@@ -37,6 +37,8 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private readonly Swapchain _swapchain;
 	private readonly RenderGraph _graph;
 	private readonly BarrierPlan _plan;
+	private readonly AliasPlan _aliasPlan;
+	private readonly HashSet<int> _aliasedHandoffIds; // resources that reuse an earlier alias's memory this frame
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly TechniqueCache _techniques;
 	private readonly TransientResources _transients;
@@ -67,8 +69,20 @@ public sealed unsafe class GraphExecutor : IDisposable
 		_windowExtent = new Extent2D((uint)framebufferSize.X, (uint)framebufferSize.Y);
 		_swapchain = new Swapchain(ctx, _windowExtent);
 
-		// Derive once — the graph is immutable, so order/barriers/load-store are frame-invariant.
-		_plan = BarrierPlan.Derive(GraphSchedule.Derive(graph));
+		// Derive once — the graph is immutable, so order/barriers/load-store/lifetimes are frame-invariant.
+		var schedule = GraphSchedule.Derive(graph);
+		_plan = BarrierPlan.Derive(schedule);
+		_aliasPlan = AliasPlan.Derive(LifetimePlan.Derive(schedule));
+
+		// Each bucket's members share one block; every member after the first reuses an earlier alias's memory
+		// this frame, so its Undefined→… birth transition must wait on all prior work to that memory (the
+		// aliasing barrier — see EmitTransition). The first member is covered by the per-frame fence instead.
+		_aliasedHandoffIds = [];
+		foreach (var bucket in _aliasPlan.Buckets)
+			for (var i = 1; i < bucket.Members.Length; i++)
+				_aliasedHandoffIds.Add(bucket.Members[i].Id);
+		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
+			Console.WriteLine($"[loom] transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
 		// One VMA allocator backs both transients and meshes. The command pool must exist before the mesh
 		// store (geometry uploads use a one-time copy command), so create it up front.
@@ -77,7 +91,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		CreateCommandPool();
 
 		_techniques = new TechniqueCache(ctx);
-		_transients = new TransientResources(ctx, graph, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
+		_transients = new TransientResources(ctx, graph, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
 		_meshes = new MeshStore(ctx, _allocator, _commandPool);
 		_descriptors = new DescriptorAllocator(ctx, MaxFramesInFlight);
 		_context = new RenderContext(ctx, _techniques, techniques, _transients, _descriptors, _meshes);
@@ -345,10 +359,25 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private void EmitTransition(CommandBuffer cmd, ResourceTransition transition)
 	{
 		ref var image = ref _transients.Get(_currentFrame, transition.Resource.Id);
-		var from = StateMapping.For(transition.From);
-		var to = StateMapping.For(transition.To);
+		var src = StateMapping.For(transition.From);
+		var dst = StateMapping.For(transition.To);
+		var srcStage = src.Stage;
+		var srcAccess = src.Access;
+
+		// Aliasing barrier: when a resource is born onto memory an earlier alias used this frame (an
+		// Undefined→… transition for a non-first bucket member), the fresh-memory TopOfPipe source scope is
+		// unsafe — the predecessor's GPU work on that memory may still be running. Widen the source scope to
+		// "all prior commands / all memory" so this image's first write waits for the predecessor to finish.
+		// (Conservative but correct; hand-offs are few. The Undefined old layout already discards the alias's
+		// contents, which is exactly the aliasing semantic.)
+		if (transition.From == ResourceState.Undefined && _aliasedHandoffIds.Contains(transition.Resource.Id))
+		{
+			srcStage = PipelineStageFlags2.AllCommandsBit;
+			srcAccess = AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit;
+		}
+
 		var range = new ImageSubresourceRange(image.Aspect, 0, 1, 0, 1);
-		TransitionImage(cmd, image.Image, range, from.Layout, to.Layout, from.Stage, from.Access, to.Stage, to.Access);
+		TransitionImage(cmd, image.Image, range, src.Layout, dst.Layout, srcStage, srcAccess, dst.Stage, dst.Access);
 	}
 
 	private void TransitionImage(
