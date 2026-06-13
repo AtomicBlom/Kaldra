@@ -27,5 +27,5 @@ public readonly record struct TechniqueDescription(
 	int SampleCount = 0,
 	bool HasVertexInput = false,
 	Format DepthFormat = Format.Undefined,
-	bool Blend = false,
+	BlendMode Blend = BlendMode.None,
 	bool DepthWrite = true);

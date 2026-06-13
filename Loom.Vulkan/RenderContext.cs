@@ -24,6 +24,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private readonly DescriptorAllocator _descriptors;
 	private readonly MeshStore _meshes;
 	private readonly Sampler _nearestSampler;
+	private readonly Sampler _linearSampler;
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off TechniqueCache's
 	// per-call SPIR-V file read. Misses fall through to TechniqueCache (which bakes + content-hashes once).
 	private readonly Dictionary<string, Technique> _baked = [];
@@ -54,7 +55,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_resources = resources;
 		_descriptors = descriptors;
 		_meshes = meshes;
-		_nearestSampler = CreateNearestSampler();
+		_nearestSampler = CreateSampler(Filter.Nearest);
+		_linearSampler = CreateSampler(Filter.Linear);
 	}
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, camera, and timing before any pass records.</summary>
@@ -87,6 +89,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		{
 			// Bind each sampled input as a combined image sampler at bindings 0..N-1 (the graph put them in
 			// ShaderReadOnly before this pass). One transient descriptor set, recycled with the frame slot.
+			var sampler = _registry[technique].LinearFilter ? _linearSampler : _nearestSampler;
 			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 			var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
 			var writes = stackalloc WriteDescriptorSet[inputs.Length];
@@ -95,7 +98,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 				ref var image = ref _resources.Get(_frameSlot, inputs[i].Id);
 				imageInfos[i] = new DescriptorImageInfo
 				{
-					Sampler = _nearestSampler,
+					Sampler = sampler,
 					ImageView = image.View,
 					ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
 				};
@@ -143,18 +146,24 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		var baked = _techniques.GetOrBake(new TechniqueDescription(
 			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormats,
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly));
+		// Note: template.Blend / LinearFilter need no extra key term — Blend is folded into the
+		// TechniqueDescription hash, and LinearFilter only affects the descriptor's sampler, not the pipeline.
 		_baked[key] = baked;
 		return baked;
 	}
 
-	private Sampler CreateNearestSampler()
+	// Nearest keeps the §9 pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
+	// the smooth filtering a chunky pixel glow still wants internally. The sampler is part of the combined
+	// image-sampler descriptor, so the technique's LinearFilter flag just selects which one FullScreen binds.
+	private Sampler CreateSampler(Filter filter)
 	{
+		var mip = filter == Filter.Linear ? SamplerMipmapMode.Linear : SamplerMipmapMode.Nearest;
 		SamplerCreateInfo info = new()
 		{
 			SType = StructureType.SamplerCreateInfo,
-			MagFilter = Filter.Nearest,
-			MinFilter = Filter.Nearest,
-			MipmapMode = SamplerMipmapMode.Nearest,
+			MagFilter = filter,
+			MinFilter = filter,
+			MipmapMode = mip,
 			AddressModeU = SamplerAddressMode.ClampToEdge,
 			AddressModeV = SamplerAddressMode.ClampToEdge,
 			AddressModeW = SamplerAddressMode.ClampToEdge,
@@ -168,5 +177,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	{
 		if (_nearestSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _nearestSampler, null);
+		if (_linearSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _linearSampler, null);
 	}
 }

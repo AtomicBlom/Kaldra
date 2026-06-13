@@ -181,19 +181,26 @@ public sealed unsafe class Technique : IDisposable
 			SType = StructureType.PipelineMultisampleStateCreateInfo,
 			RasterizationSamples = SampleCountFlags.Count1Bit,
 		});
-		// One blend attachment per colour target (a g-buffer writes several). Standard src-alpha
-		// over-blending when the technique blends (a .Blends transparent pass), else writes opaquely.
+		// One blend attachment per colour target (a g-buffer writes several). The blend equation is technique
+		// state (Planning.md §7): None writes opaquely, AlphaOver does src-alpha over-blend (transparency),
+		// Additive sums src+dst (bloom accumulation). All pair with a pass that .Blends the target (LoadOp.Load).
+		var (srcFactor, dstFactor) = description.Blend switch
+		{
+			BlendMode.AlphaOver => (BlendFactor.SrcAlpha, BlendFactor.OneMinusSrcAlpha),
+			BlendMode.Additive => (BlendFactor.One, BlendFactor.One),
+			_ => (BlendFactor.One, BlendFactor.Zero),
+		};
 		var colorCount = description.ColorFormats.Length;
 		var blendAttachments = arena.Alloc<PipelineColorBlendAttachmentState>(colorCount);
 		for (var i = 0; i < colorCount; i++)
 			blendAttachments[i] = new PipelineColorBlendAttachmentState
 			{
-				BlendEnable = description.Blend,
-				SrcColorBlendFactor = BlendFactor.SrcAlpha,
-				DstColorBlendFactor = BlendFactor.OneMinusSrcAlpha,
+				BlendEnable = description.Blend != BlendMode.None,
+				SrcColorBlendFactor = srcFactor,
+				DstColorBlendFactor = dstFactor,
 				ColorBlendOp = BlendOp.Add,
-				SrcAlphaBlendFactor = BlendFactor.One,
-				DstAlphaBlendFactor = BlendFactor.OneMinusSrcAlpha,
+				SrcAlphaBlendFactor = srcFactor,
+				DstAlphaBlendFactor = dstFactor,
 				AlphaBlendOp = BlendOp.Add,
 				ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit
 					| ColorComponentFlags.BBit | ColorComponentFlags.ABit,
