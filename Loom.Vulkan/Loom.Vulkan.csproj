@@ -10,6 +10,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
+    <!-- VMASharp (RaymondEllis fork): pure-managed VMA port on Silk.NET 2.23/net10, MIT, as a submodule.
+         Deliberately NOT in Loom.slnx so `dotnet format` never reformats vendored code; the ProjectReference
+         still builds it transitively. The transient-memory aliaser (M4) builds on it. -->
+    <ProjectReference Include="..\external\VMASharp\VMASharp\VMASharp.csproj" />
   </ItemGroup>
 
   <!-- The first backend. The Vulkan/Silk.NET stack is quarantined here. -->

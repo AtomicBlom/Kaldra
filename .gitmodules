@@ -1,0 +1,3 @@
+[submodule "external/VMASharp"]
+	path = external/VMASharp
+	url = https://github.com/RaymondEllis/VMASharp.git
