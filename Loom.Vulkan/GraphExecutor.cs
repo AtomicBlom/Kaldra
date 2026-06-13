@@ -1,49 +1,75 @@
+using Loom.Core;
+using Loom.Graph;
 using Silk.NET.Maths;
 using Silk.NET.Vulkan;
-
 using Buffer = Silk.NET.Vulkan.Buffer;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
+using VkFormat = Silk.NET.Vulkan.Format;
 
 namespace Loom.Vulkan;
 
 /// <summary>
-/// M0 clear-to-color renderer: a command pool/buffers, frame-in-flight sync, and a per-frame
-/// pass that clears the acquired swapchain image via <b>dynamic rendering</b> (no renderpass /
-/// framebuffer objects) and presents it. Layout transitions use <c>vkCmdPipelineBarrier2</c>
-/// (synchronization2). This is deliberately hand-written plumbing — the graph derives all of
-/// this from M3 onward.
+/// The graph-driven renderer (Planning.md §2 Execute/Bake): it derives a <see cref="GraphSchedule"/> and
+/// <see cref="BarrierPlan"/> from an immutable <see cref="RenderGraph"/> <em>once</em> (the plan is
+/// frame-stable, so the per-frame cost is recording, not deriving), then each frame records the plan into a
+/// command buffer — emitting <c>vkCmdPipelineBarrier2</c> from the derived transitions, opening a
+/// dynamic-rendering scope per pass with the derived load/store ops, invoking the pass's record callback,
+/// and presenting. This replaces M0/M1's hand-written <c>Renderer</c>: the barriers and layout transitions
+/// it wrote by hand are now derived (Planning.md §2).
+/// <para>
+/// <b>One frame in flight.</b> Transient images are single-buffered and shared across frames (no aliasing
+/// yet — that and frame pacing are M4). A second in-flight frame would let frame N+1's write to a transient
+/// race frame N's read of the same physical image, with no semaphore guarding it. Serialising on the frame
+/// fence is the correct, simple M3 stance; the per-frame arrays stay so M4 can lift the cap once transients
+/// are frame-aware.
+/// </para>
 /// </summary>
-public sealed unsafe class Renderer : IDisposable
+public sealed unsafe class GraphExecutor : IDisposable
 {
-	private const int MaxFramesInFlight = 2;
+	private const int MaxFramesInFlight = 1;
+	private static readonly ClearValue ClearColor = new(color: new ClearColorValue(0, 0, 0, 1));
+	private static readonly ClearValue ClearDepth = new(depthStencil: new ClearDepthStencilValue(1.0f, 0));
 
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly Swapchain _swapchain;
+	private readonly RenderGraph _graph;
+	private readonly BarrierPlan _plan;
 	private readonly TechniqueCache _techniques;
-	private readonly Technique _technique;
+	private readonly TransientResources _transients;
+	private readonly DescriptorAllocator _descriptors;
+	private readonly RenderContext _context;
 
 	private CommandPool _commandPool;
 	private CommandBuffer[] _commandBuffers = [];
 	private Semaphore[] _imageAvailable = []; // per frame-in-flight
-	private Semaphore[] _renderFinished = []; // per swapchain image (avoids present-semaphore reuse)
+	private Semaphore[] _renderFinished = []; // per swapchain image
 	private Fence[] _inFlight = [];           // per frame-in-flight
 
 	private int _currentFrame;
 	private bool _framebufferResized;
 	private Extent2D _windowExtent;
-	private double _elapsed;
 	private string? _capturePath;
 
-	public Renderer(VulkanContext ctx, Vector2D<int> framebufferSize, string trianglePipelineSpv)
+	public GraphExecutor(
+		VulkanContext ctx,
+		RenderGraph graph,
+		IReadOnlyDictionary<string, TechniqueTemplate> techniques,
+		Vector2D<int> framebufferSize)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
+		_graph = graph;
 		_windowExtent = new Extent2D((uint)framebufferSize.X, (uint)framebufferSize.Y);
 		_swapchain = new Swapchain(ctx, _windowExtent);
+
+		// Derive once — the graph is immutable, so order/barriers/load-store are frame-invariant.
+		_plan = BarrierPlan.Derive(GraphSchedule.Derive(graph));
+
 		_techniques = new TechniqueCache(ctx);
-		_technique = _techniques.GetOrBake(
-			new TechniqueDescription(trianglePipelineSpv, "vertexMain", "fragmentMain", _swapchain.ImageFormat));
+		_transients = new TransientResources(ctx, graph, _swapchain.ImageFormat, _swapchain.Extent);
+		_descriptors = new DescriptorAllocator(ctx, MaxFramesInFlight);
+		_context = new RenderContext(ctx, _techniques, techniques, _transients, _descriptors);
 
 		CreateCommandPool();
 		CreateCommandBuffers();
@@ -65,8 +91,6 @@ public sealed unsafe class Renderer : IDisposable
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
 			return; // Minimized — nothing to draw.
-
-		_elapsed += deltaSeconds;
 
 		_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
 
@@ -92,9 +116,13 @@ public sealed unsafe class Renderer : IDisposable
 		if (capturePath is not null)
 			(captureBuffer, captureMemory) = CreateStagingBuffer(captureSize);
 
+		// This frame slot's prior work is done (fence waited), so its descriptor sets are idle: recycle them.
+		_descriptors.BeginFrame(_currentFrame);
+		_transients.SetBackbuffer(_swapchain.Images[imageIndex], _swapchain.ImageViews[imageIndex], _swapchain.Extent);
+
 		var cmd = _commandBuffers[_currentFrame];
 		_vk.ResetCommandBuffer(cmd, 0);
-		RecordCommandBuffer(cmd, imageIndex, captureBuffer);
+		RecordGraph(cmd, captureBuffer, (float)deltaSeconds);
 
 		SemaphoreSubmitInfo waitInfo = new()
 		{
@@ -127,7 +155,6 @@ public sealed unsafe class Renderer : IDisposable
 
 		if (capturePath is not null)
 		{
-			// Wait for the image->buffer copy to finish, then read it back and write the PNG.
 			_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
 			WriteCapture(captureMemory, captureSize, _swapchain.Extent.Width, _swapchain.Extent.Height, capturePath);
 			_vk.DestroyBuffer(_ctx.Device, captureBuffer, null);
@@ -161,99 +188,142 @@ public sealed unsafe class Renderer : IDisposable
 		_currentFrame = (_currentFrame + 1) % MaxFramesInFlight;
 	}
 
-	private void RecordCommandBuffer(CommandBuffer cmd, uint imageIndex, Buffer captureBuffer)
+	private void RecordGraph(CommandBuffer cmd, Buffer captureBuffer, float deltaTime)
 	{
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		var image = _swapchain.Images[imageIndex];
-		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
+		_context.BeginFrame(cmd, deltaTime);
 
-		// Acquired image is in UNDEFINED layout; transition it for color writes.
-		TransitionImage(cmd, image, range,
-			ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
-			PipelineStageFlags2.TopOfPipeBit, AccessFlags2.None,
-			PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit);
-
-		// Animate the clear colour so it's obvious the loop is live frame-to-frame.
-		var t = (float)_elapsed;
-		var clear = new ClearValue(color: new ClearColorValue(
-			0.10f + 0.10f * MathF.Sin(t * 0.7f),
-			0.10f + 0.10f * MathF.Sin(t * 0.9f + 2.0f),
-			0.16f + 0.12f * MathF.Sin(t * 1.1f + 4.0f),
-			1.0f));
-
-		RenderingAttachmentInfo colorAttachment = new()
+		foreach (var pass in _plan.Passes)
 		{
-			SType = StructureType.RenderingAttachmentInfo,
-			ImageView = _swapchain.ImageViews[imageIndex],
-			ImageLayout = ImageLayout.ColorAttachmentOptimal,
-			LoadOp = AttachmentLoadOp.Clear,
-			StoreOp = AttachmentStoreOp.Store,
-			ClearValue = clear,
-		};
-		RenderingInfo renderingInfo = new()
+			foreach (var transition in pass.Transitions)
+				EmitTransition(cmd, transition);
+			RecordPass(cmd, pass);
+		}
+
+		FinishFrame(cmd, captureBuffer);
+
+		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
+	}
+
+	private void RecordPass(CommandBuffer cmd, PassBarriers pass)
+	{
+		var attachments = pass.Attachments;
+		var color = stackalloc RenderingAttachmentInfo[attachments.Length];
+		var colorCount = 0;
+		RenderingAttachmentInfo depth = default;
+		var hasDepth = false;
+		Extent2D area = default;
+		VkFormat colorFormat = default;
+
+		foreach (var attachment in attachments)
+		{
+			ref var image = ref _transients.Get(attachment.Resource.Id);
+			if (area.Width == 0)
+				area = image.Extent; // all of a pass's attachments share a domain → one render area
+
+			if (attachment.State == ResourceState.ColorAttachment)
+			{
+				if (colorCount == 0)
+					colorFormat = image.Format;
+				color[colorCount++] = new RenderingAttachmentInfo
+				{
+					SType = StructureType.RenderingAttachmentInfo,
+					ImageView = image.View,
+					ImageLayout = ImageLayout.ColorAttachmentOptimal,
+					LoadOp = ToLoadOp(attachment.Load),
+					StoreOp = ToStoreOp(attachment.Store),
+					ClearValue = ClearColor,
+				};
+			}
+			else
+			{
+				depth = new RenderingAttachmentInfo
+				{
+					SType = StructureType.RenderingAttachmentInfo,
+					ImageView = image.View,
+					ImageLayout = StateMapping.For(attachment.State).Layout,
+					LoadOp = ToLoadOp(attachment.Load),
+					StoreOp = ToStoreOp(attachment.Store),
+					ClearValue = ClearDepth,
+				};
+				hasDepth = true;
+			}
+		}
+
+		RenderingInfo info = new()
 		{
 			SType = StructureType.RenderingInfo,
-			RenderArea = new Rect2D(new Offset2D(0, 0), _swapchain.Extent),
+			RenderArea = new Rect2D(new Offset2D(0, 0), area),
 			LayerCount = 1,
-			ColorAttachmentCount = 1,
-			PColorAttachments = &colorAttachment,
+			ColorAttachmentCount = (uint)colorCount,
+			PColorAttachments = colorCount > 0 ? color : null,
+			PDepthAttachment = hasDepth ? &depth : null,
 		};
+		_vk.CmdBeginRendering(cmd, in info);
 
-		_vk.CmdBeginRendering(cmd, in renderingInfo);
-
-		_vk.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _technique.Pipeline);
 		Viewport viewport = new()
 		{
 			X = 0,
 			Y = 0,
-			Width = _swapchain.Extent.Width,
-			Height = _swapchain.Extent.Height,
+			Width = area.Width,
+			Height = area.Height,
 			MinDepth = 0,
 			MaxDepth = 1,
 		};
 		_vk.CmdSetViewport(cmd, 0, 1, in viewport);
-		Rect2D scissor = new(new Offset2D(0, 0), _swapchain.Extent);
+		Rect2D scissor = new(new Offset2D(0, 0), area);
 		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
-		_vk.CmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle: 3 fabricated verts, no vertex buffer
+
+		_context.BeginPass(colorFormat);
+		pass.Pass.Record?.Invoke(_context);
 
 		_vk.CmdEndRendering(cmd);
+	}
+
+	// Terminal: hand the present target to the swapchain, copying it out first if a capture was requested.
+	private void FinishFrame(CommandBuffer cmd, Buffer captureBuffer)
+	{
+		if (_graph.PresentTarget is not { } present)
+			return; // Headless graph: nothing to present.
+
+		ref var image = ref _transients.Get(present.Id);
+		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
 
 		if (captureBuffer.Handle != 0)
 		{
-			// Copy the rendered image into the staging buffer, then make it presentable.
-			TransitionImage(cmd, image, range,
+			TransitionImage(cmd, image.Image, range,
 				ImageLayout.ColorAttachmentOptimal, ImageLayout.TransferSrcOptimal,
 				PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit,
 				PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit);
 
 			BufferImageCopy region = new()
 			{
-				ImageSubresource = new ImageSubresourceLayers
-				{
-					AspectMask = ImageAspectFlags.ColorBit,
-					LayerCount = 1,
-				},
-				ImageExtent = new Extent3D(_swapchain.Extent.Width, _swapchain.Extent.Height, 1),
+				ImageSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.ColorBit, LayerCount = 1 },
+				ImageExtent = new Extent3D(image.Extent.Width, image.Extent.Height, 1),
 			};
-			_vk.CmdCopyImageToBuffer(cmd, image, ImageLayout.TransferSrcOptimal, captureBuffer, 1, in region);
+			_vk.CmdCopyImageToBuffer(cmd, image.Image, ImageLayout.TransferSrcOptimal, captureBuffer, 1, in region);
 
-			TransitionImage(cmd, image, range,
+			TransitionImage(cmd, image.Image, range,
 				ImageLayout.TransferSrcOptimal, ImageLayout.PresentSrcKhr,
 				PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit,
 				PipelineStageFlags2.BottomOfPipeBit, AccessFlags2.None);
 		}
 		else
 		{
-			// Transition for presentation.
-			TransitionImage(cmd, image, range,
-				ImageLayout.ColorAttachmentOptimal, ImageLayout.PresentSrcKhr,
-				PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit,
-				PipelineStageFlags2.BottomOfPipeBit, AccessFlags2.None);
+			foreach (var transition in _plan.FinalTransitions)
+				EmitTransition(cmd, transition);
 		}
+	}
 
-		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
+	private void EmitTransition(CommandBuffer cmd, ResourceTransition transition)
+	{
+		ref var image = ref _transients.Get(transition.Resource.Id);
+		var from = StateMapping.For(transition.From);
+		var to = StateMapping.For(transition.To);
+		var range = new ImageSubresourceRange(image.Aspect, 0, 1, 0, 1);
+		TransitionImage(cmd, image.Image, range, from.Layout, to.Layout, from.Stage, from.Access, to.Stage, to.Access);
 	}
 
 	private void TransitionImage(
@@ -285,6 +355,16 @@ public sealed unsafe class Renderer : IDisposable
 		_vk.CmdPipelineBarrier2(cmd, in dependency);
 	}
 
+	private static AttachmentLoadOp ToLoadOp(LoadAction load) => load switch
+	{
+		LoadAction.Clear => AttachmentLoadOp.Clear,
+		LoadAction.Load => AttachmentLoadOp.Load,
+		_ => AttachmentLoadOp.DontCare,
+	};
+
+	private static AttachmentStoreOp ToStoreOp(StoreAction store) =>
+		store == StoreAction.Store ? AttachmentStoreOp.Store : AttachmentStoreOp.DontCare;
+
 	private (Buffer Buffer, DeviceMemory Memory) CreateStagingBuffer(ulong size)
 	{
 		BufferCreateInfo info = new()
@@ -301,23 +381,13 @@ public sealed unsafe class Renderer : IDisposable
 		{
 			SType = StructureType.MemoryAllocateInfo,
 			AllocationSize = requirements.Size,
-			MemoryTypeIndex = FindMemoryType(
+			MemoryTypeIndex = _ctx.FindMemoryType(
 				requirements.MemoryTypeBits,
 				MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit),
 		};
 		_vk.AllocateMemory(_ctx.Device, in alloc, null, out var memory).Check("vkAllocateMemory");
 		_vk.BindBufferMemory(_ctx.Device, buffer, memory, 0).Check("vkBindBufferMemory");
 		return (buffer, memory);
-	}
-
-	private uint FindMemoryType(uint typeBits, MemoryPropertyFlags required)
-	{
-		_vk.GetPhysicalDeviceMemoryProperties(_ctx.PhysicalDevice, out var properties);
-		for (var i = 0u; i < properties.MemoryTypeCount; i++)
-			if ((typeBits & (1u << (int)i)) != 0
-				&& (properties.MemoryTypes[(int)i].PropertyFlags & required) == required)
-				return i;
-		throw new VulkanException("No host-visible memory type available for the capture buffer.");
 	}
 
 	private void WriteCapture(DeviceMemory memory, ulong size, uint width, uint height, string path)
@@ -327,7 +397,7 @@ public sealed unsafe class Renderer : IDisposable
 		var src = new ReadOnlySpan<byte>(mapped, (int)size);
 
 		// Swapchain is typically B8G8R8A8; PNG wants RGBA, so swap R/B for those formats.
-		var swizzle = _swapchain.ImageFormat is Format.B8G8R8A8Srgb or Format.B8G8R8A8Unorm;
+		var swizzle = _swapchain.ImageFormat is VkFormat.B8G8R8A8Srgb or VkFormat.B8G8R8A8Unorm;
 		var rgba = new byte[(int)size];
 		for (var i = 0; i < (int)(width * height); i++)
 		{
@@ -400,6 +470,7 @@ public sealed unsafe class Renderer : IDisposable
 		_vk.DeviceWaitIdle(_ctx.Device);
 		var oldImageCount = _swapchain.ImageCount;
 		_swapchain.Recreate(_windowExtent);
+		_transients.Recreate(_swapchain.Extent);
 
 		if (_swapchain.ImageCount != oldImageCount)
 		{
@@ -420,7 +491,11 @@ public sealed unsafe class Renderer : IDisposable
 	{
 		_vk.DeviceWaitIdle(_ctx.Device);
 
+		_context.Dispose();
+		_descriptors.Dispose();
+		_transients.Dispose();
 		_techniques.Dispose();
+
 		DestroyRenderFinishedSemaphores();
 		foreach (var semaphore in _imageAvailable)
 			if (semaphore.Handle != 0)

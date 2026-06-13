@@ -341,6 +341,20 @@ public sealed unsafe class VulkanContext : IDisposable
 		KhrSwapchain = khrSwapchain;
 	}
 
+	/// <summary>
+	/// Pick a memory type index satisfying <paramref name="typeBits"/> (a resource's allowed types) and the
+	/// requested <paramref name="required"/> property flags. Shared by transient images and staging buffers.
+	/// </summary>
+	public uint FindMemoryType(uint typeBits, MemoryPropertyFlags required)
+	{
+		Vk.GetPhysicalDeviceMemoryProperties(PhysicalDevice, out var properties);
+		for (var i = 0u; i < properties.MemoryTypeCount; i++)
+			if ((typeBits & (1u << (int)i)) != 0
+				&& (properties.MemoryTypes[(int)i].PropertyFlags & required) == required)
+				return i;
+		throw new VulkanException($"No memory type with {required} available.");
+	}
+
 	public void Dispose()
 	{
 		if (Device.Handle != 0)

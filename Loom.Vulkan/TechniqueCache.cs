@@ -38,6 +38,7 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 		hash.AppendData(Encoding.UTF8.GetBytes(description.FragmentEntry));
 		hash.AppendData("\0"u8);
 		hash.AppendData(BitConverter.GetBytes((int)description.ColorFormat));
+		hash.AppendData(BitConverter.GetBytes(description.SamplesInput));
 		return Convert.ToHexString(hash.GetHashAndReset());
 	}
 
