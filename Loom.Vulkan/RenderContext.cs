@@ -24,6 +24,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 	private CommandBuffer _cmd;
 	private VkFormat _colorFormat;
+	private int _frameSlot;
 
 	public float DeltaTime { get; private set; }
 
@@ -43,11 +44,12 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_nearestSampler = CreateNearestSampler();
 	}
 
-	/// <summary>Bind the context to this frame's command buffer and timing before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime)
+	/// <summary>Bind the context to this frame's command buffer, frame slot, and timing before any pass records.</summary>
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, int frameSlot)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
+		_frameSlot = frameSlot;
 	}
 
 	/// <summary>Set the colour format of the target the current pass writes — the format its techniques bake against.</summary>
@@ -66,7 +68,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		var baked = Bake(technique, samplesInput: true);
 
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-		ref var image = ref _resources.Get(input.Id);
+		ref var image = ref _resources.Get(_frameSlot, input.Id);
 		DescriptorImageInfo imageInfo = new()
 		{
 			Sampler = _nearestSampler,

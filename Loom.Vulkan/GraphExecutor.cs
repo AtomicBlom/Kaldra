@@ -17,16 +17,17 @@ namespace Loom.Vulkan;
 /// and presenting. This replaces M0/M1's hand-written <c>Renderer</c>: the barriers and layout transitions
 /// it wrote by hand are now derived (Planning.md §2).
 /// <para>
-/// <b>One frame in flight.</b> Transient images are single-buffered and shared across frames (no aliasing
-/// yet — that and frame pacing are M4). A second in-flight frame would let frame N+1's write to a transient
-/// race frame N's read of the same physical image, with no semaphore guarding it. Serialising on the frame
-/// fence is the correct, simple M3 stance; the per-frame arrays stay so M4 can lift the cap once transients
-/// are frame-aware.
+/// <b>Frames in flight (§12 M4).</b> Runs 2 frames in flight, paced on a per-frame fence. The safety this
+/// needs — a frame's writes to a transient must not clobber a still-executing earlier frame's reads of the
+/// same image — comes from <see cref="TransientResources"/> giving each transient one physical image per
+/// frame slot; each frame records against its own slot (<see cref="_currentFrame"/>). The swapchain supplies
+/// distinct backbuffer images itself, and recording is serial on the CPU (the image handle is baked into the
+/// command buffer), so the backbuffer needs no extra buffering.
 /// </para>
 /// </summary>
 public sealed unsafe class GraphExecutor : IDisposable
 {
-	private const int MaxFramesInFlight = 1;
+	private const int MaxFramesInFlight = 2;
 	private static readonly ClearValue ClearColor = new(color: new ClearColorValue(0, 0, 0, 1));
 	private static readonly ClearValue ClearDepth = new(depthStencil: new ClearDepthStencilValue(1.0f, 0));
 
@@ -67,7 +68,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		_plan = BarrierPlan.Derive(GraphSchedule.Derive(graph));
 
 		_techniques = new TechniqueCache(ctx);
-		_transients = new TransientResources(ctx, graph, _swapchain.ImageFormat, _swapchain.Extent);
+		_transients = new TransientResources(ctx, graph, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight);
 		_descriptors = new DescriptorAllocator(ctx, MaxFramesInFlight);
 		_context = new RenderContext(ctx, _techniques, techniques, _transients, _descriptors);
 
@@ -118,7 +119,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 		// This frame slot's prior work is done (fence waited), so its descriptor sets are idle: recycle them.
 		_descriptors.BeginFrame(_currentFrame);
-		_transients.SetBackbuffer(_swapchain.Images[imageIndex], _swapchain.ImageViews[imageIndex], _swapchain.Extent);
+		_transients.SetBackbuffer(_currentFrame, _swapchain.Images[imageIndex], _swapchain.ImageViews[imageIndex], _swapchain.Extent);
 
 		var cmd = _commandBuffers[_currentFrame];
 		_vk.ResetCommandBuffer(cmd, 0);
@@ -193,7 +194,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime);
+		_context.BeginFrame(cmd, deltaTime, _currentFrame);
 
 		foreach (var pass in _plan.Passes)
 		{
@@ -219,7 +220,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 		foreach (var attachment in attachments)
 		{
-			ref var image = ref _transients.Get(attachment.Resource.Id);
+			ref var image = ref _transients.Get(_currentFrame, attachment.Resource.Id);
 			if (area.Width == 0)
 				area = image.Extent; // all of a pass's attachments share a domain → one render area
 
@@ -288,7 +289,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		if (_graph.PresentTarget is not { } present)
 			return; // Headless graph: nothing to present.
 
-		ref var image = ref _transients.Get(present.Id);
+		ref var image = ref _transients.Get(_currentFrame, present.Id);
 		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
 
 		if (captureBuffer.Handle != 0)
@@ -319,7 +320,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 	private void EmitTransition(CommandBuffer cmd, ResourceTransition transition)
 	{
-		ref var image = ref _transients.Get(transition.Resource.Id);
+		ref var image = ref _transients.Get(_currentFrame, transition.Resource.Id);
 		var from = StateMapping.For(transition.From);
 		var to = StateMapping.For(transition.To);
 		var range = new ImageSubresourceRange(image.Aspect, 0, 1, 0, 1);
