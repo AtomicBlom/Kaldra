@@ -44,18 +44,14 @@ internal sealed unsafe class TransientResources : IDisposable
 	private readonly ResourceImage[][] _images; // [frameSlot][ResourceHandle.Id]
 	private Extent2D _swapExtent;
 
-	public TransientResources(VulkanContext ctx, RenderGraph graph, VkFormat backbufferFormat, Extent2D swapExtent, int framesInFlight)
+	public TransientResources(VulkanContext ctx, RenderGraph graph, VkFormat backbufferFormat, Extent2D swapExtent, int framesInFlight, VulkanMemoryAllocator allocator)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
 		_graph = graph;
 		_backbufferFormat = backbufferFormat;
 		_swapExtent = swapExtent;
-
-		// One VMA allocator backs every transient image; it sub-allocates from large blocks (and will alias
-		// non-overlapping lifetimes — next M4 step). Vulkan 1.3 device, so the 1.1+ requirement is satisfied.
-		_allocator = new VulkanMemoryAllocator(new VulkanMemoryAllocatorCreateInfo(
-			Vk.Version13, _vk, ctx.Instance, ctx.PhysicalDevice, ctx.Device));
+		_allocator = allocator; // shared with meshes; owned + disposed by the executor
 
 		var sampled = SampledResourceIds(graph);
 		_images = new ResourceImage[framesInFlight][];
@@ -196,6 +192,6 @@ internal sealed unsafe class TransientResources : IDisposable
 			for (var i = 0; i < slot.Length; i++)
 				if (!slot[i].IsBackbuffer)
 					DestroyImage(ref slot[i]);
-		_allocator.Dispose();
+		// The allocator is owned by the executor (shared with meshes), so it is not disposed here.
 	}
 }

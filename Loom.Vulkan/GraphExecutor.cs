@@ -2,6 +2,7 @@ using Loom.Core;
 using Loom.Graph;
 using Silk.NET.Maths;
 using Silk.NET.Vulkan;
+using VMASharp;
 using Buffer = Silk.NET.Vulkan.Buffer;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 using VkFormat = Silk.NET.Vulkan.Format;
@@ -36,8 +37,10 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private readonly Swapchain _swapchain;
 	private readonly RenderGraph _graph;
 	private readonly BarrierPlan _plan;
+	private readonly VulkanMemoryAllocator _allocator;
 	private readonly TechniqueCache _techniques;
 	private readonly TransientResources _transients;
+	private readonly MeshStore _meshes;
 	private readonly DescriptorAllocator _descriptors;
 	private readonly RenderContext _context;
 
@@ -67,15 +70,27 @@ public sealed unsafe class GraphExecutor : IDisposable
 		// Derive once — the graph is immutable, so order/barriers/load-store are frame-invariant.
 		_plan = BarrierPlan.Derive(GraphSchedule.Derive(graph));
 
-		_techniques = new TechniqueCache(ctx);
-		_transients = new TransientResources(ctx, graph, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight);
-		_descriptors = new DescriptorAllocator(ctx, MaxFramesInFlight);
-		_context = new RenderContext(ctx, _techniques, techniques, _transients, _descriptors);
-
+		// One VMA allocator backs both transients and meshes. The command pool must exist before the mesh
+		// store (geometry uploads use a one-time copy command), so create it up front.
+		_allocator = new VulkanMemoryAllocator(new VulkanMemoryAllocatorCreateInfo(
+			Vk.Version13, _vk, ctx.Instance, ctx.PhysicalDevice, ctx.Device));
 		CreateCommandPool();
+
+		_techniques = new TechniqueCache(ctx);
+		_transients = new TransientResources(ctx, graph, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
+		_meshes = new MeshStore(ctx, _allocator, _commandPool);
+		_descriptors = new DescriptorAllocator(ctx, MaxFramesInFlight);
+		_context = new RenderContext(ctx, _techniques, techniques, _transients, _descriptors, _meshes);
+
 		CreateCommandBuffers();
 		CreateSyncObjects();
 	}
+
+	/// <summary>
+	/// Upload geometry once and get a <see cref="Mesh"/> handle for passes to draw via <c>ctx.Draw</c>.
+	/// Call after construction but before the render loop; the handle is stable for the executor's lifetime.
+	/// </summary>
+	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
 	public void OnResize(Vector2D<int> size)
 	{
@@ -494,7 +509,9 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 		_context.Dispose();
 		_descriptors.Dispose();
+		_meshes.Dispose();
 		_transients.Dispose();
+		_allocator.Dispose(); // after every image/buffer it backed is freed
 		_techniques.Dispose();
 
 		DestroyRenderFinishedSemaphores();

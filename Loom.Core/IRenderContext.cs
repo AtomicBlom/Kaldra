@@ -32,4 +32,12 @@ public interface IRenderContext
 	/// shader-read layout transition.
 	/// </summary>
 	void FullScreen(string technique, ResourceHandle input);
+
+	/// <summary>
+	/// Draw GPU-resident geometry with the named technique (the geometry counterpart to
+	/// <see cref="FullScreen(string)"/> — §5's <c>ctx.Draw(drawList, Technique.X)</c>). The mesh is a stable
+	/// engine-minted handle; per-frame inputs (camera, transforms) are pulled from the context, not captured,
+	/// to keep the pass closure frame-independent (§8). The render target is the pass's declared output.
+	/// </summary>
+	void Draw(Mesh mesh, string technique);
 }

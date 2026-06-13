@@ -19,4 +19,5 @@ public readonly record struct TechniqueDescription(
 	string VertexEntry,
 	string FragmentEntry,
 	Format ColorFormat,
-	bool SamplesInput = false);
+	bool SamplesInput = false,
+	bool HasVertexInput = false);

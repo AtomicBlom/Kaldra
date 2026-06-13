@@ -20,6 +20,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private readonly IReadOnlyDictionary<string, TechniqueTemplate> _registry;
 	private readonly TransientResources _resources;
 	private readonly DescriptorAllocator _descriptors;
+	private readonly MeshStore _meshes;
 	private readonly Sampler _nearestSampler;
 
 	private CommandBuffer _cmd;
@@ -33,7 +34,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		TechniqueCache techniques,
 		IReadOnlyDictionary<string, TechniqueTemplate> registry,
 		TransientResources resources,
-		DescriptorAllocator descriptors)
+		DescriptorAllocator descriptors,
+		MeshStore meshes)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
@@ -41,6 +43,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_registry = registry;
 		_resources = resources;
 		_descriptors = descriptors;
+		_meshes = meshes;
 		_nearestSampler = CreateNearestSampler();
 	}
 
@@ -57,15 +60,22 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 	public void FullScreen(string technique)
 	{
-		var baked = Bake(technique, samplesInput: false);
+		var baked = Bake(technique);
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
+	}
+
+	public void Draw(Mesh mesh, string technique)
+	{
+		var baked = Bake(technique);
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
 	}
 
 	public void FullScreen(string technique, ResourceHandle input)
 	{
 		ArgumentNullException.ThrowIfNull(input);
-		var baked = Bake(technique, samplesInput: true);
+		var baked = Bake(technique);
 
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 		ref var image = ref _resources.Get(_frameSlot, input.Id);
@@ -91,12 +101,16 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0);
 	}
 
-	private Technique Bake(string technique, bool samplesInput)
+	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;
+	// the colour format is the current pass's target. So one template baked against two formats caches two
+	// pipelines, and the call site only needs the name.
+	private Technique Bake(string technique)
 	{
 		if (!_registry.TryGetValue(technique, out var template))
 			throw new VulkanException($"No technique registered under the name '{technique}'.");
 		return _techniques.GetOrBake(new TechniqueDescription(
-			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormat, samplesInput));
+			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormat,
+			template.SamplesInput, template.HasVertexInput));
 	}
 
 	private Sampler CreateNearestSampler()

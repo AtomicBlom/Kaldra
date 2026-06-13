@@ -33,8 +33,7 @@ public sealed unsafe class Technique : IDisposable
 		{
 			DescriptorSetLayout = description.SamplesInput ? CreateSampledImageSetLayout() : default;
 			Layout = CreatePipelineLayout(DescriptorSetLayout);
-			Pipeline = CreatePipeline(
-				module, description.VertexEntry, description.FragmentEntry, description.ColorFormat);
+			Pipeline = CreatePipeline(module, in description);
 		}
 		finally
 		{
@@ -93,7 +92,34 @@ public sealed unsafe class Technique : IDisposable
 		return layout;
 	}
 
-	private Pipeline CreatePipeline(ShaderModule module, string vertexEntry, string fragmentEntry, Format colorFormat)
+	// Vertex input for the one canonical interleaved layout (Loom.Core.Vertex: Vector3 Position, Vector3
+	// Normal, Vector2 Uv — sequential, 32 bytes). Offsets mirror that field order. Per-technique layouts
+	// (reflected or declared) can come later.
+	private static PipelineVertexInputStateCreateInfo* VertexInputForMesh(NativeArena arena)
+	{
+		var binding = arena.Write(new VertexInputBindingDescription
+		{
+			Binding = 0,
+			Stride = (uint)sizeof(Loom.Core.Vertex),
+			InputRate = VertexInputRate.Vertex,
+		});
+
+		var attributes = arena.Alloc<VertexInputAttributeDescription>(3);
+		attributes[0] = new VertexInputAttributeDescription { Location = 0, Binding = 0, Format = Format.R32G32B32Sfloat, Offset = 0 };  // Position
+		attributes[1] = new VertexInputAttributeDescription { Location = 1, Binding = 0, Format = Format.R32G32B32Sfloat, Offset = 12 }; // Normal
+		attributes[2] = new VertexInputAttributeDescription { Location = 2, Binding = 0, Format = Format.R32G32Sfloat, Offset = 24 };    // Uv
+
+		return arena.Write(new PipelineVertexInputStateCreateInfo
+		{
+			SType = StructureType.PipelineVertexInputStateCreateInfo,
+			VertexBindingDescriptionCount = 1,
+			PVertexBindingDescriptions = binding,
+			VertexAttributeDescriptionCount = 3,
+			PVertexAttributeDescriptions = attributes,
+		});
+	}
+
+	private Pipeline CreatePipeline(ShaderModule module, in TechniqueDescription description)
 	{
 		using var arena = new NativeArena();
 
@@ -103,21 +129,20 @@ public sealed unsafe class Technique : IDisposable
 			SType = StructureType.PipelineShaderStageCreateInfo,
 			Stage = ShaderStageFlags.VertexBit,
 			Module = module,
-			PName = arena.String(vertexEntry),
+			PName = arena.String(description.VertexEntry),
 		};
 		stages[1] = new PipelineShaderStageCreateInfo
 		{
 			SType = StructureType.PipelineShaderStageCreateInfo,
 			Stage = ShaderStageFlags.FragmentBit,
 			Module = module,
-			PName = arena.String(fragmentEntry),
+			PName = arena.String(description.FragmentEntry),
 		};
 
-		// No vertex buffers: the fullscreen triangle is fabricated from SV_VertexID.
-		var vertexInput = arena.Write(new PipelineVertexInputStateCreateInfo
-		{
-			SType = StructureType.PipelineVertexInputStateCreateInfo,
-		});
+		var vertexInput = description.HasVertexInput
+			? VertexInputForMesh(arena)
+			// No vertex buffers: the fullscreen triangle is fabricated from SV_VertexID.
+			: arena.Write(new PipelineVertexInputStateCreateInfo { SType = StructureType.PipelineVertexInputStateCreateInfo });
 		var inputAssembly = arena.Write(new PipelineInputAssemblyStateCreateInfo
 		{
 			SType = StructureType.PipelineInputAssemblyStateCreateInfo,
@@ -164,7 +189,7 @@ public sealed unsafe class Technique : IDisposable
 		});
 
 		// Dynamic rendering: the color attachment format(s) live here, chained via pNext.
-		var colorFormatPtr = arena.Write(colorFormat);
+		var colorFormatPtr = arena.Write(description.ColorFormat);
 		var renderingInfo = arena.Write(new PipelineRenderingCreateInfo
 		{
 			SType = StructureType.PipelineRenderingCreateInfo,
