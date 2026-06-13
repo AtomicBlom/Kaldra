@@ -19,6 +19,7 @@ public sealed unsafe class Renderer : IDisposable
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly Swapchain _swapchain;
+	private readonly TechniqueCache _techniques;
 	private readonly Technique _technique;
 
 	private CommandPool _commandPool;
@@ -38,7 +39,9 @@ public sealed unsafe class Renderer : IDisposable
 		_vk = ctx.Vk;
 		_windowExtent = new Extent2D((uint)framebufferSize.X, (uint)framebufferSize.Y);
 		_swapchain = new Swapchain(ctx, _windowExtent);
-		_technique = new Technique(ctx, trianglePipelineSpv, "vertexMain", "fragmentMain", _swapchain.ImageFormat);
+		_techniques = new TechniqueCache(ctx);
+		_technique = _techniques.GetOrBake(
+			new TechniqueDescription(trianglePipelineSpv, "vertexMain", "fragmentMain", _swapchain.ImageFormat));
 
 		CreateCommandPool();
 		CreateCommandBuffers();
@@ -311,7 +314,7 @@ public sealed unsafe class Renderer : IDisposable
 	{
 		_vk.DeviceWaitIdle(_ctx.Device);
 
-		_technique.Dispose();
+		_techniques.Dispose();
 		DestroyRenderFinishedSemaphores();
 		foreach (var semaphore in _imageAvailable)
 			if (semaphore.Handle != 0)

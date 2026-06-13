@@ -17,17 +17,17 @@ public sealed unsafe class Technique : IDisposable
 	public Pipeline Pipeline { get; }
 	public PipelineLayout Layout { get; }
 
-	public Technique(
-		VulkanContext ctx, string spirvPath, string vertexEntry, string fragmentEntry, Format colorFormat)
+	public Technique(VulkanContext ctx, in TechniqueDescription description, byte[] spirv)
 	{
 		_vk = ctx.Vk;
 		_device = ctx.Device;
 
-		var module = CreateShaderModule(spirvPath);
+		var module = CreateShaderModule(spirv);
 		try
 		{
 			Layout = CreateEmptyLayout();
-			Pipeline = CreatePipeline(module, vertexEntry, fragmentEntry, colorFormat);
+			Pipeline = CreatePipeline(
+				module, description.VertexEntry, description.FragmentEntry, description.ColorFormat);
 		}
 		finally
 		{
@@ -36,9 +36,8 @@ public sealed unsafe class Technique : IDisposable
 		}
 	}
 
-	private ShaderModule CreateShaderModule(string path)
+	private ShaderModule CreateShaderModule(byte[] code)
 	{
-		var code = File.ReadAllBytes(path);
 		fixed (byte* pCode = code)
 		{
 			ShaderModuleCreateInfo info = new()
