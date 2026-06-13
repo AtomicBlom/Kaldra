@@ -123,6 +123,12 @@ public sealed unsafe class GraphExecutor : IDisposable
 	/// </summary>
 	public Camera Camera { get; set; } = Camera.Identity;
 
+	/// <summary>
+	/// The object id under the cursor for the next frame (0 = nothing), set by the host. Passes pull it via
+	/// <c>ctx.HoverId</c> — the JFA outline seeds the hovered object's silhouette. Per-frame, like the camera.
+	/// </summary>
+	public uint HoverId { get; set; }
+
 	public void DrawFrame(double deltaSeconds)
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
@@ -229,7 +235,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _currentFrame, Camera);
+		_context.BeginFrame(cmd, deltaTime, _currentFrame, Camera, HoverId);
 
 		foreach (var pass in _plan.Passes)
 		{

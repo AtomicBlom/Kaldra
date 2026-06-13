@@ -34,7 +34,7 @@ public sealed unsafe class Technique : IDisposable
 		try
 		{
 			DescriptorSetLayout = description.SampleCount > 0 ? CreateSampledImageSetLayout(description.SampleCount) : default;
-			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput);
+			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput, description.HasFragmentPush);
 			Pipeline = CreatePipeline(module, in description);
 		}
 		finally
@@ -82,24 +82,30 @@ public sealed unsafe class Technique : IDisposable
 		return layout;
 	}
 
-	// Zero or one descriptor set (whether the technique samples). Mesh techniques also get a 64-byte vertex
-	// push constant for the MVP matrix — small and per-draw, so push constants beat a uniform buffer here.
-	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout, bool hasMvpPushConstant)
+	/// <summary>Size of the fragment scalar push-constant block — four floats (JFA step, hovered id, etc.).</summary>
+	public const int FragmentPushSize = 4 * sizeof(float);
+
+	// Zero or one descriptor set (whether the technique samples), plus at most one push-constant range:
+	// mesh techniques get a 64-byte VERTEX range for the MVP (small + per-draw, so push constants beat a
+	// uniform buffer); post techniques get a 16-byte FRAGMENT range for per-pass scalars (JFA step, hover id).
+	// A technique is one or the other, never both, so a single-element range array suffices.
+	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout, bool hasMvpPushConstant, bool hasFragmentPush)
 	{
 		var hasSet = setLayout.Handle != 0;
-		PushConstantRange mvp = new()
-		{
-			StageFlags = ShaderStageFlags.VertexBit,
-			Offset = 0,
-			Size = (uint)sizeof(Matrix4x4),
-		};
+		var range = new PushConstantRange();
+		if (hasMvpPushConstant)
+			range = new PushConstantRange { StageFlags = ShaderStageFlags.VertexBit, Offset = 0, Size = (uint)sizeof(Matrix4x4) };
+		else if (hasFragmentPush)
+			range = new PushConstantRange { StageFlags = ShaderStageFlags.FragmentBit, Offset = 0, Size = FragmentPushSize };
+		var hasRange = hasMvpPushConstant || hasFragmentPush;
+
 		PipelineLayoutCreateInfo info = new()
 		{
 			SType = StructureType.PipelineLayoutCreateInfo,
 			SetLayoutCount = hasSet ? 1u : 0u,
 			PSetLayouts = hasSet ? &setLayout : null,
-			PushConstantRangeCount = hasMvpPushConstant ? 1u : 0u,
-			PPushConstantRanges = hasMvpPushConstant ? &mvp : null,
+			PushConstantRangeCount = hasRange ? 1u : 0u,
+			PPushConstantRanges = hasRange ? &range : null,
 		};
 		_vk.CreatePipelineLayout(_device, in info, null, out var layout).Check("vkCreatePipelineLayout");
 		return layout;

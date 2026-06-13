@@ -14,6 +14,7 @@ namespace Loom.Vulkan;
 /// <param name="HasVertexInput">True if the vertex stage reads a <see cref="Loom.Core.Vertex"/> buffer (a mesh technique) rather than fabricating a fullscreen triangle.</param>
 /// <param name="Blend">The blend equation — pairs with a pass that <c>.Blends</c> its target (alpha-over for transparency, additive for bloom).</param>
 /// <param name="LinearFilter">Sample inputs with a linear (rather than nearest) sampler — smooth filtering for bloom's downsample/upsample; nearest elsewhere keeps the pixel grid crisp.</param>
+/// <param name="HasFragmentPush">True if the fragment stage reads a small push-constant block (up to four floats) — the per-pass scalar channel (JFA step, hovered id, outline width/glow).</param>
 public readonly record struct TechniqueTemplate(
 	string SpirvPath,
 	string VertexEntry,
@@ -21,4 +22,5 @@ public readonly record struct TechniqueTemplate(
 	int SampleCount = 0,
 	bool HasVertexInput = false,
 	BlendMode Blend = BlendMode.None,
-	bool LinearFilter = false);
+	bool LinearFilter = false,
+	bool HasFragmentPush = false);

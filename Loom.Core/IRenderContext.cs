@@ -18,6 +18,13 @@ public interface IRenderContext
 	float DeltaTime { get; }
 
 	/// <summary>
+	/// The object id currently under the cursor (0 = nothing), supplied per-frame by the host (Planning.md §5
+	/// <c>ctx.Hover</c>). The JFA outline sub-graph's seed pass pulls it from here to decide which silhouette
+	/// to grow a border around — pulled, not captured, so the graph stays frame-independent (§8).
+	/// </summary>
+	uint HoverId { get; }
+
+	/// <summary>
 	/// The camera to render from this frame (view + projection). Per-frame data the host supplies; a pass's
 	/// <c>.Draw</c> closure pulls it from here rather than capturing it, so the graph stays frame-independent
 	/// (§8). <see cref="Draw"/> uses it to transform geometry into clip space.
@@ -34,6 +41,15 @@ public interface IRenderContext
 	/// The render target is the pass's declared <c>.Writes</c> target.
 	/// </summary>
 	void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs);
+
+	/// <summary>
+	/// As the input-only <c>FullScreen</c> overload, but also pushes a small block of
+	/// scalar parameters to the fragment stage (a fragment push constant, up to four floats). This is the
+	/// per-pass uniform channel the post passes need — the JFA flood's jump step, the seed's hovered id, an
+	/// outline's width/glow — without a descriptor set. The technique must be registered as taking a fragment
+	/// push (its pipeline layout reserves the range).
+	/// </summary>
+	void FullScreen(string technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs);
 
 	/// <summary>
 	/// Draw GPU-resident geometry with the named technique (the geometry counterpart to

@@ -28,4 +28,5 @@ public readonly record struct TechniqueDescription(
 	bool HasVertexInput = false,
 	Format DepthFormat = Format.Undefined,
 	BlendMode Blend = BlendMode.None,
-	bool DepthWrite = true);
+	bool DepthWrite = true,
+	bool HasFragmentPush = false);

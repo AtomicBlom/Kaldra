@@ -35,10 +35,13 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private bool _depthReadOnly;
 	private int _frameSlot;
 	private Camera _camera;
+	private uint _hoverId;
 
 	public float DeltaTime { get; private set; }
 
 	public Camera Camera => _camera;
+
+	public uint HoverId => _hoverId;
 
 	public RenderContext(
 		VulkanContext ctx,
@@ -59,13 +62,14 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_linearSampler = CreateSampler(Filter.Linear);
 	}
 
-	/// <summary>Bind the context to this frame's command buffer, frame slot, camera, and timing before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, int frameSlot, Camera camera)
+	/// <summary>Bind the context to this frame's command buffer, frame slot, camera, hover, and timing before any pass records.</summary>
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, int frameSlot, Camera camera, uint hoverId)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
 		_frameSlot = frameSlot;
 		_camera = camera;
+		_hoverId = hoverId;
 	}
 
 	/// <summary>
@@ -80,10 +84,23 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_depthReadOnly = depthReadOnly;
 	}
 
-	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs)
+	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs) =>
+		FullScreen(technique, default, inputs);
+
+	public void FullScreen(string technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs)
 	{
 		var baked = Bake(technique);
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+
+		if (push.Length > 0)
+		{
+			// The fragment scalar channel: pad to the layout's fixed range so the shader's float4 always reads
+			// defined memory, then push to the fragment stage at offset 0.
+			var block = stackalloc float[4];
+			for (var i = 0; i < push.Length && i < 4; i++)
+				block[i] = push[i];
+			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.FragmentBit, 0, (uint)Technique.FragmentPushSize, block);
+		}
 
 		if (inputs.Length > 0)
 		{
@@ -145,9 +162,11 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// (.WritesDepth, or no depth at all) keeps writes on.
 		var baked = _techniques.GetOrBake(new TechniqueDescription(
 			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormats,
-			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly));
-		// Note: template.Blend / LinearFilter need no extra key term — Blend is folded into the
-		// TechniqueDescription hash, and LinearFilter only affects the descriptor's sampler, not the pipeline.
+			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
+			HasFragmentPush: template.HasFragmentPush));
+		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
+		// HasFragmentPush are folded into the TechniqueDescription hash, and LinearFilter only affects the
+		// descriptor's sampler, not the pipeline.
 		_baked[key] = baked;
 		return baked;
 	}
