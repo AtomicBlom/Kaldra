@@ -202,7 +202,7 @@ public sealed unsafe class VulkanContext : IDisposable
 	private bool IsSuitable(PhysicalDevice device, out uint graphicsFamily, out uint presentFamily) =>
 		FindQueueFamilies(device, out graphicsFamily, out presentFamily)
 		&& SupportsRequiredExtensions(device)
-		&& Supports13Features(device);
+		&& SupportsRequiredFeatures(device);
 
 	private bool FindQueueFamilies(PhysicalDevice device, out uint graphicsFamily, out uint presentFamily)
 	{
@@ -250,9 +250,14 @@ public sealed unsafe class VulkanContext : IDisposable
 		return true;
 	}
 
-	private bool Supports13Features(PhysicalDevice device)
+	private bool SupportsRequiredFeatures(PhysicalDevice device)
 	{
-		PhysicalDeviceVulkan12Features f12 = new() { SType = StructureType.PhysicalDeviceVulkan12Features };
+		PhysicalDeviceVulkan11Features f11 = new() { SType = StructureType.PhysicalDeviceVulkan11Features };
+		PhysicalDeviceVulkan12Features f12 = new()
+		{
+			SType = StructureType.PhysicalDeviceVulkan12Features,
+			PNext = &f11,
+		};
 		PhysicalDeviceVulkan13Features f13 = new()
 		{
 			SType = StructureType.PhysicalDeviceVulkan13Features,
@@ -265,7 +270,8 @@ public sealed unsafe class VulkanContext : IDisposable
 		};
 
 		Vk.GetPhysicalDeviceFeatures2(device, &features);
-		return f13.DynamicRendering && f13.Synchronization2 && f12.TimelineSemaphore;
+		return f13.DynamicRendering && f13.Synchronization2
+			&& f12.TimelineSemaphore && f11.ShaderDrawParameters;
 	}
 
 	private void CreateLogicalDevice()
@@ -287,11 +293,19 @@ public sealed unsafe class VulkanContext : IDisposable
 			};
 		}
 
-		// Enable the 1.3 features Loom assumes, chained off the device create-info pNext.
+		// Enable the features Loom assumes, chained off the device create-info pNext.
+		// shaderDrawParameters (1.1) backs the SV_VertexID-based fullscreen triangle: Slang's
+		// SV_VertexID lowering emits the SPIR-V DrawParameters capability.
+		PhysicalDeviceVulkan11Features f11 = new()
+		{
+			SType = StructureType.PhysicalDeviceVulkan11Features,
+			ShaderDrawParameters = true,
+		};
 		PhysicalDeviceVulkan12Features f12 = new()
 		{
 			SType = StructureType.PhysicalDeviceVulkan12Features,
 			TimelineSemaphore = true,
+			PNext = &f11,
 		};
 		PhysicalDeviceVulkan13Features f13 = new()
 		{

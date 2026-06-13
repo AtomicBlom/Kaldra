@@ -19,6 +19,7 @@ public sealed unsafe class Renderer : IDisposable
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly Swapchain _swapchain;
+	private readonly Technique _technique;
 
 	private CommandPool _commandPool;
 	private CommandBuffer[] _commandBuffers = [];
@@ -31,12 +32,13 @@ public sealed unsafe class Renderer : IDisposable
 	private Extent2D _windowExtent;
 	private double _elapsed;
 
-	public Renderer(VulkanContext ctx, Vector2D<int> framebufferSize)
+	public Renderer(VulkanContext ctx, Vector2D<int> framebufferSize, string trianglePipelineSpv)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
 		_windowExtent = new Extent2D((uint)framebufferSize.X, (uint)framebufferSize.Y);
 		_swapchain = new Swapchain(ctx, _windowExtent);
+		_technique = new Technique(ctx, trianglePipelineSpv, "vertexMain", "fragmentMain", _swapchain.ImageFormat);
 
 		CreateCommandPool();
 		CreateCommandBuffers();
@@ -175,7 +177,22 @@ public sealed unsafe class Renderer : IDisposable
 		};
 
 		_vk.CmdBeginRendering(cmd, in renderingInfo);
-		// M0: nothing drawn — the clear IS the frame. Geometry arrives with techniques in M1.
+
+		_vk.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _technique.Pipeline);
+		Viewport viewport = new()
+		{
+			X = 0,
+			Y = 0,
+			Width = _swapchain.Extent.Width,
+			Height = _swapchain.Extent.Height,
+			MinDepth = 0,
+			MaxDepth = 1,
+		};
+		_vk.CmdSetViewport(cmd, 0, 1, in viewport);
+		Rect2D scissor = new(new Offset2D(0, 0), _swapchain.Extent);
+		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
+		_vk.CmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle: 3 fabricated verts, no vertex buffer
+
 		_vk.CmdEndRendering(cmd);
 
 		// Transition for presentation.
@@ -294,6 +311,7 @@ public sealed unsafe class Renderer : IDisposable
 	{
 		_vk.DeviceWaitIdle(_ctx.Device);
 
+		_technique.Dispose();
 		DestroyRenderFinishedSemaphores();
 		foreach (var semaphore in _imageAvailable)
 			if (semaphore.Handle != 0)
