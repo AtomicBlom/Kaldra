@@ -1,6 +1,7 @@
 using Silk.NET.Maths;
 using Silk.NET.Vulkan;
 
+using Buffer = Silk.NET.Vulkan.Buffer;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 
 namespace Loom.Vulkan;
@@ -32,6 +33,7 @@ public sealed unsafe class Renderer : IDisposable
 	private bool _framebufferResized;
 	private Extent2D _windowExtent;
 	private double _elapsed;
+	private string? _capturePath;
 
 	public Renderer(VulkanContext ctx, Vector2D<int> framebufferSize, string trianglePipelineSpv)
 	{
@@ -55,6 +57,9 @@ public sealed unsafe class Renderer : IDisposable
 	}
 
 	public void WaitIdle() => _vk.DeviceWaitIdle(_ctx.Device);
+
+	/// <summary>Capture the next rendered frame to a PNG (debug/validation). Synchronous on that frame.</summary>
+	public void RequestCapture(string path) => _capturePath = path;
 
 	public void DrawFrame(double deltaSeconds)
 	{
@@ -80,9 +85,16 @@ public sealed unsafe class Renderer : IDisposable
 
 		_vk.ResetFences(_ctx.Device, 1, in _inFlight[_currentFrame]);
 
+		var capturePath = _capturePath;
+		var captureSize = (ulong)_swapchain.Extent.Width * _swapchain.Extent.Height * 4;
+		Buffer captureBuffer = default;
+		DeviceMemory captureMemory = default;
+		if (capturePath is not null)
+			(captureBuffer, captureMemory) = CreateStagingBuffer(captureSize);
+
 		var cmd = _commandBuffers[_currentFrame];
 		_vk.ResetCommandBuffer(cmd, 0);
-		RecordCommandBuffer(cmd, imageIndex);
+		RecordCommandBuffer(cmd, imageIndex, captureBuffer);
 
 		SemaphoreSubmitInfo waitInfo = new()
 		{
@@ -113,6 +125,16 @@ public sealed unsafe class Renderer : IDisposable
 		};
 		_vk.QueueSubmit2(_ctx.GraphicsQueue, 1, in submit, _inFlight[_currentFrame]).Check("vkQueueSubmit2");
 
+		if (capturePath is not null)
+		{
+			// Wait for the image->buffer copy to finish, then read it back and write the PNG.
+			_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
+			WriteCapture(captureMemory, captureSize, _swapchain.Extent.Width, _swapchain.Extent.Height, capturePath);
+			_vk.DestroyBuffer(_ctx.Device, captureBuffer, null);
+			_vk.FreeMemory(_ctx.Device, captureMemory, null);
+			_capturePath = null;
+		}
+
 		var swapchain = _swapchain.Handle;
 		var renderFinished = _renderFinished[imageIndex];
 		var presentIndex = imageIndex;
@@ -139,7 +161,7 @@ public sealed unsafe class Renderer : IDisposable
 		_currentFrame = (_currentFrame + 1) % MaxFramesInFlight;
 	}
 
-	private void RecordCommandBuffer(CommandBuffer cmd, uint imageIndex)
+	private void RecordCommandBuffer(CommandBuffer cmd, uint imageIndex, Buffer captureBuffer)
 	{
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
@@ -198,11 +220,38 @@ public sealed unsafe class Renderer : IDisposable
 
 		_vk.CmdEndRendering(cmd);
 
-		// Transition for presentation.
-		TransitionImage(cmd, image, range,
-			ImageLayout.ColorAttachmentOptimal, ImageLayout.PresentSrcKhr,
-			PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit,
-			PipelineStageFlags2.BottomOfPipeBit, AccessFlags2.None);
+		if (captureBuffer.Handle != 0)
+		{
+			// Copy the rendered image into the staging buffer, then make it presentable.
+			TransitionImage(cmd, image, range,
+				ImageLayout.ColorAttachmentOptimal, ImageLayout.TransferSrcOptimal,
+				PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit,
+				PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit);
+
+			BufferImageCopy region = new()
+			{
+				ImageSubresource = new ImageSubresourceLayers
+				{
+					AspectMask = ImageAspectFlags.ColorBit,
+					LayerCount = 1,
+				},
+				ImageExtent = new Extent3D(_swapchain.Extent.Width, _swapchain.Extent.Height, 1),
+			};
+			_vk.CmdCopyImageToBuffer(cmd, image, ImageLayout.TransferSrcOptimal, captureBuffer, 1, in region);
+
+			TransitionImage(cmd, image, range,
+				ImageLayout.TransferSrcOptimal, ImageLayout.PresentSrcKhr,
+				PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit,
+				PipelineStageFlags2.BottomOfPipeBit, AccessFlags2.None);
+		}
+		else
+		{
+			// Transition for presentation.
+			TransitionImage(cmd, image, range,
+				ImageLayout.ColorAttachmentOptimal, ImageLayout.PresentSrcKhr,
+				PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit,
+				PipelineStageFlags2.BottomOfPipeBit, AccessFlags2.None);
+		}
 
 		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
 	}
@@ -234,6 +283,63 @@ public sealed unsafe class Renderer : IDisposable
 			PImageMemoryBarriers = &barrier,
 		};
 		_vk.CmdPipelineBarrier2(cmd, in dependency);
+	}
+
+	private (Buffer Buffer, DeviceMemory Memory) CreateStagingBuffer(ulong size)
+	{
+		BufferCreateInfo info = new()
+		{
+			SType = StructureType.BufferCreateInfo,
+			Size = size,
+			Usage = BufferUsageFlags.TransferDstBit,
+			SharingMode = SharingMode.Exclusive,
+		};
+		_vk.CreateBuffer(_ctx.Device, in info, null, out var buffer).Check("vkCreateBuffer");
+
+		_vk.GetBufferMemoryRequirements(_ctx.Device, buffer, out var requirements);
+		MemoryAllocateInfo alloc = new()
+		{
+			SType = StructureType.MemoryAllocateInfo,
+			AllocationSize = requirements.Size,
+			MemoryTypeIndex = FindMemoryType(
+				requirements.MemoryTypeBits,
+				MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit),
+		};
+		_vk.AllocateMemory(_ctx.Device, in alloc, null, out var memory).Check("vkAllocateMemory");
+		_vk.BindBufferMemory(_ctx.Device, buffer, memory, 0).Check("vkBindBufferMemory");
+		return (buffer, memory);
+	}
+
+	private uint FindMemoryType(uint typeBits, MemoryPropertyFlags required)
+	{
+		_vk.GetPhysicalDeviceMemoryProperties(_ctx.PhysicalDevice, out var properties);
+		for (var i = 0u; i < properties.MemoryTypeCount; i++)
+			if ((typeBits & (1u << (int)i)) != 0
+				&& (properties.MemoryTypes[(int)i].PropertyFlags & required) == required)
+				return i;
+		throw new VulkanException("No host-visible memory type available for the capture buffer.");
+	}
+
+	private void WriteCapture(DeviceMemory memory, ulong size, uint width, uint height, string path)
+	{
+		void* mapped;
+		_vk.MapMemory(_ctx.Device, memory, 0, size, 0, &mapped).Check("vkMapMemory");
+		var src = new ReadOnlySpan<byte>(mapped, (int)size);
+
+		// Swapchain is typically B8G8R8A8; PNG wants RGBA, so swap R/B for those formats.
+		var swizzle = _swapchain.ImageFormat is Format.B8G8R8A8Srgb or Format.B8G8R8A8Unorm;
+		var rgba = new byte[(int)size];
+		for (var i = 0; i < (int)(width * height); i++)
+		{
+			var o = i * 4;
+			rgba[o] = swizzle ? src[o + 2] : src[o];
+			rgba[o + 1] = src[o + 1];
+			rgba[o + 2] = swizzle ? src[o] : src[o + 2];
+			rgba[o + 3] = src[o + 3];
+		}
+		_vk.UnmapMemory(_ctx.Device, memory);
+
+		PngWriter.WriteRgba(path, (int)width, (int)height, rgba);
 	}
 
 	private void CreateCommandPool()

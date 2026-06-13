@@ -1,5 +1,4 @@
 using Silk.NET.Vulkan;
-using Silk.NET.Vulkan.Extensions.KHR;
 
 namespace Loom.Vulkan;
 
@@ -45,6 +44,12 @@ public sealed unsafe class Swapchain : IDisposable
 		if (caps.MaxImageCount > 0 && imageCount > caps.MaxImageCount)
 			imageCount = caps.MaxImageCount;
 
+		// Color attachment always; add transfer-src when the surface supports it so frames
+		// can be copied out (e.g. PNG capture for validation).
+		var usage = ImageUsageFlags.ColorAttachmentBit;
+		if ((caps.SupportedUsageFlags & ImageUsageFlags.TransferSrcBit) != 0)
+			usage |= ImageUsageFlags.TransferSrcBit;
+
 		SwapchainCreateInfoKHR createInfo = new()
 		{
 			SType = StructureType.SwapchainCreateInfoKhr,
@@ -54,7 +59,7 @@ public sealed unsafe class Swapchain : IDisposable
 			ImageColorSpace = surfaceFormat.ColorSpace,
 			ImageExtent = extent,
 			ImageArrayLayers = 1,
-			ImageUsage = ImageUsageFlags.ColorAttachmentBit,
+			ImageUsage = usage,
 			PreTransform = caps.CurrentTransform,
 			CompositeAlpha = CompositeAlphaFlagsKHR.OpaqueBitKhr,
 			PresentMode = presentMode,
