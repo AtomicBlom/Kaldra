@@ -1,5 +1,6 @@
 using Loom.Core;
 using Silk.NET.Vulkan;
+using VMASharp;
 using VkFormat = Silk.NET.Vulkan.Format;
 
 namespace Loom.Vulkan;
@@ -22,7 +23,7 @@ internal sealed unsafe class TransientResources : IDisposable
 	{
 		public Image Image;
 		public ImageView View;
-		public DeviceMemory Memory;
+		public Allocation? Allocation;
 		public VkFormat Format;
 		public ImageAspectFlags Aspect;
 		public Extent2D Extent;
@@ -34,6 +35,7 @@ internal sealed unsafe class TransientResources : IDisposable
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly RenderGraph _graph;
+	private readonly VulkanMemoryAllocator _allocator;
 	private readonly ResourceImage[] _images; // indexed by ResourceHandle.Id
 	private Extent2D _swapExtent;
 
@@ -44,6 +46,11 @@ internal sealed unsafe class TransientResources : IDisposable
 		_graph = graph;
 		_swapExtent = swapExtent;
 		_images = new ResourceImage[graph.Resources.Length];
+
+		// One VMA allocator backs every transient image; it sub-allocates from large blocks (and aliases
+		// non-overlapping lifetimes — M4). Vulkan 1.3 device, so the 1.1+ requirement is satisfied.
+		_allocator = new VulkanMemoryAllocator(new VulkanMemoryAllocatorCreateInfo(
+			Vk.Version13, _vk, ctx.Instance, ctx.PhysicalDevice, ctx.Device));
 
 		var sampled = SampledResourceIds(graph);
 
@@ -132,17 +139,8 @@ internal sealed unsafe class TransientResources : IDisposable
 			SharingMode = SharingMode.Exclusive,
 			InitialLayout = ImageLayout.Undefined,
 		};
-		_vk.CreateImage(_ctx.Device, in info, null, out slot.Image).Check("vkCreateImage");
-
-		_vk.GetImageMemoryRequirements(_ctx.Device, slot.Image, out var requirements);
-		MemoryAllocateInfo alloc = new()
-		{
-			SType = StructureType.MemoryAllocateInfo,
-			AllocationSize = requirements.Size,
-			MemoryTypeIndex = _ctx.FindMemoryType(requirements.MemoryTypeBits, MemoryPropertyFlags.DeviceLocalBit),
-		};
-		_vk.AllocateMemory(_ctx.Device, in alloc, null, out slot.Memory).Check("vkAllocateMemory");
-		_vk.BindImageMemory(_ctx.Device, slot.Image, slot.Memory, 0).Check("vkBindImageMemory");
+		// VMA creates the image and binds sub-allocated device-local memory in one call.
+		slot.Image = _allocator.CreateImage(in info, new AllocationCreateInfo { Usage = MemoryUsage.GPU_Only }, out slot.Allocation);
 
 		ImageViewCreateInfo viewInfo = new()
 		{
@@ -161,11 +159,10 @@ internal sealed unsafe class TransientResources : IDisposable
 			_vk.DestroyImageView(_ctx.Device, slot.View, null);
 		if (slot.Image.Handle != 0)
 			_vk.DestroyImage(_ctx.Device, slot.Image, null);
-		if (slot.Memory.Handle != 0)
-			_vk.FreeMemory(_ctx.Device, slot.Memory, null);
+		slot.Allocation?.Dispose(); // returns the sub-allocation to the VMA block
 		slot.View = default;
 		slot.Image = default;
-		slot.Memory = default;
+		slot.Allocation = null;
 	}
 
 	// Resources read via .Samples anywhere in the graph need SampledBit at allocation time.
@@ -184,5 +181,6 @@ internal sealed unsafe class TransientResources : IDisposable
 		for (var i = 0; i < _images.Length; i++)
 			if (!_images[i].IsBackbuffer)
 				DestroyImage(ref _images[i]);
+		_allocator.Dispose();
 	}
 }
