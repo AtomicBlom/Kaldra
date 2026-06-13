@@ -1,0 +1,139 @@
+using System.Collections.Immutable;
+
+namespace Loom.Core;
+
+/// <summary>
+/// The fluent entry point for authoring a render graph (the <c>g</c> in <c>DefineGraph(g => { … })</c>).
+/// Declare resolution domains and resources, then passes that state their reads/writes. Build is
+/// ordinary C#: feature toggles are control flow, not config (Planning.md §8). Call
+/// <see cref="RenderGraph.Define"/> to drive one and get the immutable <see cref="RenderGraph"/> back.
+/// <para>
+/// <b>Backbuffer spelling (deviation from Planning.md §6 noted deliberately).</b> §5/§6 sketch the
+/// swapchain as <c>g.Domain.Backbuffer</c> exposing a <c>.Color</c> property, while user domains use a
+/// <c>.Color(name, format)</c> method — two spellings that collide in real C# (a type can't have both a
+/// <c>Color</c> property and a <c>Color(…)</c> method, and <c>g.Domain</c> can't be both a property and a
+/// method). Loom resolves this by exposing the swapchain colour target <em>directly</em> as the
+/// <see cref="Backbuffer"/> handle. So §6's <c>var screen = g.Domain.Backbuffer; … .Writes(screen.Color)</c>
+/// becomes <c>var screen = g.Backbuffer; … .Writes(screen)</c>; reach the native-resolution domain for
+/// sibling targets via <c>g.Backbuffer.Domain</c>.
+/// </para>
+/// </summary>
+public sealed class GraphBuilder
+{
+	private readonly List<Domain> _domains = [];
+	private readonly List<ResourceHandle> _resources = [];
+	private readonly List<PassBuilder> _passes = [];
+	private readonly HashSet<string> _domainNames = [];
+	private readonly HashSet<string> _resourceNames = [];
+	private readonly HashSet<string> _passNames = [];
+
+	private Domain? _backbufferDomain;
+	private ResourceHandle? _backbuffer;
+	private ResourceHandle? _presentTarget;
+
+	internal GraphBuilder() { }
+
+	/// <summary>
+	/// Declare a resolution domain. Everything declared in it renders at <paramref name="width"/>×
+	/// <paramref name="height"/> — the mechanism behind pixelation (Planning.md §9).
+	/// </summary>
+	public Domain Domain(string name, int width, int height)
+	{
+		if (width <= 0 || height <= 0)
+			throw new ArgumentOutOfRangeException(nameof(width), $"Domain '{name}' must have positive dimensions.");
+		if (!_domainNames.Add(name))
+			throw new InvalidOperationException($"Duplicate domain name '{name}'.");
+
+		var domain = new Domain(this, name, width, height, isBackbuffer: false);
+		_domains.Add(domain);
+		return domain;
+	}
+
+	/// <summary>
+	/// The swapchain colour target (native resolution; backend-chosen format). This <em>is</em> the
+	/// present surface — hand it to <c>.Writes</c>/<c>.Blends</c> and to <see cref="Present"/>. Its
+	/// <see cref="ResourceHandle.Domain"/> is the native-resolution domain, for declaring sibling
+	/// native-res targets (e.g. a HUD at full resolution). See the type remarks for why this replaces
+	/// §6's <c>screen.Color</c> spelling.
+	/// </summary>
+	public ResourceHandle Backbuffer
+	{
+		get
+		{
+			if (_backbuffer is not null)
+				return _backbuffer;
+
+			_backbufferDomain = new Domain(this, "<backbuffer>", width: 0, height: 0, isBackbuffer: true);
+			_domains.Add(_backbufferDomain);
+			_backbuffer = AddResource("<backbuffer>", Format.Rgba8Srgb, ResourceKind.Backbuffer, _backbufferDomain, scale: 1f);
+			return _backbuffer;
+		}
+	}
+
+	/// <summary>
+	/// Declare a resource whose lifetime is forever — the transient aliaser never recycles its memory
+	/// (Planning.md §8). For cross-frame history (e.g. auto-exposure). <paramref name="size"/> is the
+	/// history ring depth.
+	/// </summary>
+	public ResourceHandle Persistent(string name, Format format, int size = 1)
+	{
+		if (size < 1)
+			throw new ArgumentOutOfRangeException(nameof(size), "Persistent ring depth must be at least 1.");
+		// Persistent resources aren't resolution-bound; anchor them to the backbuffer domain for now.
+		// (A dedicated buffer/non-spatial resource model arrives with auto-exposure in M5.)
+		return AddResource(name, format, ResourceKind.Persistent, BackbufferDomainForPersistent(), scale: 1f, count: size);
+	}
+
+	/// <summary>Begin a raster pass. Chain intents, then <c>.Draw(ctx => …)</c>.</summary>
+	public PassBuilder Pass(string name) => AddPass(name, PassKind.Raster);
+
+	/// <summary>Begin a compute pass. Chain intents, then <c>.Dispatch(ctx => …)</c>.</summary>
+	public PassBuilder Compute(string name) => AddPass(name, PassKind.Compute);
+
+	/// <summary>
+	/// The terminal: declare which resource is presented to the screen. The acquire/present/frames-in-flight
+	/// sync is derived behind this (Planning.md §6).
+	/// </summary>
+	public void Present(ResourceHandle resource)
+	{
+		ArgumentNullException.ThrowIfNull(resource);
+		_presentTarget = resource;
+	}
+
+	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1)
+	{
+		if (!_resourceNames.Add(name))
+			throw new InvalidOperationException($"Duplicate resource name '{name}'.");
+		var handle = new ResourceHandle(_resources.Count, name, format, kind, domain, scale, count);
+		_resources.Add(handle);
+		return handle;
+	}
+
+	private Domain BackbufferDomainForPersistent()
+	{
+		_ = Backbuffer; // ensure the backbuffer domain exists
+		return _backbufferDomain!;
+	}
+
+	private PassBuilder AddPass(string name, PassKind kind)
+	{
+		if (!_passNames.Add(name))
+			throw new InvalidOperationException($"Duplicate pass name '{name}'.");
+		var pass = new PassBuilder(name, kind);
+		_passes.Add(pass);
+		return pass;
+	}
+
+	internal RenderGraph Build()
+	{
+		var passes = ImmutableArray.CreateBuilder<GraphPass>(_passes.Count);
+		foreach (var pass in _passes)
+			passes.Add(pass.Build());
+
+		return new RenderGraph(
+			[.. _domains],
+			[.. _resources],
+			passes.ToImmutable(),
+			_presentTarget);
+	}
+}
