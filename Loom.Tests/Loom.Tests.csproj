@@ -18,9 +18,10 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
-  <!-- Describe layer only: tests reference Loom.Core, never the Vulkan backend. -->
+  <!-- Describe + Execute layers: both backend-neutral, never the Vulkan backend. -->
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
+    <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
   </ItemGroup>
 
 </Project>
