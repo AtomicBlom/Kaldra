@@ -237,7 +237,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		RenderingAttachmentInfo depth = default;
 		var hasDepth = false;
 		Extent2D area = default;
-		VkFormat colorFormat = default;
+		var colorFormats = stackalloc VkFormat[attachments.Length];
 		VkFormat depthFormat = default;
 
 		foreach (var attachment in attachments)
@@ -248,8 +248,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 			if (attachment.State == ResourceState.ColorAttachment)
 			{
-				if (colorCount == 0)
-					colorFormat = image.Format;
+				colorFormats[colorCount] = image.Format;
 				color[colorCount++] = new RenderingAttachmentInfo
 				{
 					SType = StructureType.RenderingAttachmentInfo,
@@ -300,7 +299,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		Rect2D scissor = new(new Offset2D(0, 0), area);
 		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
 
-		_context.BeginPass(colorFormat, depthFormat);
+		_context.BeginPass(new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat);
 		pass.Pass.Record?.Invoke(_context);
 
 		_vk.CmdEndRendering(cmd);

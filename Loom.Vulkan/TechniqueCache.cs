@@ -37,7 +37,9 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 		hash.AppendData("\0"u8);
 		hash.AppendData(Encoding.UTF8.GetBytes(description.FragmentEntry));
 		hash.AppendData("\0"u8);
-		hash.AppendData(BitConverter.GetBytes((int)description.ColorFormat));
+		hash.AppendData(BitConverter.GetBytes(description.ColorFormats.Length));
+		foreach (var format in description.ColorFormats)
+			hash.AppendData(BitConverter.GetBytes((int)format));
 		hash.AppendData(BitConverter.GetBytes(description.SamplesInput));
 		hash.AppendData(BitConverter.GetBytes(description.HasVertexInput));
 		hash.AppendData(BitConverter.GetBytes((int)description.DepthFormat));

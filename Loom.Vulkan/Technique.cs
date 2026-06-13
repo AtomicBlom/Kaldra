@@ -179,17 +179,21 @@ public sealed unsafe class Technique : IDisposable
 			SType = StructureType.PipelineMultisampleStateCreateInfo,
 			RasterizationSamples = SampleCountFlags.Count1Bit,
 		});
-		var blendAttachment = arena.Write(new PipelineColorBlendAttachmentState
-		{
-			BlendEnable = false,
-			ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit
-				| ColorComponentFlags.BBit | ColorComponentFlags.ABit,
-		});
+		// One blend attachment per colour target (a g-buffer writes several). Blend off, full write mask.
+		var colorCount = description.ColorFormats.Length;
+		var blendAttachments = arena.Alloc<PipelineColorBlendAttachmentState>(colorCount);
+		for (var i = 0; i < colorCount; i++)
+			blendAttachments[i] = new PipelineColorBlendAttachmentState
+			{
+				BlendEnable = false,
+				ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit
+					| ColorComponentFlags.BBit | ColorComponentFlags.ABit,
+			};
 		var colorBlend = arena.Write(new PipelineColorBlendStateCreateInfo
 		{
 			SType = StructureType.PipelineColorBlendStateCreateInfo,
-			AttachmentCount = 1,
-			PAttachments = blendAttachment,
+			AttachmentCount = (uint)colorCount,
+			PAttachments = blendAttachments,
 		});
 		var dynamicStates = arena.Write<DynamicState>([DynamicState.Viewport, DynamicState.Scissor]);
 		var dynamicState = arena.Write(new PipelineDynamicStateCreateInfo
@@ -213,12 +217,12 @@ public sealed unsafe class Technique : IDisposable
 			: null;
 
 		// Dynamic rendering: the attachment format(s) live here, chained via pNext.
-		var colorFormatPtr = arena.Write(description.ColorFormat);
+		var colorFormats = arena.Write((ReadOnlySpan<Format>)description.ColorFormats);
 		var renderingInfo = arena.Write(new PipelineRenderingCreateInfo
 		{
 			SType = StructureType.PipelineRenderingCreateInfo,
-			ColorAttachmentCount = 1,
-			PColorAttachmentFormats = colorFormatPtr,
+			ColorAttachmentCount = (uint)colorCount,
+			PColorAttachmentFormats = colorFormats,
 			DepthAttachmentFormat = hasDepth ? description.DepthFormat : Format.Undefined,
 		});
 

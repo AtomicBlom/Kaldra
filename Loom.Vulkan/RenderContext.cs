@@ -24,9 +24,12 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private readonly DescriptorAllocator _descriptors;
 	private readonly MeshStore _meshes;
 	private readonly Sampler _nearestSampler;
+	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off TechniqueCache's
+	// per-call SPIR-V file read. Misses fall through to TechniqueCache (which bakes + content-hashes once).
+	private readonly Dictionary<string, Technique> _baked = [];
 
 	private CommandBuffer _cmd;
-	private VkFormat _colorFormat;
+	private VkFormat[] _colorFormats = [];
 	private VkFormat _depthFormat;
 	private int _frameSlot;
 	private Camera _camera;
@@ -63,9 +66,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	}
 
 	/// <summary>Set the attachment formats of the current pass — the formats its techniques bake against.</summary>
-	public void BeginPass(VkFormat colorFormat, VkFormat depthFormat)
+	public void BeginPass(ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat)
 	{
-		_colorFormat = colorFormat;
+		_colorFormats = colorFormats.ToArray();
 		_depthFormat = depthFormat;
 	}
 
@@ -115,15 +118,23 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	}
 
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;
-	// the colour format is the current pass's target. So one template baked against two formats caches two
-	// pipelines, and the call site only needs the name.
+	// the attachment formats are the current pass's. So one template used in passes with different targets
+	// caches distinct pipelines, and the call site only needs the name. The local cache keeps the per-draw
+	// path off TechniqueCache's file read.
 	private Technique Bake(string technique)
 	{
 		if (!_registry.TryGetValue(technique, out var template))
 			throw new VulkanException($"No technique registered under the name '{technique}'.");
-		return _techniques.GetOrBake(new TechniqueDescription(
-			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormat,
+
+		var key = $"{technique}|{string.Join(',', _colorFormats)}|{_depthFormat}";
+		if (_baked.TryGetValue(key, out var cached))
+			return cached;
+
+		var baked = _techniques.GetOrBake(new TechniqueDescription(
+			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormats,
 			template.SamplesInput, template.HasVertexInput, _depthFormat));
+		_baked[key] = baked;
+		return baked;
 	}
 
 	private Sampler CreateNearestSampler()
