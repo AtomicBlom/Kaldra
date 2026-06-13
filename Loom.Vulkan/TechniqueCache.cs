@@ -40,7 +40,7 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 		hash.AppendData(BitConverter.GetBytes(description.ColorFormats.Length));
 		foreach (var format in description.ColorFormats)
 			hash.AppendData(BitConverter.GetBytes((int)format));
-		hash.AppendData(BitConverter.GetBytes(description.SamplesInput));
+		hash.AppendData(BitConverter.GetBytes(description.SampleCount));
 		hash.AppendData(BitConverter.GetBytes(description.HasVertexInput));
 		hash.AppendData(BitConverter.GetBytes((int)description.DepthFormat));
 		return Convert.ToHexString(hash.GetHashAndReset());

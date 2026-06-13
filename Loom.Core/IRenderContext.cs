@@ -25,20 +25,15 @@ public interface IRenderContext
 	Camera Camera { get; }
 
 	/// <summary>
-	/// Draw a fullscreen triangle with the named technique, taking no sampled input — for a pass that
-	/// computes its output from scratch (a gradient, a procedural fill). Pairs with §5's
-	/// <c>.FullScreenTriangle()</c> techniques. The render target is the pass's declared <c>.Writes</c> target.
+	/// Draw a fullscreen triangle with the named technique, sampling zero or more <paramref name="inputs"/>
+	/// (each bound as a combined image sampler at set 0, bindings 0..N-1, in the order given). §5's
+	/// <c>ctx.FullScreen(Technique.X, ...args)</c>. With no inputs it's a from-scratch pass (a gradient); with
+	/// one it's the engine's blit/upscale (a fullscreen sample, not a copy — a nearest variant is the §9
+	/// pixelation step); with several it's deferred lighting and the like. Every input must be a resource the
+	/// pass declared with <c>.Samples</c>, so the graph derives the read dependency and shader-read transition.
+	/// The render target is the pass's declared <c>.Writes</c> target.
 	/// </summary>
-	void FullScreen(string technique);
-
-	/// <summary>
-	/// Draw a fullscreen triangle with the named technique, sampling <paramref name="input"/> (bound as a
-	/// combined image sampler at set 0, binding 0). This is the engine's blit/upscale — a fullscreen sample,
-	/// not a copy — so a nearest-filtered variant is the §9 pixelation step. <paramref name="input"/> must be
-	/// a resource the pass declared with <c>.Samples</c>, so the graph derives the read dependency and the
-	/// shader-read layout transition.
-	/// </summary>
-	void FullScreen(string technique, ResourceHandle input);
+	void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs);
 
 	/// <summary>
 	/// Draw GPU-resident geometry with the named technique (the geometry counterpart to

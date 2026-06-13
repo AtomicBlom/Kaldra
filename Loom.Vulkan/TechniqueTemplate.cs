@@ -10,11 +10,11 @@ namespace Loom.Vulkan;
 /// <param name="SpirvPath">Path to the compiled SPIR-V module containing both entry points.</param>
 /// <param name="VertexEntry">Vertex entry-point name.</param>
 /// <param name="FragmentEntry">Fragment entry-point name.</param>
-/// <param name="SamplesInput">True if the fragment samples one input (combined image sampler at set 0/binding 0).</param>
+/// <param name="SampleCount">Number of sampled inputs the fragment reads (combined image samplers at set 0, bindings 0..N-1).</param>
 /// <param name="HasVertexInput">True if the vertex stage reads a <see cref="Loom.Core.Vertex"/> buffer (a mesh technique) rather than fabricating a fullscreen triangle.</param>
 public readonly record struct TechniqueTemplate(
 	string SpirvPath,
 	string VertexEntry,
 	string FragmentEntry,
-	bool SamplesInput = false,
+	int SampleCount = 0,
 	bool HasVertexInput = false);

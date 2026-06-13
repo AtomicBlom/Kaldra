@@ -72,10 +72,41 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_depthFormat = depthFormat;
 	}
 
-	public void FullScreen(string technique)
+	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs)
 	{
 		var baked = Bake(technique);
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+
+		if (inputs.Length > 0)
+		{
+			// Bind each sampled input as a combined image sampler at bindings 0..N-1 (the graph put them in
+			// ShaderReadOnly before this pass). One transient descriptor set, recycled with the frame slot.
+			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+			var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
+			var writes = stackalloc WriteDescriptorSet[inputs.Length];
+			for (var i = 0; i < inputs.Length; i++)
+			{
+				ref var image = ref _resources.Get(_frameSlot, inputs[i].Id);
+				imageInfos[i] = new DescriptorImageInfo
+				{
+					Sampler = _nearestSampler,
+					ImageView = image.View,
+					ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
+				};
+				writes[i] = new WriteDescriptorSet
+				{
+					SType = StructureType.WriteDescriptorSet,
+					DstSet = set,
+					DstBinding = (uint)i,
+					DescriptorCount = 1,
+					DescriptorType = DescriptorType.CombinedImageSampler,
+					PImageInfo = &imageInfos[i],
+				};
+			}
+			_vk.UpdateDescriptorSets(_ctx.Device, (uint)inputs.Length, writes, 0, null);
+			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+		}
+
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
 
@@ -86,35 +117,6 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
-	}
-
-	public void FullScreen(string technique, ResourceHandle input)
-	{
-		ArgumentNullException.ThrowIfNull(input);
-		var baked = Bake(technique);
-
-		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-		ref var image = ref _resources.Get(_frameSlot, input.Id);
-		DescriptorImageInfo imageInfo = new()
-		{
-			Sampler = _nearestSampler,
-			ImageView = image.View,
-			ImageLayout = ImageLayout.ShaderReadOnlyOptimal, // the graph transitioned it before this pass
-		};
-		WriteDescriptorSet write = new()
-		{
-			SType = StructureType.WriteDescriptorSet,
-			DstSet = set,
-			DstBinding = 0,
-			DescriptorCount = 1,
-			DescriptorType = DescriptorType.CombinedImageSampler,
-			PImageInfo = &imageInfo,
-		};
-		_vk.UpdateDescriptorSets(_ctx.Device, 1, in write, 0, null);
-
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
-		_vk.CmdDraw(_cmd, 3, 1, 0, 0);
 	}
 
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;
@@ -132,7 +134,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 		var baked = _techniques.GetOrBake(new TechniqueDescription(
 			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormats,
-			template.SamplesInput, template.HasVertexInput, _depthFormat));
+			template.SampleCount, template.HasVertexInput, _depthFormat));
 		_baked[key] = baked;
 		return baked;
 	}

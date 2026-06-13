@@ -20,8 +20,8 @@ public sealed unsafe class Technique : IDisposable
 	public PipelineLayout Layout { get; }
 
 	/// <summary>
-	/// The descriptor set layout for a <see cref="TechniqueDescription.SamplesInput"/> technique (one
-	/// combined image sampler at set 0/binding 0), or the null handle for a technique that samples nothing.
+	/// The descriptor set layout for a sampling technique (<see cref="TechniqueDescription.SampleCount"/>
+	/// combined image samplers at set 0, bindings 0..N-1), or the null handle for a technique that samples nothing.
 	/// </summary>
 	public DescriptorSetLayout DescriptorSetLayout { get; }
 
@@ -33,7 +33,7 @@ public sealed unsafe class Technique : IDisposable
 		var module = CreateShaderModule(spirv);
 		try
 		{
-			DescriptorSetLayout = description.SamplesInput ? CreateSampledImageSetLayout() : default;
+			DescriptorSetLayout = description.SampleCount > 0 ? CreateSampledImageSetLayout(description.SampleCount) : default;
 			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput);
 			Pipeline = CreatePipeline(module, in description);
 		}
@@ -59,22 +59,24 @@ public sealed unsafe class Technique : IDisposable
 		}
 	}
 
-	// Set 0: a single combined image sampler at binding 0 (the .Samples input), visible to the fragment
-	// shader. Hardcoded for M3's fullscreen-sample; SPIR-V reflection will derive bindings later.
-	private DescriptorSetLayout CreateSampledImageSetLayout()
+	// Set 0: N combined image samplers at bindings 0..N-1 (the .Samples inputs), visible to the fragment
+	// shader. Hardcoded shape; SPIR-V reflection will derive bindings later.
+	private DescriptorSetLayout CreateSampledImageSetLayout(int sampleCount)
 	{
-		DescriptorSetLayoutBinding binding = new()
-		{
-			Binding = 0,
-			DescriptorType = DescriptorType.CombinedImageSampler,
-			DescriptorCount = 1,
-			StageFlags = ShaderStageFlags.FragmentBit,
-		};
+		var bindings = stackalloc DescriptorSetLayoutBinding[sampleCount];
+		for (var i = 0; i < sampleCount; i++)
+			bindings[i] = new DescriptorSetLayoutBinding
+			{
+				Binding = (uint)i,
+				DescriptorType = DescriptorType.CombinedImageSampler,
+				DescriptorCount = 1,
+				StageFlags = ShaderStageFlags.FragmentBit,
+			};
 		DescriptorSetLayoutCreateInfo info = new()
 		{
 			SType = StructureType.DescriptorSetLayoutCreateInfo,
-			BindingCount = 1,
-			PBindings = &binding,
+			BindingCount = (uint)sampleCount,
+			PBindings = bindings,
 		};
 		_vk.CreateDescriptorSetLayout(_device, in info, null, out var layout).Check("vkCreateDescriptorSetLayout");
 		return layout;

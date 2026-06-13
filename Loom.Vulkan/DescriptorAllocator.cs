@@ -25,7 +25,7 @@ internal sealed unsafe class DescriptorAllocator : IDisposable
 		DescriptorPoolSize poolSize = new()
 		{
 			Type = DescriptorType.CombinedImageSampler,
-			DescriptorCount = maxSetsPerFrame,
+			DescriptorCount = maxSetsPerFrame * 8, // sets may bind several samplers (e.g. deferred lighting)
 		};
 		DescriptorPoolCreateInfo info = new()
 		{

@@ -10,9 +10,9 @@ namespace Loom.Vulkan;
 /// <see cref="ColorFormats"/> are filled in at record time from the formats of the targets the pass writes,
 /// in attachment order (dynamic rendering requires the pipeline's attachment formats to match; a g-buffer
 /// pass has several), so one shader baked against different targets yields different cached pipelines.
-/// <see cref="SamplesInput"/> selects the descriptor set layout: <c>true</c> gives a single combined image
-/// sampler at set 0/binding 0 (the fullscreen-sample); the per-binding reflection that derives this
-/// automatically arrives later.
+/// <see cref="SampleCount"/> selects the descriptor set layout: N gives N combined image samplers at set 0,
+/// bindings 0..N-1 (the fullscreen-sample / deferred-lighting inputs); the per-binding reflection that derives
+/// this automatically arrives later.
 /// </para>
 /// <para>
 /// The <see cref="TechniqueCache"/> keys on a content hash (which folds in every field here), not this
@@ -24,6 +24,6 @@ public readonly record struct TechniqueDescription(
 	string VertexEntry,
 	string FragmentEntry,
 	Format[] ColorFormats,
-	bool SamplesInput = false,
+	int SampleCount = 0,
 	bool HasVertexInput = false,
 	Format DepthFormat = Format.Undefined);
