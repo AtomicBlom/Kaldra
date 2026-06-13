@@ -103,6 +103,12 @@ public sealed unsafe class GraphExecutor : IDisposable
 	/// <summary>Capture the next rendered frame to a PNG (debug/validation). Synchronous on that frame.</summary>
 	public void RequestCapture(string path) => _capturePath = path;
 
+	/// <summary>
+	/// The camera the next frame renders from. Per-frame data the host sets before <see cref="DrawFrame"/>;
+	/// passes pull it via <c>ctx.Camera</c>. Defaults to identity (clip space == world space).
+	/// </summary>
+	public Camera Camera { get; set; } = Camera.Identity;
+
 	public void DrawFrame(double deltaSeconds)
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
@@ -209,7 +215,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _currentFrame);
+		_context.BeginFrame(cmd, deltaTime, _currentFrame, Camera);
 
 		foreach (var pass in _plan.Passes)
 		{
@@ -232,6 +238,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		var hasDepth = false;
 		Extent2D area = default;
 		VkFormat colorFormat = default;
+		VkFormat depthFormat = default;
 
 		foreach (var attachment in attachments)
 		{
@@ -255,6 +262,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 			}
 			else
 			{
+				depthFormat = image.Format;
 				depth = new RenderingAttachmentInfo
 				{
 					SType = StructureType.RenderingAttachmentInfo,
@@ -292,7 +300,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		Rect2D scissor = new(new Offset2D(0, 0), area);
 		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
 
-		_context.BeginPass(colorFormat);
+		_context.BeginPass(colorFormat, depthFormat);
 		pass.Pass.Record?.Invoke(_context);
 
 		_vk.CmdEndRendering(cmd);

@@ -1,3 +1,5 @@
+using System.Numerics;
+
 using Silk.NET.Vulkan;
 
 namespace Loom.Vulkan;
@@ -32,7 +34,7 @@ public sealed unsafe class Technique : IDisposable
 		try
 		{
 			DescriptorSetLayout = description.SamplesInput ? CreateSampledImageSetLayout() : default;
-			Layout = CreatePipelineLayout(DescriptorSetLayout);
+			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput);
 			Pipeline = CreatePipeline(module, in description);
 		}
 		finally
@@ -78,15 +80,24 @@ public sealed unsafe class Technique : IDisposable
 		return layout;
 	}
 
-	// No push constants yet. Zero or one descriptor set, depending on whether the technique samples.
-	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout)
+	// Zero or one descriptor set (whether the technique samples). Mesh techniques also get a 64-byte vertex
+	// push constant for the MVP matrix — small and per-draw, so push constants beat a uniform buffer here.
+	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout, bool hasMvpPushConstant)
 	{
 		var hasSet = setLayout.Handle != 0;
+		PushConstantRange mvp = new()
+		{
+			StageFlags = ShaderStageFlags.VertexBit,
+			Offset = 0,
+			Size = (uint)sizeof(Matrix4x4),
+		};
 		PipelineLayoutCreateInfo info = new()
 		{
 			SType = StructureType.PipelineLayoutCreateInfo,
 			SetLayoutCount = hasSet ? 1u : 0u,
 			PSetLayouts = hasSet ? &setLayout : null,
+			PushConstantRangeCount = hasMvpPushConstant ? 1u : 0u,
+			PPushConstantRanges = hasMvpPushConstant ? &mvp : null,
 		};
 		_vk.CreatePipelineLayout(_device, in info, null, out var layout).Check("vkCreatePipelineLayout");
 		return layout;
@@ -188,13 +199,27 @@ public sealed unsafe class Technique : IDisposable
 			PDynamicStates = dynamicStates,
 		});
 
-		// Dynamic rendering: the color attachment format(s) live here, chained via pNext.
+		// Depth: enabled when the pass writes a depth attachment (the backend supplies its format). Standard
+		// reverse-less-than test with write; no stencil. Null when the technique has no depth target.
+		var hasDepth = description.DepthFormat != Format.Undefined;
+		var depthStencil = hasDepth
+			? arena.Write(new PipelineDepthStencilStateCreateInfo
+			{
+				SType = StructureType.PipelineDepthStencilStateCreateInfo,
+				DepthTestEnable = true,
+				DepthWriteEnable = true,
+				DepthCompareOp = CompareOp.LessOrEqual,
+			})
+			: null;
+
+		// Dynamic rendering: the attachment format(s) live here, chained via pNext.
 		var colorFormatPtr = arena.Write(description.ColorFormat);
 		var renderingInfo = arena.Write(new PipelineRenderingCreateInfo
 		{
 			SType = StructureType.PipelineRenderingCreateInfo,
 			ColorAttachmentCount = 1,
 			PColorAttachmentFormats = colorFormatPtr,
+			DepthAttachmentFormat = hasDepth ? description.DepthFormat : Format.Undefined,
 		});
 
 		GraphicsPipelineCreateInfo createInfo = new()
@@ -209,6 +234,7 @@ public sealed unsafe class Technique : IDisposable
 			PRasterizationState = rasterization,
 			PMultisampleState = multisample,
 			PColorBlendState = colorBlend,
+			PDepthStencilState = depthStencil,
 			PDynamicState = dynamicState,
 			Layout = Layout,
 			RenderPass = default, // dynamic rendering

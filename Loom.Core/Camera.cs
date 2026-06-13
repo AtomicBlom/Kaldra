@@ -1,0 +1,21 @@
+using System.Numerics;
+
+namespace Loom.Core;
+
+/// <summary>
+/// The view onto the scene a pass renders from: a view matrix and a projection. Per-frame data the host
+/// updates and the pass pulls from <see cref="IRenderContext.Camera"/> (never captured — §8). Backend-neutral
+/// (<c>System.Numerics</c>); matrices follow the row-vector convention (<c>clip = position · MVP</c>), so the
+/// combined transform composes left-to-right. The host is responsible for any Vulkan clip-space fix-up (Y
+/// flip) when it builds <see cref="Projection"/>.
+/// </summary>
+/// <param name="View">World → view (camera) space.</param>
+/// <param name="Projection">View → clip space.</param>
+public readonly record struct Camera(Matrix4x4 View, Matrix4x4 Projection)
+{
+	/// <summary>The combined view-projection (no model). Row-vector order: <c>View * Projection</c>.</summary>
+	public Matrix4x4 ViewProjection => View * Projection;
+
+	/// <summary>An identity camera (clip space == world space) — the default before the host sets one.</summary>
+	public static Camera Identity => new(Matrix4x4.Identity, Matrix4x4.Identity);
+}

@@ -20,4 +20,5 @@ public readonly record struct TechniqueDescription(
 	string FragmentEntry,
 	Format ColorFormat,
 	bool SamplesInput = false,
-	bool HasVertexInput = false);
+	bool HasVertexInput = false,
+	Format DepthFormat = Format.Undefined);

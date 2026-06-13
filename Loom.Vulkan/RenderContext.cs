@@ -1,3 +1,5 @@
+using System.Numerics;
+
 using Loom.Core;
 using Silk.NET.Vulkan;
 using VkFormat = Silk.NET.Vulkan.Format;
@@ -25,9 +27,13 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 	private CommandBuffer _cmd;
 	private VkFormat _colorFormat;
+	private VkFormat _depthFormat;
 	private int _frameSlot;
+	private Camera _camera;
 
 	public float DeltaTime { get; private set; }
+
+	public Camera Camera => _camera;
 
 	public RenderContext(
 		VulkanContext ctx,
@@ -47,16 +53,21 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_nearestSampler = CreateNearestSampler();
 	}
 
-	/// <summary>Bind the context to this frame's command buffer, frame slot, and timing before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, int frameSlot)
+	/// <summary>Bind the context to this frame's command buffer, frame slot, camera, and timing before any pass records.</summary>
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, int frameSlot, Camera camera)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
 		_frameSlot = frameSlot;
+		_camera = camera;
 	}
 
-	/// <summary>Set the colour format of the target the current pass writes — the format its techniques bake against.</summary>
-	public void BeginPass(VkFormat colorFormat) => _colorFormat = colorFormat;
+	/// <summary>Set the attachment formats of the current pass — the formats its techniques bake against.</summary>
+	public void BeginPass(VkFormat colorFormat, VkFormat depthFormat)
+	{
+		_colorFormat = colorFormat;
+		_depthFormat = depthFormat;
+	}
 
 	public void FullScreen(string technique)
 	{
@@ -68,7 +79,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	public void Draw(Mesh mesh, string technique)
 	{
 		var baked = Bake(technique);
+		var mvp = _camera.ViewProjection; // model is identity for now; per-object transforms come later
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
 	}
 
@@ -110,7 +123,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			throw new VulkanException($"No technique registered under the name '{technique}'.");
 		return _techniques.GetOrBake(new TechniqueDescription(
 			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormat,
-			template.SamplesInput, template.HasVertexInput));
+			template.SamplesInput, template.HasVertexInput, _depthFormat));
 	}
 
 	private Sampler CreateNearestSampler()

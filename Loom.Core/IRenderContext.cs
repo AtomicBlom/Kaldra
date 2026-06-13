@@ -18,6 +18,13 @@ public interface IRenderContext
 	float DeltaTime { get; }
 
 	/// <summary>
+	/// The camera to render from this frame (view + projection). Per-frame data the host supplies; a pass's
+	/// <c>.Draw</c> closure pulls it from here rather than capturing it, so the graph stays frame-independent
+	/// (§8). <see cref="Draw"/> uses it to transform geometry into clip space.
+	/// </summary>
+	Camera Camera { get; }
+
+	/// <summary>
 	/// Draw a fullscreen triangle with the named technique, taking no sampled input — for a pass that
 	/// computes its output from scratch (a gradient, a procedural fill). Pairs with §5's
 	/// <c>.FullScreenTriangle()</c> techniques. The render target is the pass's declared <c>.Writes</c> target.
