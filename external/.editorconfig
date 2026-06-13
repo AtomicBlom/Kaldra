@@ -1,0 +1,7 @@
+# Vendored third-party code (git submodules). `root = true` severs it from the repo-root
+# .editorconfig so `dotnet format` (which follows ProjectReferences) never rewrites code we
+# don't own. We track these dependencies upstream and keep their original style intact.
+root = true
+
+[*]
+generated_code = true
