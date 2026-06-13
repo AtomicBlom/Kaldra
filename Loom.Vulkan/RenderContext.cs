@@ -31,6 +31,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private CommandBuffer _cmd;
 	private VkFormat[] _colorFormats = [];
 	private VkFormat _depthFormat;
+	private bool _depthReadOnly;
 	private int _frameSlot;
 	private Camera _camera;
 
@@ -65,11 +66,16 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_camera = camera;
 	}
 
-	/// <summary>Set the attachment formats of the current pass — the formats its techniques bake against.</summary>
-	public void BeginPass(ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat)
+	/// <summary>
+	/// Set the attachment formats of the current pass — the formats its techniques bake against — plus whether
+	/// the depth attachment is bound read-only (<c>.ReadsDepth</c>): a read-only pass bakes with depth writes
+	/// disabled so a transparent draw tests against, but does not disturb, the opaque depth.
+	/// </summary>
+	public void BeginPass(ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly)
 	{
 		_colorFormats = colorFormats.ToArray();
 		_depthFormat = depthFormat;
+		_depthReadOnly = depthReadOnly;
 	}
 
 	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs)
@@ -128,13 +134,15 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		if (!_registry.TryGetValue(technique, out var template))
 			throw new VulkanException($"No technique registered under the name '{technique}'.");
 
-		var key = $"{technique}|{string.Join(',', _colorFormats)}|{_depthFormat}";
+		var key = $"{technique}|{string.Join(',', _colorFormats)}|{_depthFormat}|{_depthReadOnly}";
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
+		// A pass that reads depth read-only (.ReadsDepth) bakes with depth writes off; one that writes it
+		// (.WritesDepth, or no depth at all) keeps writes on.
 		var baked = _techniques.GetOrBake(new TechniqueDescription(
 			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormats,
-			template.SampleCount, template.HasVertexInput, _depthFormat));
+			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly));
 		_baked[key] = baked;
 		return baked;
 	}

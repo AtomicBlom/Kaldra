@@ -26,4 +26,6 @@ public readonly record struct TechniqueDescription(
 	Format[] ColorFormats,
 	int SampleCount = 0,
 	bool HasVertexInput = false,
-	Format DepthFormat = Format.Undefined);
+	Format DepthFormat = Format.Undefined,
+	bool Blend = false,
+	bool DepthWrite = true);

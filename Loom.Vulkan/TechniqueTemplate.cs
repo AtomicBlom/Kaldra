@@ -12,9 +12,11 @@ namespace Loom.Vulkan;
 /// <param name="FragmentEntry">Fragment entry-point name.</param>
 /// <param name="SampleCount">Number of sampled inputs the fragment reads (combined image samplers at set 0, bindings 0..N-1).</param>
 /// <param name="HasVertexInput">True if the vertex stage reads a <see cref="Loom.Core.Vertex"/> buffer (a mesh technique) rather than fabricating a fullscreen triangle.</param>
+/// <param name="Blend">True for an alpha-blended (transparent) technique — pairs with a pass that <c>.Blends</c> its target.</param>
 public readonly record struct TechniqueTemplate(
 	string SpirvPath,
 	string VertexEntry,
 	string FragmentEntry,
 	int SampleCount = 0,
-	bool HasVertexInput = false);
+	bool HasVertexInput = false,
+	bool Blend = false);

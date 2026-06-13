@@ -181,13 +181,20 @@ public sealed unsafe class Technique : IDisposable
 			SType = StructureType.PipelineMultisampleStateCreateInfo,
 			RasterizationSamples = SampleCountFlags.Count1Bit,
 		});
-		// One blend attachment per colour target (a g-buffer writes several). Blend off, full write mask.
+		// One blend attachment per colour target (a g-buffer writes several). Standard src-alpha
+		// over-blending when the technique blends (a .Blends transparent pass), else writes opaquely.
 		var colorCount = description.ColorFormats.Length;
 		var blendAttachments = arena.Alloc<PipelineColorBlendAttachmentState>(colorCount);
 		for (var i = 0; i < colorCount; i++)
 			blendAttachments[i] = new PipelineColorBlendAttachmentState
 			{
-				BlendEnable = false,
+				BlendEnable = description.Blend,
+				SrcColorBlendFactor = BlendFactor.SrcAlpha,
+				DstColorBlendFactor = BlendFactor.OneMinusSrcAlpha,
+				ColorBlendOp = BlendOp.Add,
+				SrcAlphaBlendFactor = BlendFactor.One,
+				DstAlphaBlendFactor = BlendFactor.OneMinusSrcAlpha,
+				AlphaBlendOp = BlendOp.Add,
 				ColorWriteMask = ColorComponentFlags.RBit | ColorComponentFlags.GBit
 					| ColorComponentFlags.BBit | ColorComponentFlags.ABit,
 			};
@@ -213,7 +220,7 @@ public sealed unsafe class Technique : IDisposable
 			{
 				SType = StructureType.PipelineDepthStencilStateCreateInfo,
 				DepthTestEnable = true,
-				DepthWriteEnable = true,
+				DepthWriteEnable = description.DepthWrite,
 				DepthCompareOp = CompareOp.LessOrEqual,
 			})
 			: null;

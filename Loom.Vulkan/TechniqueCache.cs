@@ -43,6 +43,8 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 		hash.AppendData(BitConverter.GetBytes(description.SampleCount));
 		hash.AppendData(BitConverter.GetBytes(description.HasVertexInput));
 		hash.AppendData(BitConverter.GetBytes((int)description.DepthFormat));
+		hash.AppendData(BitConverter.GetBytes(description.Blend));
+		hash.AppendData(BitConverter.GetBytes(description.DepthWrite));
 		return Convert.ToHexString(hash.GetHashAndReset());
 	}
 
