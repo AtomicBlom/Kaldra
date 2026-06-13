@@ -10,13 +10,27 @@ Loom is a declarative, render-graph-driven rendering engine for .NET 10. You dec
 
 ## Current state
 
-The repo is a **bare scaffold — pre-Milestone 0.** Five projects exist with only `.csproj` files: no hand-written source, no shaders, no package references, no `<ProjectReference>`s. Per the roadmap, Milestone 0 is next: wire the dependency chain and Silk.NET packages, then stand up a clear-to-color Vulkan window using dynamic rendering.
+**Milestone 0 is essentially complete.** The nine implementation cards are done: a clear-to-color Vulkan window runs via dynamic rendering on a Vulkan 1.3 device, validation-clean. The one remaining M0 card is the shader-pipeline *decision* (Slang vs GLSL, offline vs runtime) — it spans M0–1 and is the natural M1 kickoff. Next milestone proper is M1 (marshaling seam + hand-baked triangle).
 
-Scaffold notes to fix/know during Milestone 0:
-- `Loom.Core.csproj` has `<OutputType>Exe</OutputType>` — a `dotnet new console` leftover. `Loom.Core` should be a **library**; `Loom.Sandbox` is the only executable.
-- No `<ProjectReference>`s yet. Intended direction: `Sandbox → Vulkan → Graph → Core`, with `Loom.Shaders` feeding SPIR-V to the bake step.
-- All projects target `net10.0` (matches Planning.md §3). The `net9.0` line in Planning.md Milestone 0 is stale — use **net10.0**.
-- The solution is `Loom.slnx` (new XML format), not `Loom.sln` as drawn in Planning.md §11.
+What M0 delivered:
+- Dependency chain wired `Sandbox → Vulkan → Graph → Core`. `Loom.Core` is a library; `Loom.Sandbox` is the only `Exe`; all projects target `net10.0`; the solution is `Loom.slnx`.
+- Silk.NET **2.23.0**: Vulkan + `Extensions.KHR`/`Extensions.EXT` + Maths in `Loom.Vulkan`; Windowing + Input in `Loom.Sandbox`. The Vulkan stack stays in `Loom.Vulkan`; the host hands the backend the window's `IVkSurface`, so `Loom.Vulkan` has **no** `Silk.NET.Windowing` reference.
+- `Loom.Vulkan`: `VulkanContext` (instance + debug messenger + surface + 1.3 device with dynamic rendering / synchronization2 / timeline semaphores), `Swapchain` (format + present-mode selection, recreate-on-resize), `Renderer` (2 frames in flight, `vkCmdBeginRendering` + `vkCmdPipelineBarrier2` + `vkQueueSubmit2` — no renderpass/framebuffer objects).
+
+Dev-environment notes:
+- This dev machine is **Windows-on-ARM (Snapdragon X / Adreno X1-85)** — don't assume x64.
+- **Vulkan SDK 1.4.350.0** is installed (validation layers available). Note: `winget` can't install it from a non-interactive shell (the UAC elevation gets cancelled) — install from an interactive elevated terminal.
+- A benign `[vk:WARN]` about duplicate `VK_LAYER_MSFT_driver_sorting` manifests (Microsoft `D3DMappingLayers`) prints at startup; it's a loader/environment quirk, not a Loom issue.
+- `Loom.Sandbox` honors `LOOM_SMOKE_FRAMES=N` — render N frames then exit, for headless verification.
+
+## Progress tracking
+
+Milestone progress is tracked on the **GitHub Projects (v2) board "Loom – Render Graph Engine"** (board #6, owner `AtomicBlom`, linked to `AtomicBlom/Loom`): <https://github.com/users/AtomicBlom/projects/6>. `Planning.md` §12 remains the source of truth for *what* each milestone is; the board is the live status of the work.
+
+- **One board, draft-issue cards**, grouped by two custom single-select fields: **Stage** (`M0`…`M6`, mapping to the Planning.md §12 milestones) and **Kind** (`Implementation` / `Cross-cutting` / `Decision`). Status is the usual `Todo` / `In Progress` / `Done`.
+- **M0–M1 are broken into task cards; M2–M6 are one tracking card each** (carrying that milestone's deliverable checklist). Expand a later milestone into task cards when work on it begins.
+- **Keep the board current as you work:** move a card to **In Progress** when you start it and to **Done** once its acceptance bar is met; check off the sub-tasks in the card body as they land. When a milestone needs a choice, that's a `Decision` card — resolve it (and record the decision) before the implementation cards it gates.
+- The board needs the `gh` `project` scope (plain `repo` scope is not enough). Add/edit cards with `gh project item-create` / `gh project item-edit` against board number `6`, owner `AtomicBlom`.
 
 ## Commands
 

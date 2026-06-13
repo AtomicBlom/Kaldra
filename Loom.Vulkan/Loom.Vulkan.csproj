@@ -1,9 +1,23 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- The marshaling seam is pointer-heavy interop. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
+  </ItemGroup>
+
+  <!-- The first backend. The Vulkan/Silk.NET stack is quarantined here. -->
+  <ItemGroup>
+    <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Maths" Version="2.23.0" />
+  </ItemGroup>
 
 </Project>
