@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using Loom.Core;
 using Loom.Graph;
 using Silk.NET.Vulkan;
@@ -181,9 +183,21 @@ internal sealed unsafe class TransientResources : IDisposable
 			ref var image = ref _images[slot][id];
 			allocation.BindImageMemory(image.Image).Check("vmaBindImageMemory");
 			CreateView(ref image);
+			NameImage(slot, id, in image);
 		}
 
 		return new SlotBucket { MemberIds = memberIds, Allocation = allocation, SwapchainSized = swapchainSized };
+	}
+
+	// Name a resource's image + view for GPU debuggers (RenderDoc), keyed by the graph resource's logical name
+	// with a per-slot suffix to distinguish the frames-in-flight copies. [Conditional]: the calls and the name
+	// interpolation compile to nothing without UseNamedGPUObjects.
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	private void NameImage(int slot, int id, in ResourceImage image)
+	{
+		var name = _graph.Resources[id].Name;
+		_ctx.SetObjectName(ObjectType.Image, image.Image.Handle, $"{name}#{slot}");
+		_ctx.SetObjectName(ObjectType.ImageView, image.View.Handle, $"{name}.view#{slot}");
 	}
 
 	/// <summary>The backing image/view/format/extent for a resource in the given frame slot.</summary>
@@ -212,6 +226,7 @@ internal sealed unsafe class TransientResources : IDisposable
 			{
 				_buffers[slot][resource.Id] = _allocator.CreateBuffer(in info, new AllocationCreateInfo { Usage = MemoryUsage.GPU_Only }, out var allocation);
 				_bufferAllocations.Add(allocation);
+				_ctx.SetObjectName(ObjectType.Buffer, _buffers[slot][resource.Id].Handle, $"{resource.Name}#{slot}");
 			}
 		}
 	}
@@ -335,6 +350,7 @@ internal sealed unsafe class TransientResources : IDisposable
 			var allocation = _allocator.AllocateMemory(in reqs, new AllocationCreateInfo { Usage = MemoryUsage.GPU_Only });
 			allocation.BindImageMemory(image.Image).Check("vmaBindImageMemory");
 			CreateView(ref image);
+			NameImage(0, resource.Id, in image); // shared across slots; named once
 			_persistent.Add((image.Image, image.View, allocation));
 
 			// Point every slot's entry at the one shared image/view.

@@ -18,9 +18,15 @@ internal readonly record struct ShaderReflection(int SampleCount, int StorageIma
 	/// a structured/byte-address buffer is a storage buffer, a read-write texture is a storage image, and any
 	/// other sampled texture is a combined image sampler. Push constants, varyings, and uniforms are ignored.
 	/// </summary>
-	public static ShaderReflection FromFile(string jsonPath)
+	public static ShaderReflection FromFile(string jsonPath) => FromBytes(File.ReadAllBytes(jsonPath));
+
+	/// <summary>
+	/// Parse slangc reflection JSON held in memory — the engine resolves a shader's reflection either from an
+	/// embedded resource (engine shaders) or from disk (app shaders), so the parse takes bytes, not a path.
+	/// </summary>
+	public static ShaderReflection FromBytes(byte[] json)
 	{
-		using var doc = JsonDocument.Parse(File.ReadAllBytes(jsonPath));
+		using var doc = JsonDocument.Parse(json);
 		int samplers = 0, storageImages = 0, storageBuffers = 0;
 
 		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)

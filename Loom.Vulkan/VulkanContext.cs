@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using Silk.NET.Core;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Core.Native;
@@ -19,6 +21,7 @@ public sealed unsafe class VulkanContext : IDisposable
 	private static readonly string[] RequiredDeviceExtensions = [KhrSwapchain.ExtensionName];
 
 	private readonly bool _validation;
+	private readonly bool _wantDebugUtils; // VK_EXT_debug_utils: messenger (validation) and/or object names + labels (UseNamedGPUObjects)
 	private ExtDebugUtils? _debugUtils;
 	private DebugUtilsMessengerEXT _debugMessenger;
 	private PfnDebugUtilsMessengerCallbackEXT _debugCallback;
@@ -54,7 +57,16 @@ public sealed unsafe class VulkanContext : IDisposable
 				"[loom] Validation requested but VK_LAYER_KHRONOS_validation is unavailable " +
 				"(install the Vulkan SDK to enable it). Continuing without validation.");
 
+		// VK_EXT_debug_utils backs the validation messenger and, when the engine is built with UseNamedGPUObjects,
+		// GPU object names + per-pass debug-label scopes for RenderDoc. Enable it if either wants it.
+		_wantDebugUtils = _validation;
+#if LOOM_NAMED_GPU_OBJECTS
+		_wantDebugUtils = true;
+#endif
+
 		CreateInstance(surface);
+		if (_wantDebugUtils && Vk.TryGetInstanceExtension(Instance, out ExtDebugUtils debugUtils))
+			_debugUtils = debugUtils;
 		if (_validation)
 			SetUpDebugMessenger();
 		CreateSurface(surface);
@@ -111,7 +123,7 @@ public sealed unsafe class VulkanContext : IDisposable
 		// Surface extensions the windowing platform needs (e.g. VK_KHR_surface + the OS one).
 		byte** windowExtensions = surface.GetRequiredExtensions(out uint windowExtCount);
 		var extensions = SilkMarshal.PtrToStringArray((nint)windowExtensions, (int)windowExtCount);
-		if (_validation)
+		if (_wantDebugUtils)
 			extensions = [.. extensions, ExtDebugUtils.ExtensionName];
 
 		// VK_EXT_swapchain_colorspace lets the surface report HDR colour spaces (scRGB, HDR10) so the swapchain
@@ -160,15 +172,52 @@ public sealed unsafe class VulkanContext : IDisposable
 
 	private void SetUpDebugMessenger()
 	{
-		if (!Vk.TryGetInstanceExtension(Instance, out ExtDebugUtils debugUtils))
+		if (_debugUtils is null)
 			return; // Validation requested but VK_EXT_debug_utils is absent — not fatal.
 
-		_debugUtils = debugUtils;
 		DebugUtilsMessengerCreateInfoEXT createInfo = default;
 		PopulateDebugCreateInfo(ref createInfo);
 		_debugUtils.CreateDebugUtilsMessenger(Instance, in createInfo, null, out _debugMessenger)
 			.Check("vkCreateDebugUtilsMessengerEXT");
 	}
+
+	// GPU object names + per-pass debug-label scopes (UseNamedGPUObjects), for RenderDoc/Nsight captures. The
+	// helpers are [Conditional] so calls (and their argument evaluation, e.g. interpolated names) vanish entirely
+	// when the engine is built without the flag; they no-op at runtime if VK_EXT_debug_utils wasn't enabled.
+
+	/// <summary>Attach a human-readable name to a Vulkan object (image, buffer, pipeline, command buffer, …).</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	public void SetObjectName(ObjectType type, ulong handle, string name)
+	{
+		if (_debugUtils is null)
+			return;
+		var pName = (byte*)SilkMarshal.StringToPtr(name);
+		DebugUtilsObjectNameInfoEXT info = new()
+		{
+			SType = StructureType.DebugUtilsObjectNameInfoExt,
+			ObjectType = type,
+			ObjectHandle = handle,
+			PObjectName = pName,
+		};
+		_debugUtils.SetDebugUtilsObjectName(Device, in info);
+		SilkMarshal.Free((nint)pName);
+	}
+
+	/// <summary>Open a named debug-label region on a command buffer (a RenderDoc marker scope).</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	public void BeginDebugLabel(CommandBuffer cmd, string label)
+	{
+		if (_debugUtils is null)
+			return;
+		var pLabel = (byte*)SilkMarshal.StringToPtr(label);
+		DebugUtilsLabelEXT info = new() { SType = StructureType.DebugUtilsLabelExt, PLabelName = pLabel };
+		_debugUtils.CmdBeginDebugUtilsLabel(cmd, in info);
+		SilkMarshal.Free((nint)pLabel);
+	}
+
+	/// <summary>Close the most recently opened debug-label region on a command buffer.</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	public void EndDebugLabel(CommandBuffer cmd) => _debugUtils?.CmdEndDebugUtilsLabel(cmd);
 
 	private void PopulateDebugCreateInfo(ref DebugUtilsMessengerCreateInfoEXT createInfo)
 	{

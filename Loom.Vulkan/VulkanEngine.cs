@@ -51,7 +51,14 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private readonly DescriptorAllocator _descriptors;
 	private readonly RenderContext _context;
 	private readonly Dictionary<string, TechniqueTemplate> _registry = []; // logical name → backend baked-input form
+#if LOOM_IMGUI
 	private ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
+#endif
+
+	// Engine-owned shaders (tonemap/blit/fullscreen/exposure/imgui/debugview) ship embedded in THIS assembly
+	// under the manifest prefix "<assembly>.Shaders." (the Loom SDK's Embed mode sets the same prefix from
+	// $(AssemblyName)); app shaders are loose .spv/.json on disk. ResolveShaderAsset tries embedded first.
+	private static readonly string EmbeddedShaderPrefix = typeof(VulkanEngine).Assembly.GetName().Name + ".Shaders.";
 
 	// Graph-level state — rebuilt by SetGraph, reusing the device above.
 	private RenderGraph? _graph;
@@ -126,9 +133,9 @@ internal sealed unsafe class VulkanEngine : IEngine
 		// The descriptor-binding counts come from the shader's reflection, not the app (M7-B4): the author states
 		// only the pipeline intent (geometry/blend/filter/compute), and Slang's reflection says how many things
 		// the shader binds.
-		var reflection = ShaderReflection.FromFile(ResolveReflection(descriptor.Shader));
+		var reflection = ShaderReflection.FromBytes(ResolveShaderAsset(descriptor.Shader, ".json"));
 		_registry[name] = new TechniqueTemplate(
-			ResolveShader(descriptor.Shader),
+			ResolveShaderAsset(descriptor.Shader, ".spv"),
 			descriptor.VertexEntry,
 			descriptor.FragmentEntry,
 			reflection.SampleCount,
@@ -206,9 +213,12 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 	public void EnableImGui()
 	{
-		var spirv = File.ReadAllBytes(ResolveShader("imgui"));
+#if LOOM_IMGUI
+		var spirv = ResolveShaderAsset("imgui", ".spv");
 		_imgui = new ImGuiRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight);
 		_context.SetImGui(_imgui);
+#endif
+		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
 	}
 
 	public float SamplePick(int x, int y)
@@ -228,23 +238,27 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 	public void RequestCapture(string path) => _capturePath = path;
 
-	// Resolve a logical shader name (TechniqueDescriptor.Shader) to its compiled SPIR-V on disk. The shader
-	// directory is a backend/host concern (VulkanEngineSettings), kept out of the describe layer.
-	private string ResolveShader(string name)
+	// Resolve a logical shader name (TechniqueDescriptor.Shader) + asset extension (".spv" or its ".json"
+	// reflection sidecar, M7-B4) to bytes. Engine shaders are embedded in this assembly; app shaders are loose
+	// files under VulkanEngineSettings.ShaderDirectory. Shaders are named logically — no .spv path in app code
+	// (Planning.md §5) — and the directory is a backend/host concern kept out of the describe layer.
+	private byte[] ResolveShaderAsset(string name, string extension)
 	{
-		var path = Path.Combine(_shaderDir, name + ".spv");
-		if (!File.Exists(path))
-			throw new VulkanException($"Compiled shader '{name}' not found at {path}. Did Loom.Shaders build?");
-		return path;
-	}
+		var assembly = typeof(VulkanEngine).Assembly;
+		using var embedded = assembly.GetManifestResourceStream(EmbeddedShaderPrefix + name + extension);
+		if (embedded is not null)
+		{
+			var bytes = new byte[embedded.Length];
+			embedded.ReadExactly(bytes);
+			return bytes;
+		}
 
-	// Resolve a logical shader name to its slangc reflection-JSON sidecar (M7-B4), shipped beside the .spv.
-	private string ResolveReflection(string name)
-	{
-		var path = Path.Combine(_shaderDir, name + ".json");
-		if (!File.Exists(path))
-			throw new VulkanException($"Shader reflection '{name}.json' not found at {path}. Did Loom.Shaders build?");
-		return path;
+		var path = Path.Combine(_shaderDir, name + extension);
+		if (File.Exists(path))
+			return File.ReadAllBytes(path);
+
+		throw new VulkanException(
+			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Vulkan?");
 	}
 
 	// Vulkan clip space is +Y-down, so the projection's Y row is negated on ingest. The host supplies a neutral
@@ -395,9 +409,14 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		foreach (var pass in _plan.Passes)
 		{
+			// Wrap each pass (its pre-barriers + its draws/dispatch) in a named debug-label scope, so a RenderDoc
+			// capture reads as "gbuffer", "lighting", "bloom", … instead of a flat command list. [Conditional]:
+			// compiles to nothing without UseNamedGPUObjects.
+			_ctx.BeginDebugLabel(cmd, pass.Pass.Name);
 			foreach (var transition in pass.Transitions)
 				EmitTransition(cmd, transition);
 			RecordPass(cmd, pass);
+			_ctx.EndDebugLabel(cmd);
 		}
 
 		RecordReadback(cmd);
@@ -753,6 +772,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 		};
 		fixed (CommandBuffer* p = _commandBuffers)
 			_vk.AllocateCommandBuffers(_ctx.Device, in info, p).Check("vkAllocateCommandBuffers");
+		for (var i = 0; i < _commandBuffers.Length; i++)
+			_ctx.SetObjectName(ObjectType.CommandBuffer, (ulong)_commandBuffers[i].Handle, $"frame#{i}");
 	}
 
 	private void CreateSyncObjects()
@@ -832,7 +853,9 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		DisposeGraphResources();    // transients + readback staging (graph-level)
 		_context.Dispose();
+#if LOOM_IMGUI
 		_imgui?.Dispose(); // before the allocator — it holds VMA font/vertex/index allocations
+#endif
 		_descriptors.Dispose();
 		_meshes.Dispose();
 		_allocator.Dispose(); // after every image/buffer it backed is freed

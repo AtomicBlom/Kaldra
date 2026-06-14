@@ -1,11 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- The engine owns its infrastructure shaders (tonemap/blit/fullscreen/exposure/imgui/debugview) and
+       ships them embedded in this assembly, so consuming apps don't carry them. Import only the shared
+       shader-compile machinery (not the app SDK), so the backend never self-references through backend
+       selection. The compiled .spv/.json become EmbeddedResource (Embed mode). -->
+  <Import Project="..\build\Loom.Sdk\Loom.Shaders.props" />
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <!-- The marshaling seam is pointer-heavy interop. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Engine shaders, embedded under the manifest prefix "Loom.Vulkan.Shaders." (= $(AssemblyName).Shaders.). -->
+    <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
+    <LoomShaderOutputMode>Embed</LoomShaderOutputMode>
+    <!-- Built without ImGui (UseImGui=false): don't compile/embed the ImGui shader either. -->
+    <LoomShaderExclude Condition="'$(UseImGui)' != 'true'">$(MSBuildProjectDirectory)\Shaders\imgui.slang</LoomShaderExclude>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,8 +35,14 @@
     <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Maths" Version="2.23.0" />
     <!-- ImGui rendering is inherently backend-specific (like imgui_impl_vulkan), so the ImGui Vulkan
-         renderer lives here. Only Loom.Vulkan + the host see ImGui.NET; Loom.Core/Graph stay UI-agnostic. -->
-    <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
+         renderer lives here. Only Loom.Vulkan + the host see ImGui.NET; Loom.Core/Graph stay UI-agnostic.
+         Gated on <UseImGui> (repo-wide, Directory.Build.props) — off drops the dependency entirely. -->
+    <PackageReference Include="ImGui.NET" Version="1.91.6.1" Condition="'$(UseImGui)' == 'true'" />
+    <!-- Hermetic slangc for compiling the engine's own shaders (bundled in the package; win-x64 / win-arm64). -->
+    <PackageReference Include="Slang.Sdk" Version="0.5.1" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>
+
+  <!-- Shared shader-compile targets (after the body, so LoomShaderSourceDir is set). -->
+  <Import Project="..\build\Loom.Sdk\Loom.Shaders.targets" />
 
 </Project>

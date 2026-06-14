@@ -1,0 +1,36 @@
+<Project>
+
+  <!--
+    The app-facing Loom MSBuild SDK (Milestone 8) — targets half. See Sdk.props for usage.
+
+    Pulls in the shared shader-compile machinery (Content mode for an app) and selects which rendering
+    backend(s) the app references. Merely referencing a backend assembly loads it, and its [ModuleInitializer]
+    self-registers it into Engine.AvailableEngines — so backend choice is just a ProjectReference toggle.
+
+    Only apps import this file, so a backend reference can never reach Loom.Core/Loom.Graph (the cardinal
+    backend-isolation invariant). The guarantee is "absence of import" — no opt-in guard property needed.
+  -->
+
+  <Import Project="$(MSBuildThisFileDirectory)..\Loom.Shaders.targets" />
+
+  <PropertyGroup>
+    <_LoomRepoRoot>$(MSBuildThisFileDirectory)..\..\..\</_LoomRepoRoot>
+    <_LoomDX12Csproj>$(_LoomRepoRoot)Loom.DX12\Loom.DX12.csproj</_LoomDX12Csproj>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UseVulkan)' == 'true'">
+    <ProjectReference Include="$(_LoomRepoRoot)Loom.Vulkan\Loom.Vulkan.csproj" />
+  </ItemGroup>
+
+  <!-- DX12 is inert until the backend exists: reference it only when BOTH the flag is on AND the project is
+       present, so UseDX12=true can be flipped today without breaking the build (warn, never error). -->
+  <ItemGroup Condition="'$(UseDX12)' == 'true' And Exists('$(_LoomDX12Csproj)')">
+    <ProjectReference Include="$(_LoomDX12Csproj)" />
+  </ItemGroup>
+  <Target Name="_LoomWarnInertDX12"
+          BeforeTargets="ResolveProjectReferences"
+          Condition="'$(UseDX12)' == 'true' And !Exists('$(_LoomDX12Csproj)')">
+    <Warning Text="UseDX12=true but Loom.DX12 does not exist yet; the DX12 backend reference is inert." />
+  </Target>
+
+</Project>

@@ -1,0 +1,10 @@
+<Project>
+
+  <!--
+    Shield for vendored code (e.g. external/VMASharp). MSBuild imports the *nearest* Directory.Build.props
+    walking up from a project and stops; placing this empty one at external/ stops the walk before the repo
+    root, so the Loom feature flags / constants never leak into vendored builds. Intentionally does NOT
+    import the repo-root Directory.Build.props.
+  -->
+
+</Project>

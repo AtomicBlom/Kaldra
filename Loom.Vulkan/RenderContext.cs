@@ -29,9 +29,13 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private readonly MeshStore _meshes;
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
+#if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), set by the executor when the host enables ImGui. The HUD
 	// pass's ctx.DrawImGui() forwards this frame's draw data to it. Null when ImGui is not in use.
 	private ImGuiRenderer? _imgui;
+#endif
+	// The native ImDrawData* the host produced this frame; stays a plain nint so the field (and the neutral
+	// ctx.DrawImGui() seam) exist even when the engine is built without ImGui (UseImGui=false).
 	private nint _imguiDrawData;
 	private Extent2D _fbExtent;
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off TechniqueCache's
@@ -84,8 +88,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
 	public void SetTransients(TransientResources resources) => _resources = resources;
 
+#if LOOM_IMGUI
 	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
 	public void SetImGui(ImGuiRenderer renderer) => _imgui = renderer;
+#endif
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, and HDR-output state before any pass records.</summary>
 	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, Extent2D fbExtent, bool hdrOutput)
@@ -261,8 +267,14 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	}
 
 	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
-	// rendering scope. No-op when ImGui isn't enabled or the host produced no draw data this frame.
-	public void DrawImGui() => _imgui?.Render(_cmd, _imguiDrawData, _fbExtent, _frameSlot);
+	// rendering scope. No-op when ImGui isn't enabled or the host produced no draw data this frame — and a
+	// compiled-out no-op entirely when the engine is built without ImGui (UseImGui=false).
+	public void DrawImGui()
+	{
+#if LOOM_IMGUI
+		_imgui?.Render(_cmd, _imguiDrawData, _fbExtent, _frameSlot);
+#endif
+	}
 
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;
 	// the attachment formats are the current pass's. So one template used in passes with different targets
@@ -282,7 +294,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// (.WritesDepth, or no depth at all) keeps writes on. Materializing the Format[] here (cache miss only)
 		// is a one-time warmup allocation per unique pipeline, not per-frame churn.
 		var baked = _techniques.GetOrBake(new TechniqueDescription(
-			template.SpirvPath, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
+			template.Spirv, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
 			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput));
@@ -290,6 +302,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// HasFragmentPush are folded into the TechniqueDescription hash, and LinearFilter only affects the
 		// descriptor's sampler, not the pipeline.
 		_baked[key] = baked;
+		// Name the baked pipeline for GPU debuggers (once per unique pipeline; [Conditional] — stripped without
+		// UseNamedGPUObjects). Distinct target-format variants of one technique share the logical name.
+		_ctx.SetObjectName(ObjectType.Pipeline, baked.Pipeline.Handle, $"pipeline:{technique}");
 		return baked;
 	}
 

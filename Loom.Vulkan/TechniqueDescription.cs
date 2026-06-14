@@ -21,7 +21,7 @@ namespace Loom.Vulkan;
 /// </para>
 /// </summary>
 public readonly record struct TechniqueDescription(
-	string SpirvPath,
+	byte[] Spirv,
 	string VertexEntry,
 	string FragmentEntry,
 	Format[] ColorFormats,

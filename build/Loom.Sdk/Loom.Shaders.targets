@@ -1,0 +1,97 @@
+<Project>
+
+  <!--
+    Loom shared shader-compile machinery (Milestone 8) — targets.
+
+    Imported AFTER the project body (so $(LoomShaderSourceDir) is already set). Compiles *.slang -> SPIR-V
+    (+ a reflection-JSON sidecar) hermetically via the slangc bundled in Slang.Sdk, then registers the
+    outputs in one of two modes:
+      Content -> loose <Content> copied to the output under shaders\  (an app, e.g. Loom.Sandbox)
+      Embed   -> <EmbeddedResource> with a stable manifest name        (the engine, Loom.Vulkan)
+
+    Generalized from the original inline Loom.Shaders.csproj targets; keeps the hermetic slangc, the
+    *.module.slang exclusion, incremental Inputs/Outputs, and the IDE FastUpToDateCheck wiring.
+  -->
+
+  <PropertyGroup>
+    <SlangCompiler Condition="'$(SlangCompiler)' == ''">$(PkgSlang_Sdk)\runtimes\$(SlangRid)\native\slangc.exe</SlangCompiler>
+  </PropertyGroup>
+
+  <!-- Top-level (evaluated when LoomShaderSourceDir is known). Entry shaders compile standalone;
+       *.module.slang are shared imports (tracked for incremental, never compiled on their own). The glob is
+       over SOURCE .slang (which exist at evaluation); the .spv/.json are referenced only as transforms. -->
+  <ItemGroup Condition="'$(LoomShaderOutputMode)' != 'None'">
+    <LoomSlangEntry  Include="$(LoomShaderSourceDir)\**\*.slang" Exclude="$(LoomShaderSourceDir)\**\*.module.slang;$(LoomShaderExclude)" />
+    <LoomSlangModule Include="$(LoomShaderSourceDir)\**\*.module.slang" />
+    <LoomSlangSource Include="@(LoomSlangEntry);@(LoomSlangModule)" />
+
+    <!-- Keep the IDE FastUpToDateCheck aware of shader inputs/outputs so it never skips a build and runs
+         stale SPIR-V (the classic "my shader edit did nothing" trap) — applies to embedded resources too. -->
+    <UpToDateCheckInput Include="@(LoomSlangSource)" />
+    <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')" />
+    <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')" />
+  </ItemGroup>
+
+  <!-- Incremental: recompile when ANY .slang (entry OR shared module) is newer than ANY .spv. Listing every
+       source as an input means editing a shared *.module.slang rebuilds the shaders that import it. -->
+  <Target Name="LoomCompileShaders"
+          Condition="'$(LoomShaderOutputMode)' != 'None'"
+          Inputs="@(LoomSlangSource)"
+          Outputs="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
+    <Error Condition="'$(PkgSlang_Sdk)' == ''"
+           Text="LoomShaderOutputMode='$(LoomShaderOutputMode)' but Slang.Sdk is not referenced in this project. Add a Slang.Sdk PackageReference with GeneratePathProperty=&quot;true&quot;." />
+    <Error Condition="!Exists('$(SlangCompiler)')"
+           Text="slangc not found at '$(SlangCompiler)'. Is Slang.Sdk restored for RID '$(SlangRid)'? (Only win-x64 / win-arm64 are packaged.)" />
+    <MakeDir Directories="$(LoomShaderOutDir)" />
+    <Message Importance="high" Text="Slang -&gt; SPIR-V (+reflection): %(LoomSlangEntry.Filename).slang" />
+    <!-- Emit reflection JSON beside the SPIR-V (M7-B4): the backend reads it at DefineTechnique to derive
+         the descriptor-binding layout, so the app states only pipeline intent. -->
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target spirv -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).spv&quot; -reflection-json &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).json&quot;" />
+  </Target>
+
+  <!-- No Inputs/Outputs => ALWAYS runs (even when LoomCompileShaders is up to date), so the outputs are
+       always registered and never silently dropped from the assembly/output on incremental builds. The
+       EmbeddedResource/Content items are added HERE (in a target), not in a top-level ItemGroup, because at
+       evaluation time the .spv don't exist yet — a static glob over obj\shaders\ would embed nothing.
+
+       Anchor: BeforeTargets="AssignTargetPaths" for BOTH modes. AssignTargetPaths runs before the resource
+       pipeline (SplitResourcesByCulture -> CreateManifestResourceNames) and before Content target-path
+       assignment, so items added here flow to Csc (Embed) / to the output (Content). Anchoring at
+       BeforeCompile/CoreCompile is TOO LATE for EmbeddedResource — CreateManifestResourceNames has already
+       snapshotted @(EmbeddedResource) by then, so the late items never reach the compiler. -->
+  <Target Name="LoomRegisterShaders"
+          Condition="'$(LoomShaderOutputMode)' != 'None'"
+          DependsOnTargets="LoomCompileShaders"
+          BeforeTargets="AssignTargetPaths">
+
+    <!-- Content (app): loose .spv/.json copied to the output under shaders\, flowing to the app's bin
+         (and to projects that reference this one). -->
+    <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content'">
+      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(Filename).spv</Link>
+        <Visible>false</Visible>
+      </Content>
+      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(Filename).json</Link>
+        <Visible>false</Visible>
+      </Content>
+    </ItemGroup>
+
+    <!-- Embed (engine): .spv/.json become EmbeddedResource with a STABLE flat manifest name the engine reads
+         via Assembly.GetManifestResourceStream("<prefix><name>.spv"). The LogicalName is mandatory: without
+         it MSBuild derives the name from the obj\shaders\ path (ugly + build-config-dependent). -->
+    <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Embed'">
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).spv</LogicalName>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).json</LogicalName>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+    </ItemGroup>
+  </Target>
+
+</Project>

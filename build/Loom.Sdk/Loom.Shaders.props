@@ -1,0 +1,37 @@
+<Project>
+
+  <!--
+    Loom shared shader-compile machinery (Milestone 8) — property defaults.
+
+    Imported by any project that compiles Slang shaders: directly by Loom.Vulkan (engine shaders, Embed
+    mode) and transitively via Sdk.props by an app (Loom.Sandbox, Content mode). Carries NO backend-reference
+    logic, so the engine can import it without pulling in (or self-referencing through) the backend selection.
+
+    A consuming project sets:
+      <LoomShaderSourceDir>   the folder of *.slang sources
+      <LoomShaderOutputMode>  Embed (-> EmbeddedResource, the engine) | Content (-> loose files, an app)
+    and adds a Slang.Sdk PackageReference (GeneratePathProperty="true") for the hermetic slangc.
+  -->
+
+  <PropertyGroup>
+    <LoomShaderOutputMode Condition="'$(LoomShaderOutputMode)' == ''">None</LoomShaderOutputMode>
+
+    <!-- Optional semicolon-separated list of .slang paths/globs to exclude from compilation (on top of the
+         always-excluded *.module.slang). Used to drop ImGui's shader when the engine is built without ImGui. -->
+    <LoomShaderExclude Condition="'$(LoomShaderExclude)' == ''"></LoomShaderExclude>
+
+    <!-- Config-agnostic + timing-independent: MSBuildProjectDirectory is always set, and shaders don't
+         vary by Debug/Release. (Per-shader incremental precision via slangc -depfile is a later refinement.) -->
+    <LoomShaderOutDir Condition="'$(LoomShaderOutDir)' == ''">$(MSBuildProjectDirectory)\obj\shaders\</LoomShaderOutDir>
+
+    <!-- The manifest-name prefix for Embed mode. Defaults to "<AssemblyName>.Shaders." so the runtime can
+         derive the same key from its own assembly name (no hardcoded string drift). -->
+    <LoomEmbedManifestPrefix Condition="'$(LoomEmbedManifestPrefix)' == ''">$(AssemblyName).Shaders.</LoomEmbedManifestPrefix>
+
+    <!-- slangc RID: win-x64, or win-arm64 on a Snapdragon dev box. (mac/linux acquisition is a later task.)
+         Reproduces the original Loom.Shaders.csproj detection verbatim; overridable by setting SlangRid. -->
+    <SlangRid Condition="'$(SlangRid)' == '' And '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString())' == 'Arm64'">win-arm64</SlangRid>
+    <SlangRid Condition="'$(SlangRid)' == ''">win-x64</SlangRid>
+  </PropertyGroup>
+
+</Project>

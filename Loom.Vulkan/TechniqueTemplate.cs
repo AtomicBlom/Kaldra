@@ -9,7 +9,8 @@ namespace Loom.Vulkan;
 /// per pass at record time (from the target the pass writes), so one template baked against two targets
 /// yields two cached pipelines.
 /// </summary>
-/// <param name="SpirvPath">Path to the compiled SPIR-V module containing both entry points.</param>
+/// <param name="Spirv">The compiled SPIR-V module containing both entry points, resolved once at
+/// <see cref="VulkanEngine.DefineTechnique"/> — from an embedded resource (engine shaders) or disk (app shaders).</param>
 /// <param name="VertexEntry">Vertex entry-point name.</param>
 /// <param name="FragmentEntry">Fragment entry-point name.</param>
 /// <param name="SampleCount">Number of sampled inputs the fragment reads (combined image samplers at set 0, bindings 0..N-1).</param>
@@ -20,7 +21,7 @@ namespace Loom.Vulkan;
 /// <param name="IsCompute">True for a compute technique: one compute entry point (in <see cref="FragmentEntry"/>), dispatched rather than drawn (Planning.md §5 <c>.Dispatch</c>).</param>
 /// <param name="StorageCount">Number of storage images the (compute) shader read-writes, bound after the sampled inputs (bindings SampleCount..SampleCount+StorageCount-1).</param>
 public readonly record struct TechniqueTemplate(
-	string SpirvPath,
+	byte[] Spirv,
 	string VertexEntry,
 	string FragmentEntry,
 	int SampleCount = 0,

@@ -1,0 +1,22 @@
+<Project>
+
+  <!--
+    The app-facing Loom MSBuild SDK (Milestone 8) — props half.
+
+    An app consumes it SDK-style, writing the two imports itself:
+        <Project Sdk="Microsoft.NET.Sdk">
+          <Import Project="..\build\Loom.Sdk\Sdk\Sdk.props" />
+          ... body ...
+          <Import Project="..\build\Loom.Sdk\Sdk\Sdk.targets" />
+        </Project>
+    This is equivalent to declaring Sdk="Loom.Sdk" once the SDK is packaged (the nested Sdk/ folder mirrors
+    a real MSBuild SDK package, so the promotion is import-line-only).
+
+    It brings in the shared shader-compile machinery (here) and the UseVulkan/UseDX12 backend-reference
+    selection (in Sdk.targets). The engine feature flags + their compile constants are NOT here — they live
+    in the repo-root Directory.Build.props because they must also reach the engine assembly's own compile.
+  -->
+
+  <Import Project="$(MSBuildThisFileDirectory)..\Loom.Shaders.props" />
+
+</Project>

@@ -1,3 +1,7 @@
+// The Vulkan Dear ImGui renderer is compiled only when the engine is built with ImGui (UseImGui=true).
+// When off, the whole type is excluded and ImGui.NET is not referenced (Loom.Vulkan.csproj); the neutral
+// ctx.DrawImGui() / EnableImGui() seam in Loom.Core stays, as documented no-ops.
+#if LOOM_IMGUI
 using System.Numerics;
 
 using ImGuiNET;
@@ -590,3 +594,4 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 		}
 	}
 }
+#endif

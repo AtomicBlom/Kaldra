@@ -17,7 +17,7 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 
 	public Technique GetOrBake(in TechniqueDescription description)
 	{
-		var spirv = File.ReadAllBytes(description.SpirvPath);
+		var spirv = description.Spirv;
 		var key = ComputeKey(spirv, description);
 		if (_cache.TryGetValue(key, out var cached))
 			return cached;
