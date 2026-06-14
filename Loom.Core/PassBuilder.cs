@@ -43,6 +43,9 @@ public sealed class PassBuilder
 	/// <summary>General read-modify-write (storage images/buffers; used by compute).</summary>
 	public PassBuilder ReadWrites(params ReadOnlySpan<ResourceHandle> resources) => Add(AccessKind.ReadWrite, resources);
 
+	/// <summary>Read a buffer as vertex-attribute data (GPU particles — the draw reads what a compute wrote).</summary>
+	public PassBuilder ReadsVertex(ResourceHandle buffer) => Add(AccessKind.ReadVertex, buffer);
+
 	/// <summary>Assign this pass to a queue; the graph derives the cross-queue timeline sync.</summary>
 	public PassBuilder Queue(Queue queue)
 	{

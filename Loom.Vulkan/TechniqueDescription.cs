@@ -31,4 +31,6 @@ public readonly record struct TechniqueDescription(
 	bool DepthWrite = true,
 	bool HasFragmentPush = false,
 	bool IsCompute = false,
-	int StorageCount = 0);
+	int StorageCount = 0,
+	int StorageBufferCount = 0,
+	bool ParticleInput = false);

@@ -41,6 +41,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private readonly HashSet<int> _aliasedHandoffIds; // resources that reuse an earlier alias's memory this frame
 	private readonly HashSet<int> _persistentIds;     // resources whose contents survive across frames
 	private readonly Dictionary<int, ResourceState> _persistentState = []; // last state, carried across frames
+	private readonly HashSet<int> _bufferIds;         // storage/vertex buffer resources (emit buffer barriers, not image)
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly TechniqueCache _techniques;
 	private readonly TransientResources _transients;
@@ -98,9 +99,14 @@ public sealed unsafe class GraphExecutor : IDisposable
 		// Persistent resources (auto-exposure history) keep their contents across frames, so their first
 		// transition each frame must start from the layout the previous frame left them in, not Undefined.
 		_persistentIds = [];
+		_bufferIds = [];
 		foreach (var resource in graph.Resources)
+		{
 			if (resource.Kind == ResourceKind.Persistent)
 				_persistentIds.Add(resource.Id);
+			if (resource.Kind == ResourceKind.Buffer)
+				_bufferIds.Add(resource.Id);
+		}
 		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
 			Console.WriteLine($"[loom] transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
@@ -178,6 +184,10 @@ public sealed unsafe class GraphExecutor : IDisposable
 	/// <summary>The sun's view + projection for the next frame, set by the host. The shadow pass renders the
 	/// scene from it; lighting projects into it for the shadow test. Defaults to identity.</summary>
 	public Camera SunView { get; set; } = Camera.Identity;
+
+	/// <summary>Elapsed seconds since startup, set by the host each frame; passes pull it via <c>ctx.Time</c>
+	/// for time-driven effects (the GPU particle fountain).</summary>
+	public float Time { get; set; }
 
 	public void DrawFrame(double deltaSeconds)
 	{
@@ -290,7 +300,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _currentFrame, Camera, SunView, HoverId);
+		_context.BeginFrame(cmd, deltaTime, Time, _currentFrame, Camera, SunView, HoverId);
 
 		foreach (var pass in _plan.Passes)
 		{
@@ -469,6 +479,15 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private void EmitTransition(CommandBuffer cmd, ResourceTransition transition)
 	{
 		var id = transition.Resource.Id;
+
+		// Buffers have no layout — emit a buffer memory barrier scoped by the from/to stage+access. This is the
+		// compute(StorageWrite) → vertex-input(VertexAttributeRead) hand-off for GPU particles (§7.6).
+		if (_bufferIds.Contains(id))
+		{
+			EmitBufferBarrier(cmd, _transients.GetBuffer(_currentFrame, id), StateMapping.For(transition.From), StateMapping.For(transition.To));
+			return;
+		}
+
 		ref var image = ref _transients.Get(_currentFrame, id);
 
 		// Persistent resources survive across frames. The barrier plan, derived per-frame, thinks every
@@ -529,6 +548,31 @@ public sealed unsafe class GraphExecutor : IDisposable
 			SType = StructureType.DependencyInfo,
 			ImageMemoryBarrierCount = 1,
 			PImageMemoryBarriers = &barrier,
+		};
+		_vk.CmdPipelineBarrier2(cmd, in dependency);
+	}
+
+	// A buffer memory barrier (no layout) for the storage→vertex hand-off of a GPU-particle buffer.
+	private void EmitBufferBarrier(CommandBuffer cmd, Buffer buffer, StateMapping.Scope from, StateMapping.Scope to)
+	{
+		BufferMemoryBarrier2 barrier = new()
+		{
+			SType = StructureType.BufferMemoryBarrier2,
+			SrcStageMask = from.Stage,
+			SrcAccessMask = from.Access,
+			DstStageMask = to.Stage,
+			DstAccessMask = to.Access,
+			SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			Buffer = buffer,
+			Offset = 0,
+			Size = Vk.WholeSize,
+		};
+		DependencyInfo dependency = new()
+		{
+			SType = StructureType.DependencyInfo,
+			BufferMemoryBarrierCount = 1,
+			PBufferMemoryBarriers = &barrier,
 		};
 		_vk.CmdPipelineBarrier2(cmd, in dependency);
 	}

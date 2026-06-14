@@ -34,10 +34,10 @@ public sealed unsafe class Technique : IDisposable
 		try
 		{
 			var stage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.FragmentBit;
-			DescriptorSetLayout = description.SampleCount + description.StorageCount > 0
-				? CreateSetLayout(description.SampleCount, description.StorageCount, stage)
+			DescriptorSetLayout = description.SampleCount + description.StorageCount + description.StorageBufferCount > 0
+				? CreateSetLayout(description.SampleCount, description.StorageCount, description.StorageBufferCount, stage)
 				: default;
-			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput, description.HasFragmentPush, stage);
+			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput || description.ParticleInput, description.HasFragmentPush, stage);
 			Pipeline = description.IsCompute
 				? CreateComputePipeline(module, in description)
 				: CreatePipeline(module, in description);
@@ -64,18 +64,21 @@ public sealed unsafe class Technique : IDisposable
 		}
 	}
 
-	// Set 0: <paramref name="sampleCount"/> combined image samplers (the .Samples inputs) at bindings
-	// 0..S-1, then <paramref name="storageCount"/> storage images (a compute pass's .ReadWrites) at
-	// bindings S..S+T-1, visible to the given stage. Hardcoded shape; SPIR-V reflection derives this later.
-	private DescriptorSetLayout CreateSetLayout(int sampleCount, int storageCount, ShaderStageFlags stage)
+	// Set 0, in binding order: <paramref name="sampleCount"/> combined image samplers (the .Samples inputs),
+	// then <paramref name="storageImages"/> storage images (a compute's .ReadWrites of an image), then
+	// <paramref name="storageBuffers"/> storage buffers (a compute's .ReadWrites of a buffer — GPU particles),
+	// visible to the given stage. Hardcoded shape; SPIR-V reflection derives this later.
+	private DescriptorSetLayout CreateSetLayout(int sampleCount, int storageImages, int storageBuffers, ShaderStageFlags stage)
 	{
-		var total = sampleCount + storageCount;
+		var total = sampleCount + storageImages + storageBuffers;
 		var bindings = stackalloc DescriptorSetLayoutBinding[total];
 		for (var i = 0; i < total; i++)
 			bindings[i] = new DescriptorSetLayoutBinding
 			{
 				Binding = (uint)i,
-				DescriptorType = i < sampleCount ? DescriptorType.CombinedImageSampler : DescriptorType.StorageImage,
+				DescriptorType = i < sampleCount ? DescriptorType.CombinedImageSampler
+					: i < sampleCount + storageImages ? DescriptorType.StorageImage
+					: DescriptorType.StorageBuffer,
 				DescriptorCount = 1,
 				StageFlags = stage,
 			};
@@ -173,6 +176,28 @@ public sealed unsafe class Technique : IDisposable
 		});
 	}
 
+	// Particle vertex input: one float4 PER INSTANCE (xyz position + w life), stride 16, read straight from
+	// the storage buffer a compute wrote. Each particle is one instance of a fabricated 6-vertex quad
+	// (billboard), so the shader expands it without point sprites (§7.6 GPU particles).
+	private static PipelineVertexInputStateCreateInfo* VertexInputForParticles(NativeArena arena)
+	{
+		var binding = arena.Write(new VertexInputBindingDescription
+		{
+			Binding = 0,
+			Stride = 4 * sizeof(float),
+			InputRate = VertexInputRate.Instance,
+		});
+		var attribute = arena.Write(new VertexInputAttributeDescription { Location = 0, Binding = 0, Format = Format.R32G32B32A32Sfloat, Offset = 0 });
+		return arena.Write(new PipelineVertexInputStateCreateInfo
+		{
+			SType = StructureType.PipelineVertexInputStateCreateInfo,
+			VertexBindingDescriptionCount = 1,
+			PVertexBindingDescriptions = binding,
+			VertexAttributeDescriptionCount = 1,
+			PVertexAttributeDescriptions = attribute,
+		});
+	}
+
 	private Pipeline CreatePipeline(ShaderModule module, in TechniqueDescription description)
 	{
 		using var arena = new NativeArena();
@@ -193,14 +218,14 @@ public sealed unsafe class Technique : IDisposable
 			PName = arena.String(description.FragmentEntry),
 		};
 
-		var vertexInput = description.HasVertexInput
-			? VertexInputForMesh(arena)
+		var vertexInput = description.ParticleInput ? VertexInputForParticles(arena)
+			: description.HasVertexInput ? VertexInputForMesh(arena)
 			// No vertex buffers: the fullscreen triangle is fabricated from SV_VertexID.
 			: arena.Write(new PipelineVertexInputStateCreateInfo { SType = StructureType.PipelineVertexInputStateCreateInfo });
 		var inputAssembly = arena.Write(new PipelineInputAssemblyStateCreateInfo
 		{
 			SType = StructureType.PipelineInputAssemblyStateCreateInfo,
-			Topology = PrimitiveTopology.TriangleList,
+			Topology = PrimitiveTopology.TriangleList, // particles are instanced quads, not point sprites
 		});
 		// Viewport/scissor are dynamic, so the pipeline survives swapchain resizes.
 		var viewportState = arena.Write(new PipelineViewportStateCreateInfo

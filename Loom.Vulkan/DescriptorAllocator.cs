@@ -22,7 +22,7 @@ internal sealed unsafe class DescriptorAllocator : IDisposable
 		_vk = ctx.Vk;
 		_pools = new DescriptorPool[framesInFlight];
 
-		var poolSizes = stackalloc DescriptorPoolSize[2];
+		var poolSizes = stackalloc DescriptorPoolSize[3];
 		poolSizes[0] = new DescriptorPoolSize
 		{
 			Type = DescriptorType.CombinedImageSampler,
@@ -33,11 +33,16 @@ internal sealed unsafe class DescriptorAllocator : IDisposable
 			Type = DescriptorType.StorageImage,
 			DescriptorCount = maxSetsPerFrame * 2, // compute passes bind a storage image or two (auto-exposure)
 		};
+		poolSizes[2] = new DescriptorPoolSize
+		{
+			Type = DescriptorType.StorageBuffer,
+			DescriptorCount = maxSetsPerFrame * 2, // compute passes bind a storage buffer (GPU particles)
+		};
 		DescriptorPoolCreateInfo info = new()
 		{
 			SType = StructureType.DescriptorPoolCreateInfo,
 			MaxSets = maxSetsPerFrame,
-			PoolSizeCount = 2,
+			PoolSizeCount = 3,
 			PPoolSizes = poolSizes,
 		};
 		for (var i = 0; i < framesInFlight; i++)

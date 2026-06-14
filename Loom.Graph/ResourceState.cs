@@ -27,6 +27,9 @@ public enum ResourceState
 	/// <summary>General read/write storage image or buffer, used by compute (<c>GENERAL</c>).</summary>
 	Storage,
 
+	/// <summary>A buffer read as vertex-attribute input by a draw (GPU particles). Buffers have no layout.</summary>
+	VertexInput,
+
 	/// <summary>Ready to be presented to the screen (<c>PRESENT_SRC_KHR</c>).</summary>
 	Present,
 }

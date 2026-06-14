@@ -34,10 +34,13 @@ public sealed class ResourceHandle
 	/// <summary>For <see cref="ResourceKind.Persistent"/>: the history ring depth. Otherwise 1.</summary>
 	public int Count { get; }
 
+	/// <summary>For <see cref="ResourceKind.Buffer"/>: the buffer's size in bytes. 0 for image resources.</summary>
+	public int ByteSize { get; }
+
 	/// <summary>True if this is the swapchain present target.</summary>
 	public bool IsBackbuffer => Kind == ResourceKind.Backbuffer;
 
-	internal ResourceHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count)
+	internal ResourceHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count, int byteSize = 0)
 	{
 		Id = id;
 		Name = name;
@@ -46,6 +49,7 @@ public sealed class ResourceHandle
 		Domain = domain;
 		Scale = scale;
 		Count = count;
+		ByteSize = byteSize;
 	}
 
 	/// <summary>The pixel dimensions of this resource, resolving <see cref="Scale"/> against its domain.</summary>

@@ -28,4 +28,7 @@ public enum AccessKind
 
 	/// <summary>General read-modify-write — storage images/buffers, used by compute. (<c>.ReadWrites</c>)</summary>
 	ReadWrite,
+
+	/// <summary>A buffer read as vertex-attribute data by a draw (GPU particles, §7.6). (<c>.ReadsVertex</c>)</summary>
+	ReadVertex,
 }

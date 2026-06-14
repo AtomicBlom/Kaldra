@@ -2,6 +2,7 @@ using Loom.Core;
 using Loom.Graph;
 using Silk.NET.Vulkan;
 using VMASharp;
+using Buffer = Silk.NET.Vulkan.Buffer;
 using VkFormat = Silk.NET.Vulkan.Format;
 
 namespace Loom.Vulkan;
@@ -60,6 +61,8 @@ internal sealed unsafe class TransientResources : IDisposable
 	private readonly ResourceImage[][] _images; // [frameSlot][ResourceHandle.Id]
 	private readonly SlotBucket[][] _buckets;    // [frameSlot][bucketOrdinal]
 	private readonly List<(Image Image, ImageView View, Allocation Allocation)> _persistent = []; // shared across slots
+	private readonly Buffer[][] _buffers;        // [frameSlot][ResourceHandle.Id] — storage/vertex buffers (GPU particles)
+	private readonly List<Allocation> _bufferAllocations = [];
 	private Extent2D _swapExtent;
 
 	public TransientResources(VulkanContext ctx, RenderGraph graph, AliasPlan aliasPlan, VkFormat backbufferFormat, Extent2D swapExtent, int framesInFlight, VulkanMemoryAllocator allocator)
@@ -77,15 +80,19 @@ internal sealed unsafe class TransientResources : IDisposable
 		var readback = graph.ReadbackTargets.Select(r => r.Id).ToHashSet(); // need TRANSFER_SRC for the copy-out
 		_images = new ResourceImage[framesInFlight][];
 		_buckets = new SlotBucket[framesInFlight][];
+		_buffers = new Buffer[framesInFlight][];
 		for (var slot = 0; slot < framesInFlight; slot++)
 		{
 			_images[slot] = new ResourceImage[graph.Resources.Length];
+			_buffers[slot] = new Buffer[graph.Resources.Length];
 			foreach (var resource in graph.Resources)
 				InitMetadata(slot, resource, sampled, storage, readback);
 			_buckets[slot] = AllocateBuckets(slot);
 		}
 		// Persistent resources are allocated once and shared by every slot (cross-frame history, §8).
 		AllocatePersistentResources(framesInFlight);
+		// Storage/vertex buffers (GPU particles) — one per slot, multi-buffered like transient images.
+		AllocateBuffers(framesInFlight);
 	}
 
 	// Sets a resource's format/aspect/usage/flags without creating the image — the bucket pass allocates.
@@ -127,8 +134,8 @@ internal sealed unsafe class TransientResources : IDisposable
 		var next = -1; // synthetic keys for un-bucketed (dedicated) resources
 		foreach (var resource in _graph.Resources)
 		{
-			if (resource.IsBackbuffer || resource.Kind == ResourceKind.Persistent)
-				continue; // backbuffer is the swapchain's; persistent is shared across slots, allocated apart
+			if (resource.IsBackbuffer || resource.Kind is ResourceKind.Persistent or ResourceKind.Buffer)
+				continue; // backbuffer is the swapchain's; persistent shared across slots; buffers aren't images
 			var key = _aliasPlan.BucketOf(resource) ?? next--;
 			(groups.TryGetValue(key, out var list) ? list : groups[key] = []).Add(resource.Id);
 		}
@@ -178,6 +185,33 @@ internal sealed unsafe class TransientResources : IDisposable
 
 	/// <summary>The backing image/view/format/extent for a resource in the given frame slot.</summary>
 	public ref ResourceImage Get(int frameSlot, int id) => ref _images[frameSlot][id];
+
+	/// <summary>The backing storage/vertex buffer for a <see cref="ResourceKind.Buffer"/> resource in the given slot.</summary>
+	public Buffer GetBuffer(int frameSlot, int id) => _buffers[frameSlot][id];
+
+	// One device-local buffer per Buffer resource per frame slot (multi-buffered: a frame's compute writes it
+	// while an earlier frame's draw may still read its own slot's copy). Usage covers storage (compute write)
+	// + vertex (draw read) — the GPU particle path (§7.6).
+	private void AllocateBuffers(int framesInFlight)
+	{
+		foreach (var resource in _graph.Resources)
+		{
+			if (resource.Kind != ResourceKind.Buffer)
+				continue;
+			BufferCreateInfo info = new()
+			{
+				SType = StructureType.BufferCreateInfo,
+				Size = (ulong)resource.ByteSize,
+				Usage = BufferUsageFlags.StorageBufferBit | BufferUsageFlags.VertexBufferBit,
+				SharingMode = SharingMode.Exclusive,
+			};
+			for (var slot = 0; slot < framesInFlight; slot++)
+			{
+				_buffers[slot][resource.Id] = _allocator.CreateBuffer(in info, new AllocationCreateInfo { Usage = MemoryUsage.GPU_Only }, out var allocation);
+				_bufferAllocations.Add(allocation);
+			}
+		}
+	}
 
 	/// <summary>Point the frame slot's backbuffer resource at the swapchain image acquired this frame.</summary>
 	public void SetBackbuffer(int frameSlot, Image image, ImageView view, Extent2D extent)
@@ -320,6 +354,13 @@ internal sealed unsafe class TransientResources : IDisposable
 				_vk.DestroyImage(_ctx.Device, image, null);
 			allocation.Dispose();
 		}
+		// Storage/vertex buffers: destroy each VkBuffer, then return its allocation to VMA.
+		foreach (var slot in _buffers)
+			foreach (var buffer in slot)
+				if (buffer.Handle != 0)
+					_vk.DestroyBuffer(_ctx.Device, buffer, null);
+		foreach (var allocation in _bufferAllocations)
+			allocation.Dispose();
 		// The allocator is owned by the executor (shared with meshes), so it is not disposed here.
 	}
 }

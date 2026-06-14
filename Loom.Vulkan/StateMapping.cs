@@ -55,6 +55,13 @@ internal static class StateMapping
 			PipelineStageFlags2.ComputeShaderBit,
 			AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit),
 
+		// A buffer read as vertex-attribute input (GPU particles). Buffers have no layout — the layout field
+		// is ignored for the buffer memory barrier the executor emits; only the stage/access scope matters.
+		GraphState.VertexInput => new(
+			ImageLayout.Undefined,
+			PipelineStageFlags2.VertexAttributeInputBit,
+			AccessFlags2.VertexAttributeReadBit),
+
 		// Terminal: hand the image to the presentation engine.
 		GraphState.Present => new(ImageLayout.PresentSrcKhr, PipelineStageFlags2.BottomOfPipeBit, AccessFlags2.None),
 

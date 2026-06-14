@@ -118,7 +118,7 @@ public sealed class BarrierPlan
 	/// </summary>
 	private static IEnumerable<Use> UsesOf(GraphPass pass)
 	{
-		var flags = new Dictionary<int, (ResourceHandle Res, bool Write, bool Blend, bool Sample, bool WriteDepth, bool ReadDepth, bool Storage)>();
+		var flags = new Dictionary<int, (ResourceHandle Res, bool Write, bool Blend, bool Sample, bool WriteDepth, bool ReadDepth, bool Storage, bool Vertex)>();
 		foreach (var access in pass.Accesses)
 		{
 			var f = flags.GetValueOrDefault(access.Resource.Id);
@@ -131,6 +131,7 @@ public sealed class BarrierPlan
 				case AccessKind.WriteDepth: f.WriteDepth = true; break;
 				case AccessKind.ReadDepth: f.ReadDepth = true; break;
 				case AccessKind.ReadWrite: f.Storage = true; break;
+				case AccessKind.ReadVertex: f.Vertex = true; break;
 			}
 			flags[access.Resource.Id] = f;
 		}
@@ -145,6 +146,8 @@ public sealed class BarrierPlan
 					return new Use(f.Res, ResourceState.DepthReadOnly, IsAttachment: true, IsBlend: false, IsReadOnlyAttachment: true);
 				if (f.Storage)
 					return new Use(f.Res, ResourceState.Storage, IsAttachment: false, IsBlend: false, IsReadOnlyAttachment: false);
+				if (f.Vertex)
+					return new Use(f.Res, ResourceState.VertexInput, IsAttachment: false, IsBlend: false, IsReadOnlyAttachment: false);
 				if (f.Write || f.Blend)
 					return new Use(f.Res, ResourceState.ColorAttachment, IsAttachment: true, IsBlend: f.Blend && !f.Write, IsReadOnlyAttachment: false);
 				return new Use(f.Res, ResourceState.ShaderRead, IsAttachment: false, IsBlend: false, IsReadOnlyAttachment: false);

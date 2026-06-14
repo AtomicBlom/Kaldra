@@ -17,6 +17,10 @@ public interface IRenderContext
 	/// <summary>Seconds since the previous frame.</summary>
 	float DeltaTime { get; }
 
+	/// <summary>Elapsed seconds since startup — per-frame host data for time-driven effects (the GPU particle
+	/// fountain animates from it). Pulled, not captured (§8).</summary>
+	float Time { get; }
+
 	/// <summary>
 	/// The object id currently under the cursor (0 = nothing), supplied per-frame by the host (Planning.md §5
 	/// <c>ctx.Hover</c>). The JFA outline sub-graph's seed pass pulls it from here to decide which silhouette
@@ -82,4 +86,12 @@ public interface IRenderContext
 	/// different view; the shadow pass uses this with <see cref="SunView"/> to render the depth map.
 	/// </summary>
 	void Draw(Mesh mesh, string technique, Camera view);
+
+	/// <summary>
+	/// Draw <paramref name="count"/> points whose per-vertex data is read straight from <paramref name="buffer"/>
+	/// — a GPU storage buffer a compute pass just wrote (GPU particles, §7.6). The buffer must be one the pass
+	/// declared with <c>.ReadsVertex</c>, so the graph derives the compute→vertex-input barrier. The technique
+	/// transforms by <see cref="Camera"/> (pulled, not captured).
+	/// </summary>
+	void DrawParticles(ResourceHandle buffer, int count, string technique);
 }

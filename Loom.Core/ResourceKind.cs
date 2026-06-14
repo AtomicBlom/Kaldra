@@ -14,6 +14,12 @@ public enum ResourceKind
 	Depth,
 
 	/// <summary>
+	/// A GPU storage buffer (not an image) — a compute pass writes it, a draw reads it as vertex data
+	/// (GPU particles, §7.6). Sized in bytes (<see cref="ResourceHandle.ByteSize"/>), not a domain. Transient.
+	/// </summary>
+	Buffer,
+
+	/// <summary>
 	/// A resource whose lifetime is forever — the transient aliaser never recycles its memory.
 	/// Used for cross-frame history (e.g. auto-exposure). Opt-out of aliasing (Planning.md §8).
 	/// </summary>

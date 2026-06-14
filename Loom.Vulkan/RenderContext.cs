@@ -40,6 +40,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 	public float DeltaTime { get; private set; }
 
+	public float Time { get; private set; }
+
 	public Camera Camera => _camera;
 
 	public uint HoverId => _hoverId;
@@ -66,10 +68,11 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	}
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, and timing before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, int frameSlot, Camera camera, Camera sunView, uint hoverId)
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
+		Time = time;
 		_frameSlot = frameSlot;
 		_camera = camera;
 		_sunView = sunView;
@@ -167,37 +170,65 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		var total = sampled.Length + storage.Length;
 		if (total > 0)
 		{
-			// Bindings 0..S-1: sampled inputs (ShaderReadOnly, the nearest sampler). S..S+T-1: storage images
-			// (GENERAL) the compute read-writes. The graph put each in the matching layout before this pass.
+			// Binding order matches the layout: sampled inputs (combined image samplers, ShaderReadOnly), then
+			// storage resources — a storage IMAGE (GENERAL) or, for a Buffer-kind resource, a storage BUFFER.
 			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 			var imageInfos = stackalloc DescriptorImageInfo[total];
+			var bufferInfos = stackalloc DescriptorBufferInfo[total];
 			var writes = stackalloc WriteDescriptorSet[total];
 			for (var i = 0; i < total; i++)
 			{
-				var isSampled = i < sampled.Length;
-				var handle = isSampled ? sampled[i] : storage[i - sampled.Length];
-				ref var image = ref _resources.Get(_frameSlot, handle.Id);
-				imageInfos[i] = new DescriptorImageInfo
-				{
-					Sampler = isSampled ? _nearestSampler : default,
-					ImageView = image.View,
-					ImageLayout = isSampled ? ImageLayout.ShaderReadOnlyOptimal : ImageLayout.General,
-				};
-				writes[i] = new WriteDescriptorSet
+				var write = new WriteDescriptorSet
 				{
 					SType = StructureType.WriteDescriptorSet,
 					DstSet = set,
 					DstBinding = (uint)i,
 					DescriptorCount = 1,
-					DescriptorType = isSampled ? DescriptorType.CombinedImageSampler : DescriptorType.StorageImage,
-					PImageInfo = &imageInfos[i],
 				};
+				if (i < sampled.Length)
+				{
+					ref var image = ref _resources.Get(_frameSlot, sampled[i].Id);
+					imageInfos[i] = new DescriptorImageInfo { Sampler = _nearestSampler, ImageView = image.View, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
+					write.DescriptorType = DescriptorType.CombinedImageSampler;
+					write.PImageInfo = &imageInfos[i];
+				}
+				else
+				{
+					var handle = storage[i - sampled.Length];
+					if (handle.Kind == ResourceKind.Buffer)
+					{
+						bufferInfos[i] = new DescriptorBufferInfo { Buffer = _resources.GetBuffer(_frameSlot, handle.Id), Offset = 0, Range = Vk.WholeSize };
+						write.DescriptorType = DescriptorType.StorageBuffer;
+						write.PBufferInfo = &bufferInfos[i];
+					}
+					else
+					{
+						ref var image = ref _resources.Get(_frameSlot, handle.Id);
+						imageInfos[i] = new DescriptorImageInfo { ImageView = image.View, ImageLayout = ImageLayout.General };
+						write.DescriptorType = DescriptorType.StorageImage;
+						write.PImageInfo = &imageInfos[i];
+					}
+				}
+				writes[i] = write;
 			}
 			_vk.UpdateDescriptorSets(_ctx.Device, (uint)total, writes, 0, null);
 			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Compute, baked.Layout, 0, 1, in set, 0, null);
 		}
 
 		_vk.CmdDispatch(_cmd, groups.X, groups.Y, groups.Z);
+	}
+
+	public void DrawParticles(ResourceHandle buffer, int count, string technique)
+	{
+		var baked = Bake(technique);
+		var mvp = _camera.ViewProjection;
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+		var vertexBuffer = _resources.GetBuffer(_frameSlot, buffer.Id);
+		ulong offset = 0;
+		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vertexBuffer, in offset);
+		// The buffer IS the per-instance vertex stream: 6 fabricated quad verts × one instance per particle.
+		_vk.CmdDraw(_cmd, 6, (uint)count, 0, 0);
 	}
 
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;
@@ -218,7 +249,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		var baked = _techniques.GetOrBake(new TechniqueDescription(
 			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormats,
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
-			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount));
+			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
+			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput));
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
 		// HasFragmentPush are folded into the TechniqueDescription hash, and LinearFilter only affects the
 		// descriptor's sampler, not the pipeline.

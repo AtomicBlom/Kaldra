@@ -17,6 +17,7 @@ internal static class AccessKindExtensions
 		AccessKind.ReadDepth => true,
 		AccessKind.Blend => true,
 		AccessKind.ReadWrite => true,
+		AccessKind.ReadVertex => true,
 		_ => false,
 	};
 

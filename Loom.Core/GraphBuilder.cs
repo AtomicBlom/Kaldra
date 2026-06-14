@@ -116,11 +116,24 @@ public sealed class GraphBuilder
 		return resource;
 	}
 
-	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1)
+	/// <summary>
+	/// Declare a GPU storage buffer of <paramref name="byteSize"/> bytes (Planning.md §7.6) — not an image,
+	/// not resolution-bound. A compute pass <c>.ReadWrites</c> it and a draw <c>.ReadsVertex</c> it (GPU
+	/// particles): the engine derives the compute→vertex barrier from those edges. Anchored to the backbuffer
+	/// domain (it has no resolution of its own).
+	/// </summary>
+	public ResourceHandle Buffer(string name, int byteSize)
+	{
+		if (byteSize <= 0)
+			throw new ArgumentOutOfRangeException(nameof(byteSize), "A buffer needs a positive byte size.");
+		return AddResource(name, Format.Rgba8Unorm, ResourceKind.Buffer, BackbufferDomainForPersistent(), scale: 1f, byteSize: byteSize);
+	}
+
+	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0)
 	{
 		if (!_resourceNames.Add(name))
 			throw new InvalidOperationException($"Duplicate resource name '{name}'.");
-		var handle = new ResourceHandle(_resources.Count, name, format, kind, domain, scale, count);
+		var handle = new ResourceHandle(_resources.Count, name, format, kind, domain, scale, count, byteSize);
 		_resources.Add(handle);
 		return handle;
 	}
