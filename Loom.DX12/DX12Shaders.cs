@@ -18,14 +18,27 @@ namespace Loom.DX12;
 internal static unsafe class DX12Shaders
 {
 	/// <summary>
-	/// Resolve a logical shader name + stage to its build-emitted HLSL (<c>&lt;name&gt;.&lt;stage&gt;.hlsl</c>,
-	/// stage = <c>vs</c>/<c>ps</c>/<c>cs</c>), or null if absent. Slang's HLSL target is per-entry-point, so the
-	/// build emits one self-contained module per stage and the backend compiles each from its own source.
+	/// Resolve a logical shader name + stage to its build-emitted <em>signed DXIL</em> blob
+	/// (<c>&lt;name&gt;.&lt;stage&gt;.dxil</c>, stage = <c>vs</c>/<c>ps</c>/<c>cs</c>), or null if absent. The Loom
+	/// build emits one self-contained signed-DXIL module per stage (offline, like the Vulkan <c>.spv</c>); the
+	/// backend loads the blob straight into the PSO — no runtime compiler is shipped.
 	/// </summary>
-	public static string? TryResolveStageHlsl(string shaderDir, string name, string stage)
+	public static byte[]? TryResolveStageDxil(string shaderDir, string name, string stage)
 	{
-		var path = Path.Combine(shaderDir, $"{name}.{stage}.hlsl");
-		return File.Exists(path) ? File.ReadAllText(path) : null;
+		var path = Path.Combine(shaderDir, $"{name}.{stage}.dxil");
+		return File.Exists(path) ? File.ReadAllBytes(path) : null;
+	}
+
+	/// <summary>Compile built-in HLSL to a DXBC bytecode blob via the in-box FXC (the fallback stand-in path; ships nothing — d3dcompiler is in Windows).</summary>
+	public static byte[] CompileToBytes(string hlsl, string entry, string target)
+	{
+		using var compiler = D3DCompiler.GetApi();
+		var blob = Compile(compiler, Encoding.ASCII.GetBytes(hlsl), entry, target);
+		var size = (int)blob.GetBufferSize();
+		var bytes = new byte[size];
+		new ReadOnlySpan<byte>(blob.GetBufferPointer(), size).CopyTo(bytes);
+		blob.Dispose();
+		return bytes;
 	}
 
 	/// <summary>
@@ -182,34 +195,6 @@ internal static unsafe class DX12Shaders
 			}
 			""", 0),
 	};
-
-	/// <summary>
-	/// Whether a resolved technique compiles for all its stages (FXC) — vertex from <paramref name="vertexHlsl"/>,
-	/// fragment/compute from <paramref name="fragmentHlsl"/> (each its own per-stage module). Gates real-shader
-	/// resolution: a shader not yet cross-targeted (e.g. a vertex input missing an HLSL semantic) fails here and
-	/// the backend falls back to the built-in stand-in, so adopting the real pipeline never breaks a demo mid-port.
-	/// </summary>
-	public static bool CompilesOk(string? vertexHlsl, string fragmentHlsl, string vertexEntry, string fragmentEntry, bool isCompute)
-	{
-		using var compiler = D3DCompiler.GetApi();
-		try
-		{
-			if (isCompute)
-			{
-				Compile(compiler, Encoding.ASCII.GetBytes(fragmentHlsl), fragmentEntry, "cs_5_1").Dispose();
-			}
-			else
-			{
-				Compile(compiler, Encoding.ASCII.GetBytes(vertexHlsl!), vertexEntry, "vs_5_1").Dispose();
-				Compile(compiler, Encoding.ASCII.GetBytes(fragmentHlsl), fragmentEntry, "ps_5_1").Dispose();
-			}
-			return true;
-		}
-		catch
-		{
-			return false;
-		}
-	}
 
 	public static ComPtr<ID3D10Blob> Compile(D3DCompiler compiler, byte[] hlsl, string entry, string target)
 	{

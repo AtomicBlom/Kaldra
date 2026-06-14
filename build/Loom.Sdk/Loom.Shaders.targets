@@ -33,7 +33,7 @@
     <UpToDateCheckInput Include="@(LoomSlangSource)" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')" />
-    <UpToDateCheckBuilt Condition="'$(LoomEmitHlsl)' == 'true'" Include="$(LoomShaderOutDir)hlsl.stamp" />
+    <UpToDateCheckBuilt Condition="'$(LoomEmitDxil)' == 'true'" Include="$(LoomShaderOutDir)dxil.stamp" />
   </ItemGroup>
 
   <!-- Incremental: recompile when ANY .slang (entry OR shared module) is newer than ANY .spv. Listing every
@@ -58,16 +58,33 @@
        file for it — the '|| exit /b 0' swallows slangc's "entry not found" so the build stays warning-free
        (real shader errors are still caught by the un-swallowed SPIR-V compile above). Stamp-tracked so it
        re-runs when any .slang changes; the registration globs whatever stage files were actually produced. -->
-  <Target Name="LoomEmitHlslShaders"
-          Condition="'$(LoomEmitHlsl)' == 'true' And '$(LoomShaderOutputMode)' != 'None'"
+  <Target Name="LoomEmitDxilShaders"
+          Condition="'$(LoomEmitDxil)' == 'true' And '$(LoomShaderOutputMode)' != 'None'"
           Inputs="@(LoomSlangSource)"
-          Outputs="$(LoomShaderOutDir)hlsl.stamp">
+          Outputs="$(LoomShaderOutDir)dxil.stamp">
+    <!-- Resolve the Windows SDK bin dir holding the architecture-matched dxcompiler.dll (+ dxil.dll signer) for
+         slangc's -dxc-path. Done here (not props) because it transforms a glob item into a path — an item-list
+         reference is illegal in a props-level Condition. Overridable via $(LoomDxcPath). -->
+    <ItemGroup Condition="'$(LoomDxcPath)' == ''">
+      <_LoomDxcDll Include="$(MSBuildProgramFiles32)\Windows Kits\10\bin\**\$(LoomDxcArch)\dxcompiler.dll" />
+    </ItemGroup>
+    <PropertyGroup Condition="'$(LoomDxcPath)' == ''">
+      <LoomDxcPath>@(_LoomDxcDll->'%(RootDir)%(Directory)'->Distinct())</LoomDxcPath>
+      <!-- %(Directory) ends in a backslash; passed as -dxc-path "…\" the trailing \" reads as an escaped quote
+           in cmd and mangles the arg. Forward slashes (slangc accepts them on Windows) avoid the \"-escape. -->
+      <LoomDxcPath>$(LoomDxcPath.Replace('\','/'))</LoomDxcPath>
+    </PropertyGroup>
+    <Warning Condition="'$(LoomDxcPath)' == ''"
+             Text="LoomEmitDxil is on but no DXC found (Windows SDK '$(LoomDxcArch)' bin). DX12 will fall back to built-in shaders; install the Windows SDK or set $(LoomDxcPath)." />
     <MakeDir Directories="$(LoomShaderOutDir)" />
-    <Message Importance="high" Text="Slang -&gt; HLSL (per stage): %(LoomSlangEntry.Filename).slang" />
-    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target hlsl -profile sm_6_0 -entry vertexMain -stage vertex -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).vs.hlsl&quot; 2&gt;nul || exit /b 0" />
-    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target hlsl -profile sm_6_0 -entry fragmentMain -stage fragment -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).ps.hlsl&quot; 2&gt;nul || exit /b 0" />
-    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target hlsl -profile sm_6_0 -entry computeMain -stage compute -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).cs.hlsl&quot; 2&gt;nul || exit /b 0" />
-    <Touch Files="$(LoomShaderOutDir)hlsl.stamp" AlwaysCreate="true" />
+    <Message Importance="high" Text="Slang -&gt; signed DXIL (per stage): %(LoomSlangEntry.Filename).slang" />
+    <!-- slangc -target dxil hands off to DXC at $(LoomDxcPath) and signs via the co-located dxil.dll. One Exec
+         per fixed stage; a shader lacking a stage just produces no file ('|| exit /b 0' swallows the expected
+         "entry not found" so the build stays warning-free — real shader errors are caught by the SPIR-V compile). -->
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry vertexMain -stage vertex -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).vs.dxil&quot; 2&gt;nul || exit /b 0" />
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry fragmentMain -stage fragment -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).ps.dxil&quot; 2&gt;nul || exit /b 0" />
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry computeMain -stage compute -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).cs.dxil&quot; 2&gt;nul || exit /b 0" />
+    <Touch Files="$(LoomShaderOutDir)dxil.stamp" AlwaysCreate="true" />
   </Target>
 
   <!-- No Inputs/Outputs => ALWAYS runs (even when the compile targets are up to date), so the outputs are
@@ -82,17 +99,17 @@
        snapshotted @(EmbeddedResource) by then, so the late items never reach the compiler. -->
   <Target Name="LoomRegisterShaders"
           Condition="'$(LoomShaderOutputMode)' != 'None'"
-          DependsOnTargets="LoomCompileShaders;LoomEmitHlslShaders"
+          DependsOnTargets="LoomCompileShaders;LoomEmitDxilShaders"
           BeforeTargets="AssignTargetPaths">
 
-    <!-- The per-stage HLSL files actually produced (glob, evaluated now that they exist — a static per-shader
-         list can't know which stages a shader has). Empty when LoomEmitHlsl is off. -->
-    <ItemGroup Condition="'$(LoomEmitHlsl)' == 'true'">
-      <LoomHlslFile Include="$(LoomShaderOutDir)*.hlsl" />
+    <!-- The per-stage signed-DXIL files actually produced (glob, evaluated now that they exist — a static
+         per-shader list can't know which stages a shader has). Empty when LoomEmitDxil is off. -->
+    <ItemGroup Condition="'$(LoomEmitDxil)' == 'true'">
+      <LoomDxilFile Include="$(LoomShaderOutDir)*.dxil" />
     </ItemGroup>
 
-    <!-- Content (app): loose .spv/.json (+ HLSL) copied to the output under shaders\, flowing to the app's bin
-         (and to projects that reference this one). -->
+    <!-- Content (app): loose .spv/.json (+ signed DXIL) copied to the output under shaders\, flowing to the
+         app's bin (and to projects that reference this one). -->
     <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content'">
       <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -104,7 +121,7 @@
         <Link>shaders\%(Filename).json</Link>
         <Visible>false</Visible>
       </Content>
-      <Content Include="@(LoomHlslFile)">
+      <Content Include="@(LoomDxilFile)">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         <Link>shaders\%(Filename)%(Extension)</Link>
         <Visible>false</Visible>
@@ -123,7 +140,7 @@
         <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).json</LogicalName>
         <Visible>false</Visible>
       </EmbeddedResource>
-      <EmbeddedResource Include="@(LoomHlslFile)">
+      <EmbeddedResource Include="@(LoomDxilFile)">
         <LogicalName>$(LoomEmbedManifestPrefix)%(Filename)%(Extension)</LogicalName>
         <Visible>false</Visible>
       </EmbeddedResource>

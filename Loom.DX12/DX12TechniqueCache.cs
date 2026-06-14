@@ -8,14 +8,14 @@ using BlendMode = Loom.Core.BlendMode;
 namespace Loom.DX12;
 
 /// <summary>
-/// A registered DX12 technique: its HLSL + the shape needed to bake a pipeline (the DX12 counterpart of
-/// <c>TechniqueTemplate</c>). The vertex and fragment stages carry <em>separate</em> HLSL sources because
-/// Slang emits one self-contained module per entry point (a combined module duplicates shared decls); for a
-/// built-in stand-in both point at the same string, and for a compute technique only <see cref="FragmentHlsl"/>
-/// (the compute module) is used.
+/// A registered DX12 technique: its <em>prebuilt per-stage bytecode</em> + the shape needed to bake a pipeline
+/// (the DX12 counterpart of <c>TechniqueTemplate</c>). The bytecode is either signed DXIL the Loom build emitted
+/// offline (the real Slang shaders) or DXBC the backend FXC-compiled from a built-in stand-in — both are blobs
+/// the PSO consumes directly, so baking never compiles. The vertex and fragment stages are separate blobs; for
+/// a compute technique only <see cref="FragmentBytecode"/> (the compute blob) is used.
 /// </summary>
 internal readonly record struct DX12TechniqueTemplate(
-	string VertexHlsl, string FragmentHlsl, string VertexEntry, string FragmentEntry, int InputCount,
+	byte[] VertexBytecode, byte[] FragmentBytecode, string VertexEntry, string FragmentEntry, int InputCount,
 	bool HasVertexInput, bool HasFragmentPush, bool LinearFilter,
 	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None);
 
@@ -93,24 +93,21 @@ internal sealed unsafe class DX12Technique : IDisposable
 	public DX12Technique(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		IsCompute = template.IsCompute;
-		using var compiler = D3DCompiler.GetApi();
 
 		if (template.IsCompute)
 		{
-			BakeCompute(ctx, compiler, System.Text.Encoding.ASCII.GetBytes(template.FragmentHlsl), template);
+			BakeCompute(ctx, template);
 			return;
 		}
-		BakeGraphics(ctx, compiler, template, colorFormats, depthFormat, depthReadOnly);
+		BakeGraphics(ctx, template, colorFormats, depthFormat, depthReadOnly);
 	}
 
 	// A compute root signature: a 16-float scalar root constant at b0 plus a storage-buffer root UAV at u0
 	// (DX12 root descriptors bind a raw buffer by GPU address — no descriptor heap entry). Both visible to all
 	// stages (compute is not covered by the per-stage VERTEX/PIXEL visibilities). Storage IMAGES / sampled
 	// inputs in a compute land with the offline-DXIL slice (auto-exposure, SSAO).
-	private void BakeCompute(DX12Context ctx, D3DCompiler compiler, byte[] hlsl, DX12TechniqueTemplate template)
+	private void BakeCompute(DX12Context ctx, DX12TechniqueTemplate template)
 	{
-		var cs = DX12Shaders.Compile(compiler, hlsl, template.FragmentEntry, "cs_5_1");
-
 		var parameters = stackalloc RootParameter[2];
 		RootConstantParam = 0;
 		parameters[0] = new RootParameter
@@ -129,24 +126,23 @@ internal sealed unsafe class DX12Technique : IDisposable
 		var rootDesc = new RootSignatureDesc { NumParameters = 2, PParameters = parameters, NumStaticSamplers = 0, PStaticSamplers = null, Flags = RootSignatureFlags.None };
 		SerializeRootSignature(ctx, &rootDesc);
 
-		var pso = new ComputePipelineStateDesc
+		// The compute bytecode is prebuilt (signed DXIL from the build, or FXC-compiled built-in bytes); pin it
+		// for the CreatePipelineState call, which copies it.
+		fixed (byte* pCs = template.FragmentBytecode)
 		{
-			PRootSignature = RootSignature.Handle,
-			CS = new ShaderBytecode { PShaderBytecode = cs.GetBufferPointer(), BytecodeLength = cs.GetBufferSize() },
-			NodeMask = 0,
-			Flags = PipelineStateFlags.None,
-		};
-		SilkMarshal.ThrowHResult(ctx.Device.CreateComputePipelineState(&pso, out Pipeline));
-		cs.Dispose();
+			var pso = new ComputePipelineStateDesc
+			{
+				PRootSignature = RootSignature.Handle,
+				CS = new ShaderBytecode { PShaderBytecode = pCs, BytecodeLength = (nuint)template.FragmentBytecode.Length },
+				NodeMask = 0,
+				Flags = PipelineStateFlags.None,
+			};
+			SilkMarshal.ThrowHResult(ctx.Device.CreateComputePipelineState(&pso, out Pipeline));
+		}
 	}
 
-	private void BakeGraphics(DX12Context ctx, D3DCompiler compiler, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	private void BakeGraphics(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
-		// Each stage compiles from its own self-contained module (real Slang shaders emit one per entry point;
-		// a built-in stand-in points both at the same string).
-		var vs = DX12Shaders.Compile(compiler, System.Text.Encoding.ASCII.GetBytes(template.VertexHlsl), template.VertexEntry, "vs_5_1");
-		var ps = DX12Shaders.Compile(compiler, System.Text.Encoding.ASCII.GetBytes(template.FragmentHlsl), template.FragmentEntry, "ps_5_1");
-
 		// Root signature: optionally a 32-bit root-constants block (the MVP at b0/vertex for a mesh or particle
 		// technique, or a 16-float scalar block at b0/pixel for a post pass — one or the other, mirroring the
 		// Vulkan layout), and optionally one SRV descriptor table (t0..tN-1) + a static sampler (s0).
@@ -233,68 +229,71 @@ internal sealed unsafe class DX12Technique : IDisposable
 		};
 
 		var hasDepth = depthFormat != Format.FormatUnknown;
-		var pso = new GraphicsPipelineStateDesc
+		// The stage bytecode is prebuilt (signed DXIL from the build, or FXC-compiled built-in bytes); pin both
+		// for the CreatePipelineState call, which copies them.
+		fixed (byte* pVs = template.VertexBytecode)
+		fixed (byte* pPs = template.FragmentBytecode)
 		{
-			PRootSignature = RootSignature.Handle,
-			VS = new ShaderBytecode { PShaderBytecode = vs.GetBufferPointer(), BytecodeLength = vs.GetBufferSize() },
-			PS = new ShaderBytecode { PShaderBytecode = ps.GetBufferPointer(), BytecodeLength = ps.GetBufferSize() },
-			BlendState = blend,
-			SampleMask = uint.MaxValue,
-			RasterizerState = new RasterizerDesc { FillMode = FillMode.Solid, CullMode = CullMode.None, FrontCounterClockwise = false, DepthClipEnable = true },
-			DepthStencilState = new DepthStencilDesc
+			var pso = new GraphicsPipelineStateDesc
 			{
-				DepthEnable = hasDepth,
-				DepthWriteMask = depthReadOnly ? DepthWriteMask.Zero : DepthWriteMask.All,
-				DepthFunc = ComparisonFunc.LessEqual,
-				StencilEnable = false,
-			},
-			DSVFormat = hasDepth ? depthFormat : Format.FormatUnknown,
-			PrimitiveTopologyType = PrimitiveTopologyType.Triangle,
-			NumRenderTargets = (uint)colorFormats.Length,
-			SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
-			Flags = PipelineStateFlags.None,
-		};
-		for (var i = 0; i < colorFormats.Length && i < 8; i++)
-			pso.RTVFormats[i] = colorFormats[i];
+				PRootSignature = RootSignature.Handle,
+				VS = new ShaderBytecode { PShaderBytecode = pVs, BytecodeLength = (nuint)template.VertexBytecode.Length },
+				PS = new ShaderBytecode { PShaderBytecode = pPs, BytecodeLength = (nuint)template.FragmentBytecode.Length },
+				BlendState = blend,
+				SampleMask = uint.MaxValue,
+				RasterizerState = new RasterizerDesc { FillMode = FillMode.Solid, CullMode = CullMode.None, FrontCounterClockwise = false, DepthClipEnable = true },
+				DepthStencilState = new DepthStencilDesc
+				{
+					DepthEnable = hasDepth,
+					DepthWriteMask = depthReadOnly ? DepthWriteMask.Zero : DepthWriteMask.All,
+					DepthFunc = ComparisonFunc.LessEqual,
+					StencilEnable = false,
+				},
+				DSVFormat = hasDepth ? depthFormat : Format.FormatUnknown,
+				PrimitiveTopologyType = PrimitiveTopologyType.Triangle,
+				NumRenderTargets = (uint)colorFormats.Length,
+				SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
+				Flags = PipelineStateFlags.None,
+			};
+			for (var i = 0; i < colorFormats.Length && i < 8; i++)
+				pso.RTVFormats[i] = colorFormats[i];
 
-		// Vertex input: a mesh reads the canonical interleaved Loom.Core.Vertex (POSITION/NORMAL/TEXCOORD,
-		// mirroring lit.slang); a particle technique reads one float4 PER INSTANCE (the storage buffer the
-		// compute wrote, expanded into a billboard); a fullscreen technique fabricates its triangle and needs none.
-		if (template.HasVertexInput)
-		{
-			ReadOnlySpan<byte> position = "POSITION\0"u8;
-			ReadOnlySpan<byte> normal = "NORMAL\0"u8;
-			ReadOnlySpan<byte> texcoord = "TEXCOORD\0"u8;
-			fixed (byte* pPos = position)
-			fixed (byte* pNorm = normal)
-			fixed (byte* pTex = texcoord)
+			// Vertex input: a mesh reads the canonical interleaved Loom.Core.Vertex (POSITION/NORMAL/TEXCOORD,
+			// mirroring lit.slang); a particle technique reads one float4 PER INSTANCE (the storage buffer the
+			// compute wrote, expanded into a billboard); a fullscreen technique fabricates its triangle and needs none.
+			if (template.HasVertexInput)
 			{
-				var elements = stackalloc InputElementDesc[3];
-				elements[0] = new InputElementDesc { SemanticName = pPos, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 0, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
-				elements[1] = new InputElementDesc { SemanticName = pNorm, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 12, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
-				elements[2] = new InputElementDesc { SemanticName = pTex, SemanticIndex = 0, Format = Format.FormatR32G32Float, InputSlot = 0, AlignedByteOffset = 24, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
-				pso.InputLayout = new InputLayoutDesc { NumElements = 3, PInputElementDescs = elements };
+				ReadOnlySpan<byte> position = "POSITION\0"u8;
+				ReadOnlySpan<byte> normal = "NORMAL\0"u8;
+				ReadOnlySpan<byte> texcoord = "TEXCOORD\0"u8;
+				fixed (byte* pPos = position)
+				fixed (byte* pNorm = normal)
+				fixed (byte* pTex = texcoord)
+				{
+					var elements = stackalloc InputElementDesc[3];
+					elements[0] = new InputElementDesc { SemanticName = pPos, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 0, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
+					elements[1] = new InputElementDesc { SemanticName = pNorm, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 12, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
+					elements[2] = new InputElementDesc { SemanticName = pTex, SemanticIndex = 0, Format = Format.FormatR32G32Float, InputSlot = 0, AlignedByteOffset = 24, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
+					pso.InputLayout = new InputLayoutDesc { NumElements = 3, PInputElementDescs = elements };
+					SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
+				}
+			}
+			else if (template.ParticleInput)
+			{
+				ReadOnlySpan<byte> position = "POSITION\0"u8;
+				fixed (byte* pPos = position)
+				{
+					var element = new InputElementDesc { SemanticName = pPos, SemanticIndex = 0, Format = Format.FormatR32G32B32A32Float, InputSlot = 0, AlignedByteOffset = 0, InputSlotClass = InputClassification.PerInstanceData, InstanceDataStepRate = 1 };
+					pso.InputLayout = new InputLayoutDesc { NumElements = 1, PInputElementDescs = &element };
+					SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
+				}
+			}
+			else
+			{
+				pso.InputLayout = new InputLayoutDesc { NumElements = 0, PInputElementDescs = null };
 				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
 			}
 		}
-		else if (template.ParticleInput)
-		{
-			ReadOnlySpan<byte> position = "POSITION\0"u8;
-			fixed (byte* pPos = position)
-			{
-				var element = new InputElementDesc { SemanticName = pPos, SemanticIndex = 0, Format = Format.FormatR32G32B32A32Float, InputSlot = 0, AlignedByteOffset = 0, InputSlotClass = InputClassification.PerInstanceData, InstanceDataStepRate = 1 };
-				pso.InputLayout = new InputLayoutDesc { NumElements = 1, PInputElementDescs = &element };
-				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
-			}
-		}
-		else
-		{
-			pso.InputLayout = new InputLayoutDesc { NumElements = 0, PInputElementDescs = null };
-			SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
-		}
-
-		vs.Dispose();
-		ps.Dispose();
 	}
 
 	private void SerializeRootSignature(DX12Context ctx, RootSignatureDesc* rootDesc)

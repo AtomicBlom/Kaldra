@@ -537,39 +537,60 @@ public sealed unsafe class DX12Engine : IEngine
 		var dir = _settings.ShaderDirectory;
 		var shader = descriptor.Shader;
 
-		// Resolve the build-emitted per-stage HLSL: compute uses <name>.cs.hlsl; graphics uses <name>.vs.hlsl +
-		// <name>.ps.hlsl. Use it only if every needed stage resolves AND compiles (a not-yet-cross-targeted
-		// shader fails CompilesOk → fall back to the built-in stand-in, so the port never breaks a demo mid-way).
-		var realVs = descriptor.IsCompute ? null : DX12Shaders.TryResolveStageHlsl(dir, shader, "vs");
-		var realFs = DX12Shaders.TryResolveStageHlsl(dir, shader, descriptor.IsCompute ? "cs" : "ps");
-		var haveReal = realFs is not null
-			&& (descriptor.IsCompute || realVs is not null)
-			&& DX12Shaders.CompilesOk(realVs, realFs, descriptor.VertexEntry, descriptor.FragmentEntry, descriptor.IsCompute);
-
-		string vertexHlsl, fragmentHlsl, source;
+		// Prefer the build-emitted SIGNED DXIL (offline, shipped like the Vulkan .spv — no runtime compiler):
+		// compute resolves <name>.cs.dxil; graphics resolves <name>.vs.dxil + <name>.ps.dxil. A shader with no
+		// DXIL yet (not cross-targeted, so the build's emit produced nothing) falls back to the built-in stand-in
+		// FXC-compiled here (d3dcompiler ships with Windows), so the port never breaks a demo mid-way.
+		byte[] vertexBytecode, fragmentBytecode;
 		int inputCount;
-		if (haveReal)
+		string source;
+
+		if (descriptor.IsCompute)
 		{
-			vertexHlsl = realVs ?? realFs!; // compute: the vertex source is unused
-			fragmentHlsl = realFs!;
-			inputCount = DX12Shaders.ResolveSampledInputCount(dir, shader);
-			source = $"{shader} (Slang)";
-		}
-		else if (DX12Shaders.Builtins.TryGetValue(shader, out var builtin))
-		{
-			vertexHlsl = fragmentHlsl = builtin.Hlsl; // the built-in module holds every entry point
-			inputCount = builtin.InputCount;
-			source = "built-in";
+			var cs = DX12Shaders.TryResolveStageDxil(dir, shader, "cs");
+			if (cs is not null)
+			{
+				(vertexBytecode, fragmentBytecode) = ([], cs);
+				inputCount = DX12Shaders.ResolveSampledInputCount(dir, shader);
+				source = $"{shader}.cs.dxil (Slang→signed DXIL)";
+			}
+			else if (DX12Shaders.Builtins.TryGetValue(shader, out var builtin))
+			{
+				(vertexBytecode, fragmentBytecode) = ([], DX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.FragmentEntry, "cs_5_1"));
+				inputCount = builtin.InputCount;
+				source = "built-in (FXC)";
+			}
+			else
+			{
+				throw new NotSupportedException($"DX12: compute shader '{shader}' has no '{shader}.cs.dxil' in '{dir}' and no built-in stand-in.");
+			}
 		}
 		else
 		{
-			throw new NotSupportedException(
-				$"DX12: shader '{shader}' has no resolvable HLSL ('{shader}.[vs|ps|cs].hlsl' in '{dir}') and no built-in stand-in.");
+			var vs = DX12Shaders.TryResolveStageDxil(dir, shader, "vs");
+			var ps = DX12Shaders.TryResolveStageDxil(dir, shader, "ps");
+			if (vs is not null && ps is not null)
+			{
+				(vertexBytecode, fragmentBytecode) = (vs, ps);
+				inputCount = DX12Shaders.ResolveSampledInputCount(dir, shader);
+				source = $"{shader}.{{vs,ps}}.dxil (Slang→signed DXIL)";
+			}
+			else if (DX12Shaders.Builtins.TryGetValue(shader, out var builtin))
+			{
+				vertexBytecode = DX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.VertexEntry, "vs_5_1");
+				fragmentBytecode = DX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.FragmentEntry, "ps_5_1");
+				inputCount = builtin.InputCount;
+				source = "built-in (FXC)";
+			}
+			else
+			{
+				throw new NotSupportedException($"DX12: shader '{shader}' has no '{shader}.[vs,ps].dxil' in '{dir}' and no built-in stand-in.");
+			}
 		}
 
 		Console.WriteLine($"[loom] DX12 technique '{name}' ← {source}.");
 		_techniques.Register(name, new DX12TechniqueTemplate(
-			vertexHlsl, fragmentHlsl, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
+			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend));
 	}

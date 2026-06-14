@@ -16,12 +16,18 @@
   <PropertyGroup>
     <LoomShaderOutputMode Condition="'$(LoomShaderOutputMode)' == ''">None</LoomShaderOutputMode>
 
-    <!-- Also emit HLSL beside the SPIR-V (for the DX12 backend, which resolves <name>.hlsl + reflection and
-         compiles each stage at bake time). On by default whenever the DX12 backend is in the build; the engine
-         resolves a shader's HLSL the same way it resolves its SPIR-V. Slang emits one combined multi-entry HLSL
-         per module (all entry points), so the backend picks the stage by entry name. -->
-    <LoomEmitHlsl Condition="'$(LoomEmitHlsl)' == '' And '$(UseDX12)' == 'true'">true</LoomEmitHlsl>
-    <LoomEmitHlsl Condition="'$(LoomEmitHlsl)' == ''">false</LoomEmitHlsl>
+    <!-- Also emit SIGNED DXIL beside the SPIR-V (for the DX12 backend, which loads the blob — no runtime
+         compiler, like the Vulkan .spv). On by default whenever the DX12 backend is in the build. Slang's HLSL/
+         DXIL target is per-entry-point, so the build emits one signed-DXIL module per stage (vs/ps/cs). -->
+    <LoomEmitDxil Condition="'$(LoomEmitDxil)' == '' And '$(UseDX12)' == 'true'">true</LoomEmitDxil>
+    <LoomEmitDxil Condition="'$(LoomEmitDxil)' == ''">false</LoomEmitDxil>
+
+    <!-- slangc emits DXIL by handing off to DXC, which it loads only from its own module dir or a path we give
+         it (NOT the PATH env var). The Windows SDK ships an architecture-matched dxc (dxcompiler.dll + the
+         dxil.dll signer); point slangc at that bin directory. Overridable via $(LoomDxcPath). Build-machine
+         only — the shipped app carries just the signed .dxil. -->
+    <LoomDxcArch Condition="'$(LoomDxcArch)' == '' And '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString())' == 'Arm64'">arm64</LoomDxcArch>
+    <LoomDxcArch Condition="'$(LoomDxcArch)' == ''">x64</LoomDxcArch>
 
     <!-- Optional semicolon-separated list of .slang paths/globs to exclude from compilation (on top of the
          always-excluded *.module.slang). Used to drop ImGui's shader when the engine is built without ImGui. -->
