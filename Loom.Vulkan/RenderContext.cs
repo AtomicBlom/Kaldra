@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 using Loom.Core;
 using Silk.NET.Vulkan;
@@ -32,10 +34,15 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private Extent2D _fbExtent;
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off TechniqueCache's
 	// per-call SPIR-V file read. Misses fall through to TechniqueCache (which bakes + content-hashes once).
-	private readonly Dictionary<string, Technique> _baked = [];
+	// The key is a value type (PipelineKey) so the per-draw lookup allocates nothing (Planning.md §8: 0 GC
+	// in the render loop) — the old interpolated-string key heap-allocated on every draw.
+	private readonly Dictionary<PipelineKey, Technique> _baked = [];
 
 	private CommandBuffer _cmd;
-	private VkFormat[] _colorFormats = [];
+	// The current pass's color formats, stored inline (not a heap array) so BeginPass copies into them per
+	// pass without allocating; _colorCount is how many of the MaxColorFormats slots are live.
+	private ColorFormatBuffer _colorFormats;
+	private int _colorCount;
 	private VkFormat _depthFormat;
 	private bool _depthReadOnly;
 	private int _frameSlot;
@@ -96,7 +103,13 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	/// </summary>
 	public void BeginPass(ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly)
 	{
-		_colorFormats = colorFormats.ToArray();
+		// Copy into the inline buffer (no allocation) rather than .ToArray(); the incoming span points into
+		// the executor's stackalloc, which is gone once this returns. Throw — never clamp — on an over-wide
+		// pass: silently dropping formats would bake a pipeline with fewer attachments than the pass writes.
+		if (colorFormats.Length > MaxColorFormats)
+			throw new VulkanException($"A pass has {colorFormats.Length} color attachments; the pipeline-key buffer holds {MaxColorFormats}.");
+		_colorCount = colorFormats.Length;
+		colorFormats.CopyTo(((Span<VkFormat>)_colorFormats)[.._colorCount]);
 		_depthFormat = depthFormat;
 		_depthReadOnly = depthReadOnly;
 	}
@@ -254,14 +267,16 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		if (!_registry.TryGetValue(technique, out var template))
 			throw new VulkanException($"No technique registered under the name '{technique}'.");
 
-		var key = $"{technique}|{string.Join(',', _colorFormats)}|{_depthFormat}|{_depthReadOnly}";
+		var colorFormats = ((ReadOnlySpan<VkFormat>)_colorFormats)[.._colorCount];
+		var key = new PipelineKey(technique, colorFormats, _depthFormat, _depthReadOnly);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
 		// A pass that reads depth read-only (.ReadsDepth) bakes with depth writes off; one that writes it
-		// (.WritesDepth, or no depth at all) keeps writes on.
+		// (.WritesDepth, or no depth at all) keeps writes on. Materializing the Format[] here (cache miss only)
+		// is a one-time warmup allocation per unique pipeline, not per-frame churn.
 		var baked = _techniques.GetOrBake(new TechniqueDescription(
-			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormats,
+			template.SpirvPath, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
 			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput));
@@ -270,6 +285,70 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// descriptor's sampler, not the pipeline.
 		_baked[key] = baked;
 		return baked;
+	}
+
+	// Cap on a pass's color attachments — well above any realistic device maxColorAttachments (commonly 8),
+	// so PipelineKey's inline buffer never overflows in practice; BeginPass throws if a pass exceeds it.
+	private const int MaxColorFormats = 16;
+
+	// A fixed-size, inline (non-heap) buffer of color formats — the variable-length part of PipelineKey,
+	// stored by value so the key allocates nothing.
+	[InlineArray(MaxColorFormats)]
+	private struct ColorFormatBuffer
+	{
+		private VkFormat _element0;
+	}
+
+	// Value-type, allocation-free replacement for the old interpolated-string pipeline-cache key. Distinct
+	// attachment formats must map to distinct pipelines, so Equals compares the full key — never a hash-only
+	// collapse that could alias a wrong-format pipeline.
+	private struct PipelineKey : IEquatable<PipelineKey>
+	{
+		private readonly string _technique;
+		private ColorFormatBuffer _colorFormats;
+		private readonly int _colorCount;
+		private readonly VkFormat _depthFormat;
+		private readonly bool _depthReadOnly;
+
+		public PipelineKey(string technique, ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly)
+		{
+			// Bake only ever passes a span already sliced to <= MaxColorFormats by BeginPass's guard, so this
+			// is an internal-contract check — elided in Release, costing nothing on the per-draw hot path.
+			Debug.Assert(colorFormats.Length <= MaxColorFormats, "PipelineKey color formats exceed MaxColorFormats.");
+			_technique = technique;
+			_colorCount = colorFormats.Length;
+			for (var i = 0; i < colorFormats.Length; i++)
+				_colorFormats[i] = colorFormats[i];
+			_depthFormat = depthFormat;
+			_depthReadOnly = depthReadOnly;
+		}
+
+		public bool Equals(PipelineKey other)
+		{
+			if (_colorCount != other._colorCount
+				|| _depthFormat != other._depthFormat
+				|| _depthReadOnly != other._depthReadOnly
+				|| !string.Equals(_technique, other._technique, StringComparison.Ordinal))
+				return false;
+			for (var i = 0; i < _colorCount; i++)
+				if (_colorFormats[i] != other._colorFormats[i])
+					return false;
+			return true;
+		}
+
+		public override bool Equals(object? obj) => obj is PipelineKey other && Equals(other);
+
+		public override int GetHashCode()
+		{
+			var hash = new HashCode();
+			hash.Add(_technique, StringComparer.Ordinal);
+			hash.Add(_colorCount);
+			for (var i = 0; i < _colorCount; i++)
+				hash.Add(_colorFormats[i]);
+			hash.Add(_depthFormat);
+			hash.Add(_depthReadOnly);
+			return hash.ToHashCode();
+		}
 	}
 
 	// Nearest keeps the §9 pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
