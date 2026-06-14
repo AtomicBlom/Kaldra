@@ -4,6 +4,7 @@
     <File Path="Planning.md" />
   </Folder>
   <Project Path="Loom.Core/Loom.Core.csproj" />
+  <Project Path="Loom.DX12/Loom.DX12.csproj" />
   <Project Path="Loom.Graph/Loom.Graph.csproj" />
   <Project Path="Loom.Sandbox/Loom.Sandbox.csproj" />
   <Project Path="Loom.Tests/Loom.Tests.csproj" />

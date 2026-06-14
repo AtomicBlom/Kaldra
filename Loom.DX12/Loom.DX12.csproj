@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The second backend (Planning.md §2 portability invariant). Like Loom.Vulkan, the DirectX 12 / Silk.NET
+       stack is quarantined here: nothing graphics-API-specific reaches Loom.Core / Loom.Graph. The engine
+       feature flags (UseImGui, …) live in the repo-root Directory.Build.props; backend *selection* (UseDX12)
+       is the app SDK's job — this project only exists to be referenced when UseDX12=true. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- The marshaling seam is pointer-heavy COM interop, exactly as in Loom.Vulkan. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
+  </ItemGroup>
+
+  <!-- The DirectX 12 stack, quarantined here. D3DCompiler is the in-box FXC (d3dcompiler_47.dll) — slice 1
+       compiles the hand-baked triangle's HLSL to DXBC at runtime, because the bundled slangc can't emit DXIL
+       on win-arm64 (no dxc/dxil). The offline DXIL pipeline is a follow-up workstream. -->
+  <ItemGroup>
+    <PackageReference Include="Silk.NET.Direct3D12" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.DXGI" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Direct3D.Compilers" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Maths" Version="2.23.0" />
+  </ItemGroup>
+
+</Project>

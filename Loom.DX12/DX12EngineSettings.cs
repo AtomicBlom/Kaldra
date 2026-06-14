@@ -1,0 +1,26 @@
+using Loom.Core;
+
+namespace Loom.DX12;
+
+/// <summary>
+/// DirectX 12-specific engine configuration — the <see cref="EngineSettings"/> subclass a host populates when
+/// it wants DX12-only knobs (Planning.md §3, the counterpart to <c>VulkanEngineSettings</c>). It is the one
+/// sanctioned place the DX12 backend type appears in app code; constructing it also loads the Loom.DX12
+/// assembly, which self-registers the DX12 backend into <see cref="Engine.AvailableEngines"/> (see
+/// <see cref="DX12Backend"/>). A host that needs no DX12-only knob can use the base <see cref="EngineSettings"/>
+/// instead, provided it touches some Loom.DX12 type first.
+/// </summary>
+public sealed class DX12EngineSettings : EngineSettings
+{
+	/// <summary>
+	/// Prefer a discrete / high-performance adapter when several are present (the default). On a single-GPU
+	/// machine (e.g. an integrated Adreno on Windows-on-ARM) this is moot — the one suitable adapter is taken.
+	/// </summary>
+	public bool PreferDiscreteGpu { get; set; } = true;
+
+	/// <summary>
+	/// Request the D3D12 GPU-based validation layer in addition to the basic debug layer when
+	/// <see cref="EngineSettings.EnableValidation"/> is set. Far more thorough (and far slower) — off by default.
+	/// </summary>
+	public bool GpuBasedValidation { get; set; }
+}
