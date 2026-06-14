@@ -50,6 +50,37 @@ internal static unsafe class DX12Shaders
 			}
 			float4 fragmentMain(VSOut i) : SV_Target { return src.Sample(samp, i.uv); }
 			""", 1),
+
+		// Forward directional lighting — the HLSL twin of the sandbox's lit.slang. Reads the canonical
+		// Loom.Core.Vertex stream (POSITION/NORMAL/TEXCOORD), transforms by the camera MVP (a 64-byte root
+		// constant at b0, the DX12 counterpart of Vulkan's vertex push constant), and shades each fragment with
+		// one directional key light + flat ambient, colouring albedo by normal so each cube face reads distinctly.
+		// Proves the mesh-draw path: vertex buffers + index buffer + depth test + the MVP root constant. The
+		// matrix math mirrors lit.slang exactly: mul(mvp, position) with the raw row-major Camera.ViewProjection
+		// (FXC's column-major cbuffer packing transposes it, yielding the row-vector clip = position·MVP).
+		["lit"] = ("""
+			cbuffer Push : register(b0) { float4x4 mvp; };
+			struct VsIn { float3 position : POSITION; float3 normal : NORMAL; float2 uv : TEXCOORD0; };
+			struct VsOut { float4 position : SV_Position; float3 normal : NORMAL; float2 uv : TEXCOORD0; };
+			VsOut vertexMain(VsIn input)
+			{
+				VsOut o;
+				o.position = mul(mvp, float4(input.position, 1.0));
+				o.normal = input.normal;
+				o.uv = input.uv;
+				return o;
+			}
+			float4 fragmentMain(VsOut input) : SV_Target
+			{
+				float3 n = normalize(input.normal);
+				float3 albedo = n * 0.5 + 0.5;                        // distinct per-face colour
+				float3 lightDir = normalize(float3(0.6, 0.55, 0.45)); // matches the sandbox sun
+				float ndotl = max(dot(n, lightDir), 0.0);
+				const float ambient = 0.15;
+				const float key = 1.5;                                // > 1 so lit faces are HDR (clamped on an SDR target)
+				return float4(albedo * (ambient + ndotl * key), 1.0);
+			}
+			""", 0),
 	};
 
 	public static ComPtr<ID3D10Blob> Compile(D3DCompiler compiler, byte[] hlsl, string entry, string target)

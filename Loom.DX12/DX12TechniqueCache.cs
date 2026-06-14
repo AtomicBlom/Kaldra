@@ -6,17 +6,16 @@ using Silk.NET.DXGI;
 namespace Loom.DX12;
 
 /// <summary>A registered DX12 technique: its HLSL + the shape needed to bake a pipeline (the DX12 counterpart of <c>TechniqueTemplate</c>).</summary>
-internal readonly record struct DX12TechniqueTemplate(string Hlsl, string VertexEntry, string FragmentEntry, int InputCount, bool HasFragmentPush, bool LinearFilter);
+internal readonly record struct DX12TechniqueTemplate(string Hlsl, string VertexEntry, string FragmentEntry, int InputCount, bool HasVertexInput, bool HasFragmentPush, bool LinearFilter);
 
 /// <summary>
 /// Bakes and caches DX12 graphics pipelines per technique — the counterpart of the Vulkan backend's
 /// <c>TechniqueCache</c>. A pipeline is keyed by the technique name plus the pass's actual render-target
-/// formats (a PSO is format-specific, exactly like a Vulkan dynamic-rendering pipeline). The HLSL is compiled
-/// once per unique (name, formats) combination and the PSO cached for the engine's lifetime.
+/// formats <em>and depth format</em> (a PSO is format-specific, exactly like a Vulkan dynamic-rendering
+/// pipeline). The HLSL is compiled once per unique key and the PSO cached for the engine's lifetime.
 /// <para>
-/// This first executor step bakes only from-scratch passes (no sampled inputs, no push constants), so the
-/// root signature is empty; the descriptor-table + static-sampler + root-constant path lands with the
-/// transient/sample slice.
+/// Bakes from-scratch fullscreen passes, sampling passes (SRV table + static sampler), and mesh passes
+/// (vertex input layout + depth test + an MVP root constant). Compute lands in a later slice.
 /// </para>
 /// </summary>
 internal sealed unsafe class DX12TechniqueCache : IDisposable
@@ -29,25 +28,26 @@ internal sealed unsafe class DX12TechniqueCache : IDisposable
 
 	public void Register(string name, DX12TechniqueTemplate template) => _templates[name] = template;
 
-	public DX12Technique GetOrBake(string name, ReadOnlySpan<Format> colorFormats)
+	public DX12Technique GetOrBake(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		if (!_templates.TryGetValue(name, out var template))
 			throw new InvalidOperationException($"DX12: technique '{name}' was not defined — call DefineTechnique first.");
 
-		var key = BuildKey(name, colorFormats);
+		var key = BuildKey(name, colorFormats, depthFormat, depthReadOnly);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
-		var technique = new DX12Technique(_ctx, template, colorFormats);
+		var technique = new DX12Technique(_ctx, template, colorFormats, depthFormat, depthReadOnly);
 		_baked[key] = technique;
 		return technique;
 	}
 
-	private static string BuildKey(string name, ReadOnlySpan<Format> colorFormats)
+	private static string BuildKey(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		var key = name;
 		foreach (var format in colorFormats)
 			key += "|" + (int)format;
+		key += "|d" + (int)depthFormat + (depthReadOnly ? "r" : "w");
 		return key;
 	}
 
@@ -59,39 +59,61 @@ internal sealed unsafe class DX12TechniqueCache : IDisposable
 	}
 }
 
-/// <summary>One baked graphics pipeline + its root signature.</summary>
+/// <summary>One baked graphics pipeline + its root signature, with the root-parameter slots the context binds against.</summary>
 internal sealed unsafe class DX12Technique : IDisposable
 {
 	public ComPtr<ID3D12RootSignature> RootSignature;
 	public ComPtr<ID3D12PipelineState> Pipeline;
 
-	public DX12Technique(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats)
-	{
-		if (template.HasFragmentPush)
-			throw new NotSupportedException("DX12: fragment push constants land in a later executor slice.");
+	/// <summary>Root-parameter slot for the 32-bit root constants (MVP for a mesh, scalar block for a post pass), or -1 if none.</summary>
+	public int RootConstantParam { get; } = -1;
 
+	/// <summary>Root-parameter slot for the SRV descriptor table (sampled inputs), or -1 if the technique samples nothing.</summary>
+	public int TableParam { get; } = -1;
+
+	public DX12Technique(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	{
 		using var compiler = D3DCompiler.GetApi();
 		var hlsl = System.Text.Encoding.ASCII.GetBytes(template.Hlsl);
 		var vs = DX12Shaders.Compile(compiler, hlsl, template.VertexEntry, "vs_5_0");
 		var ps = DX12Shaders.Compile(compiler, hlsl, template.FragmentEntry, "ps_5_0");
 
-		// A from-scratch pass (no inputs) needs an empty root signature; a sampling pass binds N sampled inputs
-		// through one SRV descriptor table (register t0..tN-1) plus one static sampler (s0).
-		RootSignatureDesc rootDesc;
+		// Root signature, built from at most two parameters: optionally a 32-bit root-constants block (the MVP
+		// matrix at b0/vertex for a mesh technique, or a 16-float scalar block at b0/pixel for a post pass — a
+		// technique uses one or the other, never both, mirroring the Vulkan layout), and optionally one SRV
+		// descriptor table (t0..tN-1) plus a static sampler (s0) for sampled inputs.
+		var hasRootConstants = template.HasVertexInput || template.HasFragmentPush;
+		var parameters = stackalloc RootParameter[2];
+		var paramCount = 0;
 		var range = new DescriptorRange
 		{
 			RangeType = DescriptorRangeType.Srv,
 			NumDescriptors = (uint)template.InputCount,
 			BaseShaderRegister = 0,
 			RegisterSpace = 0,
-			OffsetInDescriptorsFromTableStart = 0
+			OffsetInDescriptorsFromTableStart = 0,
 		};
-		var param = new RootParameter
+
+		if (hasRootConstants)
 		{
-			ParameterType = RootParameterType.TypeDescriptorTable,
-			ShaderVisibility = ShaderVisibility.Pixel,
-			Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &range } }
-		};
+			RootConstantParam = paramCount;
+			parameters[paramCount++] = new RootParameter
+			{
+				ParameterType = RootParameterType.Type32BitConstants,
+				ShaderVisibility = template.HasVertexInput ? ShaderVisibility.Vertex : ShaderVisibility.Pixel,
+				Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = 16 } },
+			};
+		}
+		if (template.InputCount > 0)
+		{
+			TableParam = paramCount;
+			parameters[paramCount++] = new RootParameter
+			{
+				ParameterType = RootParameterType.TypeDescriptorTable,
+				ShaderVisibility = ShaderVisibility.Pixel,
+				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &range } },
+			};
+		}
 		var sampler = new StaticSamplerDesc
 		{
 			Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
@@ -104,12 +126,18 @@ internal sealed unsafe class DX12Technique : IDisposable
 			MaxLOD = float.MaxValue,
 			ShaderRegister = 0,
 			RegisterSpace = 0,
-			ShaderVisibility = ShaderVisibility.Pixel
+			ShaderVisibility = ShaderVisibility.Pixel,
 		};
-		if (template.InputCount > 0)
-			rootDesc = new RootSignatureDesc { NumParameters = 1, PParameters = &param, NumStaticSamplers = 1, PStaticSamplers = &sampler, Flags = RootSignatureFlags.None };
-		else
-			rootDesc = new RootSignatureDesc { Flags = RootSignatureFlags.None };
+		// A mesh pass reads a vertex buffer, so the root signature must allow the input-assembler layout.
+		var flags = template.HasVertexInput ? RootSignatureFlags.AllowInputAssemblerInputLayout : RootSignatureFlags.None;
+		var rootDesc = new RootSignatureDesc
+		{
+			NumParameters = (uint)paramCount,
+			PParameters = paramCount > 0 ? parameters : null,
+			NumStaticSamplers = template.InputCount > 0 ? 1u : 0u,
+			PStaticSamplers = template.InputCount > 0 ? &sampler : null,
+			Flags = flags,
+		};
 
 		ComPtr<ID3D10Blob> blob = default;
 		ComPtr<ID3D10Blob> error = default;
@@ -122,6 +150,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 		var blend = new BlendDesc { AlphaToCoverageEnable = false, IndependentBlendEnable = false };
 		blend.RenderTarget[0] = new RenderTargetBlendDesc { RenderTargetWriteMask = 0xF };
 
+		var hasDepth = depthFormat != Format.FormatUnknown;
 		var pso = new GraphicsPipelineStateDesc
 		{
 			PRootSignature = RootSignature.Handle,
@@ -130,16 +159,47 @@ internal sealed unsafe class DX12Technique : IDisposable
 			BlendState = blend,
 			SampleMask = uint.MaxValue,
 			RasterizerState = new RasterizerDesc { FillMode = FillMode.Solid, CullMode = CullMode.None, FrontCounterClockwise = false, DepthClipEnable = true },
-			DepthStencilState = new DepthStencilDesc { DepthEnable = false, StencilEnable = false },
-			InputLayout = new InputLayoutDesc { NumElements = 0, PInputElementDescs = null },
+			DepthStencilState = new DepthStencilDesc
+			{
+				DepthEnable = hasDepth,
+				DepthWriteMask = depthReadOnly ? DepthWriteMask.Zero : DepthWriteMask.All,
+				DepthFunc = ComparisonFunc.LessEqual,
+				StencilEnable = false,
+			},
+			DSVFormat = hasDepth ? depthFormat : Format.FormatUnknown,
 			PrimitiveTopologyType = PrimitiveTopologyType.Triangle,
 			NumRenderTargets = (uint)colorFormats.Length,
 			SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
-			Flags = PipelineStateFlags.None
+			Flags = PipelineStateFlags.None,
 		};
 		for (var i = 0; i < colorFormats.Length && i < 8; i++)
 			pso.RTVFormats[i] = colorFormats[i];
-		SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
+
+		// A mesh technique reads the canonical interleaved Loom.Core.Vertex (Vector3 Position, Vector3 Normal,
+		// Vector2 Uv — 32 bytes); the semantic names + offsets mirror lit.slang's POSITION/NORMAL/TEXCOORD. A
+		// fullscreen technique fabricates its triangle from SV_VertexID, so it needs no input layout.
+		if (template.HasVertexInput)
+		{
+			ReadOnlySpan<byte> position = "POSITION\0"u8;
+			ReadOnlySpan<byte> normal = "NORMAL\0"u8;
+			ReadOnlySpan<byte> texcoord = "TEXCOORD\0"u8;
+			fixed (byte* pPos = position)
+			fixed (byte* pNorm = normal)
+			fixed (byte* pTex = texcoord)
+			{
+				var elements = stackalloc InputElementDesc[3];
+				elements[0] = new InputElementDesc { SemanticName = pPos, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 0, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
+				elements[1] = new InputElementDesc { SemanticName = pNorm, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 12, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
+				elements[2] = new InputElementDesc { SemanticName = pTex, SemanticIndex = 0, Format = Format.FormatR32G32Float, InputSlot = 0, AlignedByteOffset = 24, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
+				pso.InputLayout = new InputLayoutDesc { NumElements = 3, PInputElementDescs = elements };
+				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
+			}
+		}
+		else
+		{
+			pso.InputLayout = new InputLayoutDesc { NumElements = 0, PInputElementDescs = null };
+			SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
+		}
 
 		vs.Dispose();
 		ps.Dispose();

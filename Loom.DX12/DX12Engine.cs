@@ -31,6 +31,7 @@ public sealed unsafe class DX12Engine : IEngine
 	private readonly DX12Triangle _triangle;
 	private readonly DX12TechniqueCache _techniques;
 	private readonly DX12DescriptorRing _ring;
+	private readonly DX12MeshStore _meshes;
 	private readonly DX12RenderContext _context;
 	private DX12Transients? _transients;
 
@@ -75,7 +76,8 @@ public sealed unsafe class DX12Engine : IEngine
 		_triangle = new DX12Triangle(_ctx, _swapchain.Format);
 		_techniques = new DX12TechniqueCache(_ctx);
 		_ring = new DX12DescriptorRing(_ctx, 256);
-		_context = new DX12RenderContext(_ctx, _techniques, _ring);
+		_meshes = new DX12MeshStore(_ctx);
+		_context = new DX12RenderContext(_ctx, _techniques, _ring, _meshes);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
@@ -210,55 +212,72 @@ public sealed unsafe class DX12Engine : IEngine
 		}
 	}
 
-	// Bind a raster pass's colour target(s) from its derived AttachmentActions, apply load actions, then run the
-	// callback. This first executor step handles the backbuffer target only (transient targets follow next slice).
+	// Bind a raster pass's colour + depth target(s) from its derived AttachmentActions, apply load actions, then
+	// run the callback. Colour targets bind RTVs; a depth target binds the DSV and bakes the depth test into the
+	// pass's pipelines (via BeginPass). Targets may be the backbuffer (swapchain RTV) or graph transients.
 	private void RecordRasterPass(uint index, PassBarriers pass)
 	{
 		var rtv = stackalloc CpuDescriptorHandle[8];
 		var formats = stackalloc DxgiFormat[8];
+		var black = stackalloc float[4] { 0f, 0f, 0f, 1f };
 		var colorCount = 0;
 		uint width = 0, height = 0;
 
+		CpuDescriptorHandle dsv = default;
+		var hasDepth = false;
+		var depthClear = false;
+		var depthReadOnly = false;
+		var depthFormat = DxgiFormat.FormatUnknown;
+
 		foreach (var attachment in pass.Attachments)
 		{
-			if (attachment.State != ResourceState.ColorAttachment)
-				throw new NotSupportedException("DX12: depth attachments land in a later executor slice.");
-
 			var id = attachment.Resource.Id;
-			if (attachment.Resource.IsBackbuffer)
+			if (attachment.State == ResourceState.ColorAttachment)
 			{
-				rtv[colorCount] = _swapchain.RtvHandle(index);
-				formats[colorCount] = _swapchain.Format;
-				width = _swapchain.Width;
-				height = _swapchain.Height;
+				if (attachment.Resource.IsBackbuffer)
+				{
+					rtv[colorCount] = _swapchain.RtvHandle(index);
+					formats[colorCount] = _swapchain.Format;
+					width = _swapchain.Width;
+					height = _swapchain.Height;
+				}
+				else
+				{
+					rtv[colorCount] = _transients!.View(index, id);
+					formats[colorCount] = _transients.Format(index, id);
+					(width, height) = _transients.Extent(id);
+				}
+				if (attachment.Load == LoadAction.Clear)
+					_commandList.ClearRenderTargetView(rtv[colorCount], black, 0u, (Box2D<int>*)null);
+				colorCount++;
 			}
-			else
+			else // DepthAttachment or DepthReadOnly
 			{
-				rtv[colorCount] = _transients!.Rtv(index, id);
-				formats[colorCount] = _transients.Format(index, id);
-				(width, height) = _transients.Extent(id);
+				dsv = _transients!.View(index, id);
+				depthFormat = _transients.Format(index, id);
+				depthReadOnly = attachment.State == ResourceState.DepthReadOnly;
+				depthClear = attachment.Load == LoadAction.Clear;
+				if (width == 0)
+					(width, height) = _transients.Extent(id);
+				hasDepth = true;
 			}
-			colorCount++;
 		}
 
-		if (colorCount == 0)
-			throw new NotSupportedException("DX12: a raster pass with no colour target is not supported yet.");
+		if (colorCount == 0 && !hasDepth)
+			throw new NotSupportedException("DX12: a raster pass with no colour or depth target is not supported yet.");
 
-		_commandList.OMSetRenderTargets((uint)colorCount, rtv, false, (CpuDescriptorHandle*)null);
+		_commandList.OMSetRenderTargets((uint)colorCount, colorCount > 0 ? rtv : null, false, hasDepth ? &dsv : null);
 
-		var clear = stackalloc float[4] { 0f, 0f, 0f, 1f };
-		for (var c = 0; c < pass.Attachments.Length; c++)
-		{
-			if (pass.Attachments[c].Load == LoadAction.Clear)
-				_commandList.ClearRenderTargetView(rtv[c], clear, 0u, (Box2D<int>*)null);
-		}
+		// Colour clears were emitted above (per attachment); clear depth to 1.0 here if the pass produces it.
+		if (hasDepth && depthClear)
+			_commandList.ClearDepthStencilView(dsv, ClearFlags.Depth, 1f, 0, 0u, (Box2D<int>*)null);
 
 		var viewport = new Viewport { TopLeftX = 0, TopLeftY = 0, Width = width, Height = height, MinDepth = 0, MaxDepth = 1 };
 		var scissor = new Box2D<int>(0, 0, (int)width, (int)height);
 		_commandList.RSSetViewports(1, &viewport);
 		_commandList.RSSetScissorRects(1, &scissor);
 
-		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount));
+		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly);
 		pass.Pass.Record?.Invoke(_context);
 	}
 
@@ -456,6 +475,7 @@ public sealed unsafe class DX12Engine : IEngine
 		if (_readback.Handle is not null)
 			_readback.Dispose();
 		_transients?.Dispose();
+		_meshes.Dispose();
 		_ring.Dispose();
 		_techniques.Dispose();
 		_triangle.Dispose();
@@ -479,7 +499,7 @@ public sealed unsafe class DX12Engine : IEngine
 
 		_techniques.Register(name, new DX12TechniqueTemplate(
 			builtin.Hlsl, descriptor.VertexEntry, descriptor.FragmentEntry,
-			builtin.InputCount, descriptor.HasFragmentPush, descriptor.LinearFilter));
+			builtin.InputCount, descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter));
 	}
 
 	/// <summary>
@@ -504,7 +524,7 @@ public sealed unsafe class DX12Engine : IEngine
 	}
 
 	private const string NextSlice = "DX12: this IEngine member lands in a later executor slice.";
-	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => throw new NotSupportedException(NextSlice);
+	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 	public void EnableImGui() => throw new NotSupportedException(NextSlice);
 	public float SamplePick(int x, int y) => throw new NotSupportedException(NextSlice);
 

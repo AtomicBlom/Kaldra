@@ -3,6 +3,7 @@ using System.Numerics;
 
 using Loom.Core;
 using Loom.DX12; // the one sanctioned backend type the host names; constructing DX12EngineSettings self-registers it
+using Loom.Sandbox.Demos;
 
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
@@ -48,10 +49,39 @@ internal static class Dx12Smoke
 			?? throw new InvalidOperationException("The DX12 backend did not register into Engine.AvailableEngines.");
 		using var engine = backend.Create(hwnd, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 
-		// LOOM_DX12_GRAPH=1 routes through the render-graph executor (a graph-described fullscreen pass writing
-		// the backbuffer) instead of the fixed clear+triangle path — the proof the executor consumes the graph.
+		// Two env-selected graph modes exercise the executor (vs. the fixed clear+triangle path):
+		//   LOOM_DX12_GRAPH=1 — a two-pass offscreen->blit gradient (transient alloc + the cross-pass barrier).
+		//   LOOM_DX12_CUBE=1  — the lit cube + ground plane on a depth buffer (mesh upload, indexed draw, the
+		//                       MVP root constant, and a depth target), the DX12 twin of CubeLightingDemo.
 		var graphMode = Environment.GetEnvironmentVariable("LOOM_DX12_GRAPH") is "1" or "true";
-		if (graphMode)
+		var cubeMode = Environment.GetEnvironmentVariable("LOOM_DX12_CUBE") is "1" or "true";
+
+		Mesh cube = default, plane = default;
+		if (cubeMode)
+		{
+			engine.DefineTechnique("lit", new TechniqueDescriptor("lit", HasVertexInput: true));
+			var (cubeVerts, cubeIndices) = Geometry.BuildCube();
+			var (planeVerts, planeIndices) = Geometry.BuildPlane();
+			cube = engine.CreateMesh(cubeVerts, cubeIndices);
+			plane = engine.CreateMesh(planeVerts, planeIndices);
+
+			var graph = RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				var depth = g.Screen.Depth("depth", Format.Depth32F);
+				g.Pass("scene")
+					.Writes(screen)
+					.WritesDepth(depth)
+					.Draw(ctx =>
+					{
+						ctx.Draw(cube, "lit");
+						ctx.Draw(plane, "lit");
+					});
+				g.Present(screen);
+			});
+			engine.SetGraph(graph);
+		}
+		else if (graphMode)
 		{
 			engine.DefineTechnique("gradient", new TechniqueDescriptor("gradient"));
 			engine.DefineTechnique("blit", new TechniqueDescriptor("blit", LinearFilter: true));
@@ -68,7 +98,8 @@ internal static class Dx12Smoke
 			engine.SetGraph(graph);
 		}
 
-		Console.WriteLine($"Loom DX12 {(graphMode ? "graph executor" : "first slice")} on {engine.DeviceName} ({engine.BackendName}). Close the window to exit.");
+		var mode = cubeMode ? "lit cube" : graphMode ? "graph executor" : "first slice";
+		Console.WriteLine($"Loom DX12 {mode} on {engine.DeviceName} ({engine.BackendName}). Close the window to exit.");
 
 		var frame = 0;
 		var elapsed = 0f;
@@ -78,12 +109,20 @@ internal static class Dx12Smoke
 			frame++;
 			elapsed += (float)delta;
 
-			// LOOM_CAPTURE=path grabs the triangle to a PNG (a few frames in, so the swapchain has settled),
-			// then exits — the headless pixel-level proof the triangle actually renders.
+			// Orbit the cube. Neutral right-handed, +Y-up projection — the DX12 backend ingests it as-is (no
+			// Y-flip, unlike Vulkan), since D3D12 clip space is already +Y-up (Camera/M7-B5).
+			var eye = new Vector3(MathF.Sin(elapsed) * 2.5f, 1.6f, MathF.Cos(elapsed) * 2.5f);
+			var view = Matrix4x4.CreateLookAt(eye, Vector3.Zero, Vector3.UnitY);
+			var aspect = window.FramebufferSize.Y == 0 ? 1f : (float)window.FramebufferSize.X / window.FramebufferSize.Y;
+			var projection = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3f, aspect, 0.1f, 100f);
+			var camera = new Camera(view, projection);
+
+			// LOOM_CAPTURE=path grabs the frame to a PNG (a few frames in, so the swapchain has settled),
+			// then exits — the headless pixel-level proof the scene actually renders.
 			if (capturePath is not null && frame == 3)
 				engine.RequestCapture(capturePath);
 
-			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed });
+			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed, Camera = camera });
 
 			if (capturePath is not null && frame >= 3)
 				window.Close();
