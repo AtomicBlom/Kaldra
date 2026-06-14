@@ -22,6 +22,9 @@
     <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Maths" Version="2.23.0" />
+    <!-- ImGui rendering is inherently backend-specific (like imgui_impl_vulkan), so the ImGui Vulkan
+         renderer lives here. Only Loom.Vulkan + the host see ImGui.NET; Loom.Core/Graph stay UI-agnostic. -->
+    <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
   </ItemGroup>
 
 </Project>

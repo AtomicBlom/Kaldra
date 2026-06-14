@@ -25,6 +25,11 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private readonly MeshStore _meshes;
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
+	// The host's ImGui renderer (backend-specific), set by the executor when the host enables ImGui. The HUD
+	// pass's ctx.DrawImGui() forwards this frame's draw data to it. Null when ImGui is not in use.
+	private ImGuiRenderer? _imgui;
+	private nint _imguiDrawData;
+	private Extent2D _fbExtent;
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off TechniqueCache's
 	// per-call SPIR-V file read. Misses fall through to TechniqueCache (which bakes + content-hashes once).
 	private readonly Dictionary<string, Technique> _baked = [];
@@ -67,8 +72,11 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_linearSampler = CreateSampler(Filter.Linear);
 	}
 
+	/// <summary>The host's ImGui renderer (backend-specific), wired in by the executor when ImGui is enabled.</summary>
+	public void SetImGui(ImGuiRenderer renderer) => _imgui = renderer;
+
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, and timing before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId)
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, Extent2D fbExtent)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
@@ -77,6 +85,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_camera = camera;
 		_sunView = sunView;
 		_hoverId = hoverId;
+		_imguiDrawData = imguiDrawData;
+		_fbExtent = fbExtent;
 	}
 
 	/// <summary>
@@ -230,6 +240,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// The buffer IS the per-instance vertex stream: 6 fabricated quad verts × one instance per particle.
 		_vk.CmdDraw(_cmd, 6, (uint)count, 0, 0);
 	}
+
+	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
+	// rendering scope. No-op when ImGui isn't enabled or the host produced no draw data this frame.
+	public void DrawImGui() => _imgui?.Render(_cmd, _imguiDrawData, _fbExtent, _frameSlot);
 
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;
 	// the attachment formats are the current pass's. So one template used in passes with different targets

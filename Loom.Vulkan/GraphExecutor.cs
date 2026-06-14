@@ -48,6 +48,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private readonly MeshStore _meshes;
 	private readonly DescriptorAllocator _descriptors;
 	private readonly RenderContext _context;
+	private ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 
 	private CommandPool _commandPool;
 	private CommandBuffer[] _commandBuffers = [];
@@ -189,6 +190,28 @@ public sealed unsafe class GraphExecutor : IDisposable
 	/// for time-driven effects (the GPU particle fountain).</summary>
 	public float Time { get; set; }
 
+	/// <summary>
+	/// This frame's Dear ImGui draw data — the native <c>ImDrawData*</c> the host produced via
+	/// <c>ImGui.Render()</c>, set before <see cref="DrawFrame"/>. The HUD pass's <c>ctx.DrawImGui()</c> hands it
+	/// to the backend ImGui renderer. <see cref="nint.Zero"/> (the default) draws no UI. Only meaningful after
+	/// <see cref="EnableImGui"/>.
+	/// </summary>
+	public nint ImGuiDrawData { get; set; }
+
+	/// <summary>
+	/// Stand up the backend Dear ImGui renderer (the <c>imgui_impl_vulkan</c> equivalent), baking its pipeline
+	/// against the swapchain format and uploading the current ImGui context's font atlas. Call once after
+	/// construction, before the render loop, with the path to the compiled <c>imgui.spv</c>. The host must have
+	/// created the ImGui context (and configured its fonts) first. After this, a pass that <c>.Blends</c> the
+	/// backbuffer can call <c>ctx.DrawImGui()</c>, and the host sets <see cref="ImGuiDrawData"/> each frame.
+	/// </summary>
+	public void EnableImGui(string spirvPath)
+	{
+		var spirv = File.ReadAllBytes(spirvPath);
+		_imgui = new ImGuiRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight);
+		_context.SetImGui(_imgui);
+	}
+
 	public void DrawFrame(double deltaSeconds)
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
@@ -300,7 +323,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, Time, _currentFrame, Camera, SunView, HoverId);
+		_context.BeginFrame(cmd, deltaTime, Time, _currentFrame, Camera, SunView, HoverId, ImGuiDrawData, _swapchain.Extent);
 
 		foreach (var pass in _plan.Passes)
 		{
@@ -714,6 +737,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		_vk.DeviceWaitIdle(_ctx.Device);
 
 		_context.Dispose();
+		_imgui?.Dispose(); // before the allocator — it holds VMA font/vertex/index allocations
 		_descriptors.Dispose();
 		_meshes.Dispose();
 		_transients.Dispose();

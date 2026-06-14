@@ -94,4 +94,13 @@ public interface IRenderContext
 	/// transforms by <see cref="Camera"/> (pulled, not captured).
 	/// </summary>
 	void DrawParticles(ResourceHandle buffer, int count, string technique);
+
+	/// <summary>
+	/// Render the host's Dear ImGui draw data into the current pass's target — the screen-space HUD/debug
+	/// overlay (Planning.md §6/§9: a native-resolution UI layer on top of the pixelated world). The host owns
+	/// the ImGui context and produces the draw data each frame (<c>ImGui.Render()</c>); this verb is the neutral
+	/// hand-off so Loom.Core stays UI-agnostic — the backend translates it into GPU work. Used from a pass that
+	/// <c>.Blends</c> the backbuffer (the "hud" pass). A no-op if the host hasn't enabled ImGui.
+	/// </summary>
+	void DrawImGui();
 }
