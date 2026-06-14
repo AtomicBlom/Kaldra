@@ -149,6 +149,23 @@ public class GraphScheduleTests
 	}
 
 	[Fact]
+	public void Presenting_a_target_no_pass_writes_throws()
+	{
+		// You cannot present a resource nothing produces — the screen would show undefined contents (M7-A4).
+		var ex = Assert.Throws<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var screen = g.Backbuffer;
+				var o = world.Color("o", Format.Rgba8Srgb);
+				g.Pass("p").Writes(o); // produces 'o', never the backbuffer
+				g.Present(screen);     // but presents the backbuffer, which nothing writes
+			}));
+
+		Assert.Contains("never written", ex.Message);
+	}
+
+	[Fact]
 	public void Reading_a_persistent_before_writing_is_allowed()
 	{
 		// Persistent resources carry cross-frame history, so read-before-write is legal (Planning.md §8).

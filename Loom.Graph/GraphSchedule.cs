@@ -41,7 +41,8 @@ public sealed class GraphSchedule
 
 	/// <summary>
 	/// Derive the schedule. Throws <see cref="GraphValidationException"/> if a non-persistent resource is
-	/// read before any pass writes it (it would sample undefined contents).
+	/// read before any pass writes it (it would sample undefined contents) or if the present target is never
+	/// written. Also emits a console warning for any dead pass (writes nothing consumed/presented/read back).
 	/// </summary>
 	public static GraphSchedule Derive(RenderGraph graph)
 	{
@@ -121,8 +122,15 @@ public sealed class GraphSchedule
 			}
 		}
 
+		// The present target must be produced by some pass; otherwise the screen would show undefined contents.
+		if (graph.PresentTarget is { } present
+			&& (!state.TryGetValue(present.Id, out var presentState) || presentState.LastWriter < 0))
+			errors.Add($"Present target '{present.Name}' is never written by any pass.");
+
 		if (errors.Count > 0)
 			throw new GraphValidationException(string.Join(Environment.NewLine, errors));
+
+		WarnDeadPasses(graph, dependsOn);
 
 		var order = TopologicalOrder(n, dependsOn);
 
@@ -175,6 +183,41 @@ public sealed class GraphSchedule
 			throw new GraphValidationException("Render graph contains a dependency cycle (this should be impossible).");
 
 		return order;
+	}
+
+	/// <summary>
+	/// Surface passes whose writes nobody reads downstream and which aren't the presented or read-back output —
+	/// wasted GPU work worth flagging (Planning.md §8). A <em>warning</em>, not an error: a dead pass is
+	/// suboptimal, not incorrect, so we don't fail the build over it.
+	/// </summary>
+	private static void WarnDeadPasses(RenderGraph graph, SortedSet<int>[] dependsOn)
+	{
+		var dependedUpon = new HashSet<int>();
+		foreach (var deps in dependsOn)
+			dependedUpon.UnionWith(deps);
+
+		var outputIds = new HashSet<int>(graph.ReadbackTargets.Select(r => r.Id));
+		if (graph.PresentTarget is { } present)
+			outputIds.Add(present.Id);
+
+		for (var i = 0; i < graph.Passes.Length; i++)
+		{
+			if (dependedUpon.Contains(i))
+				continue;
+
+			var writesAnything = false;
+			var feedsOutput = false;
+			foreach (var access in graph.Passes[i].Accesses)
+			{
+				if (access.Kind.Writes())
+					writesAnything = true;
+				if (outputIds.Contains(access.Resource.Id))
+					feedsOutput = true;
+			}
+
+			if (writesAnything && !feedsOutput)
+				Console.WriteLine($"[loom] warning: pass '{graph.Passes[i].Name}' produces nothing read downstream, presented, or read back — it may be dead.");
+		}
 	}
 
 	/// <summary>A human-readable dump of the execution order and derived dependencies, for inspection/tests.</summary>
