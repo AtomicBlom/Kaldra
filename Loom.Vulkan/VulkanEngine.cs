@@ -1,5 +1,3 @@
-using System.Numerics;
-
 using Loom.Core;
 using Loom.Graph;
 using Silk.NET.Core.Contexts;
@@ -123,20 +121,24 @@ internal sealed unsafe class VulkanEngine : IEngine
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		ArgumentException.ThrowIfNullOrEmpty(name);
-		// Resolve the logical shader name to backend bytecode and fold the neutral descriptor into the backend's
-		// baked-input form. Shaders are named logically here — no .spv path appears in app code (Planning.md §5).
+		// Resolve the logical shader name to backend bytecode + reflection, and fold the neutral descriptor into
+		// the backend's baked-input form. Shaders are named logically — no .spv path in app code (Planning.md §5).
+		// The descriptor-binding counts come from the shader's reflection, not the app (M7-B4): the author states
+		// only the pipeline intent (geometry/blend/filter/compute), and Slang's reflection says how many things
+		// the shader binds.
+		var reflection = ShaderReflection.FromFile(ResolveReflection(descriptor.Shader));
 		_registry[name] = new TechniqueTemplate(
 			ResolveShader(descriptor.Shader),
 			descriptor.VertexEntry,
 			descriptor.FragmentEntry,
-			descriptor.SampleCount,
+			reflection.SampleCount,
 			descriptor.HasVertexInput,
 			descriptor.Blend,
 			descriptor.LinearFilter,
 			descriptor.HasFragmentPush,
 			descriptor.IsCompute,
-			descriptor.StorageImageCount,
-			descriptor.StorageBufferCount,
+			reflection.StorageImageCount,
+			reflection.StorageBufferCount,
 			descriptor.ParticleInput);
 	}
 
@@ -233,6 +235,15 @@ internal sealed unsafe class VulkanEngine : IEngine
 		var path = Path.Combine(_shaderDir, name + ".spv");
 		if (!File.Exists(path))
 			throw new VulkanException($"Compiled shader '{name}' not found at {path}. Did Loom.Shaders build?");
+		return path;
+	}
+
+	// Resolve a logical shader name to its slangc reflection-JSON sidecar (M7-B4), shipped beside the .spv.
+	private string ResolveReflection(string name)
+	{
+		var path = Path.Combine(_shaderDir, name + ".json");
+		if (!File.Exists(path))
+			throw new VulkanException($"Shader reflection '{name}.json' not found at {path}. Did Loom.Shaders build?");
 		return path;
 	}
 
