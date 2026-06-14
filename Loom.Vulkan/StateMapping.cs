@@ -42,10 +42,11 @@ internal static class StateMapping
 			PipelineStageFlags2.EarlyFragmentTestsBit | PipelineStageFlags2.LateFragmentTestsBit,
 			AccessFlags2.DepthStencilAttachmentReadBit),
 
-		// Sampled in a fragment shader (the .Samples consumer). M3 reads only in the fragment stage.
+		// Sampled in a shader (the .Samples consumer). Covers both fragment (fullscreen/lighting) and compute
+		// (the auto-exposure reduction samples lit) so the transition makes the read visible to either stage.
 		GraphState.ShaderRead => new(
 			ImageLayout.ShaderReadOnlyOptimal,
-			PipelineStageFlags2.FragmentShaderBit,
+			PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
 			AccessFlags2.ShaderSampledReadBit),
 
 		// Compute storage image (read-write). Unused until the first compute pass, but defined for completeness.

@@ -59,6 +59,7 @@ internal sealed unsafe class TransientResources : IDisposable
 	private readonly VkFormat _backbufferFormat;
 	private readonly ResourceImage[][] _images; // [frameSlot][ResourceHandle.Id]
 	private readonly SlotBucket[][] _buckets;    // [frameSlot][bucketOrdinal]
+	private readonly List<(Image Image, ImageView View, Allocation Allocation)> _persistent = []; // shared across slots
 	private Extent2D _swapExtent;
 
 	public TransientResources(VulkanContext ctx, RenderGraph graph, AliasPlan aliasPlan, VkFormat backbufferFormat, Extent2D swapExtent, int framesInFlight, VulkanMemoryAllocator allocator)
@@ -71,20 +72,23 @@ internal sealed unsafe class TransientResources : IDisposable
 		_swapExtent = swapExtent;
 		_allocator = allocator; // shared with meshes; owned + disposed by the executor
 
-		var sampled = SampledResourceIds(graph);
+		var sampled = UsedWith(graph, AccessKind.Sample);
+		var storage = UsedWith(graph, AccessKind.ReadWrite);
 		_images = new ResourceImage[framesInFlight][];
 		_buckets = new SlotBucket[framesInFlight][];
 		for (var slot = 0; slot < framesInFlight; slot++)
 		{
 			_images[slot] = new ResourceImage[graph.Resources.Length];
 			foreach (var resource in graph.Resources)
-				InitMetadata(slot, resource, sampled);
+				InitMetadata(slot, resource, sampled, storage);
 			_buckets[slot] = AllocateBuckets(slot);
 		}
+		// Persistent resources are allocated once and shared by every slot (cross-frame history, §8).
+		AllocatePersistentResources(framesInFlight);
 	}
 
 	// Sets a resource's format/aspect/usage/flags without creating the image — the bucket pass allocates.
-	private void InitMetadata(int slot, ResourceHandle resource, HashSet<int> sampled)
+	private void InitMetadata(int slot, ResourceHandle resource, HashSet<int> sampled, HashSet<int> storage)
 	{
 		var aspect = resource.Kind == ResourceKind.Depth ? ImageAspectFlags.DepthBit : ImageAspectFlags.ColorBit;
 		ref var image = ref _images[slot][resource.Id];
@@ -104,6 +108,8 @@ internal sealed unsafe class TransientResources : IDisposable
 			: ImageUsageFlags.ColorAttachmentBit;
 		if (sampled.Contains(resource.Id))
 			usage |= ImageUsageFlags.SampledBit;
+		if (storage.Contains(resource.Id))
+			usage |= ImageUsageFlags.StorageBit; // a compute pass read-writes it (auto-exposure)
 
 		image.Format = FormatMapping.ToVulkan(resource.Format);
 		image.Usage = usage;
@@ -118,8 +124,8 @@ internal sealed unsafe class TransientResources : IDisposable
 		var next = -1; // synthetic keys for un-bucketed (dedicated) resources
 		foreach (var resource in _graph.Resources)
 		{
-			if (resource.IsBackbuffer)
-				continue;
+			if (resource.IsBackbuffer || resource.Kind == ResourceKind.Persistent)
+				continue; // backbuffer is the swapchain's; persistent is shared across slots, allocated apart
 			var key = _aliasPlan.BucketOf(resource) ?? next--;
 			(groups.TryGetValue(key, out var list) ? list : groups[key] = []).Add(resource.Id);
 		}
@@ -254,15 +260,43 @@ internal sealed unsafe class TransientResources : IDisposable
 		image.Image = default;
 	}
 
-	// Resources read via .Samples anywhere in the graph need SampledBit at allocation time.
-	private static HashSet<int> SampledResourceIds(RenderGraph graph)
+	// One image + memory per Persistent resource, shared by every frame slot so its contents carry across
+	// frames (auto-exposure history). Allocated apart from the per-slot alias buckets, never recycled (§8).
+	private void AllocatePersistentResources(int framesInFlight)
 	{
-		var sampled = new HashSet<int>();
+		foreach (var resource in _graph.Resources)
+		{
+			if (resource.Kind != ResourceKind.Persistent)
+				continue;
+
+			ref var image = ref _images[0][resource.Id]; // metadata (format/usage/aspect) already set per slot
+			CreateImage(ref image, ExtentOf(resource));
+			_vk.GetImageMemoryRequirements(_ctx.Device, image.Image, out var req);
+			MemoryRequirements reqs = new() { Size = req.Size, Alignment = req.Alignment, MemoryTypeBits = req.MemoryTypeBits };
+			var allocation = _allocator.AllocateMemory(in reqs, new AllocationCreateInfo { Usage = MemoryUsage.GPU_Only });
+			allocation.BindImageMemory(image.Image).Check("vmaBindImageMemory");
+			CreateView(ref image);
+			_persistent.Add((image.Image, image.View, allocation));
+
+			// Point every slot's entry at the one shared image/view.
+			for (var slot = 0; slot < framesInFlight; slot++)
+			{
+				_images[slot][resource.Id].Image = image.Image;
+				_images[slot][resource.Id].View = image.View;
+				_images[slot][resource.Id].Extent = image.Extent;
+			}
+		}
+	}
+
+	// Resources touched with the given access kind anywhere in the graph (drives usage flags at alloc time).
+	private static HashSet<int> UsedWith(RenderGraph graph, AccessKind kind)
+	{
+		var ids = new HashSet<int>();
 		foreach (var pass in graph.Passes)
 			foreach (var access in pass.Accesses)
-				if (access.Kind == AccessKind.Sample)
-					sampled.Add(access.Resource.Id);
-		return sampled;
+				if (access.Kind == kind)
+					ids.Add(access.Resource.Id);
+		return ids;
 	}
 
 	public void Dispose()
@@ -274,6 +308,15 @@ internal sealed unsafe class TransientResources : IDisposable
 					DestroyImage(ref _images[slot][id]);
 				bucket.Allocation.Dispose(); // returns the bucket's block to VMA
 			}
+		// Persistent images are shared across slots, so destroy each exactly once here.
+		foreach (var (image, view, allocation) in _persistent)
+		{
+			if (view.Handle != 0)
+				_vk.DestroyImageView(_ctx.Device, view, null);
+			if (image.Handle != 0)
+				_vk.DestroyImage(_ctx.Device, image, null);
+			allocation.Dispose();
+		}
 		// The allocator is owned by the executor (shared with meshes), so it is not disposed here.
 	}
 }

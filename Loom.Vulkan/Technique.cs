@@ -33,9 +33,14 @@ public sealed unsafe class Technique : IDisposable
 		var module = CreateShaderModule(spirv);
 		try
 		{
-			DescriptorSetLayout = description.SampleCount > 0 ? CreateSampledImageSetLayout(description.SampleCount) : default;
-			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput, description.HasFragmentPush);
-			Pipeline = CreatePipeline(module, in description);
+			var stage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.FragmentBit;
+			DescriptorSetLayout = description.SampleCount + description.StorageCount > 0
+				? CreateSetLayout(description.SampleCount, description.StorageCount, stage)
+				: default;
+			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput, description.HasFragmentPush, stage);
+			Pipeline = description.IsCompute
+				? CreateComputePipeline(module, in description)
+				: CreatePipeline(module, in description);
 		}
 		finally
 		{
@@ -59,23 +64,25 @@ public sealed unsafe class Technique : IDisposable
 		}
 	}
 
-	// Set 0: N combined image samplers at bindings 0..N-1 (the .Samples inputs), visible to the fragment
-	// shader. Hardcoded shape; SPIR-V reflection will derive bindings later.
-	private DescriptorSetLayout CreateSampledImageSetLayout(int sampleCount)
+	// Set 0: <paramref name="sampleCount"/> combined image samplers (the .Samples inputs) at bindings
+	// 0..S-1, then <paramref name="storageCount"/> storage images (a compute pass's .ReadWrites) at
+	// bindings S..S+T-1, visible to the given stage. Hardcoded shape; SPIR-V reflection derives this later.
+	private DescriptorSetLayout CreateSetLayout(int sampleCount, int storageCount, ShaderStageFlags stage)
 	{
-		var bindings = stackalloc DescriptorSetLayoutBinding[sampleCount];
-		for (var i = 0; i < sampleCount; i++)
+		var total = sampleCount + storageCount;
+		var bindings = stackalloc DescriptorSetLayoutBinding[total];
+		for (var i = 0; i < total; i++)
 			bindings[i] = new DescriptorSetLayoutBinding
 			{
 				Binding = (uint)i,
-				DescriptorType = DescriptorType.CombinedImageSampler,
+				DescriptorType = i < sampleCount ? DescriptorType.CombinedImageSampler : DescriptorType.StorageImage,
 				DescriptorCount = 1,
-				StageFlags = ShaderStageFlags.FragmentBit,
+				StageFlags = stage,
 			};
 		DescriptorSetLayoutCreateInfo info = new()
 		{
 			SType = StructureType.DescriptorSetLayoutCreateInfo,
-			BindingCount = (uint)sampleCount,
+			BindingCount = (uint)total,
 			PBindings = bindings,
 		};
 		_vk.CreateDescriptorSetLayout(_device, in info, null, out var layout).Check("vkCreateDescriptorSetLayout");
@@ -85,19 +92,20 @@ public sealed unsafe class Technique : IDisposable
 	/// <summary>Size of the fragment scalar push-constant block — four floats (JFA step, hovered id, etc.).</summary>
 	public const int FragmentPushSize = 4 * sizeof(float);
 
-	// Zero or one descriptor set (whether the technique samples), plus at most one push-constant range:
-	// mesh techniques get a 64-byte VERTEX range for the MVP (small + per-draw, so push constants beat a
-	// uniform buffer); post techniques get a 16-byte FRAGMENT range for per-pass scalars (JFA step, hover id).
-	// A technique is one or the other, never both, so a single-element range array suffices.
-	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout, bool hasMvpPushConstant, bool hasFragmentPush)
+	// Zero or one descriptor set (whether the technique binds resources), plus at most one push-constant
+	// range: mesh techniques get a 64-byte VERTEX range for the MVP (small + per-draw, so push constants beat
+	// a uniform buffer); post/compute techniques get a 16-byte range for per-pass scalars (JFA step, hover id,
+	// exposure rate) in <paramref name="scalarStage"/> (fragment for a draw, compute for a dispatch). A
+	// technique uses one kind or the other, never both, so a single-element range array suffices.
+	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout, bool hasMvpPushConstant, bool hasScalarPush, ShaderStageFlags scalarStage)
 	{
 		var hasSet = setLayout.Handle != 0;
 		var range = new PushConstantRange();
 		if (hasMvpPushConstant)
 			range = new PushConstantRange { StageFlags = ShaderStageFlags.VertexBit, Offset = 0, Size = (uint)sizeof(Matrix4x4) };
-		else if (hasFragmentPush)
-			range = new PushConstantRange { StageFlags = ShaderStageFlags.FragmentBit, Offset = 0, Size = FragmentPushSize };
-		var hasRange = hasMvpPushConstant || hasFragmentPush;
+		else if (hasScalarPush)
+			range = new PushConstantRange { StageFlags = scalarStage, Offset = 0, Size = FragmentPushSize };
+		var hasRange = hasMvpPushConstant || hasScalarPush;
 
 		PipelineLayoutCreateInfo info = new()
 		{
@@ -109,6 +117,29 @@ public sealed unsafe class Technique : IDisposable
 		};
 		_vk.CreatePipelineLayout(_device, in info, null, out var layout).Check("vkCreatePipelineLayout");
 		return layout;
+	}
+
+	// A compute pipeline is just the one compute stage + the layout — no fixed-function state, no render
+	// target, no dynamic rendering. The entry point name rides in FragmentEntry (a compute technique has the
+	// single entry there). This is the Bake layer's compute half: the auto-exposure reduction dispatches it.
+	private Pipeline CreateComputePipeline(ShaderModule module, in TechniqueDescription description)
+	{
+		using var arena = new NativeArena();
+		ComputePipelineCreateInfo createInfo = new()
+		{
+			SType = StructureType.ComputePipelineCreateInfo,
+			Stage = new PipelineShaderStageCreateInfo
+			{
+				SType = StructureType.PipelineShaderStageCreateInfo,
+				Stage = ShaderStageFlags.ComputeBit,
+				Module = module,
+				PName = arena.String(description.FragmentEntry),
+			},
+			Layout = Layout,
+		};
+		_vk.CreateComputePipelines(_device, default, 1, in createInfo, null, out var pipeline)
+			.Check("vkCreateComputePipelines");
+		return pipeline;
 	}
 
 	// Vertex input for the one canonical interleaved layout (Loom.Core.Vertex: Vector3 Position, Vector3

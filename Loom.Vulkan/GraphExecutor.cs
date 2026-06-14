@@ -39,6 +39,8 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private readonly BarrierPlan _plan;
 	private readonly AliasPlan _aliasPlan;
 	private readonly HashSet<int> _aliasedHandoffIds; // resources that reuse an earlier alias's memory this frame
+	private readonly HashSet<int> _persistentIds;     // resources whose contents survive across frames
+	private readonly Dictionary<int, ResourceState> _persistentState = []; // last state, carried across frames
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly TechniqueCache _techniques;
 	private readonly TransientResources _transients;
@@ -81,6 +83,13 @@ public sealed unsafe class GraphExecutor : IDisposable
 		foreach (var bucket in _aliasPlan.Buckets)
 			for (var i = 1; i < bucket.Members.Length; i++)
 				_aliasedHandoffIds.Add(bucket.Members[i].Id);
+
+		// Persistent resources (auto-exposure history) keep their contents across frames, so their first
+		// transition each frame must start from the layout the previous frame left them in, not Undefined.
+		_persistentIds = [];
+		foreach (var resource in graph.Resources)
+			if (resource.Kind == ResourceKind.Persistent)
+				_persistentIds.Add(resource.Id);
 		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
 			Console.WriteLine($"[loom] transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
@@ -251,6 +260,15 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 	private void RecordPass(CommandBuffer cmd, PassBarriers pass)
 	{
+		// Compute passes have no attachments and no dynamic-rendering scope — just bind + dispatch. The
+		// resource transitions (storage GENERAL, the consumer's SHADER_READ) were already emitted before this.
+		if (pass.Pass.Kind == PassKind.Compute)
+		{
+			_context.BeginPass([], default, false); // no colour/depth targets; keeps the bake key stable
+			pass.Pass.Record?.Invoke(_context);
+			return;
+		}
+
 		var attachments = pass.Attachments;
 		var color = stackalloc RenderingAttachmentInfo[attachments.Length];
 		var colorCount = 0;
@@ -364,8 +382,22 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 	private void EmitTransition(CommandBuffer cmd, ResourceTransition transition)
 	{
-		ref var image = ref _transients.Get(_currentFrame, transition.Resource.Id);
-		var src = StateMapping.For(transition.From);
+		var id = transition.Resource.Id;
+		ref var image = ref _transients.Get(_currentFrame, id);
+
+		// Persistent resources survive across frames. The barrier plan, derived per-frame, thinks every
+		// resource starts Undefined; for a persistent one that would discard the value the next frame's compute
+		// needs to read. Substitute the real layout/state the previous frame left it in (tracked here), so the
+		// transition preserves contents. First frame ever: no entry yet, so it stays Undefined (garbage, which
+		// the exposure adaptation converges away from). The single shared image + in-order submission make the
+		// resulting SHADER_READ→GENERAL barrier the cross-frame read/write hazard guard.
+		var fromState = transition.From;
+		if (_persistentIds.Contains(id) && fromState == ResourceState.Undefined && _persistentState.TryGetValue(id, out var carried))
+			fromState = carried;
+		if (_persistentIds.Contains(id))
+			_persistentState[id] = transition.To;
+
+		var src = StateMapping.For(fromState);
 		var dst = StateMapping.For(transition.To);
 		var srcStage = src.Stage;
 		var srcAccess = src.Access;

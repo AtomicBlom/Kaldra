@@ -145,6 +145,55 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
 	}
 
+	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
+	{
+		var baked = Bake(technique);
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Compute, baked.Pipeline);
+
+		if (push.Length > 0)
+		{
+			var block = stackalloc float[4];
+			for (var i = 0; i < push.Length && i < 4; i++)
+				block[i] = push[i];
+			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)Technique.FragmentPushSize, block);
+		}
+
+		var total = sampled.Length + storage.Length;
+		if (total > 0)
+		{
+			// Bindings 0..S-1: sampled inputs (ShaderReadOnly, the nearest sampler). S..S+T-1: storage images
+			// (GENERAL) the compute read-writes. The graph put each in the matching layout before this pass.
+			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+			var imageInfos = stackalloc DescriptorImageInfo[total];
+			var writes = stackalloc WriteDescriptorSet[total];
+			for (var i = 0; i < total; i++)
+			{
+				var isSampled = i < sampled.Length;
+				var handle = isSampled ? sampled[i] : storage[i - sampled.Length];
+				ref var image = ref _resources.Get(_frameSlot, handle.Id);
+				imageInfos[i] = new DescriptorImageInfo
+				{
+					Sampler = isSampled ? _nearestSampler : default,
+					ImageView = image.View,
+					ImageLayout = isSampled ? ImageLayout.ShaderReadOnlyOptimal : ImageLayout.General,
+				};
+				writes[i] = new WriteDescriptorSet
+				{
+					SType = StructureType.WriteDescriptorSet,
+					DstSet = set,
+					DstBinding = (uint)i,
+					DescriptorCount = 1,
+					DescriptorType = isSampled ? DescriptorType.CombinedImageSampler : DescriptorType.StorageImage,
+					PImageInfo = &imageInfos[i],
+				};
+			}
+			_vk.UpdateDescriptorSets(_ctx.Device, (uint)total, writes, 0, null);
+			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Compute, baked.Layout, 0, 1, in set, 0, null);
+		}
+
+		_vk.CmdDispatch(_cmd, groups.X, groups.Y, groups.Z);
+	}
+
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;
 	// the attachment formats are the current pass's. So one template used in passes with different targets
 	// caches distinct pipelines, and the call site only needs the name. The local cache keeps the per-draw
@@ -163,7 +212,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		var baked = _techniques.GetOrBake(new TechniqueDescription(
 			template.SpirvPath, template.VertexEntry, template.FragmentEntry, _colorFormats,
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
-			HasFragmentPush: template.HasFragmentPush));
+			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount));
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
 		// HasFragmentPush are folded into the TechniqueDescription hash, and LinearFilter only affects the
 		// descriptor's sampler, not the pipeline.

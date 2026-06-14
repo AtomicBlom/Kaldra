@@ -50,6 +50,15 @@ public sealed class Domain
 	public ResourceHandle Depth(string name, Format format) =>
 		_graph.AddResource(name, format, ResourceKind.Depth, this, scale: 1f);
 
+	/// <summary>
+	/// Declare a <see cref="ResourceKind.Persistent"/> target sized to this domain — contents survive across
+	/// frames and its memory is never aliased (Planning.md §8). Use a tiny domain (e.g. 1×1) for a scalar
+	/// history like the auto-exposure value. (<see cref="GraphBuilder.Persistent"/> is the resolution-agnostic
+	/// form anchored to the backbuffer domain.)
+	/// </summary>
+	public ResourceHandle Persistent(string name, Format format) =>
+		_graph.AddResource(name, format, ResourceKind.Persistent, this, scale: 1f);
+
 	/// <summary>The pixel dimensions of a target at the given scale within this domain.</summary>
 	public (int Width, int Height) Resolve(float scale) =>
 		((int)MathF.Round(Width * scale), (int)MathF.Round(Height * scale));

@@ -14,7 +14,9 @@ namespace Loom.Vulkan;
 /// <param name="HasVertexInput">True if the vertex stage reads a <see cref="Loom.Core.Vertex"/> buffer (a mesh technique) rather than fabricating a fullscreen triangle.</param>
 /// <param name="Blend">The blend equation — pairs with a pass that <c>.Blends</c> its target (alpha-over for transparency, additive for bloom).</param>
 /// <param name="LinearFilter">Sample inputs with a linear (rather than nearest) sampler — smooth filtering for bloom's downsample/upsample; nearest elsewhere keeps the pixel grid crisp.</param>
-/// <param name="HasFragmentPush">True if the fragment stage reads a small push-constant block (up to four floats) — the per-pass scalar channel (JFA step, hovered id, outline width/glow).</param>
+/// <param name="HasFragmentPush">True if the shader's fragment (or, for a compute technique, compute) stage reads a small push-constant block (up to four floats) — the per-pass scalar channel (JFA step, hovered id, exposure rate).</param>
+/// <param name="IsCompute">True for a compute technique: one compute entry point (in <see cref="FragmentEntry"/>), dispatched rather than drawn (Planning.md §5 <c>.Dispatch</c>).</param>
+/// <param name="StorageCount">Number of storage images the (compute) shader read-writes, bound after the sampled inputs (bindings SampleCount..SampleCount+StorageCount-1).</param>
 public readonly record struct TechniqueTemplate(
 	string SpirvPath,
 	string VertexEntry,
@@ -23,4 +25,6 @@ public readonly record struct TechniqueTemplate(
 	bool HasVertexInput = false,
 	BlendMode Blend = BlendMode.None,
 	bool LinearFilter = false,
-	bool HasFragmentPush = false);
+	bool HasFragmentPush = false,
+	bool IsCompute = false,
+	int StorageCount = 0);

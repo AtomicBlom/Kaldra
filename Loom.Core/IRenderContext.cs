@@ -52,6 +52,16 @@ public interface IRenderContext
 	void FullScreen(string technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs);
 
 	/// <summary>
+	/// Dispatch a compute technique over a grid of <paramref name="groups"/> workgroups (§5's
+	/// <c>ctx.Dispatch</c>). <paramref name="sampled"/> resources bind as combined image samplers at set 0
+	/// bindings 0..S-1 (the pass's <c>.Samples</c>); <paramref name="storage"/> resources bind as storage
+	/// images at S..S+T-1 (the pass's <c>.ReadWrites</c>) — the graph derives the GENERAL-layout transitions
+	/// and the compute↔consumer barriers. <paramref name="push"/> is the same up-to-four-float scalar channel
+	/// as the fullscreen overload, delivered to the compute stage. Used by the auto-exposure reduction.
+	/// </summary>
+	void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage);
+
+	/// <summary>
 	/// Draw GPU-resident geometry with the named technique (the geometry counterpart to
 	/// <see cref="FullScreen(string)"/> — §5's <c>ctx.Draw(drawList, Technique.X)</c>). The mesh is a stable
 	/// engine-minted handle; per-frame inputs (camera, transforms) are pulled from the context, not captured,

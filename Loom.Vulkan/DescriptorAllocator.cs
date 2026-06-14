@@ -22,17 +22,23 @@ internal sealed unsafe class DescriptorAllocator : IDisposable
 		_vk = ctx.Vk;
 		_pools = new DescriptorPool[framesInFlight];
 
-		DescriptorPoolSize poolSize = new()
+		var poolSizes = stackalloc DescriptorPoolSize[2];
+		poolSizes[0] = new DescriptorPoolSize
 		{
 			Type = DescriptorType.CombinedImageSampler,
 			DescriptorCount = maxSetsPerFrame * 8, // sets may bind several samplers (e.g. deferred lighting)
+		};
+		poolSizes[1] = new DescriptorPoolSize
+		{
+			Type = DescriptorType.StorageImage,
+			DescriptorCount = maxSetsPerFrame * 2, // compute passes bind a storage image or two (auto-exposure)
 		};
 		DescriptorPoolCreateInfo info = new()
 		{
 			SType = StructureType.DescriptorPoolCreateInfo,
 			MaxSets = maxSetsPerFrame,
-			PoolSizeCount = 1,
-			PPoolSizes = &poolSize,
+			PoolSizeCount = 2,
+			PPoolSizes = poolSizes,
 		};
 		for (var i = 0; i < framesInFlight; i++)
 			_vk.CreateDescriptorPool(_ctx.Device, in info, null, out _pools[i]).Check("vkCreateDescriptorPool");
