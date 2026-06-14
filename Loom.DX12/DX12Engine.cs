@@ -25,6 +25,7 @@ public sealed unsafe class DX12Engine : IEngine
 	private readonly DX12EngineSettings _settings;
 	private readonly DX12Context _ctx;
 	private readonly DX12Swapchain _swapchain;
+	private readonly DX12Triangle _triangle;
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -53,6 +54,8 @@ public sealed unsafe class DX12Engine : IEngine
 		_fenceEvent = CreateEventW(0, 0, 0, 0);
 		if (_fenceEvent == 0)
 			throw new InvalidOperationException("CreateEvent failed for the DX12 frame-pacing fence.");
+
+		_triangle = new DX12Triangle(_ctx, _swapchain.Format);
 
 		Console.WriteLine($"[loom] DX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
 	}
@@ -83,7 +86,7 @@ public sealed unsafe class DX12Engine : IEngine
 		color[3] = 1f;
 		_commandList.ClearRenderTargetView(rtv, color, 0u, (Box2D<int>*)null);
 
-		// (Next slice: set viewport/scissor, bind the root signature + triangle PSO, and draw here.)
+		_triangle.Record(_commandList, _swapchain.Width, _swapchain.Height);
 
 		Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.Present);
 		SilkMarshal.ThrowHResult(_commandList.Close());
@@ -163,6 +166,7 @@ public sealed unsafe class DX12Engine : IEngine
 
 		if (_fenceEvent != 0)
 			CloseHandle(_fenceEvent);
+		_triangle.Dispose();
 		_fence.Dispose();
 		_commandList.Dispose();
 		for (uint i = 0; i < BufferCount; i++)
