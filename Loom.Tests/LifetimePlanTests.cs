@@ -127,4 +127,41 @@ public class LifetimePlanTests
 
 		Assert.False(Life(plan, "history").Aliasable);
 	}
+
+	[Fact]
+	public void Readback_target_lifetime_extends_to_end_of_frame()
+	{
+		// `a` is read back to the host (g.Readback). That copy runs AFTER every pass, so `a` must stay live
+		// to end of frame; otherwise the aliaser recycles its memory and the readback samples whatever folded
+		// into it (the picking-flicker bug). Mirrors the real id -> outline -> bloom shape, where object_id
+		// would otherwise die at its last sample and get stomped.
+		var withReadback = Derive(RenderGraph.Define(g =>
+		{
+			var world = g.Domain("world", 320, 180);
+			var a = world.Color("a", Format.R16F);
+			var b = world.Color("b", Format.Rgba16F);
+			var c = world.Color("c", Format.Rgba16F);
+			g.Pass("p0").Writes(a);
+			g.Pass("p1").Samples(a).Writes(b);
+			g.Pass("p2").Samples(b).Writes(c);
+			g.Readback(a);
+		}));
+
+		// 3 passes -> orders 0..2; the readback pushes `a`'s last use to 3, one past the final pass.
+		Assert.Equal(3, withReadback.Schedule.Passes.Length);
+		Assert.Equal((0, 3), (Life(withReadback, "a").FirstUse, Life(withReadback, "a").LastUse));
+
+		// Guard against over-extension: the SAME graph without the readback leaves `a` at its natural [0,1].
+		var noReadback = Derive(RenderGraph.Define(g =>
+		{
+			var world = g.Domain("world", 320, 180);
+			var a = world.Color("a", Format.R16F);
+			var b = world.Color("b", Format.Rgba16F);
+			var c = world.Color("c", Format.Rgba16F);
+			g.Pass("p0").Writes(a);
+			g.Pass("p1").Samples(a).Writes(b);
+			g.Pass("p2").Samples(b).Writes(c);
+		}));
+		Assert.Equal((0, 1), (Life(noReadback, "a").FirstUse, Life(noReadback, "a").LastUse));
+	}
 }

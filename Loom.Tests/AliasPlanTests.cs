@@ -128,4 +128,40 @@ public class AliasPlanTests
 		Assert.Equal(1, plan.AliasableCount);
 		Assert.Single(plan.Buckets);
 	}
+
+	[Fact]
+	public void Readback_target_is_not_aliased_by_a_later_transient()
+	{
+		// a[0,1] would normally fold with c[2,2] (disjoint lifetimes). But `a` is read back to the host after
+		// every pass, so its memory must survive to end of frame — the aliaser must NOT hand it to c, else the
+		// readback copies c's stomped contents (the picking-flicker bug). Mirrors the real id/outline/bloom shape.
+		var withReadback = Derive(RenderGraph.Define(g =>
+		{
+			var world = g.Domain("world", 320, 180);
+			var a = world.Color("a", Format.R16F);
+			var b = world.Color("b", Format.Rgba16F);
+			var c = world.Color("c", Format.Rgba16F);
+			g.Pass("p0").Writes(a);
+			g.Pass("p1").Samples(a).Writes(b);
+			g.Pass("p2").Samples(b).Writes(c);
+			g.Readback(a);
+		}));
+
+		var res = withReadback.Lifetimes.Schedule.Graph.Resources;
+		Assert.NotEqual(withReadback.BucketOf(res.Single(r => r.Name == "a")), withReadback.BucketOf(res.Single(r => r.Name == "c")));
+
+		// Pin the behaviour the fix changes: WITHOUT the readback, a and c DO fold into one shared bucket.
+		var noReadback = Derive(RenderGraph.Define(g =>
+		{
+			var world = g.Domain("world", 320, 180);
+			var a = world.Color("a", Format.R16F);
+			var b = world.Color("b", Format.Rgba16F);
+			var c = world.Color("c", Format.Rgba16F);
+			g.Pass("p0").Writes(a);
+			g.Pass("p1").Samples(a).Writes(b);
+			g.Pass("p2").Samples(b).Writes(c);
+		}));
+		var bare = noReadback.Lifetimes.Schedule.Graph.Resources;
+		Assert.Equal(noReadback.BucketOf(bare.Single(r => r.Name == "a")), noReadback.BucketOf(bare.Single(r => r.Name == "c")));
+	}
 }

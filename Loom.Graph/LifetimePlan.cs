@@ -51,6 +51,15 @@ public sealed class LifetimePlan
 			}
 		}
 
+		// A g.Readback target is copied to the host AFTER every pass (end of frame), but that copy is not a
+		// pass, so the walk above stopped its lifetime at its last graph use. Extend it past the final pass so
+		// the aliaser never recycles its memory before the copy-out — otherwise the readback samples whatever
+		// later transient aliased into it (picking reads garbage; the hover outline flickers). §7.4.
+		var endOfFrame = schedule.Passes.Length; // pass orders are 0..n-1, so n is strictly after them all
+		foreach (var target in schedule.Graph.ReadbackTargets)
+			if (last.ContainsKey(target.Id))
+				last[target.Id] = endOfFrame;
+
 		var lifetimes = ImmutableArray.CreateBuilder<ResourceLifetime>(first.Count);
 		foreach (var (id, handle) in handles.OrderBy(kv => kv.Key))
 			lifetimes.Add(new ResourceLifetime(handle, first[id], last[id], IsAliasable(handle)));
