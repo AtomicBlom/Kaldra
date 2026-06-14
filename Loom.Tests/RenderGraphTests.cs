@@ -141,7 +141,8 @@ public class RenderGraphTests
 	[Fact]
 	public void Reference_frame_shape_composes()
 	{
-		ResourceHandle? lit = null, depth = null;
+		ColorHandle? lit = null;
+		DepthHandle? depth = null;
 		var graph = RenderGraph.Define(g =>
 		{
 			var world = g.Domain("world", 320, 180);
@@ -150,13 +151,15 @@ public class RenderGraphTests
 			var albedo = world.Color("albedo", Format.Rgba8Srgb);
 			var normal = world.Color("normal", Format.Rgb10A2);
 			var material = world.Color("material", Format.Rgba8Unorm);
-			depth = world.Depth("depth", Format.Depth32F);
-			lit = world.Color("lit", Format.Rgba16F);
+			var d = world.Depth("depth", Format.Depth32F);
+			var l = world.Color("lit", Format.Rgba16F);
+			depth = d;
+			lit = l;
 
-			g.Pass("gbuffer").Writes(albedo, normal, material).WritesDepth(depth);
-			g.Pass("lighting").Samples(albedo, normal, material, depth).Writes(lit);
-			g.Pass("transparent").Blends(lit).ReadsDepth(depth);
-			g.Pass("upscale").Samples(lit).Writes(screen);
+			g.Pass("gbuffer").Writes(albedo, normal, material).WritesDepth(d);
+			g.Pass("lighting").Samples(albedo, normal, material, d).Writes(l);
+			g.Pass("transparent").Blends(l).ReadsDepth(d);
+			g.Pass("upscale").Samples(l).Writes(screen);
 			g.Pass("hud").Writes(screen);
 			g.Present(screen);
 		});

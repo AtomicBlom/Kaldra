@@ -30,7 +30,7 @@ public sealed class GraphBuilder
 	private readonly List<ResourceHandle> _readbackTargets = [];
 
 	private Domain? _backbufferDomain;
-	private ResourceHandle? _backbuffer;
+	private ColorHandle? _backbuffer;
 	private ResourceHandle? _presentTarget;
 
 	internal GraphBuilder() { }
@@ -58,7 +58,7 @@ public sealed class GraphBuilder
 	/// native-res targets (e.g. a HUD at full resolution). See the type remarks for why this replaces
 	/// §6's <c>screen.Color</c> spelling.
 	/// </summary>
-	public ResourceHandle Backbuffer
+	public ColorHandle Backbuffer
 	{
 		get
 		{
@@ -67,7 +67,7 @@ public sealed class GraphBuilder
 
 			_backbufferDomain = new Domain(this, "<backbuffer>", width: 0, height: 0, isBackbuffer: true);
 			_domains.Add(_backbufferDomain);
-			_backbuffer = AddResource("<backbuffer>", Format.Rgba8Srgb, ResourceKind.Backbuffer, _backbufferDomain, scale: 1f);
+			_backbuffer = (ColorHandle)AddResource("<backbuffer>", Format.Rgba8Srgb, ResourceKind.Backbuffer, _backbufferDomain, scale: 1f);
 			return _backbuffer;
 		}
 	}
@@ -77,13 +77,13 @@ public sealed class GraphBuilder
 	/// (Planning.md §8). For cross-frame history (e.g. auto-exposure). <paramref name="size"/> is the
 	/// history ring depth.
 	/// </summary>
-	public ResourceHandle Persistent(string name, Format format, int size = 1)
+	public ColorHandle Persistent(string name, Format format, int size = 1)
 	{
 		if (size < 1)
 			throw new ArgumentOutOfRangeException(nameof(size), "Persistent ring depth must be at least 1.");
 		// Persistent resources aren't resolution-bound; anchor them to the backbuffer domain for now.
 		// (A dedicated buffer/non-spatial resource model arrives with auto-exposure in M5.)
-		return AddResource(name, format, ResourceKind.Persistent, BackbufferDomainForPersistent(), scale: 1f, count: size);
+		return (ColorHandle)AddResource(name, format, ResourceKind.Persistent, BackbufferDomainForPersistent(), scale: 1f, count: size);
 	}
 
 	/// <summary>Begin a raster pass. Chain intents, then <c>.Draw(ctx => …)</c>.</summary>
@@ -96,7 +96,7 @@ public sealed class GraphBuilder
 	/// The terminal: declare which resource is presented to the screen. The acquire/present/frames-in-flight
 	/// sync is derived behind this (Planning.md §6).
 	/// </summary>
-	public void Present(ResourceHandle resource)
+	public void Present(ColorHandle resource)
 	{
 		ArgumentNullException.ThrowIfNull(resource);
 		_presentTarget = resource;
@@ -122,18 +122,25 @@ public sealed class GraphBuilder
 	/// particles): the engine derives the compute→vertex barrier from those edges. Anchored to the backbuffer
 	/// domain (it has no resolution of its own).
 	/// </summary>
-	public ResourceHandle Buffer(string name, int byteSize)
+	public BufferHandle Buffer(string name, int byteSize)
 	{
 		if (byteSize <= 0)
 			throw new ArgumentOutOfRangeException(nameof(byteSize), "A buffer needs a positive byte size.");
-		return AddResource(name, Format.Rgba8Unorm, ResourceKind.Buffer, BackbufferDomainForPersistent(), scale: 1f, byteSize: byteSize);
+		return (BufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Buffer, BackbufferDomainForPersistent(), scale: 1f, byteSize: byteSize);
 	}
 
 	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0)
 	{
 		if (!_resourceNames.Add(name))
 			throw new InvalidOperationException($"Duplicate resource name '{name}'.");
-		var handle = new ResourceHandle(_resources.Count, name, format, kind, domain, scale, count, byteSize);
+		var id = _resources.Count;
+		ResourceHandle handle = kind switch
+		{
+			ResourceKind.Depth => new DepthHandle(id, name, format, domain, scale),
+			ResourceKind.Buffer => new BufferHandle(id, name, format, domain, byteSize),
+			// Color / Persistent / Backbuffer are all colour-like images; the lifetime/role lives in Kind.
+			_ => new ColorHandle(id, name, format, kind, domain, scale, count),
+		};
 		_resources.Add(handle);
 		return handle;
 	}

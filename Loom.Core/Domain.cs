@@ -36,19 +36,19 @@ public sealed class Domain
 	}
 
 	/// <summary>Declare a colour target in this domain.</summary>
-	public ResourceHandle Color(string name, Format format) =>
-		_graph.AddResource(name, format, ResourceKind.Color, this, scale: 1f);
+	public ColorHandle Color(string name, Format format) =>
+		(ColorHandle)_graph.AddResource(name, format, ResourceKind.Color, this, scale: 1f);
 
 	/// <summary>
 	/// Declare a colour target at a fraction of the domain's resolution (used for mip chains —
 	/// e.g. bloom's pyramid). <paramref name="scale"/> multiplies both width and height.
 	/// </summary>
-	public ResourceHandle Color(string name, Format format, float scale) =>
-		_graph.AddResource(name, format, ResourceKind.Color, this, scale);
+	public ColorHandle Color(string name, Format format, float scale) =>
+		(ColorHandle)_graph.AddResource(name, format, ResourceKind.Color, this, scale);
 
 	/// <summary>Declare a depth target in this domain.</summary>
-	public ResourceHandle Depth(string name, Format format) =>
-		_graph.AddResource(name, format, ResourceKind.Depth, this, scale: 1f);
+	public DepthHandle Depth(string name, Format format) =>
+		(DepthHandle)_graph.AddResource(name, format, ResourceKind.Depth, this, scale: 1f);
 
 	/// <summary>
 	/// Declare a <see cref="ResourceKind.Persistent"/> target sized to this domain — contents survive across
@@ -56,8 +56,8 @@ public sealed class Domain
 	/// history like the auto-exposure value. (<see cref="GraphBuilder.Persistent"/> is the resolution-agnostic
 	/// form anchored to the backbuffer domain.)
 	/// </summary>
-	public ResourceHandle Persistent(string name, Format format) =>
-		_graph.AddResource(name, format, ResourceKind.Persistent, this, scale: 1f);
+	public ColorHandle Persistent(string name, Format format) =>
+		(ColorHandle)_graph.AddResource(name, format, ResourceKind.Persistent, this, scale: 1f);
 
 	/// <summary>The pixel dimensions of a target at the given scale within this domain.</summary>
 	public (int Width, int Height) Resolve(float scale) =>

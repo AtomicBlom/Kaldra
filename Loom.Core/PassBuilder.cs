@@ -23,28 +23,43 @@ public sealed class PassBuilder
 	}
 
 	/// <summary>Colour output(s). The pass produces these; the engine may clear them.</summary>
-	public PassBuilder Writes(params ReadOnlySpan<ResourceHandle> resources) => Add(AccessKind.Write, resources);
+	public PassBuilder Writes(params ReadOnlySpan<ColorHandle> resources)
+	{
+		foreach (var resource in resources)
+			Add(AccessKind.Write, resource);
+		return this;
+	}
 
 	/// <summary>
 	/// Read-modify-write colour: the existing contents are loaded (preserved), then the technique's blend
 	/// accumulates onto them. The pass is both the last reader and the next writer (Planning.md §8).
 	/// </summary>
-	public PassBuilder Blends(ResourceHandle resource) => Add(AccessKind.Blend, resource);
+	public PassBuilder Blends(ColorHandle resource) => Add(AccessKind.Blend, resource);
 
-	/// <summary>Sampled (shader-read) input(s).</summary>
-	public PassBuilder Samples(params ReadOnlySpan<ResourceHandle> resources) => Add(AccessKind.Sample, resources);
+	/// <summary>Sampled (shader-read) input(s) — any colour or depth image (<see cref="ITextureHandle"/>).</summary>
+	public PassBuilder Samples(params ReadOnlySpan<ITextureHandle> resources)
+	{
+		foreach (var resource in resources)
+			Add(AccessKind.Sample, (ResourceHandle)resource);
+		return this;
+	}
 
 	/// <summary>Depth write.</summary>
-	public PassBuilder WritesDepth(ResourceHandle depth) => Add(AccessKind.WriteDepth, depth);
+	public PassBuilder WritesDepth(DepthHandle depth) => Add(AccessKind.WriteDepth, depth);
 
 	/// <summary>Depth test, no write.</summary>
-	public PassBuilder ReadsDepth(ResourceHandle depth) => Add(AccessKind.ReadDepth, depth);
+	public PassBuilder ReadsDepth(DepthHandle depth) => Add(AccessKind.ReadDepth, depth);
 
-	/// <summary>General read-modify-write of read-write storage resources (images/buffers; used by compute).</summary>
-	public PassBuilder ReadWrites(params ReadOnlySpan<ResourceHandle> resources) => Add(AccessKind.ReadWrite, resources);
+	/// <summary>General read-modify-write of read-write storage resources — storage images or buffers (<see cref="IStorageHandle"/>; used by compute).</summary>
+	public PassBuilder ReadWrites(params ReadOnlySpan<IStorageHandle> resources)
+	{
+		foreach (var resource in resources)
+			Add(AccessKind.ReadWrite, (ResourceHandle)resource);
+		return this;
+	}
 
 	/// <summary>Read a buffer as vertex-attribute data (GPU particles — the draw reads what a compute wrote).</summary>
-	public PassBuilder ReadsVertex(ResourceHandle buffer) => Add(AccessKind.ReadVertex, buffer);
+	public PassBuilder ReadsVertex(BufferHandle buffer) => Add(AccessKind.ReadVertex, buffer);
 
 	/// <summary>Assign this pass to a queue; the graph derives the cross-queue timeline sync.</summary>
 	public PassBuilder Queue(Queue queue)
@@ -77,13 +92,6 @@ public sealed class PassBuilder
 	private PassBuilder Add(AccessKind kind, ResourceHandle resource)
 	{
 		_accesses.Add(new ResourceAccess(resource, kind));
-		return this;
-	}
-
-	private PassBuilder Add(AccessKind kind, ReadOnlySpan<ResourceHandle> resources)
-	{
-		foreach (var resource in resources)
-			_accesses.Add(new ResourceAccess(resource, kind));
 		return this;
 	}
 
