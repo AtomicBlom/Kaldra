@@ -49,15 +49,18 @@ internal static class Dx12Smoke
 			?? throw new InvalidOperationException("The DX12 backend did not register into Engine.AvailableEngines.");
 		using var engine = backend.Create(hwnd, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 
-		// Two env-selected graph modes exercise the executor (vs. the fixed clear+triangle path):
-		//   LOOM_DX12_GRAPH=1 — a two-pass offscreen->blit gradient (transient alloc + the cross-pass barrier).
-		//   LOOM_DX12_CUBE=1  — the lit cube + ground plane on a depth buffer (mesh upload, indexed draw, the
-		//                       MVP root constant, and a depth target), the DX12 twin of CubeLightingDemo.
+		// Env-selected graph modes exercise the executor (vs. the fixed clear+triangle path):
+		//   LOOM_DX12_GRAPH=1     — a two-pass offscreen->blit gradient (transient alloc + the cross-pass barrier).
+		//   LOOM_DX12_CUBE=1      — the lit cube + ground plane on a depth buffer (mesh upload, indexed draw, the
+		//                           MVP root constant, and a depth target), the DX12 twin of CubeLightingDemo.
+		//   LOOM_DX12_PARTICLES=1 — the GPU-particle path (§7.6): a compute pass writes a storage buffer, a draw
+		//                           reads it as a per-instance vertex stream (additive sparks over the lit scene).
 		var graphMode = Environment.GetEnvironmentVariable("LOOM_DX12_GRAPH") is "1" or "true";
 		var cubeMode = Environment.GetEnvironmentVariable("LOOM_DX12_CUBE") is "1" or "true";
+		var particlesMode = Environment.GetEnvironmentVariable("LOOM_DX12_PARTICLES") is "1" or "true";
 
 		Mesh cube = default, plane = default;
-		if (cubeMode)
+		if (cubeMode || particlesMode)
 		{
 			engine.DefineTechnique("lit", new TechniqueDescriptor("lit", HasVertexInput: true));
 			var (cubeVerts, cubeIndices) = Geometry.BuildCube();
@@ -65,20 +68,62 @@ internal static class Dx12Smoke
 			cube = engine.CreateMesh(cubeVerts, cubeIndices);
 			plane = engine.CreateMesh(planeVerts, planeIndices);
 
-			var graph = RenderGraph.Define(g =>
+			RenderGraph graph;
+			if (particlesMode)
 			{
-				var screen = g.Backbuffer;
-				var depth = g.Screen.Depth("depth", Format.Depth32F);
-				g.Pass("scene")
-					.Writes(screen)
-					.WritesDepth(depth)
-					.Draw(ctx =>
-					{
-						ctx.Draw(cube, "lit");
-						ctx.Draw(plane, "lit");
-					});
-				g.Present(screen);
-			});
+				engine.DefineTechnique("particle.update", new TechniqueDescriptor("particle_update", FragmentEntry: "computeMain", IsCompute: true, HasFragmentPush: true));
+				engine.DefineTechnique("particle.render", new TechniqueDescriptor("particle_render", Blend: BlendMode.Additive, ParticleInput: true));
+				engine.DefineTechnique("blit", new TechniqueDescriptor("blit", LinearFilter: true));
+
+				const int particleCount = 4096;
+				graph = RenderGraph.Define(g =>
+				{
+					var screen = g.Backbuffer;
+					var lit = g.Screen.Color("lit", Format.Rgba16F);
+					var depth = g.Screen.Depth("depth", Format.Depth32F);
+					var particles = g.Buffer("particles", particleCount * 16); // float4 per particle
+
+					g.Pass("scene")
+						.Writes(lit)
+						.WritesDepth(depth)
+						.Draw(ctx =>
+						{
+							ctx.Draw(cube, "lit");
+							ctx.Draw(plane, "lit");
+						});
+
+					// Compute writes the buffer; the draw reads it as a vertex stream — the engine derives the
+					// compute->vertex-input barrier between the two edges (.ReadWrites then .ReadsVertex).
+					g.Compute("particle.update")
+						.ReadWrites(particles)
+						.Dispatch(ctx => ctx.Dispatch("particle.update", ((uint)(particleCount / 64), 1, 1), [ctx.Time, particleCount], [], [particles]));
+
+					g.Pass("particles")
+						.Blends(lit)
+						.ReadsVertex(particles)
+						.Draw(ctx => ctx.DrawParticles(particles, particleCount, "particle.render"));
+
+					g.Pass("blit").Samples(lit).Writes(screen).Draw(ctx => ctx.FullScreen("blit", lit));
+					g.Present(screen);
+				});
+			}
+			else
+			{
+				graph = RenderGraph.Define(g =>
+				{
+					var screen = g.Backbuffer;
+					var depth = g.Screen.Depth("depth", Format.Depth32F);
+					g.Pass("scene")
+						.Writes(screen)
+						.WritesDepth(depth)
+						.Draw(ctx =>
+						{
+							ctx.Draw(cube, "lit");
+							ctx.Draw(plane, "lit");
+						});
+					g.Present(screen);
+				});
+			}
 			engine.SetGraph(graph);
 		}
 		else if (graphMode)
@@ -98,7 +143,7 @@ internal static class Dx12Smoke
 			engine.SetGraph(graph);
 		}
 
-		var mode = cubeMode ? "lit cube" : graphMode ? "graph executor" : "first slice";
+		var mode = particlesMode ? "GPU particles" : cubeMode ? "lit cube" : graphMode ? "graph executor" : "first slice";
 		Console.WriteLine($"Loom DX12 {mode} on {engine.DeviceName} ({engine.BackendName}). Close the window to exit.");
 
 		var frame = 0;

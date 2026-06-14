@@ -81,6 +81,64 @@ internal static unsafe class DX12Shaders
 				return float4(albedo * (ambient + ndotl * key), 1.0);
 			}
 			""", 0),
+
+		// GPU particle update — the HLSL twin of particle_update.slang. A COMPUTE shader that writes a storage
+		// buffer (one float4 per particle: xyz position + w life). The buffer is a RWByteAddressBuffer bound as a
+		// root UAV at u0 (DX12 root descriptors bind a raw buffer by GPU address — no descriptor heap entry), and
+		// the per-pass scalars ride a root constant at b0 (p.x = time, p.y = particle count). Positions are a pure
+		// function of (index, time) — a looping fountain — so no cross-frame state. Proves Dispatch + the UAV.
+		["particle_update"] = ("""
+			RWByteAddressBuffer particles : register(u0);
+			cbuffer Push : register(b0) { float4 p; };
+			[numthreads(64, 1, 1)]
+			void computeMain(uint3 id : SV_DispatchThreadID)
+			{
+				uint i = id.x;
+				uint count = (uint)p.y;
+				if (i >= count)
+					return;
+				float time = p.x;
+				float phase = frac(time * 0.22 + i * (1.0 / count));
+				float angle = i * 2.39996323 + time * 0.6;     // golden-angle spread + slow swirl
+				float spread = 0.15 + phase * 0.9;             // widens as it rises
+				float height = -0.45 + phase * 3.0;            // rises from the cube base
+				float4 v = float4(cos(angle) * spread, height, sin(angle) * spread, 1.0 - phase);
+				particles.Store4(i * 16, asuint(v));
+			}
+			""", 0),
+
+		// GPU particle render — the HLSL twin of particle_render.slang. Each particle is one INSTANCE; the buffer
+		// is bound as the per-instance vertex stream (one float4: xyz position + w life). The vertex stage
+		// fabricates a 6-vertex billboard quad sized in clip space; the fragment makes a soft round emissive spark
+		// (additively blended). MVP rides a root constant at b0/vertex.
+		["particle_render"] = ("""
+			cbuffer Push : register(b0) { float4x4 mvp; };
+			struct VsOut { float4 position : SV_Position; float2 offset : TEXCOORD0; float life : TEXCOORD1; };
+			VsOut vertexMain(float4 particle : POSITION, uint vid : SV_VertexID)
+			{
+				const float2 corners[6] = {
+					float2(-1, -1), float2(1, -1), float2(1, 1),
+					float2(-1, -1), float2(1, 1), float2(-1, 1),
+				};
+				float2 corner = corners[vid];
+				float4 clip = mul(mvp, float4(particle.xyz, 1.0));
+				const float size = 0.012;
+				clip.xy += corner * size * clip.w;            // constant on-screen size with depth
+				VsOut o;
+				o.position = clip;
+				o.offset = corner;
+				o.life = particle.w;
+				return o;
+			}
+			float4 fragmentMain(VsOut input) : SV_Target
+			{
+				float d = length(input.offset);
+				float falloff = saturate(1.0 - d);
+				falloff *= falloff;                            // soft round dot
+				float3 colour = float3(2.6, 1.6, 0.5) * input.life * falloff; // emissive warm spark
+				return float4(colour, 1.0);
+			}
+			""", 0),
 	};
 
 	public static ComPtr<ID3D10Blob> Compile(D3DCompiler compiler, byte[] hlsl, string entry, string target)

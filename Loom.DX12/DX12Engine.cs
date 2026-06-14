@@ -171,9 +171,9 @@ public sealed unsafe class DX12Engine : IEngine
 				EmitGraphTransition(index, transition);
 
 			if (pass.Pass.Kind == PassKind.Compute)
-				throw new NotSupportedException("DX12: compute passes land in a later executor slice.");
-
-			RecordRasterPass(index, pass);
+				RecordComputePass(pass);
+			else
+				RecordRasterPass(index, pass);
 		}
 
 		// Optional capture: copy the present target before the final present transition (which then runs from
@@ -278,6 +278,15 @@ public sealed unsafe class DX12Engine : IEngine
 		_commandList.RSSetScissorRects(1, &scissor);
 
 		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly);
+		pass.Pass.Record?.Invoke(_context);
+	}
+
+	// A compute pass has no render targets and no render-target binding — its resource transitions (the storage
+	// buffer → UNORDERED_ACCESS) were emitted before this; just record the dispatch. Empty attachments keep the
+	// context's pass state stable (the DX12 mirror of VulkanEngine's compute branch in RecordPass).
+	private void RecordComputePass(PassBarriers pass)
+	{
+		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
 		pass.Pass.Record?.Invoke(_context);
 	}
 
@@ -499,7 +508,8 @@ public sealed unsafe class DX12Engine : IEngine
 
 		_techniques.Register(name, new DX12TechniqueTemplate(
 			builtin.Hlsl, descriptor.VertexEntry, descriptor.FragmentEntry,
-			builtin.InputCount, descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter));
+			builtin.InputCount, descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
+			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend));
 	}
 
 	/// <summary>

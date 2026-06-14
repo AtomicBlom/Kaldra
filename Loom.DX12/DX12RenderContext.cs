@@ -160,8 +160,57 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 	}
 
 	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
-		=> throw new NotSupportedException(NextSlice);
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: compute requires an active graph (SetGraph).");
+		if (sampled.Length > 0)
+			throw new NotSupportedException("DX12: sampled inputs in a compute pass land with the offline-DXIL slice (SSAO/auto-exposure).");
+		if (storage.Length > 1)
+			throw new NotSupportedException("DX12: a compute pass binds one storage buffer for now (the GPU-particle path); multi-buffer compute lands later.");
 
-	public void DrawParticles(ResourceHandle buffer, int count, string technique) => throw new NotSupportedException(NextSlice);
+		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
+		_cmd.SetComputeRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		if (push.Length > 0 && baked.RootConstantParam >= 0)
+		{
+			var block = stackalloc float[16];
+			for (var i = 0; i < push.Length && i < 16; i++)
+				block[i] = push[i];
+			_cmd.SetComputeRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
+		}
+		// The storage buffer binds as a root UAV (by GPU address) — the graph put it in UNORDERED_ACCESS first.
+		if (storage.Length > 0 && baked.UavRootParam >= 0)
+			_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, storage[0].Id).GetGPUVirtualAddress());
+
+		_cmd.Dispatch(groups.X, groups.Y, groups.Z);
+	}
+
+	public void DrawParticles(ResourceHandle buffer, int count, string technique)
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: particles require an active graph (SetGraph).");
+
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = Camera.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		// The buffer IS the per-instance vertex stream (one float4 per particle); the graph put it in
+		// VERTEX_AND_CONSTANT_BUFFER before this pass. 6 fabricated quad verts × one instance per particle.
+		var vbv = new VertexBufferView
+		{
+			BufferLocation = _transients.Resource(_slot, buffer.Id).GetGPUVirtualAddress(),
+			SizeInBytes = _transients.ByteSize(buffer.Id),
+			StrideInBytes = 16,
+		};
+		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		_cmd.IASetVertexBuffers(0, 1, &vbv);
+		_cmd.DrawInstanced(6, (uint)count, 0, 0);
+	}
+
 	public void DrawImGui() { } // neutral no-op until the DX12 ImGui renderer lands
 }

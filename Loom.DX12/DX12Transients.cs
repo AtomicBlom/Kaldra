@@ -30,6 +30,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 
 	private readonly Target[][] _targets; // [slot][resourceId]
 	private readonly (uint W, uint H)[] _extents; // by resourceId (same across slots)
+	private readonly uint[] _byteSizes; // by resourceId, for Buffer-kind resources
 	private readonly bool[] _isTransient; // by resourceId
 	private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
 	private ComPtr<ID3D12DescriptorHeap> _dsvHeap;
@@ -39,18 +40,28 @@ internal sealed unsafe class DX12Transients : IDisposable
 		var count = graph.Resources.Length;
 		_isTransient = new bool[count];
 		_extents = new (uint, uint)[count];
+		_byteSizes = new uint[count];
 
 		var colorTargets = new List<ResourceHandle>();
 		var depthTargets = new List<ResourceHandle>();
+		var bufferTargets = new List<ResourceHandle>();
 		foreach (var resource in graph.Resources)
 		{
 			if (resource.Kind == ResourceKind.Backbuffer)
 				continue; // the swapchain facade, owned by the engine
-			if (resource.Kind is not (ResourceKind.Color or ResourceKind.Depth))
-				throw new NotSupportedException($"DX12: resource kind {resource.Kind} ('{resource.Name}') lands in a later executor slice (buffer/persistent).");
+			if (resource.Kind is not (ResourceKind.Color or ResourceKind.Depth or ResourceKind.Buffer))
+				throw new NotSupportedException($"DX12: resource kind {resource.Kind} ('{resource.Name}') lands in a later executor slice (persistent).");
 			_isTransient[resource.Id] = true;
-			_extents[resource.Id] = Size(resource, swapWidth, swapHeight);
-			(resource.Kind == ResourceKind.Depth ? depthTargets : colorTargets).Add(resource);
+			if (resource.Kind == ResourceKind.Buffer)
+			{
+				_byteSizes[resource.Id] = (uint)resource.ByteSize;
+				bufferTargets.Add(resource);
+			}
+			else
+			{
+				_extents[resource.Id] = Size(resource, swapWidth, swapHeight);
+				(resource.Kind == ResourceKind.Depth ? depthTargets : colorTargets).Add(resource);
+			}
 		}
 
 		_targets = new Target[bufferCount][];
@@ -59,6 +70,20 @@ internal sealed unsafe class DX12Transients : IDisposable
 
 		AllocateColor(ctx, colorTargets, bufferCount);
 		AllocateDepth(ctx, depthTargets, bufferCount);
+		AllocateBuffers(ctx, bufferTargets, bufferCount);
+	}
+
+	// One device-local UAV buffer per Buffer resource per frame slot (multi-buffered like the images: a frame's
+	// compute writes it while an earlier frame's particle draw may still read its own slot's copy). No view/RTV
+	// — a compute binds it as a root UAV by GPU address, a draw binds it as a vertex buffer view (§7.6).
+	private void AllocateBuffers(DX12Context ctx, List<ResourceHandle> bufferTargets, uint bufferCount)
+	{
+		for (uint slot = 0; slot < bufferCount; slot++)
+			foreach (var resource in bufferTargets)
+			{
+				var buffer = CreateBufferResource(ctx, _byteSizes[resource.Id]);
+				_targets[slot][resource.Id] = new Target { Resource = buffer, View = default, Format = DxgiFormat.FormatUnknown, State = ResourceStates.Common, IsDepth = false };
+			}
 	}
 
 	private void AllocateColor(DX12Context ctx, List<ResourceHandle> colorTargets, uint bufferCount)
@@ -110,8 +135,8 @@ internal sealed unsafe class DX12Transients : IDisposable
 	}
 
 	public bool IsTransient(int id) => _isTransient[id];
-	public bool IsDepth(uint slot, int id) => _targets[slot][id].IsDepth;
 	public (uint W, uint H) Extent(int id) => _extents[id];
+	public uint ByteSize(int id) => _byteSizes[id];
 	public DxgiFormat Format(uint slot, int id) => _targets[slot][id].Format;
 	public CpuDescriptorHandle View(uint slot, int id) => _targets[slot][id].View;
 	public ComPtr<ID3D12Resource> Resource(uint slot, int id) => _targets[slot][id].Resource;
@@ -167,6 +192,30 @@ internal sealed unsafe class DX12Transients : IDisposable
 		SilkMarshal.ThrowHResult(ctx.Device.CreateCommittedResource(
 			&heapProps, HeapFlags.None, &desc, initialState, clear, out texture));
 		return texture;
+	}
+
+	// A device-local (Default-heap) buffer the compute writes via a root UAV and a draw reads as a vertex
+	// stream — created with AllowUnorderedAccess, starting in COMMON (the executor transitions it per the plan).
+	private static ComPtr<ID3D12Resource> CreateBufferResource(DX12Context ctx, uint byteSize)
+	{
+		var heapProps = new HeapProperties { Type = HeapType.Default, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
+		var desc = new ResourceDesc
+		{
+			Dimension = ResourceDimension.Buffer,
+			Alignment = 0,
+			Width = byteSize,
+			Height = 1,
+			DepthOrArraySize = 1,
+			MipLevels = 1,
+			Format = DxgiFormat.FormatUnknown,
+			SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = 1, Quality = 0 },
+			Layout = TextureLayout.LayoutRowMajor,
+			Flags = ResourceFlags.AllowUnorderedAccess,
+		};
+		ComPtr<ID3D12Resource> buffer = default;
+		SilkMarshal.ThrowHResult(ctx.Device.CreateCommittedResource(
+			&heapProps, HeapFlags.None, &desc, ResourceStates.Common, (ClearValue*)null, out buffer));
+		return buffer;
 	}
 
 	public void Dispose()
