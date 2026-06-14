@@ -79,7 +79,7 @@ public sealed class RenderGraph
 
 		sb.Append("domains\n");
 		foreach (var domain in Domains)
-			sb.Append($"  {domain.Name}|{domain.Width}x{domain.Height}|bb={domain.IsBackbuffer}|rel={domain.RelativeScale:R}\n");
+			sb.Append($"  {domain.Name}|{domain.Width}x{domain.Height}|bb={domain.IsBackbuffer}|rel={domain.RelativeScale:R}|s={domain.Samples}\n");
 
 		sb.Append("resources\n");
 		foreach (var resource in Resources)
@@ -111,6 +111,8 @@ public sealed class RenderGraph
 			var size = domain.IsBackbuffer ? "native"
 				: domain.RelativeScale > 0f ? $"{domain.RelativeScale:0.###}x screen"
 				: $"{domain.Width}x{domain.Height}";
+			if (domain.Samples > 1)
+				size += $" {domain.Samples}xMSAA";
 			sb.AppendLine($"    {domain.Name}  {size}");
 		}
 

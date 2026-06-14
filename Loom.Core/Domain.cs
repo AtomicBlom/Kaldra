@@ -27,7 +27,7 @@ public sealed class Domain
 	public bool IsBackbuffer { get; }
 
 	/// <summary>
-	/// For a <em>backbuffer-relative</em> domain (<see cref="GraphBuilder.Domain(string,float)"/>), the fraction
+	/// For a <em>backbuffer-relative</em> domain (<see cref="GraphBuilder.Domain(string,float,int)"/>), the fraction
 	/// of the native backbuffer this domain tracks — its pixel size is resolved against the swapchain at bake and
 	/// re-resolved on every resize. 0 for a fixed-size domain (use <see cref="Width"/>/<see cref="Height"/>) or
 	/// the native backbuffer domain (<see cref="IsBackbuffer"/>). A relative domain leaves Width/Height at 0; the
@@ -35,7 +35,16 @@ public sealed class Domain
 	/// </summary>
 	public float RelativeScale { get; }
 
-	internal Domain(GraphBuilder graph, string name, int width, int height, bool isBackbuffer, float relativeScale = 0f)
+	/// <summary>
+	/// MSAA sample count for targets in this domain (1 = no multisampling; otherwise a power of two). The
+	/// backend creates this domain's colour/depth targets multisampled at this count. A multisampled target
+	/// must be <em>resolved</em> to a single-sample target before it can be sampled or presented — that resolve
+	/// lands in M9 (Planning.md §10 AA decision: the engine does not mandate deferred rendering, so MSAA is the
+	/// anti-aliasing path for forward/simple scenes; deferred scenes use post-process FXAA/SMAA instead).
+	/// </summary>
+	public int Samples { get; }
+
+	internal Domain(GraphBuilder graph, string name, int width, int height, bool isBackbuffer, float relativeScale = 0f, int samples = 1)
 	{
 		_graph = graph;
 		Name = name;
@@ -43,6 +52,7 @@ public sealed class Domain
 		Height = height;
 		IsBackbuffer = isBackbuffer;
 		RelativeScale = relativeScale;
+		Samples = samples;
 	}
 
 	/// <summary>Declare a colour target in this domain.</summary>

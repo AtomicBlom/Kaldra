@@ -42,6 +42,7 @@ internal sealed unsafe class TransientResources : IDisposable
 		public bool IsBackbuffer;
 		public bool SwapchainSized;
 		public ImageUsageFlags Usage;
+		public SampleCountFlags Samples;
 	}
 
 	// One VMA block shared by a bucket's members (per frame slot). The members alias it — never live at once.
@@ -101,6 +102,7 @@ internal sealed unsafe class TransientResources : IDisposable
 		var aspect = resource.Kind == ResourceKind.Depth ? ImageAspectFlags.DepthBit : ImageAspectFlags.ColorBit;
 		ref var image = ref _images[slot][resource.Id];
 		image.Aspect = aspect;
+		image.Samples = SampleFlags(resource.Domain.Samples); // 1x for the backbuffer + most domains (M7-A8)
 
 		if (resource.IsBackbuffer)
 		{
@@ -262,6 +264,17 @@ internal sealed unsafe class TransientResources : IDisposable
 		return new Extent2D((uint)w, (uint)h);
 	}
 
+	// A domain's MSAA sample count (a power of two) mapped to the Vulkan flag. 1x for the backbuffer and most
+	// domains; >1 makes the domain's targets multisampled (the resolve to single-sample lands in M9 — M7-A8).
+	private static SampleCountFlags SampleFlags(int count) => count switch
+	{
+		>= 16 => SampleCountFlags.Count16Bit,
+		8 => SampleCountFlags.Count8Bit,
+		4 => SampleCountFlags.Count4Bit,
+		2 => SampleCountFlags.Count2Bit,
+		_ => SampleCountFlags.Count1Bit,
+	};
+
 	// Raw image creation (no memory bound yet — the bucket binds it). Sets the image handle and extent.
 	private void CreateImage(ref ResourceImage image, Extent2D extent)
 	{
@@ -274,7 +287,7 @@ internal sealed unsafe class TransientResources : IDisposable
 			Extent = new Extent3D(extent.Width, extent.Height, 1),
 			MipLevels = 1,
 			ArrayLayers = 1,
-			Samples = SampleCountFlags.Count1Bit,
+			Samples = image.Samples,
 			Tiling = ImageTiling.Optimal,
 			Usage = image.Usage,
 			SharingMode = SharingMode.Exclusive,

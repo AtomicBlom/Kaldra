@@ -39,14 +39,15 @@ public sealed class GraphBuilder
 	/// Declare a resolution domain. Everything declared in it renders at <paramref name="width"/>×
 	/// <paramref name="height"/> — the mechanism behind pixelation (Planning.md §9).
 	/// </summary>
-	public Domain Domain(string name, int width, int height)
+	public Domain Domain(string name, int width, int height, int samples = 1)
 	{
 		if (width <= 0 || height <= 0)
 			throw new ArgumentOutOfRangeException(nameof(width), $"Domain '{name}' must have positive dimensions.");
+		ValidateSamples(name, samples);
 		if (!_domainNames.Add(name))
 			throw new InvalidOperationException($"Duplicate domain name '{name}'.");
 
-		var domain = new Domain(this, name, width, height, isBackbuffer: false);
+		var domain = new Domain(this, name, width, height, isBackbuffer: false, samples: samples);
 		_domains.Add(domain);
 		return domain;
 	}
@@ -55,19 +56,28 @@ public sealed class GraphBuilder
 	/// Declare a <em>backbuffer-relative</em> resolution domain: its pixel size is <paramref name="scale"/> ×
 	/// the native backbuffer, re-resolved at bake and on every resize so it tracks the window. Use this for
 	/// full- or fractional-screen targets (e.g. <c>scale: 0.5f</c> for a half-res pass). For a pixel-art world
-	/// that must stay a constant size regardless of window, use the fixed <see cref="Domain(string,int,int)"/>
+	/// that must stay a constant size regardless of window, use the fixed <see cref="Domain(string,int,int,int)"/>
 	/// overload instead. (<see cref="Screen"/> is the <c>scale: 1</c> case — the native-resolution domain.)
+	/// <paramref name="samples"/> is the MSAA count (1 = none; a power of two).
 	/// </summary>
-	public Domain Domain(string name, float scale)
+	public Domain Domain(string name, float scale, int samples = 1)
 	{
 		if (scale <= 0f)
 			throw new ArgumentOutOfRangeException(nameof(scale), $"Domain '{name}' relative scale must be positive.");
+		ValidateSamples(name, samples);
 		if (!_domainNames.Add(name))
 			throw new InvalidOperationException($"Duplicate domain name '{name}'.");
 
-		var domain = new Domain(this, name, width: 0, height: 0, isBackbuffer: false, relativeScale: scale);
+		var domain = new Domain(this, name, width: 0, height: 0, isBackbuffer: false, relativeScale: scale, samples: samples);
 		_domains.Add(domain);
 		return domain;
+	}
+
+	// MSAA sample counts are powers of two (1, 2, 4, 8, 16). Validate at declaration so misuse fails loud (M7-A8).
+	private static void ValidateSamples(string name, int samples)
+	{
+		if (samples < 1 || (samples & (samples - 1)) != 0)
+			throw new ArgumentOutOfRangeException(nameof(samples), $"Domain '{name}' sample count must be a power of two (1, 2, 4, 8, …); got {samples}.");
 	}
 
 	/// <summary>

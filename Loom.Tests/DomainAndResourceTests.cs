@@ -66,6 +66,33 @@ public class DomainAndResourceTests
 	}
 
 	[Fact]
+	public void Domain_records_its_msaa_sample_count()
+	{
+		RenderGraph.Define(g =>
+		{
+			var scene = g.Domain("scene", 1280, 720, samples: 4);
+			Assert.Equal(4, scene.Samples);
+			Assert.Equal(1, g.Domain("plain", 320, 180).Samples); // default is single-sample
+		});
+	}
+
+	[Theory]
+	[InlineData(0)]
+	[InlineData(3)]
+	[InlineData(6)]
+	public void Domain_rejects_non_power_of_two_sample_count(int samples) =>
+		Assert.Throws<ArgumentOutOfRangeException>(() =>
+			RenderGraph.Define(g => g.Domain("bad", 320, 180, samples)));
+
+	[Fact]
+	public void Sample_count_distinguishes_the_graph_hash()
+	{
+		var a = RenderGraph.Define(g => { g.Domain("d", 320, 180, samples: 1); });
+		var b = RenderGraph.Define(g => { g.Domain("d", 320, 180, samples: 4); });
+		Assert.NotEqual(a.Hash(), b.Hash());
+	}
+
+	[Fact]
 	public void Duplicate_domain_name_throws() =>
 		Assert.Throws<InvalidOperationException>(() =>
 			RenderGraph.Define(g =>
