@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D.Compilers;
@@ -7,14 +8,55 @@ using Silk.NET.Direct3D.Compilers;
 namespace Loom.DX12;
 
 /// <summary>
-/// Runtime HLSL→DXBC compilation (via the in-box FXC, <c>D3DCompile</c>) plus the backend's built-in HLSL for
-/// the demo techniques. This is the interim shader-resolution path for the DX12 backend: the engine's real
-/// techniques are authored in Slang and the proper route is offline Slang→DXIL, but the bundled <c>slangc</c>
-/// can't emit DXIL on win-arm64, so until that pipeline lands the executor resolves a small set of built-in
-/// HLSL techniques here by logical name. Replaced wholesale when the offline DXIL pipeline arrives.
+/// Runtime HLSL compilation (via the in-box FXC, <c>D3DCompile</c>) plus shader resolution for the DX12 backend.
+/// The engine's real techniques are authored in Slang; the Loom build emits a cross-target <c>&lt;name&gt;.hlsl</c>
+/// (one combined multi-entry module) + a <c>&lt;name&gt;.json</c> reflection sidecar beside the SPIR-V, and the
+/// backend resolves the HLSL here by logical name (the DX12 counterpart of resolving embedded SPIR-V). A small
+/// set of <see cref="Builtins"/> remains as a fallback for shaders that have no resolvable HLSL yet (e.g. the
+/// engine-owned blit/gradient, or a shader not yet cross-targeted). Signed-DXIL via runtime DXC is the follow-up.
 /// </summary>
 internal static unsafe class DX12Shaders
 {
+	/// <summary>
+	/// Resolve a logical shader name + stage to its build-emitted HLSL (<c>&lt;name&gt;.&lt;stage&gt;.hlsl</c>,
+	/// stage = <c>vs</c>/<c>ps</c>/<c>cs</c>), or null if absent. Slang's HLSL target is per-entry-point, so the
+	/// build emits one self-contained module per stage and the backend compiles each from its own source.
+	/// </summary>
+	public static string? TryResolveStageHlsl(string shaderDir, string name, string stage)
+	{
+		var path = Path.Combine(shaderDir, $"{name}.{stage}.hlsl");
+		return File.Exists(path) ? File.ReadAllText(path) : null;
+	}
+
+	/// <summary>
+	/// The number of sampled inputs (combined image samplers) a shader binds, read from its
+	/// <c>slangc -reflection-json</c> sidecar — the DX12 counterpart of <c>Loom.Vulkan.ShaderReflection</c>. Drives
+	/// the SRV-table size in the root signature so the app states only pipeline intent (M7-B4). 0 if no sidecar.
+	/// </summary>
+	public static int ResolveSampledInputCount(string shaderDir, string name)
+	{
+		var path = Path.Combine(shaderDir, name + ".json");
+		if (!File.Exists(path))
+			return 0;
+		using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+		var count = 0;
+		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
+			foreach (var p in parameters.EnumerateArray())
+			{
+				if (!p.TryGetProperty("binding", out var binding) || !binding.TryGetProperty("kind", out var bk) || bk.GetString() != "descriptorTableSlot")
+					continue;
+				if (!p.TryGetProperty("type", out var type) || !type.TryGetProperty("kind", out var tk) || tk.GetString() != "resource")
+					continue;
+				var baseShape = type.TryGetProperty("baseShape", out var shape) ? shape.GetString() : null;
+				var readWrite = type.TryGetProperty("access", out var access) && access.GetString() == "readWrite";
+				// Count only sampled textures (combined image samplers); structured/byte buffers and RW textures
+				// are storage, not SRV-table entries (they ride a root UAV / a later slice on DX12).
+				if (baseShape is not ("structuredBuffer" or "byteAddressBuffer") && !readWrite)
+					count++;
+			}
+		return count;
+	}
+
 	/// <summary>Built-in HLSL + sampled-input count, keyed by the logical shader name a <c>TechniqueDescriptor</c> carries.</summary>
 	public static readonly IReadOnlyDictionary<string, (string Hlsl, int InputCount)> Builtins = new Dictionary<string, (string, int)>
 	{
@@ -140,6 +182,34 @@ internal static unsafe class DX12Shaders
 			}
 			""", 0),
 	};
+
+	/// <summary>
+	/// Whether a resolved technique compiles for all its stages (FXC) — vertex from <paramref name="vertexHlsl"/>,
+	/// fragment/compute from <paramref name="fragmentHlsl"/> (each its own per-stage module). Gates real-shader
+	/// resolution: a shader not yet cross-targeted (e.g. a vertex input missing an HLSL semantic) fails here and
+	/// the backend falls back to the built-in stand-in, so adopting the real pipeline never breaks a demo mid-port.
+	/// </summary>
+	public static bool CompilesOk(string? vertexHlsl, string fragmentHlsl, string vertexEntry, string fragmentEntry, bool isCompute)
+	{
+		using var compiler = D3DCompiler.GetApi();
+		try
+		{
+			if (isCompute)
+			{
+				Compile(compiler, Encoding.ASCII.GetBytes(fragmentHlsl), fragmentEntry, "cs_5_1").Dispose();
+			}
+			else
+			{
+				Compile(compiler, Encoding.ASCII.GetBytes(vertexHlsl!), vertexEntry, "vs_5_1").Dispose();
+				Compile(compiler, Encoding.ASCII.GetBytes(fragmentHlsl), fragmentEntry, "ps_5_1").Dispose();
+			}
+			return true;
+		}
+		catch
+		{
+			return false;
+		}
+	}
 
 	public static ComPtr<ID3D10Blob> Compile(D3DCompiler compiler, byte[] hlsl, string entry, string target)
 	{

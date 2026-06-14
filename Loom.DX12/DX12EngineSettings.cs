@@ -23,4 +23,12 @@ public sealed class DX12EngineSettings : EngineSettings
 	/// <see cref="EngineSettings.EnableValidation"/> is set. Far more thorough (and far slower) — off by default.
 	/// </summary>
 	public bool GpuBasedValidation { get; set; }
+
+	/// <summary>
+	/// Directory of loose shader assets (the Loom SDK's <c>shaders\</c> output): the DX12 backend resolves a
+	/// technique's HLSL (<c>&lt;name&gt;.hlsl</c>) + reflection (<c>&lt;name&gt;.json</c>) here at
+	/// <see cref="IEngine.DefineTechnique"/>, the counterpart of <c>VulkanEngineSettings.ShaderDirectory</c>.
+	/// A shader with no resolved HLSL falls back to the backend's built-in stand-in.
+	/// </summary>
+	public string ShaderDirectory { get; set; } = "shaders";
 }

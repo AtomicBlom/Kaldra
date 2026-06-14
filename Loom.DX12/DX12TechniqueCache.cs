@@ -7,9 +7,15 @@ using BlendMode = Loom.Core.BlendMode;
 
 namespace Loom.DX12;
 
-/// <summary>A registered DX12 technique: its HLSL + the shape needed to bake a pipeline (the DX12 counterpart of <c>TechniqueTemplate</c>).</summary>
+/// <summary>
+/// A registered DX12 technique: its HLSL + the shape needed to bake a pipeline (the DX12 counterpart of
+/// <c>TechniqueTemplate</c>). The vertex and fragment stages carry <em>separate</em> HLSL sources because
+/// Slang emits one self-contained module per entry point (a combined module duplicates shared decls); for a
+/// built-in stand-in both point at the same string, and for a compute technique only <see cref="FragmentHlsl"/>
+/// (the compute module) is used.
+/// </summary>
 internal readonly record struct DX12TechniqueTemplate(
-	string Hlsl, string VertexEntry, string FragmentEntry, int InputCount,
+	string VertexHlsl, string FragmentHlsl, string VertexEntry, string FragmentEntry, int InputCount,
 	bool HasVertexInput, bool HasFragmentPush, bool LinearFilter,
 	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None);
 
@@ -88,14 +94,13 @@ internal sealed unsafe class DX12Technique : IDisposable
 	{
 		IsCompute = template.IsCompute;
 		using var compiler = D3DCompiler.GetApi();
-		var hlsl = System.Text.Encoding.ASCII.GetBytes(template.Hlsl);
 
 		if (template.IsCompute)
 		{
-			BakeCompute(ctx, compiler, hlsl, template);
+			BakeCompute(ctx, compiler, System.Text.Encoding.ASCII.GetBytes(template.FragmentHlsl), template);
 			return;
 		}
-		BakeGraphics(ctx, compiler, hlsl, template, colorFormats, depthFormat, depthReadOnly);
+		BakeGraphics(ctx, compiler, template, colorFormats, depthFormat, depthReadOnly);
 	}
 
 	// A compute root signature: a 16-float scalar root constant at b0 plus a storage-buffer root UAV at u0
@@ -104,7 +109,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 	// inputs in a compute land with the offline-DXIL slice (auto-exposure, SSAO).
 	private void BakeCompute(DX12Context ctx, D3DCompiler compiler, byte[] hlsl, DX12TechniqueTemplate template)
 	{
-		var cs = DX12Shaders.Compile(compiler, hlsl, template.FragmentEntry, "cs_5_0");
+		var cs = DX12Shaders.Compile(compiler, hlsl, template.FragmentEntry, "cs_5_1");
 
 		var parameters = stackalloc RootParameter[2];
 		RootConstantParam = 0;
@@ -135,10 +140,12 @@ internal sealed unsafe class DX12Technique : IDisposable
 		cs.Dispose();
 	}
 
-	private void BakeGraphics(DX12Context ctx, D3DCompiler compiler, byte[] hlsl, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	private void BakeGraphics(DX12Context ctx, D3DCompiler compiler, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
-		var vs = DX12Shaders.Compile(compiler, hlsl, template.VertexEntry, "vs_5_0");
-		var ps = DX12Shaders.Compile(compiler, hlsl, template.FragmentEntry, "ps_5_0");
+		// Each stage compiles from its own self-contained module (real Slang shaders emit one per entry point;
+		// a built-in stand-in points both at the same string).
+		var vs = DX12Shaders.Compile(compiler, System.Text.Encoding.ASCII.GetBytes(template.VertexHlsl), template.VertexEntry, "vs_5_1");
+		var ps = DX12Shaders.Compile(compiler, System.Text.Encoding.ASCII.GetBytes(template.FragmentHlsl), template.FragmentEntry, "ps_5_1");
 
 		// Root signature: optionally a 32-bit root-constants block (the MVP at b0/vertex for a mesh or particle
 		// technique, or a 16-float scalar block at b0/pixel for a post pass — one or the other, mirroring the

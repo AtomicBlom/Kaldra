@@ -525,18 +525,52 @@ public sealed unsafe class DX12Engine : IEngine
 	}
 
 	/// <summary>
-	/// Register a technique under a logical name. This first executor step resolves the built-in HLSL the demo
-	/// graphs use (the interim stand-in for the offline Slang→DXIL pipeline); a future slice resolves real
-	/// shader bytecode by name exactly as the Vulkan backend resolves embedded SPIR-V.
+	/// Register a technique under a logical name. Resolves the real shader the Loom build emits next to the
+	/// SPIR-V — a cross-target <c>&lt;name&gt;.hlsl</c> (Slang→HLSL) plus its <c>&lt;name&gt;.json</c> reflection
+	/// (which gives the sampled-input count, so the app states only pipeline intent — M7-B4) — exactly as the
+	/// Vulkan backend resolves embedded SPIR-V. A shader with no resolvable/compilable HLSL falls back to the
+	/// backend's built-in stand-in, so the real-shader pipeline can be adopted shader-by-shader without breaking
+	/// a demo mid-port.
 	/// </summary>
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
 	{
-		if (!DX12Shaders.Builtins.TryGetValue(descriptor.Shader, out var builtin))
-			throw new NotSupportedException($"DX12: no built-in HLSL for shader '{descriptor.Shader}' (the offline DXIL pipeline that resolves real shaders is a later slice).");
+		var dir = _settings.ShaderDirectory;
+		var shader = descriptor.Shader;
 
+		// Resolve the build-emitted per-stage HLSL: compute uses <name>.cs.hlsl; graphics uses <name>.vs.hlsl +
+		// <name>.ps.hlsl. Use it only if every needed stage resolves AND compiles (a not-yet-cross-targeted
+		// shader fails CompilesOk → fall back to the built-in stand-in, so the port never breaks a demo mid-way).
+		var realVs = descriptor.IsCompute ? null : DX12Shaders.TryResolveStageHlsl(dir, shader, "vs");
+		var realFs = DX12Shaders.TryResolveStageHlsl(dir, shader, descriptor.IsCompute ? "cs" : "ps");
+		var haveReal = realFs is not null
+			&& (descriptor.IsCompute || realVs is not null)
+			&& DX12Shaders.CompilesOk(realVs, realFs, descriptor.VertexEntry, descriptor.FragmentEntry, descriptor.IsCompute);
+
+		string vertexHlsl, fragmentHlsl, source;
+		int inputCount;
+		if (haveReal)
+		{
+			vertexHlsl = realVs ?? realFs!; // compute: the vertex source is unused
+			fragmentHlsl = realFs!;
+			inputCount = DX12Shaders.ResolveSampledInputCount(dir, shader);
+			source = $"{shader} (Slang)";
+		}
+		else if (DX12Shaders.Builtins.TryGetValue(shader, out var builtin))
+		{
+			vertexHlsl = fragmentHlsl = builtin.Hlsl; // the built-in module holds every entry point
+			inputCount = builtin.InputCount;
+			source = "built-in";
+		}
+		else
+		{
+			throw new NotSupportedException(
+				$"DX12: shader '{shader}' has no resolvable HLSL ('{shader}.[vs|ps|cs].hlsl' in '{dir}') and no built-in stand-in.");
+		}
+
+		Console.WriteLine($"[loom] DX12 technique '{name}' ← {source}.");
 		_techniques.Register(name, new DX12TechniqueTemplate(
-			builtin.Hlsl, descriptor.VertexEntry, descriptor.FragmentEntry,
-			builtin.InputCount, descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
+			vertexHlsl, fragmentHlsl, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
+			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend));
 	}
 

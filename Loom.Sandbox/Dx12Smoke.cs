@@ -44,6 +44,9 @@ internal static class Dx12Smoke
 			EnableValidation = true,
 			VSync = vsync,
 			PreferredBackend = "DX12",
+			// The Loom SDK copies the demo shaders' HLSL + reflection here next to the exe; the DX12 backend
+			// resolves a technique's <name>.hlsl/.json from this directory (falling back to its built-ins).
+			ShaderDirectory = Path.Combine(AppContext.BaseDirectory, "shaders"),
 		};
 		var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
 			?? throw new InvalidOperationException("The DX12 backend did not register into Engine.AvailableEngines.");

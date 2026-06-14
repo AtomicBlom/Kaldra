@@ -9,8 +9,11 @@
       Content -> loose <Content> copied to the output under shaders\  (an app, e.g. Loom.Sandbox)
       Embed   -> <EmbeddedResource> with a stable manifest name        (the engine, Loom.Vulkan)
 
-    Generalized from the original inline Loom.Shaders.csproj targets; keeps the hermetic slangc, the
-    *.module.slang exclusion, incremental Inputs/Outputs, and the IDE FastUpToDateCheck wiring.
+    When $(LoomEmitHlsl) is set (the DX12 backend is in the build) it ALSO emits per-stage HLSL beside the
+    SPIR-V — <name>.vs.hlsl / <name>.ps.hlsl / <name>.cs.hlsl. Slang's HLSL target is per-entry-point (a
+    combined multi-entry module duplicates the shared structs and won't compile), so each stage is emitted
+    on its own; the stages are the fixed vs/fragment/compute set, so no per-shader entry enumeration is
+    needed. The DX12 backend resolves the stage files it needs and compiles each.
   -->
 
   <PropertyGroup>
@@ -30,6 +33,7 @@
     <UpToDateCheckInput Include="@(LoomSlangSource)" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')" />
+    <UpToDateCheckBuilt Condition="'$(LoomEmitHlsl)' == 'true'" Include="$(LoomShaderOutDir)hlsl.stamp" />
   </ItemGroup>
 
   <!-- Incremental: recompile when ANY .slang (entry OR shared module) is newer than ANY .spv. Listing every
@@ -49,10 +53,27 @@
     <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target spirv -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).spv&quot; -reflection-json &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).json&quot;" />
   </Target>
 
-  <!-- No Inputs/Outputs => ALWAYS runs (even when LoomCompileShaders is up to date), so the outputs are
+  <!-- DX12: emit per-stage HLSL the backend compiles at bake time. One Exec per fixed stage; a shader lacking
+       a stage (a graphics shader has no compute entry, a compute shader no vertex/fragment) just produces no
+       file for it — the '|| exit /b 0' swallows slangc's "entry not found" so the build stays warning-free
+       (real shader errors are still caught by the un-swallowed SPIR-V compile above). Stamp-tracked so it
+       re-runs when any .slang changes; the registration globs whatever stage files were actually produced. -->
+  <Target Name="LoomEmitHlslShaders"
+          Condition="'$(LoomEmitHlsl)' == 'true' And '$(LoomShaderOutputMode)' != 'None'"
+          Inputs="@(LoomSlangSource)"
+          Outputs="$(LoomShaderOutDir)hlsl.stamp">
+    <MakeDir Directories="$(LoomShaderOutDir)" />
+    <Message Importance="high" Text="Slang -&gt; HLSL (per stage): %(LoomSlangEntry.Filename).slang" />
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target hlsl -profile sm_6_0 -entry vertexMain -stage vertex -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).vs.hlsl&quot; 2&gt;nul || exit /b 0" />
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target hlsl -profile sm_6_0 -entry fragmentMain -stage fragment -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).ps.hlsl&quot; 2&gt;nul || exit /b 0" />
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target hlsl -profile sm_6_0 -entry computeMain -stage compute -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).cs.hlsl&quot; 2&gt;nul || exit /b 0" />
+    <Touch Files="$(LoomShaderOutDir)hlsl.stamp" AlwaysCreate="true" />
+  </Target>
+
+  <!-- No Inputs/Outputs => ALWAYS runs (even when the compile targets are up to date), so the outputs are
        always registered and never silently dropped from the assembly/output on incremental builds. The
        EmbeddedResource/Content items are added HERE (in a target), not in a top-level ItemGroup, because at
-       evaluation time the .spv don't exist yet — a static glob over obj\shaders\ would embed nothing.
+       evaluation time the .spv/.hlsl don't exist yet — a static glob over obj\shaders\ would embed nothing.
 
        Anchor: BeforeTargets="AssignTargetPaths" for BOTH modes. AssignTargetPaths runs before the resource
        pipeline (SplitResourcesByCulture -> CreateManifestResourceNames) and before Content target-path
@@ -61,10 +82,16 @@
        snapshotted @(EmbeddedResource) by then, so the late items never reach the compiler. -->
   <Target Name="LoomRegisterShaders"
           Condition="'$(LoomShaderOutputMode)' != 'None'"
-          DependsOnTargets="LoomCompileShaders"
+          DependsOnTargets="LoomCompileShaders;LoomEmitHlslShaders"
           BeforeTargets="AssignTargetPaths">
 
-    <!-- Content (app): loose .spv/.json copied to the output under shaders\, flowing to the app's bin
+    <!-- The per-stage HLSL files actually produced (glob, evaluated now that they exist — a static per-shader
+         list can't know which stages a shader has). Empty when LoomEmitHlsl is off. -->
+    <ItemGroup Condition="'$(LoomEmitHlsl)' == 'true'">
+      <LoomHlslFile Include="$(LoomShaderOutDir)*.hlsl" />
+    </ItemGroup>
+
+    <!-- Content (app): loose .spv/.json (+ HLSL) copied to the output under shaders\, flowing to the app's bin
          (and to projects that reference this one). -->
     <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content'">
       <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
@@ -77,11 +104,16 @@
         <Link>shaders\%(Filename).json</Link>
         <Visible>false</Visible>
       </Content>
+      <Content Include="@(LoomHlslFile)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(Filename)%(Extension)</Link>
+        <Visible>false</Visible>
+      </Content>
     </ItemGroup>
 
-    <!-- Embed (engine): .spv/.json become EmbeddedResource with a STABLE flat manifest name the engine reads
-         via Assembly.GetManifestResourceStream("<prefix><name>.spv"). The LogicalName is mandatory: without
-         it MSBuild derives the name from the obj\shaders\ path (ugly + build-config-dependent). -->
+    <!-- Embed (engine): .spv/.json (+ HLSL) become EmbeddedResource with a STABLE flat manifest name the engine
+         reads via Assembly.GetManifestResourceStream("<prefix><name>.spv"). The LogicalName is mandatory:
+         without it MSBuild derives the name from the obj\shaders\ path (ugly + build-config-dependent). -->
     <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Embed'">
       <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
         <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).spv</LogicalName>
@@ -89,6 +121,10 @@
       </EmbeddedResource>
       <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')">
         <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).json</LogicalName>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(LoomHlslFile)">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename)%(Extension)</LogicalName>
         <Visible>false</Visible>
       </EmbeddedResource>
     </ItemGroup>

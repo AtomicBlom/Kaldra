@@ -16,6 +16,13 @@
   <PropertyGroup>
     <LoomShaderOutputMode Condition="'$(LoomShaderOutputMode)' == ''">None</LoomShaderOutputMode>
 
+    <!-- Also emit HLSL beside the SPIR-V (for the DX12 backend, which resolves <name>.hlsl + reflection and
+         compiles each stage at bake time). On by default whenever the DX12 backend is in the build; the engine
+         resolves a shader's HLSL the same way it resolves its SPIR-V. Slang emits one combined multi-entry HLSL
+         per module (all entry points), so the backend picks the stage by entry name. -->
+    <LoomEmitHlsl Condition="'$(LoomEmitHlsl)' == '' And '$(UseDX12)' == 'true'">true</LoomEmitHlsl>
+    <LoomEmitHlsl Condition="'$(LoomEmitHlsl)' == ''">false</LoomEmitHlsl>
+
     <!-- Optional semicolon-separated list of .slang paths/globs to exclude from compilation (on top of the
          always-excluded *.module.slang). Used to drop ImGui's shader when the engine is built without ImGui. -->
     <LoomShaderExclude Condition="'$(LoomShaderExclude)' == ''"></LoomShaderExclude>
