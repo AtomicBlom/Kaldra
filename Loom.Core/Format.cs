@@ -20,10 +20,14 @@ public enum Format
 	/// <summary>16-bit float RGBA. HDR colour with enough range for bloom.</summary>
 	Rgba16F,
 
-	/// <summary>16-bit float, single channel.</summary>
+	/// <summary>16-bit float, single channel. Single-channel data: SSAO, the exposure scalar, and the
+	/// reference-frame's object-id picking target (small ids are exact in F16 — see <see cref="R32Uint"/>).</summary>
 	R16F,
 
-	/// <summary>32-bit unsigned integer, single channel. Object-id / picking targets.</summary>
+	/// <summary>32-bit unsigned integer, single channel. The format for **true** integer object ids — exact
+	/// for any id range, where <see cref="R16F"/> is only exact below 2048. (The reference frame's picking path
+	/// uses <see cref="R16F"/>: its ids are tiny and a float id composes directly with the float-based JFA
+	/// outline. Switch the id target to this when an app needs large/precise picking ids.)</summary>
 	R32Uint,
 
 	/// <summary>16-bit float, two channels. Velocity / JFA seed coordinates.</summary>
