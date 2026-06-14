@@ -61,12 +61,15 @@ A huge amount of what historically made this dream feel impossible was 1.0-era b
 If your mental model of "Vulkan is unbearably procedural" was formed around 2016-era tutorials with explicit subpasses and binary-semaphore juggling, half of that pain is simply obsolete on this baseline. (Vulkan 1.4 is also fine to target — all three features above remain core — but 1.3 is the widely-supported floor and what the design assumes.)
 
 ### Descriptors via SPIR-V reflection
-Reflect the SPIR-V to auto-derive descriptor set layouts and push-constant ranges. The user declares *shaders*; Loom figures out the binding layout. This removes another large chunk of struct-filling from the frontend. Likely tooling: `spirv-reflect` (Silk.NET has bindings) or SPIRV-Cross.
+Reflect the SPIR-V to auto-derive descriptor set layouts and push-constant ranges. The user declares *shaders*; Loom figures out the binding layout. This removes another large chunk of struct-filling from the frontend. **Decided (M7): use Slang's own reflection** — Slang is already the shader compiler, so its reflection comes for free with no extra dependency (`spirv-reflect` / SPIRV-Cross were the alternatives). This resolves the §10 open question; it lands in Milestone 7 (the `DefineTechnique` builder).
+
+### HDR display output (baseline capability)
+The engine renders internally in HDR (`Rgba16F` throughout lighting/bloom/tonemap), but **true HDR *output*** — presenting to an HDR display rather than tonemapping down to 8-bit sRGB — is a first-class capability, not an afterthought. The backbuffer format and swapchain colour space are **negotiated against display capability** (`VK_COLOR_SPACE_HDR10_ST2084_EXT` / `…_EXTENDED_SRGB_LINEAR_EXT` scRGB), not hardcoded; the HDR-capable formats (`Rgb10A2`, `Rgba16F`) already exist in the format vocabulary. An `EngineSettings.HdrOutput` toggle selects HDR vs the SDR fallback, and the terminal/tonemap pass applies the matching output transform (PQ/scRGB vs sRGB). Lands in Milestone 7.
 
 ### Stack
 - **.NET 10** (`net10.0`).
 - **Silk.NET** for Vulkan, windowing, input, and math: `Silk.NET.Vulkan`, `Silk.NET.Windowing`, `Silk.NET.Input`, `Silk.NET.Maths`. Dynamic rendering / sync2 are enabled as device features (`VkPhysicalDeviceVulkan13Features`), not loaded as extensions.
-- **Shader compilation**: prefer **Slang** (modern, excellent reflection, compiles to SPIR-V offline) with GLSL as a fallback. For runtime compilation, Silk.NET provides `shaderc` bindings; for reflection, `spirv-reflect` bindings. *(Verify exact package names during Milestone 0.)*
+- **Shader compilation**: **Slang**, decided and in place (M0/M1) — compiled to SPIR-V **offline** via the bundled `slangc` (the `Slang.Sdk` NuGet, hermetic, win-x64/win-arm64). **Reflection also uses Slang** (decided M7), not `spirv-reflect`. GLSL remains a possible fallback; runtime compilation (`shaderc`) is unused for now.
 - **Memory**: candidate is the Vulkan Memory Allocator (VMA) for sub-allocation and, importantly, its **aliasing** support, which the transient-resource system needs. Decision deferred — see Section 9.
 
 ---
@@ -85,19 +88,20 @@ Reflect the SPIR-V to auto-derive descriptor set layouts and push-constant range
 
 This is the fluent surface to author against. Treat it as the spec; keep it stable across the codebase.
 
+> **Status (M7).** This vocabulary is the *target*; **Milestone 7 brings the code in line with it.** Where today's code differs, it's flagged inline as *(current: …)*. The biggest gaps M7 closes: there was no neutral `Engine` facade (the host built graphs via `RenderGraph.Define` and drove a backend `GraphExecutor` directly), techniques were string-keyed backend records rather than a `DefineTechnique` builder, per-frame inputs were mutable executor properties rather than a `FrameInputs` value, and `ResourceHandle` was one untyped class rather than `ColorHandle`/`DepthHandle`/`BufferHandle`.
+
 ### Entry points
-- `engine.DefineGraph(g => { ... })` — builds, bakes, and caches a graph. Returns a `Graph`.
-- `engine.DefineTechnique("name", t => { ... })` — builds and caches a technique. Returns a `Technique` handle.
-- `graph.Render(frameInputs)` — the entire per-frame hot-path call. Returns a frame result (carries readback handles).
+- `engine.DefineGraph(g => { ... })` — builds, bakes, and caches a graph. Returns a `Graph`. The engine is obtained from the backend registry: `Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend) ?? Engine.AvailableEngines.First()`, then `engine = backend.Create(surface, settings)` — app code names no backend type. *(current: `RenderGraph.Define(...)`, a static factory in `Loom.Core`, plus a `Loom.Vulkan.GraphExecutor` constructed directly.)*
+- `engine.DefineTechnique("name", t => { ... })` — builds and caches a technique. Returns a `Technique` handle. *(current: a `Dictionary<string, TechniqueTemplate>` where `TechniqueTemplate` is a hand-counted `Loom.Vulkan` record — M7 moves this to a Core builder with Slang reflection.)*
+- `graph.Render(frameInputs)` — the entire per-frame hot-path call. Returns a frame result (carries readback handles). *(current: mutable props on `GraphExecutor` — `.Camera`/`.Time`/`.SunView`/`.HoverId` — plus `DrawFrame(delta)`.)*
 
 ### Resources & domains
-- `g.Domain("name", width, height)` — a **resolution domain**. Everything in a domain renders at that resolution. This is the mechanism behind pixelation (Section 10).
-- `g.Backbuffer` / `g.Domain.Backbuffer` — the swapchain domain (native resolution). Exposes `.Color`.
-- `domain.Color("name", Format.X)` — a color target in that domain.
-- `domain.Color("name", Format.X, scale: f)` — a color target at a fraction of the domain (used for mip chains).
-- `domain.Depth("name", Format.X)` — a depth target.
-- `g.Persistent("name", Format.X, size: N)` — a resource whose lifetime is **forever**; the aliaser will never recycle its memory. Used for cross-frame history (e.g. auto-exposure).
-- A `ResourceHandle` exposes `.Domain` (so helpers can inherit their parent's domain).
+- `g.Domain("name", width, height)` — a **fixed-size resolution domain**. Everything in a domain renders at that resolution. The mechanism behind pixelation (Section 10); the right tool for pixel-art (a fixed 320×180 world stays pixel-consistent at any window size).
+- `g.Domain("name", scale: f)` *(M7)* — a **resize-tracking domain** sized to a fraction of the backbuffer; re-resolves on resize. `g.Screen` *(M7)* is the native-resolution screen domain.
+- `g.Backbuffer` — the swapchain colour target (native resolution; backend-negotiated format/colour space, incl. HDR). `g.Backbuffer.Domain` is the native-resolution domain for sibling targets.
+- `domain.Color("name", Format.X)` → a `ColorHandle`; `domain.Color("name", Format.X, scale: f)` → fractional (mip chains); `domain.Depth("name", Format.X)` → a `DepthHandle`. *(M7: typed handles; `g.Buffer` → `BufferHandle`.)*
+- `g.Persistent("name", Format.X, size: N)` — a resource whose lifetime is **forever**; the aliaser never recycles its memory. Cross-frame history (e.g. auto-exposure).
+- A handle exposes `.Domain` (so helpers can inherit their parent's domain). *(current: one untyped `ResourceHandle` with a `Kind` enum — M7 splits it into subtypes so verb misuse is a compile error.)*
 
 ### Pass builders
 Raster pass: `g.Pass("name")` then chain intents:
@@ -110,18 +114,17 @@ Raster pass: `g.Pass("name")` then chain intents:
 - `.Queue(Queue.AsyncCompute)` — assign the pass to a queue; the graph derives the cross-queue timeline sync.
 - `.Draw(ctx => { ... })` — the record callback. **Must be pure w.r.t. graph structure** (see Section 8).
 
-Compute pass: `g.Compute("name")` then intents, then `.Dispatch(ctx => ctx.Run(Technique.X, groups: (x,y,z), ...))`.
+Compute pass: `g.Compute("name")` then intents, then `.Dispatch(ctx => ctx.Dispatch(Technique.X, groups: (x,y,z), ...))`.
 
 Terminal: `g.Present(resource)`.
 
 GPU→CPU: `var handle = g.Readback(resource);` then on the frame result, `await result.Sample(handle, x, y)`.
 
 ### Inside `.Draw` / `.Dispatch` — the execution context (`ctx`)
-- `ctx.Draw(drawList, Technique.X)` and `ctx.Draw(drawList, Technique.X, view: cameraOrLightView)` — record draws with a technique, optionally from an arbitrary view.
-- `ctx.FullScreen(Technique.X, ...args)` — a fullscreen pass (paired with `.FullScreenTriangle()` techniques).
-- `ctx.Blit(resource, Filter.Nearest)` — blit/upscale. Nearest is the pixelation step.
-- `ctx.Run(Technique.X, groups, ...)` — dispatch a compute technique.
-- `ctx.Scene`, `ctx.Camera`, `ctx.DeltaTime`, `ctx.Hover` (`.ObjectId`, `.Color`) — per-frame inputs, pulled from the context rather than captured (keeps the graph frame-independent and cacheable).
+- `ctx.Draw(drawList, Technique.X)` and `ctx.Draw(drawList, Technique.X, view: cameraOrLightView)` — record draws with a technique, optionally from an arbitrary view. *(current: `ctx.Draw(Mesh, "name")` — a single captured mesh, no draw lists; a `Scene`/draw-list abstraction is future work.)*
+- `ctx.FullScreen(Technique.X, ...args)` — a fullscreen pass (paired with `.FullScreenTriangle()` techniques). Includes the blit/upscale: a nearest sample of one input **is** the pixelation step. *(There is no separate `ctx.Blit`/`Filter` — it folded into `FullScreen` + the technique's filter.)*
+- `ctx.Dispatch(Technique.X, groups, ...)` — dispatch a compute technique.
+- `ctx.Camera`, `ctx.DeltaTime`, `ctx.Time`, `ctx.SunView`, `ctx.HoverId` — per-frame inputs, **pulled** from the context, not captured (keeps the graph frame-independent and cacheable). *(`ctx.Scene` and a structured `ctx.Hover` (`.ObjectId`/`.Color`) are the target; current code exposes `ctx.HoverId` as a bare `uint`.)*
 
 ### Technique builders
 - `.Vertex("path.spv")`, `.Fragment("path.spv")`.
@@ -130,10 +133,10 @@ GPU→CPU: `var handle = g.Readback(resource);` then on the frame result, `await
 - `.Depth(test:, write:, compare: Compare.X)` — e.g. `Compare.GreaterEqual` for reverse-Z.
 - `.Blend(Blend.X)` — `Blend.AlphaOver`, `Blend.Additive`.
 - `.Cull(Cull.X)` — `Cull.Back`, `Cull.None`.
-- Descriptor set layout and push-constant ranges are **reflected from the SPIR-V**, not declared here.
+- Descriptor set layout and push-constant ranges are **reflected from the shader**, not declared here. *(M7: via **Slang reflection** — the §10 decision. The technique names its shader **logically**; the backend resolves the bytecode (SPIR-V today, DXIL for a future DX12 backend), so the describe layer never names a `.spv` path. Until M7 this is a hand-counted `TechniqueTemplate` in `Loom.Vulkan`.)*
 
 ### Frame inputs
-`graph.Render(new FrameInputs { Camera = camera, Scene = scene })` — plus hover/cursor info for picking and outlines. `Scene` is app-owned and exposes draw lists: `Scene.Opaque`, `Scene.Transparent.SortedBackToFront(camera)`, `Scene.Lights`, `Scene.Sun` (`.View`, `.Cascade(i)`), `Scene.Hud` (`.Items`), `Scene.Grading`.
+`graph.Render(new FrameInputs { Camera = camera, Scene = scene })` — plus hover/cursor info for picking and outlines. `Scene` is app-owned and exposes draw lists: `Scene.Opaque`, `Scene.Transparent.SortedBackToFront(camera)`, `Scene.Lights`, `Scene.Sun` (`.View`, `.Cascade(i)`), `Scene.Hud` (`.Items`), `Scene.Grading`. *(M7 introduces the `FrameInputs` value + `Render`; a full `Scene`/draw-list abstraction is later work — current code sets mutable executor props and captures meshes into pass closures.)*
 
 ### Formats used so far
 `Rgba8Srgb`, `Rgba8Unorm`, `Rgb10A2`, `Rgba16F`, `R16F`, `R32Uint`, `Rg16F`, `Depth32F`.
@@ -459,6 +462,7 @@ These recur across effects, so they live in one place. They are *taste* layered 
 - **No TAA.** TAA spatially blurs to hide jitter, which smears hard pixel edges. Temporal *exposure* adaptation is safe because it only scales brightness, never blurs — so auto-exposure (7.3) is fine even though it uses the same history-buffer mechanism TAA would.
 - **Quantize analytic SDFs for chunky borders.** HUD SDF borders are smooth by default. To match the pixel grid, quantize the distance (`d = floor(d)`) for stepped, pixel-locked rings instead of anti-aliased ones.
 - **Outline domain choice.** Run the JFA outline in the world domain and the ring lands on the pixel grid and chunkifies on upscale (pixel-locked). Run the same passes in the screen domain for a smooth UI-style outline. One-line move.
+- **HDR output is orthogonal (and engine-general).** True HDR display output (§3) is a capability the engine offers regardless of the pixel-art target — a pixel-art game can present HDR (chunky pixels, wide luminance) or stay SDR. It's an `EngineSettings.HdrOutput` choice, not an aesthetic baked into the pixel-art decisions here; like AA, it's a general-engine knob the demo doesn't have to use.
 
 ---
 
@@ -466,15 +470,24 @@ These recur across effects, so they live in one place. They are *taste* layered 
 
 These are genuinely unresolved and should be decided as the relevant milestone is reached. Captured here so they aren't forgotten.
 
-- **Memory allocator.** VMA (via bindings) for sub-allocation + aliasing support, or a custom allocator? The transient-resource aliaser needs control over placement; VMA supports aliasing, which argues for it. Decide at Milestone 4.
+- **Memory allocator.** ✅ **RESOLVED (M4): VMA** — the pure-managed `VMASharp` port. The transient-resource aliaser builds on its placement/aliasing support.
 - **Descriptor strategy.** Descriptor pools + descriptor *indexing* / bindless (Vulkan 1.2+), or per-pass push descriptors? SPIR-V reflection drives layouts either way. Bindless simplifies a lot but adds complexity up front. Decide at Milestone 1–2.
 - **Bake cache hashing.** What composes the technique hash (shader SPIR-V hashes + all pipeline state) and the graph hash? Needs a stable, collision-resistant scheme. Decide at Milestone 1.
-- **Frames-in-flight.** 2 or 3? And how transient/per-frame resources are multi-buffered against the timeline. Decide at Milestone 4.
-- **Shader pipeline.** Slang vs GLSL vs HLSL → SPIR-V; offline (MSBuild task) vs runtime (shaderc) compilation; hot-reload story. Lean Slang + offline, with a runtime path for iteration. Decide at Milestone 0–1.
-- **Reflection library.** `spirv-reflect` bindings vs SPIRV-Cross vs Slang's own reflection. Verify what Silk.NET ships. Decide at Milestone 1.
+- **Frames-in-flight.** ✅ **RESOLVED (M4): 2.** Each transient gets one physical image per frame slot; the swapchain supplies distinct backbuffer images. (M7 lifts the count into `EngineSettings`.)
+- **Shader pipeline.** ✅ **RESOLVED (M0/M1): Slang, compiled offline** via the bundled `slangc` (the `Slang.Sdk` NuGet, hermetic). Hot-reload remains a future cross-cutting workstream.
+- **Reflection library.** ✅ **RESOLVED (M7): Slang's own reflection** — no extra dependency since Slang is already the compiler (`spirv-reflect`/SPIRV-Cross were the alternatives).
 - **Graph (re)compilation cadence.** Many frame graphs rebuild the graph description cheaply *every frame* and cache only the pipelines. Loom's design caches the baked graph and rebuilds only on structural change. Confirm the description rebuild is cheap enough, or commit to the cache-and-invalidate model. Decide at Milestone 2–3.
 - **Threading.** Multi-threaded command-buffer recording (secondary command buffers, or multiple primaries merged)? The Execute layer's record step is the place. Decide post-Milestone 5.
 - **Culling ownership.** Currently `Scene` is app-owned and supplies draw lists (e.g. `SortedBackToFront`). Does Loom ever own frustum/occlusion culling, or stay strictly "you hand me draw lists"? Default: stay out of it. Revisit if clustered lighting / GPU-driven rendering lands.
+
+### Decisions made in Milestone 7 (the engine review)
+
+- **Front door.** ✅ A neutral `Engine`/`Loom` facade + `IRenderer` in Core/Graph; the host names no backend type. Backends self-register into a `Engine.AvailableEngines` registry and are picked at runtime by name; the build chooses which are present via `<UseVulkan>`/`<UseDX12>` (M8). The engine owns the long-lived device + pipeline cache and a *swappable active graph*.
+- **Configuration.** ✅ A subclassable `EngineSettings` (validation, frames-in-flight, present/vsync, `HdrOutput`, `PreferredBackend`, …) with `VulkanEngineSettings`/`DX12EngineSettings` subclasses, replacing scattered env-var/constructor config.
+- **Resource handles.** ✅ Full subtypes — `ColorHandle`/`DepthHandle`/`BufferHandle` (+ an `ITextureHandle` for sampleable inputs) — so verb misuse is a compile error.
+- **Anti-aliasing.** ✅ Support **all three**, since the engine does *not* mandate deferred rendering: **MSAA** for forward/simple games (a describe-layer sample-count + a backend resolve), **post-process FXAA/SMAA** for deferred games (built-in graph-native techniques), and **none** (default). MSAA's describe-layer API lands in M7; the FXAA/SMAA + MSAA-resolve implementations in M9.
+- **HDR output.** ✅ First-class (see §3) — negotiated swapchain colour space + format, an output transform, gated by `EngineSettings.HdrOutput`.
+- **Debug tooling (M8).** `<UseImGui>`, `<UseDebugVisualization>` (per-resource ImGui windows; x64-only — the win-arm64 `ImVec2`-by-value HFA marshaling bug disables them on arm64), and `<UseNamedGPUObjects>` (object names + per-pass `vkCmdBeginDebugUtilsLabelEXT` scopes for RenderDoc).
 
 ---
 
@@ -515,8 +528,17 @@ Lifetime analysis (first-write/last-read per transient), memory aliasing (VMA or
 **Milestone 5 — The reference frame, built up incrementally.**
 `gbuffer` → `lighting` (deferred) → forward `transparent` → the bloom sub-graph (`.Blends` accumulation) → nearest `upscale` (the pixelation) → `hud` with SDF borders → `present`. Then add auto-exposure (`Persistent` + `Compute`) and shadows (the `view:` param). This is the demo *and* the proof that the full vocabulary composes. Make it match the pixel-art decisions in Section 9. *Proves the whole design end to end.*
 
-**Milestone 6 — The "prove it generalizes" layer (optional, pick by interest).**
-Picking + readback, JFA outlines (composing with picking — the glowing-hover-border payoff), clustered lighting, async compute, SSAO/SSR, GPU particles, debug viz.
+**Milestone 6 — The "prove it generalizes" layer (optional, pick by interest). ✅ chosen scope complete.**
+Built: picking + GPU→CPU readback, JFA outlines composing with picking (the glowing-hover-border payoff), SSAO, GPU particles, debug viz, and a Dear ImGui HUD. The remaining optional items (clustered lighting, async compute, SSR) moved to **Milestone 9**.
+
+**Milestone 7 — Comprehensive engine review + the front door.**
+A whole-surface API audit before the engine grows further (the seven findings: no neutral front door; §5 drift; backend-shaped techniques; the five flagged items; missing features incl. HDR/AA/validation; DX12-portability hazards; one mega-demo). *Reconcile (A):* make §5 honest, scrub Vulkan-isms from Core's public docs, fix dead `Bloom` params + the picking format, add describe-layer validation, **full `ResourceHandle` subtypes**, `g.Screen` + resize-tracking domains, an HDR-capable backbuffer/format model, and a describe-layer **MSAA sample-count** API (the engine must not mandate deferred). *Front door (B):* a neutral `Engine`/`Loom` facade + `IRenderer` + a `Engine.AvailableEngines` backend registry (swappable active graph), `EngineSettings`(+`VulkanEngineSettings`), `FrameInputs` + `graph.Render(inputs)`, a describe-layer `Technique`/`DefineTechnique` builder with **Slang reflection**, the Vulkan NDC flip moved into the backend, the **HDR output transform**, and a **keyboard-switchable demo selector** (runtime graph-swap). *Proves the engine has a clean, backend-portable front door before more is built on it.*
+
+**Milestone 8 — Build system & debug tooling.**
+`Loom.Shaders` becomes a `.targets` + a **Loom MSBuild SDK** (engine vs app shader split). `<UseVulkan>`/`<UseDX12>` build flags pick which backends register into `Engine.AvailableEngines` (default Vulkan; DX12 inert until that backend exists). `<UseImGui>` (engine-owned ImGui glue), `<UseDebugVisualization>` (per-resource ImGui buffer windows; x64-only, arm64 disabled with a label), and `<UseNamedGPUObjects>` (object names + per-pass debug-label scopes for RenderDoc).
+
+**Milestone 9 — Deferred generalization.**
+The deferred M6 optional items: clustered light culling, async compute (`.Queue`), SSR — plus the post-process AA implementations (FXAA/SMAA) and the MSAA resolve path (per M7's AA decision).
 
 **Cross-cutting workstreams (alongside the above):** the shader build + reflection pipeline (Milestone 0–1 onward), the bake cache + hashing (from Milestone 1), and hot-reload (whenever iteration speed starts to hurt).
 
