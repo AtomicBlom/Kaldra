@@ -76,13 +76,14 @@ public sealed unsafe class GraphExecutor : IDisposable
 		VulkanContext ctx,
 		RenderGraph graph,
 		IReadOnlyDictionary<string, TechniqueTemplate> techniques,
-		Vector2D<int> framebufferSize)
+		Vector2D<int> framebufferSize,
+		bool vsync = true)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
 		_graph = graph;
 		_windowExtent = new Extent2D((uint)framebufferSize.X, (uint)framebufferSize.Y);
-		_swapchain = new Swapchain(ctx, _windowExtent);
+		_swapchain = new Swapchain(ctx, _windowExtent, vsync);
 
 		// Derive once — the graph is immutable, so order/barriers/load-store/lifetimes are frame-invariant.
 		var schedule = GraphSchedule.Derive(graph);

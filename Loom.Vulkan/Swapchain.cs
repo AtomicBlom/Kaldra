@@ -9,6 +9,7 @@ namespace Loom.Vulkan;
 public sealed unsafe class Swapchain : IDisposable
 {
 	private readonly VulkanContext _ctx;
+	private readonly bool _vsync;
 
 	public SwapchainKHR Handle { get; private set; }
 	public Format ImageFormat { get; private set; }
@@ -17,9 +18,10 @@ public sealed unsafe class Swapchain : IDisposable
 	public ImageView[] ImageViews { get; private set; } = [];
 	public uint ImageCount => (uint)Images.Length;
 
-	public Swapchain(VulkanContext ctx, Extent2D windowExtent)
+	public Swapchain(VulkanContext ctx, Extent2D windowExtent, bool vsync)
 	{
 		_ctx = ctx;
+		_vsync = vsync;
 		Create(windowExtent);
 	}
 
@@ -39,6 +41,9 @@ public sealed unsafe class Swapchain : IDisposable
 		var surfaceFormat = ChooseFormat();
 		var presentMode = ChoosePresentMode();
 		var extent = ChooseExtent(caps, windowExtent);
+
+		if (oldSwapchain.Handle == 0) // First create only — not every resize.
+			Console.WriteLine($"[loom] present={presentMode}, vsync={_vsync}");
 
 		var imageCount = caps.MinImageCount + 1;
 		if (caps.MaxImageCount > 0 && imageCount > caps.MaxImageCount)
@@ -116,10 +121,19 @@ public sealed unsafe class Swapchain : IDisposable
 		fixed (PresentModeKHR* pModes = modes)
 			_ctx.KhrSurface.GetPhysicalDeviceSurfacePresentModes(_ctx.PhysicalDevice, _ctx.Surface, ref count, pModes);
 
-		foreach (var mode in modes)
-			if (mode == PresentModeKHR.MailboxKhr)
-				return mode;
-		return PresentModeKHR.FifoKhr; // Always available.
+		// Map the host's V-Sync *intent* to a present mode, picking the first available by preference.
+		// vsync on  -> Fifo: honest no-tear vsync, guaranteed available, consistent on every GPU.
+		// vsync off -> Immediate (uncapped, low-latency; the mode NVIDIA's Windows driver exposes),
+		//              else Mailbox (uncapped where supported, e.g. Adreno), else Fifo as a last resort.
+		ReadOnlySpan<PresentModeKHR> preference = _vsync
+			? [PresentModeKHR.FifoKhr]
+			: [PresentModeKHR.ImmediateKhr, PresentModeKHR.MailboxKhr, PresentModeKHR.FifoKhr];
+
+		foreach (var wanted in preference)
+			foreach (var available in modes)
+				if (available == wanted)
+					return wanted;
+		return PresentModeKHR.FifoKhr; // Guaranteed available by the spec.
 	}
 
 	private static Extent2D ChooseExtent(SurfaceCapabilitiesKHR caps, Extent2D windowExtent)
