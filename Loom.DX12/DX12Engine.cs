@@ -5,6 +5,7 @@ using Loom.Graph;
 
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
+using Silk.NET.DXGI;
 using Silk.NET.Maths;
 
 namespace Loom.DX12;
@@ -35,6 +36,10 @@ public sealed unsafe class DX12Engine : IEngine
 	private nint _fenceEvent;
 	private int _debugErrors;
 	private bool _disposed;
+
+	private string? _capturePath;
+	private ComPtr<ID3D12Resource> _readback;
+	private ulong _readbackSize;
 
 	public DX12Engine(nint hwnd, int width, int height, DX12EngineSettings settings)
 	{
@@ -88,7 +93,12 @@ public sealed unsafe class DX12Engine : IEngine
 
 		_triangle.Record(_commandList, _swapchain.Width, _swapchain.Height);
 
-		Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.Present);
+		// When capturing, copy the rendered backbuffer into a readback buffer in the same submission, then
+		// present; otherwise just transition straight to PRESENT.
+		var capturing = _capturePath is not null;
+		var rowPitch = capturing ? RecordCapture(backbuffer) : 0u;
+		if (!capturing)
+			Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.Present);
 		SilkMarshal.ThrowHResult(_commandList.Close());
 
 		var list = (ID3D12CommandList*)_commandList.Handle;
@@ -101,7 +111,104 @@ public sealed unsafe class DX12Engine : IEngine
 		_frameFenceValues[index] = _fenceValue;
 
 		_debugErrors += _ctx.DrainDebugMessages(); // surface any D3D12 debug-layer messages this frame produced
+
+		if (capturing)
+		{
+			WaitForFrame(index); // block until this frame's copy finished, then map + encode
+			WriteCapture(_capturePath!, rowPitch);
+			_capturePath = null;
+		}
 	}
+
+	/// <summary>
+	/// Record (into the open command list) the copy of the just-rendered backbuffer into the readback buffer,
+	/// leaving the backbuffer in PRESENT state. Returns the row pitch of the readback layout.
+	/// </summary>
+	private uint RecordCapture(ComPtr<ID3D12Resource> backbuffer)
+	{
+		var width = _swapchain.Width;
+		var height = _swapchain.Height;
+		var rowPitch = Align(width * 4, 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
+		EnsureReadback((ulong)rowPitch * height);
+
+		Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.CopySource);
+
+		var dst = new TextureCopyLocation
+		{
+			PResource = _readback.Handle,
+			Type = TextureCopyType.PlacedFootprint,
+			Anonymous = new TextureCopyLocationUnion
+			{
+				PlacedFootprint = new PlacedSubresourceFootprint
+				{
+					Offset = 0,
+					Footprint = new SubresourceFootprint { Format = _swapchain.Format, Width = width, Height = height, Depth = 1, RowPitch = rowPitch }
+				}
+			}
+		};
+		var src = new TextureCopyLocation
+		{
+			PResource = backbuffer.Handle,
+			Type = TextureCopyType.SubresourceIndex,
+			Anonymous = new TextureCopyLocationUnion { SubresourceIndex = 0 }
+		};
+		_commandList.CopyTextureRegion(&dst, 0, 0, 0, &src, (Box*)null);
+
+		Transition(backbuffer, ResourceStates.CopySource, ResourceStates.Present);
+		return rowPitch;
+	}
+
+	private void EnsureReadback(ulong size)
+	{
+		if (_readback.Handle is not null && _readbackSize >= size)
+			return;
+		if (_readback.Handle is not null)
+			_readback.Dispose();
+
+		var heapProps = new HeapProperties
+		{
+			Type = HeapType.Readback,
+			CPUPageProperty = CpuPageProperty.Unknown,
+			MemoryPoolPreference = MemoryPool.Unknown,
+			CreationNodeMask = 1,
+			VisibleNodeMask = 1
+		};
+		var desc = new ResourceDesc
+		{
+			Dimension = ResourceDimension.Buffer,
+			Alignment = 0,
+			Width = size,
+			Height = 1,
+			DepthOrArraySize = 1,
+			MipLevels = 1,
+			Format = Silk.NET.DXGI.Format.FormatUnknown,
+			SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
+			Layout = TextureLayout.LayoutRowMajor,
+			Flags = ResourceFlags.None
+		};
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommittedResource(
+			&heapProps, HeapFlags.None, &desc, ResourceStates.CopyDest, (ClearValue*)null, out _readback));
+		_readbackSize = size;
+	}
+
+	private void WriteCapture(string path, uint rowPitch)
+	{
+		var width = (int)_swapchain.Width;
+		var height = (int)_swapchain.Height;
+
+		void* mapped;
+		SilkMarshal.ThrowHResult(_readback.Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
+		var rgba = new byte[width * height * 4];
+		var src = (byte*)mapped;
+		for (var y = 0; y < height; y++)
+			new ReadOnlySpan<byte>(src + (long)y * rowPitch, width * 4).CopyTo(rgba.AsSpan(y * width * 4));
+		_readback.Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+
+		PngWriter.WriteRgba(path, width, height, rgba);
+		Console.WriteLine($"[loom] DX12 captured {width}x{height} -> {path}");
+	}
+
+	private static uint Align(uint value, uint alignment) => (value + alignment - 1) & ~(alignment - 1);
 
 	private void WaitForFrame(uint index)
 	{
@@ -166,6 +273,8 @@ public sealed unsafe class DX12Engine : IEngine
 
 		if (_fenceEvent != 0)
 			CloseHandle(_fenceEvent);
+		if (_readback.Handle is not null)
+			_readback.Dispose();
 		_triangle.Dispose();
 		_fence.Dispose();
 		_commandList.Dispose();
@@ -182,7 +291,9 @@ public sealed unsafe class DX12Engine : IEngine
 	public void SetGraph(RenderGraph graph) => throw new NotSupportedException(NextSlice);
 	public void EnableImGui() => throw new NotSupportedException(NextSlice);
 	public float SamplePick(int x, int y) => throw new NotSupportedException(NextSlice);
-	public void RequestCapture(string path) => throw new NotSupportedException(NextSlice);
+
+	/// <summary>Capture the next rendered frame to a PNG at <paramref name="path"/> (Planning.md §12 M10 verification).</summary>
+	public void RequestCapture(string path) => _capturePath = path;
 
 	[DllImport("kernel32", SetLastError = true)]
 	private static extern nint CreateEventW(nint lpEventAttributes, int bManualReset, int bInitialState, nint lpName);

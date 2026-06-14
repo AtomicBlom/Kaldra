@@ -22,6 +22,7 @@ internal static class Dx12Smoke
 		var vsyncEnv = Environment.GetEnvironmentVariable("LOOM_VSYNC");
 		var vsync = vsyncEnv is null || vsyncEnv.ToLowerInvariant() is not ("0" or "false" or "off" or "no");
 		var smokeFrames = int.TryParse(Environment.GetEnvironmentVariable("LOOM_SMOKE_FRAMES"), out var n) ? n : 0;
+		var capturePath = Environment.GetEnvironmentVariable("LOOM_CAPTURE");
 
 		// A plain Win32 window with no GL/Vulkan context — the DX12 backend binds its swapchain to the raw HWND.
 		var options = WindowOptions.Default with
@@ -56,8 +57,17 @@ internal static class Dx12Smoke
 		{
 			frame++;
 			elapsed += (float)delta;
+
+			// LOOM_CAPTURE=path grabs the triangle to a PNG (a few frames in, so the swapchain has settled),
+			// then exits — the headless pixel-level proof the triangle actually renders.
+			if (capturePath is not null && frame == 3)
+				engine.RequestCapture(capturePath);
+
 			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed });
-			if (smokeFrames > 0 && frame >= smokeFrames)
+
+			if (capturePath is not null && frame >= 3)
+				window.Close();
+			else if (smokeFrames > 0 && frame >= smokeFrames)
 				window.Close();
 		};
 
