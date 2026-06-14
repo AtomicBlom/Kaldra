@@ -55,9 +55,12 @@ internal static class Dx12Smoke
 		//                           MVP root constant, and a depth target), the DX12 twin of CubeLightingDemo.
 		//   LOOM_DX12_PARTICLES=1 — the GPU-particle path (§7.6): a compute pass writes a storage buffer, a draw
 		//                           reads it as a per-instance vertex stream (additive sparks over the lit scene).
+		//   LOOM_DX12_ALIAS=1     — a 4-transient blit chain whose non-overlapping lifetimes fold into 2 memory
+		//                           buckets (the §8/M4 AliasPlan → DX12 placed-resource heaps + aliasing barriers).
 		var graphMode = Environment.GetEnvironmentVariable("LOOM_DX12_GRAPH") is "1" or "true";
 		var cubeMode = Environment.GetEnvironmentVariable("LOOM_DX12_CUBE") is "1" or "true";
 		var particlesMode = Environment.GetEnvironmentVariable("LOOM_DX12_PARTICLES") is "1" or "true";
+		var aliasMode = Environment.GetEnvironmentVariable("LOOM_DX12_ALIAS") is "1" or "true";
 
 		Mesh cube = default, plane = default;
 		if (cubeMode || particlesMode)
@@ -126,6 +129,30 @@ internal static class Dx12Smoke
 			}
 			engine.SetGraph(graph);
 		}
+		else if (aliasMode)
+		{
+			engine.DefineTechnique("gradient", new TechniqueDescriptor("gradient"));
+			engine.DefineTechnique("blit", new TechniqueDescriptor("blit", LinearFilter: true));
+			// A 4-link blit chain: each transient is written by one pass and consumed by the next, so their
+			// lifetimes never overlap by more than one step. The AliasPlan folds a+c and b+d (4 transients → 2
+			// memory buckets); the engine places each bucket's pair on one heap and emits the aliasing barrier on
+			// each member's reactivation. A correct result is still the gradient (corruption would mean a missing
+			// or mis-ordered aliasing barrier). The fold is logged at SetGraph.
+			var graph = RenderGraph.Define(g =>
+			{
+				var a = g.Screen.Color("a", Format.Rgba8Unorm);
+				var b = g.Screen.Color("b", Format.Rgba8Unorm);
+				var c = g.Screen.Color("c", Format.Rgba8Unorm);
+				var d = g.Screen.Color("d", Format.Rgba8Unorm);
+				g.Pass("gen").Writes(a).Draw(ctx => ctx.FullScreen("gradient"));
+				g.Pass("b1").Samples(a).Writes(b).Draw(ctx => ctx.FullScreen("blit", a));
+				g.Pass("b2").Samples(b).Writes(c).Draw(ctx => ctx.FullScreen("blit", b));
+				g.Pass("b3").Samples(c).Writes(d).Draw(ctx => ctx.FullScreen("blit", c));
+				g.Pass("b4").Samples(d).Writes(g.Backbuffer).Draw(ctx => ctx.FullScreen("blit", d));
+				g.Present(g.Backbuffer);
+			});
+			engine.SetGraph(graph);
+		}
 		else if (graphMode)
 		{
 			engine.DefineTechnique("gradient", new TechniqueDescriptor("gradient"));
@@ -143,7 +170,7 @@ internal static class Dx12Smoke
 			engine.SetGraph(graph);
 		}
 
-		var mode = particlesMode ? "GPU particles" : cubeMode ? "lit cube" : graphMode ? "graph executor" : "first slice";
+		var mode = particlesMode ? "GPU particles" : cubeMode ? "lit cube" : aliasMode ? "transient aliasing" : graphMode ? "graph executor" : "first slice";
 		Console.WriteLine($"Loom DX12 {mode} on {engine.DeviceName} ({engine.BackendName}). Close the window to exit.");
 
 		var frame = 0;

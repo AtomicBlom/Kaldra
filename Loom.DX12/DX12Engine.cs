@@ -44,11 +44,15 @@ public sealed unsafe class DX12Engine : IEngine
 	private int _debugErrors;
 	private bool _disposed;
 
-	// The active graph + its derived plan (null until SetGraph). Per-buffer backbuffer state is tracked because
+	// The active graph + its derived plans (null until SetGraph). Per-buffer backbuffer state is tracked because
 	// D3D12 transition barriers need the resource's exact current state (see DX12StateMapping).
 	private RenderGraph? _graph;
 	private BarrierPlan? _barrierPlan;
+	private AliasPlan? _aliasPlan;
 	private readonly ResourceStates[] _backbufferState = new ResourceStates[BufferCount];
+	// Aliased transients re-barriered this frame: a bucket member that shares memory needs one D3D12 aliasing
+	// barrier before its first (re)activation each frame (the hand-off from whatever member last used the memory).
+	private readonly HashSet<int> _aliasBarriered = [];
 
 	private string? _capturePath;
 	private ComPtr<ID3D12Resource> _readback;
@@ -163,6 +167,7 @@ public sealed unsafe class DX12Engine : IEngine
 		var heap = _ring.Heap.Handle;
 		_commandList.SetDescriptorHeaps(1, &heap);
 		_ring.Reset();
+		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
 		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index);
 
 		foreach (var pass in _barrierPlan!.Passes)
@@ -306,11 +311,34 @@ public sealed unsafe class DX12Engine : IEngine
 			return;
 		}
 
-		var current = _transients!.State(index, id);
+		// An aliased transient reuses memory another bucket member held — before its first (re)activation this
+		// frame, an aliasing barrier orders this use after whatever last touched the shared memory (and marks its
+		// contents undefined, which the pass's clear/full-write then initialises). The DX12 analogue of the
+		// Vulkan backend's widened-source-scope birth barrier; once per resource per frame.
+		if (_transients!.IsAliasedMember(id) && _aliasBarriered.Add(id))
+			EmitAliasingBarrier(_transients.Resource(index, id));
+
+		var current = _transients.State(index, id);
 		if (current == target)
 			return;
 		Transition(_transients.Resource(index, id), current, target);
 		_transients.SetState(index, id, target);
+	}
+
+	// A D3D12 aliasing barrier handing the bucket's shared memory to <paramref name="after"/> (before = null:
+	// any resource previously on that memory is deactivated — conservative but correct, and hand-offs are few).
+	private void EmitAliasingBarrier(ComPtr<ID3D12Resource> after)
+	{
+		var barrier = new ResourceBarrier
+		{
+			Type = ResourceBarrierType.Aliasing,
+			Flags = ResourceBarrierFlags.None,
+			Anonymous = new ResourceBarrierUnion
+			{
+				Aliasing = new ResourceAliasingBarrier { PResourceBefore = (ID3D12Resource*)null, PResourceAfter = after.Handle }
+			}
+		};
+		_commandList.ResourceBarrier(1, &barrier);
 	}
 
 	/// <summary>
@@ -448,7 +476,7 @@ public sealed unsafe class DX12Engine : IEngine
 		if (_graph is not null)
 		{
 			_transients?.Dispose();
-			_transients = new DX12Transients(_ctx, _graph, BufferCount, _swapchain.Width, _swapchain.Height);
+			_transients = new DX12Transients(_ctx, _graph, _aliasPlan!, BufferCount, _swapchain.Width, _swapchain.Height);
 			_context.SetTransients(_transients);
 			for (uint i = 0; i < BufferCount; i++)
 				_backbufferState[i] = ResourceStates.Present;
@@ -524,12 +552,20 @@ public sealed unsafe class DX12Engine : IEngine
 			WaitIdle();
 
 		_graph = graph;
-		_barrierPlan = BarrierPlan.Derive(GraphSchedule.Derive(graph));
+		// Derive once — the graph is immutable, so order/barriers/lifetimes/aliasing are frame-invariant. The
+		// AliasPlan (the §8/M4 transient-memory partition) is the SAME backend-neutral product the Vulkan engine
+		// consumes; this backend turns each bucket into a placed-resource heap shared by its members.
+		var schedule = GraphSchedule.Derive(graph);
+		_barrierPlan = BarrierPlan.Derive(schedule);
+		_aliasPlan = AliasPlan.Derive(LifetimePlan.Derive(schedule));
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present;
 
+		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
+			Console.WriteLine($"[loom] DX12 transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
+
 		_transients?.Dispose();
-		_transients = new DX12Transients(_ctx, graph, BufferCount, _swapchain.Width, _swapchain.Height);
+		_transients = new DX12Transients(_ctx, graph, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
 		_context.SetTransients(_transients);
 	}
 

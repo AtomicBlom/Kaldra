@@ -1,4 +1,5 @@
 using Loom.Core;
+using Loom.Graph;
 
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
@@ -8,13 +9,19 @@ using DxgiFormat = Silk.NET.DXGI.Format;
 namespace Loom.DX12;
 
 /// <summary>
-/// The transient render targets a graph declares — the DX12 counterpart of the Vulkan backend's
-/// <c>TransientResources</c>. Each colour transient gets one texture (plus an RTV) per frame-in-flight slot,
-/// and each depth transient one texture (plus a DSV) per slot, so a frame's write never races a prior frame's
-/// read. The backbuffer is <em>not</em> here (it's the swapchain's facade, handled by the engine).
+/// The concrete GPU resources backing a graph's transients — the DX12 counterpart of the Vulkan backend's
+/// <c>TransientResources</c>. Each colour/depth transient gets one texture (plus an RTV/DSV) per
+/// frame-in-flight slot, and each buffer one UAV buffer per slot, so a frame's write never races a prior
+/// frame's read. The backbuffer is <em>not</em> here (it's the swapchain's facade, handled by the engine).
 /// <para>
-/// This step allocates colour + depth targets with no aliasing (one allocation each, like the Vulkan backend's
-/// M3); lifetime-driven aliasing (the <c>AliasPlan</c> buckets) and buffers follow.
+/// <b>Transient aliasing (§8, §12 M4).</b> The Execute layer's <see cref="AliasPlan"/> partitions the colour/
+/// depth transients into buckets whose members are never live at once; this backend turns each bucket (per
+/// slot) into <em>one</em> placed-resource <c>ID3D12Heap</c> and creates every member as a
+/// <c>CreatePlacedResource</c> at offset 0 — so e.g. the bloom mips reuse the G-buffer's memory once lighting
+/// has consumed it. The hand-off needs an <em>aliasing barrier</em> before a member is reactivated: that is
+/// the executor's job (it tracks which ids are aliased members and emits the barrier on first use each frame).
+/// The heap takes the max member's size/alignment; RT and DS textures share one heap (same heap category, so
+/// heap-tier 1 is fine). Buffers and the backbuffer aren't aliased — buffers get their own committed allocation.
 /// </para>
 /// </summary>
 internal sealed unsafe class DX12Transients : IDisposable
@@ -32,19 +39,22 @@ internal sealed unsafe class DX12Transients : IDisposable
 	private readonly (uint W, uint H)[] _extents; // by resourceId (same across slots)
 	private readonly uint[] _byteSizes; // by resourceId, for Buffer-kind resources
 	private readonly bool[] _isTransient; // by resourceId
+	private readonly HashSet<int> _aliasedMemberIds = []; // ids in a multi-member bucket — need an aliasing barrier
+	private readonly List<ComPtr<ID3D12Heap>> _heaps = []; // per-bucket-per-slot placed-resource heaps
 	private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
 	private ComPtr<ID3D12DescriptorHeap> _dsvHeap;
 
-	public DX12Transients(DX12Context ctx, RenderGraph graph, uint bufferCount, uint swapWidth, uint swapHeight)
+	public DX12Transients(DX12Context ctx, RenderGraph graph, AliasPlan aliasPlan, uint bufferCount, uint swapWidth, uint swapHeight)
 	{
 		var count = graph.Resources.Length;
 		_isTransient = new bool[count];
 		_extents = new (uint, uint)[count];
 		_byteSizes = new uint[count];
 
-		var colorTargets = new List<ResourceHandle>();
-		var depthTargets = new List<ResourceHandle>();
+		var aliasable = new List<ResourceHandle>(); // colour + depth targets (the AliasPlan's domain)
 		var bufferTargets = new List<ResourceHandle>();
+		var colorCount = 0;
+		var depthCount = 0;
 		foreach (var resource in graph.Resources)
 		{
 			if (resource.Kind == ResourceKind.Backbuffer)
@@ -60,7 +70,8 @@ internal sealed unsafe class DX12Transients : IDisposable
 			else
 			{
 				_extents[resource.Id] = Size(resource, swapWidth, swapHeight);
-				(resource.Kind == ResourceKind.Depth ? depthTargets : colorTargets).Add(resource);
+				aliasable.Add(resource);
+				if (resource.Kind == ResourceKind.Depth) depthCount++; else colorCount++;
 			}
 		}
 
@@ -68,14 +79,101 @@ internal sealed unsafe class DX12Transients : IDisposable
 		for (uint slot = 0; slot < bufferCount; slot++)
 			_targets[slot] = new Target[count];
 
-		AllocateColor(ctx, colorTargets, bufferCount);
-		AllocateDepth(ctx, depthTargets, bufferCount);
+		// One RTV per colour target per slot, one DSV per depth target per slot (descriptor heaps for the views —
+		// distinct from the placed-resource heaps that back the textures' memory).
+		var rtvStart = default(CpuDescriptorHandle);
+		var dsvStart = default(CpuDescriptorHandle);
+		var rtvInc = ctx.Device.GetDescriptorHandleIncrementSize(DescriptorHeapType.Rtv);
+		var dsvInc = ctx.Device.GetDescriptorHandleIncrementSize(DescriptorHeapType.Dsv);
+		if (colorCount > 0)
+		{
+			var d = new DescriptorHeapDesc { Type = DescriptorHeapType.Rtv, NumDescriptors = (uint)(bufferCount * colorCount), Flags = DescriptorHeapFlags.None, NodeMask = 0 };
+			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out _rtvHeap));
+			rtvStart = _rtvHeap.GetCPUDescriptorHandleForHeapStart();
+		}
+		if (depthCount > 0)
+		{
+			var d = new DescriptorHeapDesc { Type = DescriptorHeapType.Dsv, NumDescriptors = (uint)(bufferCount * depthCount), Flags = DescriptorHeapFlags.None, NodeMask = 0 };
+			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out _dsvHeap));
+			dsvStart = _dsvHeap.GetCPUDescriptorHandleForHeapStart();
+		}
+
+		uint rtvCursor = 0, dsvCursor = 0;
+		for (uint slot = 0; slot < bufferCount; slot++)
+			AllocateAliasedTargets(ctx, aliasPlan, aliasable, slot, rtvStart, dsvStart, rtvInc, dsvInc, ref rtvCursor, ref dsvCursor);
+
 		AllocateBuffers(ctx, bufferTargets, bufferCount);
+
+		// A resource that shares a bucket with at least one other resource reuses memory mid-frame, so the
+		// executor must aliasing-barrier it before each (re)activation. Singletons need no barrier.
+		foreach (var bucket in aliasPlan.Buckets)
+			if (bucket.Members.Length > 1)
+				foreach (var member in bucket.Members)
+					_aliasedMemberIds.Add(member.Id);
 	}
 
-	// One device-local UAV buffer per Buffer resource per frame slot (multi-buffered like the images: a frame's
-	// compute writes it while an earlier frame's particle draw may still read its own slot's copy). No view/RTV
-	// — a compute binds it as a root UAV by GPU address, a draw binds it as a vertex buffer view (§7.6).
+	// Group the aliasable (colour/depth) resources by their AliasPlan bucket, back each bucket with one placed-
+	// resource heap (sized to its largest member), and create every member at offset 0 so they share the memory.
+	private void AllocateAliasedTargets(DX12Context ctx, AliasPlan aliasPlan, List<ResourceHandle> aliasable, uint slot,
+		CpuDescriptorHandle rtvStart, CpuDescriptorHandle dsvStart, uint rtvInc, uint dsvInc, ref uint rtvCursor, ref uint dsvCursor)
+	{
+		var groups = new Dictionary<int, List<ResourceHandle>>();
+		var next = -1; // synthetic keys for any resource the plan didn't bucket (declared-but-unused)
+		foreach (var resource in aliasable)
+		{
+			var key = aliasPlan.BucketOf(resource) ?? next--;
+			(groups.TryGetValue(key, out var list) ? list : groups[key] = []).Add(resource);
+		}
+
+		foreach (var members in groups.Values)
+		{
+			// Size one heap to fit the largest member (all members placed at offset 0 → they alias).
+			ulong maxSize = 0, maxAlign = 0;
+			foreach (var resource in members)
+			{
+				var desc = BuildDesc(resource);
+				var info = ctx.Device.GetResourceAllocationInfo(0, 1, &desc);
+				maxSize = Math.Max(maxSize, info.SizeInBytes);
+				maxAlign = Math.Max(maxAlign, info.Alignment);
+			}
+
+			var heapDesc = new HeapDesc
+			{
+				SizeInBytes = maxSize,
+				Properties = new HeapProperties { Type = HeapType.Default, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 },
+				Alignment = maxAlign,
+				Flags = HeapFlags.AllowOnlyRTDSTextures, // colour (RT) + depth (DS) are the same heap category
+			};
+			ComPtr<ID3D12Heap> heap = default;
+			SilkMarshal.ThrowHResult(ctx.Device.CreateHeap(&heapDesc, out heap));
+			_heaps.Add(heap);
+
+			foreach (var resource in members)
+			{
+				var desc = BuildDesc(resource);
+				var isDepth = resource.Kind == ResourceKind.Depth;
+				var clear = BuildClear(desc.Format, isDepth);
+				ComPtr<ID3D12Resource> texture = default;
+				SilkMarshal.ThrowHResult(ctx.Device.CreatePlacedResource(heap, 0, &desc, ResourceStates.Common, &clear, out texture));
+
+				CpuDescriptorHandle view;
+				if (isDepth)
+				{
+					view = new CpuDescriptorHandle { Ptr = dsvStart.Ptr + (nuint)(dsvCursor++ * dsvInc) };
+					ctx.Device.CreateDepthStencilView(texture, (DepthStencilViewDesc*)null, view);
+				}
+				else
+				{
+					view = new CpuDescriptorHandle { Ptr = rtvStart.Ptr + (nuint)(rtvCursor++ * rtvInc) };
+					ctx.Device.CreateRenderTargetView(texture, (RenderTargetViewDesc*)null, view);
+				}
+				_targets[slot][resource.Id] = new Target { Resource = texture, View = view, Format = desc.Format, State = ResourceStates.Common, IsDepth = isDepth };
+			}
+		}
+	}
+
+	// One device-local UAV buffer per Buffer resource per frame slot. Buffers aren't aliased (not RT/DS), so
+	// they keep a committed allocation; a compute binds it as a root UAV, a draw as a vertex buffer (§7.6).
 	private void AllocateBuffers(DX12Context ctx, List<ResourceHandle> bufferTargets, uint bufferCount)
 	{
 		for (uint slot = 0; slot < bufferCount; slot++)
@@ -86,55 +184,8 @@ internal sealed unsafe class DX12Transients : IDisposable
 			}
 	}
 
-	private void AllocateColor(DX12Context ctx, List<ResourceHandle> colorTargets, uint bufferCount)
-	{
-		var total = (uint)(bufferCount * colorTargets.Count);
-		if (total == 0)
-			return;
-
-		var increment = ctx.Device.GetDescriptorHandleIncrementSize(DescriptorHeapType.Rtv);
-		var heapDesc = new DescriptorHeapDesc { Type = DescriptorHeapType.Rtv, NumDescriptors = total, Flags = DescriptorHeapFlags.None, NodeMask = 0 };
-		SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&heapDesc, out _rtvHeap));
-		var start = _rtvHeap.GetCPUDescriptorHandleForHeapStart();
-
-		uint slotIndex = 0;
-		for (uint slot = 0; slot < bufferCount; slot++)
-			foreach (var resource in colorTargets)
-			{
-				var (w, h) = _extents[resource.Id];
-				var format = DX12FormatMapping.ToDxgi(resource.Format);
-				var texture = CreateColorTexture(ctx, w, h, format);
-				var rtv = new CpuDescriptorHandle { Ptr = start.Ptr + (nuint)(slotIndex++ * increment) };
-				ctx.Device.CreateRenderTargetView(texture, (RenderTargetViewDesc*)null, rtv);
-				_targets[slot][resource.Id] = new Target { Resource = texture, View = rtv, Format = format, State = ResourceStates.Common, IsDepth = false };
-			}
-	}
-
-	private void AllocateDepth(DX12Context ctx, List<ResourceHandle> depthTargets, uint bufferCount)
-	{
-		var total = (uint)(bufferCount * depthTargets.Count);
-		if (total == 0)
-			return;
-
-		var increment = ctx.Device.GetDescriptorHandleIncrementSize(DescriptorHeapType.Dsv);
-		var heapDesc = new DescriptorHeapDesc { Type = DescriptorHeapType.Dsv, NumDescriptors = total, Flags = DescriptorHeapFlags.None, NodeMask = 0 };
-		SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&heapDesc, out _dsvHeap));
-		var start = _dsvHeap.GetCPUDescriptorHandleForHeapStart();
-
-		uint slotIndex = 0;
-		for (uint slot = 0; slot < bufferCount; slot++)
-			foreach (var resource in depthTargets)
-			{
-				var (w, h) = _extents[resource.Id];
-				var format = DX12FormatMapping.ToDxgi(resource.Format);
-				var texture = CreateDepthTexture(ctx, w, h, format);
-				var dsv = new CpuDescriptorHandle { Ptr = start.Ptr + (nuint)(slotIndex++ * increment) };
-				ctx.Device.CreateDepthStencilView(texture, (DepthStencilViewDesc*)null, dsv);
-				_targets[slot][resource.Id] = new Target { Resource = texture, View = dsv, Format = format, State = ResourceStates.Common, IsDepth = true };
-			}
-	}
-
 	public bool IsTransient(int id) => _isTransient[id];
+	public bool IsAliasedMember(int id) => _aliasedMemberIds.Contains(id);
 	public (uint W, uint H) Extent(int id) => _extents[id];
 	public uint ByteSize(int id) => _byteSizes[id];
 	public DxgiFormat Format(uint slot, int id) => _targets[slot][id].Format;
@@ -142,6 +193,38 @@ internal sealed unsafe class DX12Transients : IDisposable
 	public ComPtr<ID3D12Resource> Resource(uint slot, int id) => _targets[slot][id].Resource;
 	public ResourceStates State(uint slot, int id) => _targets[slot][id].State;
 	public void SetState(uint slot, int id, ResourceStates state) => _targets[slot][id].State = state;
+
+	private ResourceDesc BuildDesc(ResourceHandle resource)
+	{
+		var (w, h) = _extents[resource.Id];
+		var format = DX12FormatMapping.ToDxgi(resource.Format);
+		var flags = resource.Kind == ResourceKind.Depth ? ResourceFlags.AllowDepthStencil : ResourceFlags.AllowRenderTarget;
+		return new ResourceDesc
+		{
+			Dimension = ResourceDimension.Texture2D,
+			Alignment = 0,
+			Width = w,
+			Height = h,
+			DepthOrArraySize = 1,
+			MipLevels = 1,
+			Format = format,
+			SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = 1, Quality = 0 },
+			Layout = TextureLayout.LayoutUnknown,
+			Flags = flags,
+		};
+	}
+
+	// Optimized clear value matching the executor's clear (black colour / depth 1.0), so the debug layer
+	// doesn't warn on ClearRenderTargetView / ClearDepthStencilView.
+	private static ClearValue BuildClear(DxgiFormat format, bool isDepth)
+	{
+		var clear = new ClearValue { Format = format };
+		if (isDepth)
+			clear.Anonymous.DepthStencil = new DepthStencilValue { Depth = 1f, Stencil = 0 };
+		else
+			clear.Anonymous.Color[3] = 1f;
+		return clear;
+	}
 
 	private static (uint W, uint H) Size(ResourceHandle resource, uint swapWidth, uint swapHeight)
 	{
@@ -155,44 +238,6 @@ internal sealed unsafe class DX12Transients : IDisposable
 	}
 
 	private static uint Scale(uint value, float scale) => (uint)Math.Max(1, (int)MathF.Round(value * scale));
-
-	private static ComPtr<ID3D12Resource> CreateColorTexture(DX12Context ctx, uint width, uint height, DxgiFormat format)
-	{
-		// Optimized clear value matching the executor's clear, so the debug layer doesn't warn on ClearRenderTargetView.
-		var clear = new ClearValue { Format = format };
-		clear.Anonymous.Color[3] = 1f;
-		return CreateTexture(ctx, width, height, format, ResourceFlags.AllowRenderTarget, ResourceStates.Common, &clear);
-	}
-
-	private static ComPtr<ID3D12Resource> CreateDepthTexture(DX12Context ctx, uint width, uint height, DxgiFormat format)
-	{
-		// Optimized clear value matching the executor's depth clear (1.0), so ClearDepthStencilView is warning-free.
-		var clear = new ClearValue { Format = format };
-		clear.Anonymous.DepthStencil = new DepthStencilValue { Depth = 1f, Stencil = 0 };
-		return CreateTexture(ctx, width, height, format, ResourceFlags.AllowDepthStencil, ResourceStates.Common, &clear);
-	}
-
-	private static ComPtr<ID3D12Resource> CreateTexture(DX12Context ctx, uint width, uint height, DxgiFormat format, ResourceFlags flags, ResourceStates initialState, ClearValue* clear)
-	{
-		var heapProps = new HeapProperties { Type = HeapType.Default, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
-		var desc = new ResourceDesc
-		{
-			Dimension = ResourceDimension.Texture2D,
-			Alignment = 0,
-			Width = width,
-			Height = height,
-			DepthOrArraySize = 1,
-			MipLevels = 1,
-			Format = format,
-			SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = 1, Quality = 0 },
-			Layout = TextureLayout.LayoutUnknown,
-			Flags = flags,
-		};
-		ComPtr<ID3D12Resource> texture = default;
-		SilkMarshal.ThrowHResult(ctx.Device.CreateCommittedResource(
-			&heapProps, HeapFlags.None, &desc, initialState, clear, out texture));
-		return texture;
-	}
 
 	// A device-local (Default-heap) buffer the compute writes via a root UAV and a draw reads as a vertex
 	// stream — created with AllowUnorderedAccess, starting in COMMON (the executor transitions it per the plan).
@@ -224,6 +269,9 @@ internal sealed unsafe class DX12Transients : IDisposable
 			foreach (var target in slot)
 				if (target.Resource.Handle is not null)
 					target.Resource.Dispose();
+		foreach (var heap in _heaps)
+			if (heap.Handle is not null)
+				heap.Dispose();
 		if (_rtvHeap.Handle is not null)
 			_rtvHeap.Dispose();
 		if (_dsvHeap.Handle is not null)
