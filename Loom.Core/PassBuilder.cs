@@ -26,8 +26,8 @@ public sealed class PassBuilder
 	public PassBuilder Writes(params ReadOnlySpan<ResourceHandle> resources) => Add(AccessKind.Write, resources);
 
 	/// <summary>
-	/// Read-modify-write colour: <c>LoadOp.Load</c> + the technique's blend accumulates onto the existing
-	/// contents. The pass is both the last reader and the next writer (Planning.md §8).
+	/// Read-modify-write colour: the existing contents are loaded (preserved), then the technique's blend
+	/// accumulates onto them. The pass is both the last reader and the next writer (Planning.md §8).
 	/// </summary>
 	public PassBuilder Blends(ResourceHandle resource) => Add(AccessKind.Blend, resource);
 
@@ -40,7 +40,7 @@ public sealed class PassBuilder
 	/// <summary>Depth test, no write.</summary>
 	public PassBuilder ReadsDepth(ResourceHandle depth) => Add(AccessKind.ReadDepth, depth);
 
-	/// <summary>General read-modify-write (storage images/buffers; used by compute).</summary>
+	/// <summary>General read-modify-write of read-write storage resources (images/buffers; used by compute).</summary>
 	public PassBuilder ReadWrites(params ReadOnlySpan<ResourceHandle> resources) => Add(AccessKind.ReadWrite, resources);
 
 	/// <summary>Read a buffer as vertex-attribute data (GPU particles — the draw reads what a compute wrote).</summary>

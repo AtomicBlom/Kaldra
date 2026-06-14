@@ -12,8 +12,8 @@ public enum AccessKind
 	Write,
 
 	/// <summary>
-	/// Colour read-modify-write: <c>LoadOp.Load</c> + the technique's blend accumulates onto existing
-	/// contents. The pass is simultaneously the last reader and the next writer. (<c>.Blends</c>)
+	/// Colour read-modify-write: the existing contents are loaded (preserved), then the technique's blend
+	/// accumulates onto them. The pass is simultaneously the last reader and the next writer. (<c>.Blends</c>)
 	/// </summary>
 	Blend,
 
@@ -26,7 +26,7 @@ public enum AccessKind
 	/// <summary>Depth test, no write. (<c>.ReadsDepth</c>)</summary>
 	ReadDepth,
 
-	/// <summary>General read-modify-write — storage images/buffers, used by compute. (<c>.ReadWrites</c>)</summary>
+	/// <summary>General read-modify-write — read-write storage resources (images/buffers), used by compute. (<c>.ReadWrites</c>)</summary>
 	ReadWrite,
 
 	/// <summary>A buffer read as vertex-attribute data by a draw (GPU particles, §7.6). (<c>.ReadsVertex</c>)</summary>

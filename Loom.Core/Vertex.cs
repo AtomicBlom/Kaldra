@@ -7,7 +7,7 @@ namespace Loom.Core;
 /// Loom's canonical interleaved vertex: position, normal, and a UV. One fixed layout for now — enough to
 /// drive the reference frame's geometry (Planning.md §6/§12 M5); per-technique vertex layouts (and skinning,
 /// instancing) can come later. Backend-neutral (<c>System.Numerics</c>, no graphics-API types), so the
-/// backend owns the binding/attribute description that mirrors these fields.
+/// backend owns the vertex-layout description that mirrors these fields.
 /// </summary>
 /// <param name="Position">Object-space position.</param>
 /// <param name="Normal">Object-space normal.</param>

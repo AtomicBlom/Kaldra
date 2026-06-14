@@ -44,7 +44,8 @@ public interface IRenderContext
 
 	/// <summary>
 	/// Draw a fullscreen triangle with the named technique, sampling zero or more <paramref name="inputs"/>
-	/// (each bound as a combined image sampler at set 0, bindings 0..N-1, in the order given). §5's
+	/// (each bound, in the order given, as the technique's 0..N-1 sampled input — the backend maps that ordinal
+	/// to its own binding model). §5's
 	/// <c>ctx.FullScreen(Technique.X, ...args)</c>. With no inputs it's a from-scratch pass (a gradient); with
 	/// one it's the engine's blit/upscale (a fullscreen sample, not a copy — a nearest variant is the §9
 	/// pixelation step); with several it's deferred lighting and the like. Every input must be a resource the
@@ -54,21 +55,22 @@ public interface IRenderContext
 	void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs);
 
 	/// <summary>
-	/// As the input-only <c>FullScreen</c> overload, but also pushes a small block of
-	/// scalar parameters to the fragment stage (a fragment push constant, up to four floats). This is the
+	/// As the input-only <c>FullScreen</c> overload, but also supplies a small inline block of
+	/// scalar parameters to the fragment stage (a push/root-constant block, up to four floats). This is the
 	/// per-pass uniform channel the post passes need — the JFA flood's jump step, the seed's hovered id, an
-	/// outline's width/glow — without a descriptor set. The technique must be registered as taking a fragment
-	/// push (its pipeline layout reserves the range).
+	/// outline's width/glow — without a full resource binding. The technique must be registered as taking a
+	/// fragment-stage constant block (the backend reserves the range in its pipeline layout).
 	/// </summary>
 	void FullScreen(string technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs);
 
 	/// <summary>
 	/// Dispatch a compute technique over a grid of <paramref name="groups"/> workgroups (§5's
-	/// <c>ctx.Dispatch</c>). <paramref name="sampled"/> resources bind as combined image samplers at set 0
-	/// bindings 0..S-1 (the pass's <c>.Samples</c>); <paramref name="storage"/> resources bind as storage
-	/// images at S..S+T-1 (the pass's <c>.ReadWrites</c>) — the graph derives the GENERAL-layout transitions
-	/// and the compute↔consumer barriers. <paramref name="push"/> is the same up-to-four-float scalar channel
-	/// as the fullscreen overload, delivered to the compute stage. Used by the auto-exposure reduction.
+	/// <c>ctx.Dispatch</c>). <paramref name="sampled"/> resources are the technique's 0..S-1 sampled inputs
+	/// (the pass's <c>.Samples</c>); <paramref name="storage"/> resources are its S..S+T-1 read-write inputs
+	/// (the pass's <c>.ReadWrites</c>) — the graph derives the read-write storage transitions and the
+	/// compute↔consumer barriers, and the backend maps the ordinals to its binding model. <paramref name="push"/>
+	/// is the same up-to-four-float scalar channel as the fullscreen overload, delivered to the compute stage.
+	/// Used by the auto-exposure reduction.
 	/// </summary>
 	void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage);
 
