@@ -138,6 +138,10 @@ public sealed unsafe class GraphExecutor : IDisposable
 	/// </summary>
 	public uint HoverId { get; set; }
 
+	/// <summary>The sun's view + projection for the next frame, set by the host. The shadow pass renders the
+	/// scene from it; lighting projects into it for the shadow test. Defaults to identity.</summary>
+	public Camera SunView { get; set; } = Camera.Identity;
+
 	public void DrawFrame(double deltaSeconds)
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
@@ -244,7 +248,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _currentFrame, Camera, HoverId);
+		_context.BeginFrame(cmd, deltaTime, _currentFrame, Camera, SunView, HoverId);
 
 		foreach (var pass in _plan.Passes)
 		{

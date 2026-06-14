@@ -89,8 +89,12 @@ public sealed unsafe class Technique : IDisposable
 		return layout;
 	}
 
-	/// <summary>Size of the fragment scalar push-constant block — four floats (JFA step, hovered id, etc.).</summary>
-	public const int FragmentPushSize = 4 * sizeof(float);
+	/// <summary>
+	/// Size of the scalar push-constant block — up to sixteen floats. Small uses (JFA step, hovered id,
+	/// exposure rate) fill the first few; the deferred-lighting shadow pass uses the full block for the sun's
+	/// light-space matrix. Within the 128-byte minimum guarantee, and never coexists with the vertex MVP range.
+	/// </summary>
+	public const int FragmentPushSize = 16 * sizeof(float);
 
 	// Zero or one descriptor set (whether the technique binds resources), plus at most one push-constant
 	// range: mesh techniques get a 64-byte VERTEX range for the MVP (small + per-draw, so push constants beat

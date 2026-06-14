@@ -35,6 +35,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private bool _depthReadOnly;
 	private int _frameSlot;
 	private Camera _camera;
+	private Camera _sunView;
 	private uint _hoverId;
 
 	public float DeltaTime { get; private set; }
@@ -42,6 +43,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	public Camera Camera => _camera;
 
 	public uint HoverId => _hoverId;
+
+	public Camera SunView => _sunView;
 
 	public RenderContext(
 		VulkanContext ctx,
@@ -62,13 +65,14 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_linearSampler = CreateSampler(Filter.Linear);
 	}
 
-	/// <summary>Bind the context to this frame's command buffer, frame slot, camera, hover, and timing before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, int frameSlot, Camera camera, uint hoverId)
+	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, and timing before any pass records.</summary>
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, int frameSlot, Camera camera, Camera sunView, uint hoverId)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
 		_frameSlot = frameSlot;
 		_camera = camera;
+		_sunView = sunView;
 		_hoverId = hoverId;
 	}
 
@@ -94,10 +98,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 		if (push.Length > 0)
 		{
-			// The fragment scalar channel: pad to the layout's fixed range so the shader's float4 always reads
-			// defined memory, then push to the fragment stage at offset 0.
-			var block = stackalloc float[4];
-			for (var i = 0; i < push.Length && i < 4; i++)
+			// The fragment scalar channel: pad to the layout's fixed range so the shader always reads defined
+			// memory, then push to the fragment stage at offset 0.
+			var block = stackalloc float[16];
+			for (var i = 0; i < push.Length && i < 16; i++)
 				block[i] = push[i];
 			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.FragmentBit, 0, (uint)Technique.FragmentPushSize, block);
 		}
@@ -136,10 +140,12 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
 
-	public void Draw(Mesh mesh, string technique)
+	public void Draw(Mesh mesh, string technique) => Draw(mesh, technique, _camera);
+
+	public void Draw(Mesh mesh, string technique, Camera view)
 	{
 		var baked = Bake(technique);
-		var mvp = _camera.ViewProjection; // model is identity for now; per-object transforms come later
+		var mvp = view.ViewProjection; // model is identity for now; per-object transforms come later
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
@@ -152,8 +158,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 		if (push.Length > 0)
 		{
-			var block = stackalloc float[4];
-			for (var i = 0; i < push.Length && i < 4; i++)
+			var block = stackalloc float[16];
+			for (var i = 0; i < push.Length && i < 16; i++)
 				block[i] = push[i];
 			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)Technique.FragmentPushSize, block);
 		}

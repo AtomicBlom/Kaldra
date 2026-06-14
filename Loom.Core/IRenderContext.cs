@@ -25,6 +25,13 @@ public interface IRenderContext
 	uint HoverId { get; }
 
 	/// <summary>
+	/// The sun's view + projection for this frame (Planning.md §7.2's <c>ctx.Scene.Sun.View</c>). The shadow
+	/// pass draws the scene from <em>this</em> view into the shadow map; deferred lighting reuses it to project
+	/// world positions into light space for the shadow test. Per-frame host data, pulled not captured (§8).
+	/// </summary>
+	Camera SunView { get; }
+
+	/// <summary>
 	/// The camera to render from this frame (view + projection). Per-frame data the host supplies; a pass's
 	/// <c>.Draw</c> closure pulls it from here rather than capturing it, so the graph stays frame-independent
 	/// (§8). <see cref="Draw"/> uses it to transform geometry into clip space.
@@ -68,4 +75,11 @@ public interface IRenderContext
 	/// to keep the pass closure frame-independent (§8). The render target is the pass's declared output.
 	/// </summary>
 	void Draw(Mesh mesh, string technique);
+
+	/// <summary>
+	/// Draw GPU-resident geometry from an explicit <paramref name="view"/> instead of <see cref="Camera"/> —
+	/// §7.2's <c>view:</c> parameter. "The scene" and "the scene from the sun" are the same draw with a
+	/// different view; the shadow pass uses this with <see cref="SunView"/> to render the depth map.
+	/// </summary>
+	void Draw(Mesh mesh, string technique, Camera view);
 }
