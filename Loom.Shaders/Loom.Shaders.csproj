@@ -40,6 +40,7 @@
          a build and runs stale .spv (a classic source of "my shader edit did nothing"). -->
     <UpToDateCheckInput Include="@(SlangShaderSource)" />
     <UpToDateCheckBuilt Include="@(SlangShaderEntry->'$(ShaderOutDir)%(Filename).spv')" />
+    <UpToDateCheckBuilt Include="@(SlangShaderEntry->'$(ShaderOutDir)%(Filename).json')" />
   </ItemGroup>
 
   <!--
@@ -55,8 +56,11 @@
     <Error Condition="!Exists('$(SlangCompiler)')"
            Text="slangc not found at '$(SlangCompiler)'. Is Slang.Sdk restored for RID '$(SlangRid)'? (Only win-x64 / win-arm64 are packaged.)" />
     <MakeDir Directories="$(ShaderOutDir)" />
-    <Message Importance="high" Text="Slang -> SPIR-V: %(SlangShaderEntry.Filename).slang" />
-    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(SlangShaderEntry.FullPath)&quot; -target spirv -o &quot;$(ShaderOutDir)%(SlangShaderEntry.Filename).spv&quot;" />
+    <Message Importance="high" Text="Slang -> SPIR-V (+reflection): %(SlangShaderEntry.Filename).slang" />
+    <!-- Emit reflection JSON alongside the SPIR-V (M7-B4): the backend reads it at DefineTechnique to derive
+         the descriptor-binding layout (sampler/storage counts, push constants, compute stage) instead of the
+         app hand-counting them. "Slang's own reflection" is the §10 decision — no extra reflection dependency. -->
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(SlangShaderEntry.FullPath)&quot; -target spirv -o &quot;$(ShaderOutDir)%(SlangShaderEntry.Filename).spv&quot; -reflection-json &quot;$(ShaderOutDir)%(SlangShaderEntry.Filename).json&quot;" />
   </Target>
 
   <!-- Always runs (even when CompileShaders is up to date) so the .spv are registered as content
@@ -68,6 +72,12 @@
       <Content Include="@(SlangShaderEntry->'$(ShaderOutDir)%(Filename).spv')">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         <Link>shaders\%(Filename).spv</Link>
+        <Visible>false</Visible>
+      </Content>
+      <!-- Ship the reflection JSON next to each .spv so the backend can resolve "<shader>.json" beside it. -->
+      <Content Include="@(SlangShaderEntry->'$(ShaderOutDir)%(Filename).json')">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(Filename).json</Link>
         <Visible>false</Visible>
       </Content>
     </ItemGroup>
