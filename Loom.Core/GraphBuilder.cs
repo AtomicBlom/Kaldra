@@ -27,6 +27,8 @@ public sealed class GraphBuilder
 	private readonly HashSet<string> _resourceNames = [];
 	private readonly HashSet<string> _passNames = [];
 
+	private readonly List<ResourceHandle> _readbackTargets = [];
+
 	private Domain? _backbufferDomain;
 	private ResourceHandle? _backbuffer;
 	private ResourceHandle? _presentTarget;
@@ -100,6 +102,20 @@ public sealed class GraphBuilder
 		_presentTarget = resource;
 	}
 
+	/// <summary>
+	/// Declare that <paramref name="resource"/>'s contents should be read back to the CPU (Planning.md §7.4) —
+	/// the GPU→CPU edge, used for picking. The backend copies it to host-visible memory after the frame; the
+	/// value is available a frame or two later (readback is genuinely that old). Returns the handle so the
+	/// host can query it. The keep-alive (the resource must survive to end-of-frame) is derived from this edge.
+	/// </summary>
+	public ResourceHandle Readback(ResourceHandle resource)
+	{
+		ArgumentNullException.ThrowIfNull(resource);
+		if (!_readbackTargets.Contains(resource))
+			_readbackTargets.Add(resource);
+		return resource;
+	}
+
 	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1)
 	{
 		if (!_resourceNames.Add(name))
@@ -134,6 +150,7 @@ public sealed class GraphBuilder
 			[.. _domains],
 			[.. _resources],
 			passes.ToImmutable(),
-			_presentTarget);
+			_presentTarget,
+			[.. _readbackTargets]);
 	}
 }

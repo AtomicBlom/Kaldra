@@ -54,6 +54,17 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private Semaphore[] _renderFinished = []; // per swapchain image
 	private Fence[] _inFlight = [];           // per frame-in-flight
 
+	// GPU→CPU readback (§7.4 picking): the first g.Readback target is copied to a per-slot host-visible
+	// buffer each frame; the result is read back ~2 frames later (when the slot's fence next signals), kept
+	// in _readbackCpu as decoded floats. -1 = no readback declared.
+	private readonly int _readbackId = -1;
+	private Buffer[] _readbackBuffers = [];
+	private DeviceMemory[] _readbackMemories = [];
+	private bool[] _readbackValid = [];
+	private float[] _readbackCpu = [];
+	private int _readbackWidth;
+	private int _readbackHeight;
+
 	private int _currentFrame;
 	private bool _framebufferResized;
 	private Extent2D _windowExtent;
@@ -107,6 +118,32 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 		CreateCommandBuffers();
 		CreateSyncObjects();
+
+		// Readback staging (§7.4): one host-visible buffer per frame slot for the first g.Readback target.
+		if (graph.ReadbackTargets.Length > 0)
+		{
+			var target = graph.ReadbackTargets[0];
+			_readbackId = target.Id;
+			(_readbackWidth, _readbackHeight) = target.Resolve();
+			_readbackCpu = new float[_readbackWidth * _readbackHeight];
+			var bytes = (ulong)_readbackWidth * (ulong)_readbackHeight * 2; // R16F = 2 bytes/texel
+			_readbackBuffers = new Buffer[MaxFramesInFlight];
+			_readbackMemories = new DeviceMemory[MaxFramesInFlight];
+			_readbackValid = new bool[MaxFramesInFlight];
+			for (var i = 0; i < MaxFramesInFlight; i++)
+				(_readbackBuffers[i], _readbackMemories[i]) = CreateStagingBuffer(bytes);
+		}
+	}
+
+	/// <summary>
+	/// Sample the picking readback at a world-domain pixel (§7.4). Returns the resource's value there from a
+	/// frame or two ago (the readback latency is real). 0 outside the populated region or before warm-up.
+	/// </summary>
+	public float SamplePickReadback(int x, int y)
+	{
+		if (_readbackId < 0 || (uint)x >= (uint)_readbackWidth || (uint)y >= (uint)_readbackHeight)
+			return 0f;
+		return _readbackCpu[y * _readbackWidth + x];
 	}
 
 	/// <summary>
@@ -148,6 +185,11 @@ public sealed unsafe class GraphExecutor : IDisposable
 			return; // Minimized — nothing to draw.
 
 		_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
+
+		// The fence just signalled, so this slot's readback buffer holds the copy from when it last ran (~2
+		// frames ago). Decode it into _readbackCpu before this frame overwrites it — that's the latency §7.4
+		// is upfront about. (Done before recording, so SamplePickReadback always sees the freshest available.)
+		DownloadReadback(_currentFrame);
 
 		uint imageIndex = 0;
 		var acquire = _ctx.KhrSwapchain.AcquireNextImage(
@@ -257,9 +299,49 @@ public sealed unsafe class GraphExecutor : IDisposable
 			RecordPass(cmd, pass);
 		}
 
+		RecordReadback(cmd);
 		FinishFrame(cmd, captureBuffer);
 
 		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
+	}
+
+	// Copy the readback target (its last graph use is a .Samples, so it's in SHADER_READ) into this slot's
+	// host-visible buffer. The slot's fence guards it; DownloadReadback decodes it ~2 frames later. §7.4.
+	private void RecordReadback(CommandBuffer cmd)
+	{
+		if (_readbackId < 0)
+			return;
+
+		ref var image = ref _transients.Get(_currentFrame, _readbackId);
+		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
+		TransitionImage(cmd, image.Image, range,
+			ImageLayout.ShaderReadOnlyOptimal, ImageLayout.TransferSrcOptimal,
+			PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit,
+			PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit);
+
+		BufferImageCopy region = new()
+		{
+			ImageSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.ColorBit, LayerCount = 1 },
+			ImageExtent = new Extent3D(image.Extent.Width, image.Extent.Height, 1),
+		};
+		_vk.CmdCopyImageToBuffer(cmd, image.Image, ImageLayout.TransferSrcOptimal, _readbackBuffers[_currentFrame], 1, in region);
+		_readbackValid[_currentFrame] = true;
+	}
+
+	// Decode this slot's readback buffer (R16F halves → floats) into _readbackCpu. Called after the slot's
+	// fence signals, so the data is the copy from when the slot last ran (a frame or two ago).
+	private void DownloadReadback(int slot)
+	{
+		if (_readbackId < 0 || !_readbackValid[slot])
+			return;
+
+		var count = _readbackWidth * _readbackHeight;
+		void* mapped;
+		_vk.MapMemory(_ctx.Device, _readbackMemories[slot], 0, (ulong)count * 2, 0, &mapped).Check("vkMapMemory");
+		var halves = new ReadOnlySpan<Half>(mapped, count);
+		for (var i = 0; i < count; i++)
+			_readbackCpu[i] = (float)halves[i];
+		_vk.UnmapMemory(_ctx.Device, _readbackMemories[slot]);
 	}
 
 	private void RecordPass(CommandBuffer cmd, PassBarriers pass)
@@ -593,6 +675,14 @@ public sealed unsafe class GraphExecutor : IDisposable
 		_transients.Dispose();
 		_allocator.Dispose(); // after every image/buffer it backed is freed
 		_techniques.Dispose();
+
+		for (var i = 0; i < _readbackBuffers.Length; i++)
+		{
+			if (_readbackBuffers[i].Handle != 0)
+				_vk.DestroyBuffer(_ctx.Device, _readbackBuffers[i], null);
+			if (_readbackMemories[i].Handle != 0)
+				_vk.FreeMemory(_ctx.Device, _readbackMemories[i], null);
+		}
 
 		DestroyRenderFinishedSemaphores();
 		foreach (var semaphore in _imageAvailable)

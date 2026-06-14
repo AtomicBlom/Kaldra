@@ -74,13 +74,14 @@ internal sealed unsafe class TransientResources : IDisposable
 
 		var sampled = UsedWith(graph, AccessKind.Sample);
 		var storage = UsedWith(graph, AccessKind.ReadWrite);
+		var readback = graph.ReadbackTargets.Select(r => r.Id).ToHashSet(); // need TRANSFER_SRC for the copy-out
 		_images = new ResourceImage[framesInFlight][];
 		_buckets = new SlotBucket[framesInFlight][];
 		for (var slot = 0; slot < framesInFlight; slot++)
 		{
 			_images[slot] = new ResourceImage[graph.Resources.Length];
 			foreach (var resource in graph.Resources)
-				InitMetadata(slot, resource, sampled, storage);
+				InitMetadata(slot, resource, sampled, storage, readback);
 			_buckets[slot] = AllocateBuckets(slot);
 		}
 		// Persistent resources are allocated once and shared by every slot (cross-frame history, §8).
@@ -88,7 +89,7 @@ internal sealed unsafe class TransientResources : IDisposable
 	}
 
 	// Sets a resource's format/aspect/usage/flags without creating the image — the bucket pass allocates.
-	private void InitMetadata(int slot, ResourceHandle resource, HashSet<int> sampled, HashSet<int> storage)
+	private void InitMetadata(int slot, ResourceHandle resource, HashSet<int> sampled, HashSet<int> storage, HashSet<int> readback)
 	{
 		var aspect = resource.Kind == ResourceKind.Depth ? ImageAspectFlags.DepthBit : ImageAspectFlags.ColorBit;
 		ref var image = ref _images[slot][resource.Id];
@@ -110,6 +111,8 @@ internal sealed unsafe class TransientResources : IDisposable
 			usage |= ImageUsageFlags.SampledBit;
 		if (storage.Contains(resource.Id))
 			usage |= ImageUsageFlags.StorageBit; // a compute pass read-writes it (auto-exposure)
+		if (readback.Contains(resource.Id))
+			usage |= ImageUsageFlags.TransferSrcBit; // copied to host-visible memory for g.Readback (picking)
 
 		image.Format = FormatMapping.ToVulkan(resource.Format);
 		image.Usage = usage;

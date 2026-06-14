@@ -27,16 +27,25 @@ public sealed class RenderGraph
 	/// <summary>The resource presented to the screen, or null if the graph declared no <c>Present</c>.</summary>
 	public ResourceHandle? PresentTarget { get; }
 
+	/// <summary>
+	/// Resources the CPU wants read back (Planning.md §7.4 <c>g.Readback</c>) — the GPU→CPU edge. The backend
+	/// copies each to host-visible memory after the frame; the result is available a frame or two later (the
+	/// latency is real — readback is genuinely a frame or two old). Used by picking.
+	/// </summary>
+	public ImmutableArray<ResourceHandle> ReadbackTargets { get; }
+
 	internal RenderGraph(
 		ImmutableArray<Domain> domains,
 		ImmutableArray<ResourceHandle> resources,
 		ImmutableArray<GraphPass> passes,
-		ResourceHandle? presentTarget)
+		ResourceHandle? presentTarget,
+		ImmutableArray<ResourceHandle> readbackTargets)
 	{
 		Domains = domains;
 		Resources = resources;
 		Passes = passes;
 		PresentTarget = presentTarget;
+		ReadbackTargets = readbackTargets;
 	}
 
 	/// <summary>
