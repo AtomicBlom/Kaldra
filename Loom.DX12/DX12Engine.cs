@@ -30,7 +30,9 @@ public sealed unsafe class DX12Engine : IEngine
 	private readonly DX12Swapchain _swapchain;
 	private readonly DX12Triangle _triangle;
 	private readonly DX12TechniqueCache _techniques;
+	private readonly DX12DescriptorRing _ring;
 	private readonly DX12RenderContext _context;
+	private DX12Transients? _transients;
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -72,7 +74,8 @@ public sealed unsafe class DX12Engine : IEngine
 
 		_triangle = new DX12Triangle(_ctx, _swapchain.Format);
 		_techniques = new DX12TechniqueCache(_ctx);
-		_context = new DX12RenderContext(_techniques);
+		_ring = new DX12DescriptorRing(_ctx, 256);
+		_context = new DX12RenderContext(_ctx, _techniques, _ring);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
@@ -153,7 +156,12 @@ public sealed unsafe class DX12Engine : IEngine
 
 		SilkMarshal.ThrowHResult(_allocators[index].Reset());
 		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
-		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput);
+
+		// Bind the shader-visible heap for this command list, then reset its per-frame bump allocator.
+		var heap = _ring.Heap.Handle;
+		_commandList.SetDescriptorHeaps(1, &heap);
+		_ring.Reset();
+		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index);
 
 		foreach (var pass in _barrierPlan!.Passes)
 		{
@@ -215,13 +223,21 @@ public sealed unsafe class DX12Engine : IEngine
 		{
 			if (attachment.State != ResourceState.ColorAttachment)
 				throw new NotSupportedException("DX12: depth attachments land in a later executor slice.");
-			if (!attachment.Resource.IsBackbuffer)
-				throw new NotSupportedException("DX12: transient render targets land in the next executor slice.");
 
-			rtv[colorCount] = _swapchain.RtvHandle(index);
-			formats[colorCount] = _swapchain.Format;
-			width = _swapchain.Width;
-			height = _swapchain.Height;
+			var id = attachment.Resource.Id;
+			if (attachment.Resource.IsBackbuffer)
+			{
+				rtv[colorCount] = _swapchain.RtvHandle(index);
+				formats[colorCount] = _swapchain.Format;
+				width = _swapchain.Width;
+				height = _swapchain.Height;
+			}
+			else
+			{
+				rtv[colorCount] = _transients!.Rtv(index, id);
+				formats[colorCount] = _transients.Format(index, id);
+				(width, height) = _transients.Extent(id);
+			}
 			colorCount++;
 		}
 
@@ -250,14 +266,23 @@ public sealed unsafe class DX12Engine : IEngine
 	// barriers need the exact current state, unlike Vulkan's "Undefined" old layout — see DX12StateMapping).
 	private void EmitGraphTransition(uint index, ResourceTransition transition)
 	{
-		if (!transition.Resource.IsBackbuffer)
-			throw new NotSupportedException("DX12: transient resources land in the next executor slice.");
-
 		var target = DX12StateMapping.For(transition.To);
-		if (_backbufferState[index] == target)
+		var id = transition.Resource.Id;
+
+		if (transition.Resource.IsBackbuffer)
+		{
+			if (_backbufferState[index] == target)
+				return;
+			Transition(_swapchain.BackBuffer(index), _backbufferState[index], target);
+			_backbufferState[index] = target;
 			return;
-		Transition(_swapchain.BackBuffer(index), _backbufferState[index], target);
-		_backbufferState[index] = target;
+		}
+
+		var current = _transients!.State(index, id);
+		if (current == target)
+			return;
+		Transition(_transients.Resource(index, id), current, target);
+		_transients.SetState(index, id, target);
 	}
 
 	/// <summary>
@@ -390,6 +415,16 @@ public sealed unsafe class DX12Engine : IEngine
 		WaitIdle();
 		_swapchain.Resize(width, height);
 		Array.Clear(_frameFenceValues);
+
+		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size).
+		if (_graph is not null)
+		{
+			_transients?.Dispose();
+			_transients = new DX12Transients(_ctx, _graph, BufferCount, _swapchain.Width, _swapchain.Height);
+			_context.SetTransients(_transients);
+			for (uint i = 0; i < BufferCount; i++)
+				_backbufferState[i] = ResourceStates.Present;
+		}
 	}
 
 	public void WaitIdle()
@@ -420,6 +455,8 @@ public sealed unsafe class DX12Engine : IEngine
 			CloseHandle(_fenceEvent);
 		if (_readback.Handle is not null)
 			_readback.Dispose();
+		_transients?.Dispose();
+		_ring.Dispose();
 		_techniques.Dispose();
 		_triangle.Dispose();
 		_fence.Dispose();
@@ -437,12 +474,12 @@ public sealed unsafe class DX12Engine : IEngine
 	/// </summary>
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
 	{
-		if (!DX12Shaders.Builtins.TryGetValue(descriptor.Shader, out var hlsl))
+		if (!DX12Shaders.Builtins.TryGetValue(descriptor.Shader, out var builtin))
 			throw new NotSupportedException($"DX12: no built-in HLSL for shader '{descriptor.Shader}' (the offline DXIL pipeline that resolves real shaders is a later slice).");
 
 		_techniques.Register(name, new DX12TechniqueTemplate(
-			hlsl, descriptor.VertexEntry, descriptor.FragmentEntry,
-			InputCount: 0, descriptor.HasFragmentPush));
+			builtin.Hlsl, descriptor.VertexEntry, descriptor.FragmentEntry,
+			builtin.InputCount, descriptor.HasFragmentPush, descriptor.LinearFilter));
 	}
 
 	/// <summary>
@@ -460,6 +497,10 @@ public sealed unsafe class DX12Engine : IEngine
 		_barrierPlan = BarrierPlan.Derive(GraphSchedule.Derive(graph));
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present;
+
+		_transients?.Dispose();
+		_transients = new DX12Transients(_ctx, graph, BufferCount, _swapchain.Width, _swapchain.Height);
+		_context.SetTransients(_transients);
 	}
 
 	private const string NextSlice = "DX12: this IEngine member lands in a later executor slice.";

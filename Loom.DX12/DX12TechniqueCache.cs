@@ -6,7 +6,7 @@ using Silk.NET.DXGI;
 namespace Loom.DX12;
 
 /// <summary>A registered DX12 technique: its HLSL + the shape needed to bake a pipeline (the DX12 counterpart of <c>TechniqueTemplate</c>).</summary>
-internal readonly record struct DX12TechniqueTemplate(string Hlsl, string VertexEntry, string FragmentEntry, int InputCount, bool HasFragmentPush);
+internal readonly record struct DX12TechniqueTemplate(string Hlsl, string VertexEntry, string FragmentEntry, int InputCount, bool HasFragmentPush, bool LinearFilter);
 
 /// <summary>
 /// Bakes and caches DX12 graphics pipelines per technique — the counterpart of the Vulkan backend's
@@ -67,15 +67,50 @@ internal sealed unsafe class DX12Technique : IDisposable
 
 	public DX12Technique(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats)
 	{
-		if (template.InputCount > 0 || template.HasFragmentPush)
-			throw new NotSupportedException("DX12: techniques with sampled inputs or push constants land with the transient/sample executor slice.");
+		if (template.HasFragmentPush)
+			throw new NotSupportedException("DX12: fragment push constants land in a later executor slice.");
 
 		using var compiler = D3DCompiler.GetApi();
 		var hlsl = System.Text.Encoding.ASCII.GetBytes(template.Hlsl);
 		var vs = DX12Shaders.Compile(compiler, hlsl, template.VertexEntry, "vs_5_0");
 		var ps = DX12Shaders.Compile(compiler, hlsl, template.FragmentEntry, "ps_5_0");
 
-		var rootDesc = new RootSignatureDesc { Flags = RootSignatureFlags.None };
+		// A from-scratch pass (no inputs) needs an empty root signature; a sampling pass binds N sampled inputs
+		// through one SRV descriptor table (register t0..tN-1) plus one static sampler (s0).
+		RootSignatureDesc rootDesc;
+		var range = new DescriptorRange
+		{
+			RangeType = DescriptorRangeType.Srv,
+			NumDescriptors = (uint)template.InputCount,
+			BaseShaderRegister = 0,
+			RegisterSpace = 0,
+			OffsetInDescriptorsFromTableStart = 0
+		};
+		var param = new RootParameter
+		{
+			ParameterType = RootParameterType.TypeDescriptorTable,
+			ShaderVisibility = ShaderVisibility.Pixel,
+			Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &range } }
+		};
+		var sampler = new StaticSamplerDesc
+		{
+			Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
+			AddressU = TextureAddressMode.Clamp,
+			AddressV = TextureAddressMode.Clamp,
+			AddressW = TextureAddressMode.Clamp,
+			ComparisonFunc = ComparisonFunc.Never,
+			BorderColor = StaticBorderColor.OpaqueBlack,
+			MinLOD = 0f,
+			MaxLOD = float.MaxValue,
+			ShaderRegister = 0,
+			RegisterSpace = 0,
+			ShaderVisibility = ShaderVisibility.Pixel
+		};
+		if (template.InputCount > 0)
+			rootDesc = new RootSignatureDesc { NumParameters = 1, PParameters = &param, NumStaticSamplers = 1, PStaticSamplers = &sampler, Flags = RootSignatureFlags.None };
+		else
+			rootDesc = new RootSignatureDesc { Flags = RootSignatureFlags.None };
+
 		ComPtr<ID3D10Blob> blob = default;
 		ComPtr<ID3D10Blob> error = default;
 		SilkMarshal.ThrowHResult(ctx.D3D12.SerializeRootSignature(&rootDesc, D3DRootSignatureVersion.Version1, ref blob, ref error));

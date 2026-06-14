@@ -54,9 +54,15 @@ internal static class Dx12Smoke
 		if (graphMode)
 		{
 			engine.DefineTechnique("gradient", new TechniqueDescriptor("gradient"));
+			engine.DefineTechnique("blit", new TechniqueDescriptor("blit", LinearFilter: true));
+			// Two passes: render a gradient into an offscreen target, then sample it into the backbuffer. This
+			// exercises the executor's transient allocation + the COLOR_ATTACHMENT->SHADER_READ barrier between
+			// the passes + the SRV/sampler descriptor-table path.
 			var graph = RenderGraph.Define(g =>
 			{
-				g.Pass("gradient").Writes(g.Backbuffer).Draw(ctx => ctx.FullScreen("gradient"));
+				var offscreen = g.Screen.Color("offscreen", Format.Rgba8Unorm);
+				g.Pass("gradient").Writes(offscreen).Draw(ctx => ctx.FullScreen("gradient"));
+				g.Pass("blit").Samples(offscreen).Writes(g.Backbuffer).Draw(ctx => ctx.FullScreen("blit", offscreen));
 				g.Present(g.Backbuffer);
 			});
 			engine.SetGraph(graph);
