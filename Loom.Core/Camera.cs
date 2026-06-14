@@ -6,8 +6,10 @@ namespace Loom.Core;
 /// The view onto the scene a pass renders from: a view matrix and a projection. Per-frame data the host
 /// updates and the pass pulls from <see cref="IRenderContext.Camera"/> (never captured — §8). Backend-neutral
 /// (<c>System.Numerics</c>); matrices follow the row-vector convention (<c>clip = position · MVP</c>), so the
-/// combined transform composes left-to-right. The host is responsible for any Vulkan clip-space fix-up (Y
-/// flip) when it builds <see cref="Projection"/>.
+/// combined transform composes left-to-right. The host builds <see cref="Projection"/> in a neutral convention
+/// (right-handed, +Y up); the backend applies its own clip-space fix-up on ingest — the Vulkan +Y-down Y-flip,
+/// identity on a +Y-up API like D3D12 — so no API-specific NDC convention is baked into host or Core code
+/// (Planning.md §8 portability; M7-B5).
 /// </summary>
 /// <param name="View">World → view (camera) space.</param>
 /// <param name="Projection">View → clip space.</param>

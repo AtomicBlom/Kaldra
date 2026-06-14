@@ -1,6 +1,8 @@
+using System.Numerics;
+
 using Loom.Core;
 using Loom.Graph;
-using Silk.NET.Maths;
+using Silk.NET.Core.Contexts;
 using Silk.NET.Vulkan;
 using VMASharp;
 using Buffer = Silk.NET.Vulkan.Buffer;
@@ -10,13 +12,22 @@ using VkFormat = Silk.NET.Vulkan.Format;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// The graph-driven renderer (Planning.md §2 Execute/Bake): it derives a <see cref="GraphSchedule"/> and
-/// <see cref="BarrierPlan"/> from an immutable <see cref="RenderGraph"/> <em>once</em> (the plan is
-/// frame-stable, so the per-frame cost is recording, not deriving), then each frame records the plan into a
-/// command buffer — emitting <c>vkCmdPipelineBarrier2</c> from the derived transitions, opening a
-/// dynamic-rendering scope per pass with the derived load/store ops, invoking the pass's record callback,
-/// and presenting. This replaces M0/M1's hand-written <c>Renderer</c>: the barriers and layout transitions
-/// it wrote by hand are now derived (Planning.md §2).
+/// The Vulkan <see cref="IEngine"/> (Planning.md §2 Execute/Bake, §5 front door). It owns the long-lived
+/// device (<see cref="VulkanContext"/>), the pipeline cache, the mesh store, and the descriptor allocator; the
+/// <em>active graph</em> is swappable (<see cref="SetGraph"/>). On each <see cref="SetGraph"/> it derives a
+/// <see cref="GraphSchedule"/>, <see cref="BarrierPlan"/>, and transient-memory plan once (the plan is
+/// frame-stable, so the per-frame cost is recording, not deriving) and prepares the graph's transients; then
+/// each <see cref="Render"/> records the plan into a command buffer — emitting <c>vkCmdPipelineBarrier2</c> from
+/// the derived transitions, opening a dynamic-rendering scope per pass with the derived load/store ops, invoking
+/// the pass's record callback, and presenting. The barriers and layout transitions M0/M1 wrote by hand are now
+/// derived (Planning.md §2).
+/// <para>
+/// <b>Device vs graph.</b> Device-level resources (context, allocator, command buffers, sync, swapchain,
+/// pipeline cache, meshes, descriptors, ImGui) live for the engine's lifetime and survive a graph swap;
+/// graph-level resources (the derived plan, transients, readback buffers, persistent-state tracking) are rebuilt
+/// by <see cref="SetGraph"/>, reusing the device and cache — Planning.md §8's "structural changes rebuild the
+/// baked graph — cheap and cached," and the basis for runtime demo switching (M7-B7).
+/// </para>
 /// <para>
 /// <b>Frames in flight (§12 M4).</b> Runs 2 frames in flight, paced on a per-frame fence. The safety this
 /// needs — a frame's writes to a transient must not clobber a still-executing earlier frame's reads of the
@@ -26,7 +37,7 @@ namespace Loom.Vulkan;
 /// command buffer), so the backbuffer needs no extra buffering.
 /// </para>
 /// </summary>
-public sealed unsafe class GraphExecutor : IDisposable
+internal sealed unsafe class VulkanEngine : IEngine
 {
 	private const int MaxFramesInFlight = 2;
 	private static readonly ClearValue ClearColor = new(color: new ClearColorValue(0, 0, 0, 1));
@@ -35,20 +46,24 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly Swapchain _swapchain;
-	private readonly RenderGraph _graph;
-	private readonly BarrierPlan _plan;
-	private readonly AliasPlan _aliasPlan;
-	private readonly HashSet<int> _aliasedHandoffIds; // resources that reuse an earlier alias's memory this frame
-	private readonly HashSet<int> _persistentIds;     // resources whose contents survive across frames
-	private readonly Dictionary<int, ResourceState> _persistentState = []; // last state, carried across frames
-	private readonly HashSet<int> _bufferIds;         // storage/vertex buffer resources (emit buffer barriers, not image)
+	private readonly string _shaderDir;
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly TechniqueCache _techniques;
-	private readonly TransientResources _transients;
 	private readonly MeshStore _meshes;
 	private readonly DescriptorAllocator _descriptors;
 	private readonly RenderContext _context;
+	private readonly Dictionary<string, TechniqueTemplate> _registry = []; // logical name → backend baked-input form
 	private ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
+
+	// Graph-level state — rebuilt by SetGraph, reusing the device above.
+	private RenderGraph? _graph;
+	private BarrierPlan _plan = null!;
+	private AliasPlan _aliasPlan = null!;
+	private HashSet<int> _aliasedHandoffIds = []; // resources that reuse an earlier alias's memory this frame
+	private HashSet<int> _persistentIds = [];     // resources whose contents survive across frames
+	private readonly Dictionary<int, ResourceState> _persistentState = []; // last state, carried across frames
+	private HashSet<int> _bufferIds = [];          // storage/vertex buffer resources (emit buffer barriers, not image)
+	private TransientResources? _transients;
 
 	private CommandPool _commandPool;
 	private CommandBuffer[] _commandBuffers = [];
@@ -58,8 +73,8 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 	// GPU→CPU readback (§7.4 picking): the first g.Readback target is copied to a per-slot host-visible
 	// buffer each frame; the result is read back ~2 frames later (when the slot's fence next signals), kept
-	// in _readbackCpu as decoded floats. -1 = no readback declared.
-	private readonly int _readbackId = -1;
+	// in _readbackCpu as decoded floats. -1 = no readback declared. Graph-level (rebuilt by SetGraph).
+	private int _readbackId = -1;
 	private Buffer[] _readbackBuffers = [];
 	private DeviceMemory[] _readbackMemories = [];
 	private bool[] _readbackValid = [];
@@ -67,23 +82,79 @@ public sealed unsafe class GraphExecutor : IDisposable
 	private int _readbackWidth;
 	private int _readbackHeight;
 
+	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
+	private Camera _frameCamera = Camera.Identity;
+	private Camera _frameSun = Camera.Identity;
+	private float _frameTime;
+	private uint _frameHover;
+	private nint _frameImGui;
+
 	private int _currentFrame;
 	private bool _framebufferResized;
 	private Extent2D _windowExtent;
 	private string? _capturePath;
 
-	public GraphExecutor(
-		VulkanContext ctx,
-		RenderGraph graph,
-		IReadOnlyDictionary<string, TechniqueTemplate> techniques,
-		Vector2D<int> framebufferSize,
-		bool vsync = true)
+	public string BackendName => "Vulkan";
+	public string DeviceName => _ctx.DeviceName;
+
+	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
 	{
-		_ctx = ctx;
-		_vk = ctx.Vk;
+		_ctx = new VulkanContext(surface, settings.EnableValidation);
+		_vk = _ctx.Vk;
+		_shaderDir = settings.ShaderDirectory;
+		_windowExtent = new Extent2D((uint)width, (uint)height);
+		_swapchain = new Swapchain(_ctx, _windowExtent, settings.VSync);
+
+		// One VMA allocator backs both transients and meshes. The command pool must exist before the mesh
+		// store (geometry uploads use a one-time copy command), so create it up front.
+		_allocator = new VulkanMemoryAllocator(new VulkanMemoryAllocatorCreateInfo(
+			Vk.Version13, _vk, _ctx.Instance, _ctx.PhysicalDevice, _ctx.Device));
+		CreateCommandPool();
+
+		_techniques = new TechniqueCache(_ctx);
+		_meshes = new MeshStore(_ctx, _allocator, _commandPool);
+		_descriptors = new DescriptorAllocator(_ctx, MaxFramesInFlight);
+		_context = new RenderContext(_ctx, _techniques, _registry, _descriptors, _meshes);
+
+		CreateCommandBuffers();
+		CreateSyncObjects();
+	}
+
+	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
+	{
+		ArgumentException.ThrowIfNullOrEmpty(name);
+		// Resolve the logical shader name to backend bytecode and fold the neutral descriptor into the backend's
+		// baked-input form. Shaders are named logically here — no .spv path appears in app code (Planning.md §5).
+		_registry[name] = new TechniqueTemplate(
+			ResolveShader(descriptor.Shader),
+			descriptor.VertexEntry,
+			descriptor.FragmentEntry,
+			descriptor.SampleCount,
+			descriptor.HasVertexInput,
+			descriptor.Blend,
+			descriptor.LinearFilter,
+			descriptor.HasFragmentPush,
+			descriptor.IsCompute,
+			descriptor.StorageImageCount,
+			descriptor.StorageBufferCount,
+			descriptor.ParticleInput);
+	}
+
+	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+
+	public void SetGraph(RenderGraph graph)
+	{
+		ArgumentNullException.ThrowIfNull(graph);
+
+		// Swapping the active graph mid-run: drain the GPU before releasing the old graph's transients/readback,
+		// then bind the new graph's derived plan + resources. The device, pipeline cache, meshes, and descriptors
+		// are untouched (Planning.md §8). The first call (no prior graph) skips the drain.
+		if (_graph is not null)
+			_vk.DeviceWaitIdle(_ctx.Device);
+		DisposeGraphResources();
+		_persistentState.Clear();
+
 		_graph = graph;
-		_windowExtent = new Extent2D((uint)framebufferSize.X, (uint)framebufferSize.Y);
-		_swapchain = new Swapchain(ctx, _windowExtent, vsync);
 
 		// Derive once — the graph is immutable, so order/barriers/load-store/lifetimes are frame-invariant.
 		var schedule = GraphSchedule.Derive(graph);
@@ -98,8 +169,8 @@ public sealed unsafe class GraphExecutor : IDisposable
 			for (var i = 1; i < bucket.Members.Length; i++)
 				_aliasedHandoffIds.Add(bucket.Members[i].Id);
 
-		// Persistent resources (auto-exposure history) keep their contents across frames, so their first
-		// transition each frame must start from the layout the previous frame left them in, not Undefined.
+		// Persistent resources (auto-exposure history) keep their contents across frames; storage/vertex buffers
+		// emit buffer barriers rather than image transitions. Classify the graph's resources once.
 		_persistentIds = [];
 		_bufferIds = [];
 		foreach (var resource in graph.Resources)
@@ -112,20 +183,8 @@ public sealed unsafe class GraphExecutor : IDisposable
 		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
 			Console.WriteLine($"[loom] transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
-		// One VMA allocator backs both transients and meshes. The command pool must exist before the mesh
-		// store (geometry uploads use a one-time copy command), so create it up front.
-		_allocator = new VulkanMemoryAllocator(new VulkanMemoryAllocatorCreateInfo(
-			Vk.Version13, _vk, ctx.Instance, ctx.PhysicalDevice, ctx.Device));
-		CreateCommandPool();
-
-		_techniques = new TechniqueCache(ctx);
-		_transients = new TransientResources(ctx, graph, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
-		_meshes = new MeshStore(ctx, _allocator, _commandPool);
-		_descriptors = new DescriptorAllocator(ctx, MaxFramesInFlight);
-		_context = new RenderContext(ctx, _techniques, techniques, _transients, _descriptors, _meshes);
-
-		CreateCommandBuffers();
-		CreateSyncObjects();
+		_transients = new TransientResources(_ctx, graph, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
+		_context.SetTransients(_transients);
 
 		// Readback staging (§7.4): one host-visible buffer per frame slot for the first g.Readback target.
 		if (graph.ReadbackTargets.Length > 0)
@@ -143,77 +202,66 @@ public sealed unsafe class GraphExecutor : IDisposable
 		}
 	}
 
-	/// <summary>
-	/// Sample the picking readback at a world-domain pixel (§7.4). Returns the resource's value there from a
-	/// frame or two ago (the readback latency is real). 0 outside the populated region or before warm-up.
-	/// </summary>
-	public float SamplePickReadback(int x, int y)
+	public void EnableImGui()
+	{
+		var spirv = File.ReadAllBytes(ResolveShader("imgui"));
+		_imgui = new ImGuiRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight);
+		_context.SetImGui(_imgui);
+	}
+
+	public float SamplePick(int x, int y)
 	{
 		if (_readbackId < 0 || (uint)x >= (uint)_readbackWidth || (uint)y >= (uint)_readbackHeight)
 			return 0f;
 		return _readbackCpu[y * _readbackWidth + x];
 	}
 
-	/// <summary>
-	/// Upload geometry once and get a <see cref="Mesh"/> handle for passes to draw via <c>ctx.Draw</c>.
-	/// Call after construction but before the render loop; the handle is stable for the executor's lifetime.
-	/// </summary>
-	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
-
-	public void OnResize(Vector2D<int> size)
+	public void Resize(int width, int height)
 	{
-		_windowExtent = new Extent2D((uint)size.X, (uint)size.Y);
+		_windowExtent = new Extent2D((uint)width, (uint)height);
 		_framebufferResized = true;
 	}
 
 	public void WaitIdle() => _vk.DeviceWaitIdle(_ctx.Device);
 
-	/// <summary>Capture the next rendered frame to a PNG (debug/validation). Synchronous on that frame.</summary>
 	public void RequestCapture(string path) => _capturePath = path;
 
-	/// <summary>
-	/// The camera the next frame renders from. Per-frame data the host sets before <see cref="DrawFrame"/>;
-	/// passes pull it via <c>ctx.Camera</c>. Defaults to identity (clip space == world space).
-	/// </summary>
-	public Camera Camera { get; set; } = Camera.Identity;
-
-	/// <summary>
-	/// The object id under the cursor for the next frame (0 = nothing), set by the host. Passes pull it via
-	/// <c>ctx.HoverId</c> — the JFA outline seeds the hovered object's silhouette. Per-frame, like the camera.
-	/// </summary>
-	public uint HoverId { get; set; }
-
-	/// <summary>The sun's view + projection for the next frame, set by the host. The shadow pass renders the
-	/// scene from it; lighting projects into it for the shadow test. Defaults to identity.</summary>
-	public Camera SunView { get; set; } = Camera.Identity;
-
-	/// <summary>Elapsed seconds since startup, set by the host each frame; passes pull it via <c>ctx.Time</c>
-	/// for time-driven effects (the GPU particle fountain).</summary>
-	public float Time { get; set; }
-
-	/// <summary>
-	/// This frame's Dear ImGui draw data — the native <c>ImDrawData*</c> the host produced via
-	/// <c>ImGui.Render()</c>, set before <see cref="DrawFrame"/>. The HUD pass's <c>ctx.DrawImGui()</c> hands it
-	/// to the backend ImGui renderer. <see cref="nint.Zero"/> (the default) draws no UI. Only meaningful after
-	/// <see cref="EnableImGui"/>.
-	/// </summary>
-	public nint ImGuiDrawData { get; set; }
-
-	/// <summary>
-	/// Stand up the backend Dear ImGui renderer (the <c>imgui_impl_vulkan</c> equivalent), baking its pipeline
-	/// against the swapchain format and uploading the current ImGui context's font atlas. Call once after
-	/// construction, before the render loop, with the path to the compiled <c>imgui.spv</c>. The host must have
-	/// created the ImGui context (and configured its fonts) first. After this, a pass that <c>.Blends</c> the
-	/// backbuffer can call <c>ctx.DrawImGui()</c>, and the host sets <see cref="ImGuiDrawData"/> each frame.
-	/// </summary>
-	public void EnableImGui(string spirvPath)
+	// Resolve a logical shader name (TechniqueDescriptor.Shader) to its compiled SPIR-V on disk. The shader
+	// directory is a backend/host concern (VulkanEngineSettings), kept out of the describe layer.
+	private string ResolveShader(string name)
 	{
-		var spirv = File.ReadAllBytes(spirvPath);
-		_imgui = new ImGuiRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight);
-		_context.SetImGui(_imgui);
+		var path = Path.Combine(_shaderDir, name + ".spv");
+		if (!File.Exists(path))
+			throw new VulkanException($"Compiled shader '{name}' not found at {path}. Did Loom.Shaders build?");
+		return path;
 	}
 
-	public void DrawFrame(double deltaSeconds)
+	// Vulkan clip space is +Y-down, so the projection's Y row is negated on ingest. The host supplies a neutral
+	// (+Y-up) projection in FrameInputs; doing the flip here keeps the API convention in the backend (M7-B5) and
+	// applies it consistently to both the render MVP and any matrix a shader samples with (the sun's light-space
+	// VP the lighting/shadow passes share). A +Y-up backend (D3D12) would apply identity here instead.
+	private static Camera ClipSpace(Camera camera)
+	{
+		var projection = camera.Projection;
+		projection.M22 *= -1f;
+		return new Camera(camera.View, projection);
+	}
+
+	public void Render(FrameInputs inputs)
+	{
+		ArgumentNullException.ThrowIfNull(inputs);
+		if (_graph is null || _transients is null)
+			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
+
+		_frameCamera = ClipSpace(inputs.Camera);
+		_frameSun = ClipSpace(inputs.SunView);
+		_frameTime = inputs.Time;
+		_frameHover = inputs.HoverId;
+		_frameImGui = inputs.ImGuiDrawData;
+		DrawFrame((float)inputs.DeltaSeconds);
+	}
+
+	private void DrawFrame(float deltaSeconds)
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
 			return; // Minimized — nothing to draw.
@@ -222,7 +270,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 		// The fence just signalled, so this slot's readback buffer holds the copy from when it last ran (~2
 		// frames ago). Decode it into _readbackCpu before this frame overwrites it — that's the latency §7.4
-		// is upfront about. (Done before recording, so SamplePickReadback always sees the freshest available.)
+		// is upfront about. (Done before recording, so SamplePick always sees the freshest available.)
 		DownloadReadback(_currentFrame);
 
 		uint imageIndex = 0;
@@ -249,11 +297,11 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 		// This frame slot's prior work is done (fence waited), so its descriptor sets are idle: recycle them.
 		_descriptors.BeginFrame(_currentFrame);
-		_transients.SetBackbuffer(_currentFrame, _swapchain.Images[imageIndex], _swapchain.ImageViews[imageIndex], _swapchain.Extent);
+		_transients!.SetBackbuffer(_currentFrame, _swapchain.Images[imageIndex], _swapchain.ImageViews[imageIndex], _swapchain.Extent);
 
 		var cmd = _commandBuffers[_currentFrame];
 		_vk.ResetCommandBuffer(cmd, 0);
-		RecordGraph(cmd, captureBuffer, (float)deltaSeconds);
+		RecordGraph(cmd, captureBuffer, deltaSeconds);
 
 		SemaphoreSubmitInfo waitInfo = new()
 		{
@@ -324,7 +372,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, Time, _currentFrame, Camera, SunView, HoverId, ImGuiDrawData, _swapchain.Extent);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _swapchain.Extent);
 
 		foreach (var pass in _plan.Passes)
 		{
@@ -346,7 +394,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		if (_readbackId < 0)
 			return;
 
-		ref var image = ref _transients.Get(_currentFrame, _readbackId);
+		ref var image = ref _transients!.Get(_currentFrame, _readbackId);
 		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
 		TransitionImage(cmd, image.Image, range,
 			ImageLayout.ShaderReadOnlyOptimal, ImageLayout.TransferSrcOptimal,
@@ -401,7 +449,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 
 		foreach (var attachment in attachments)
 		{
-			ref var image = ref _transients.Get(_currentFrame, attachment.Resource.Id);
+			ref var image = ref _transients!.Get(_currentFrame, attachment.Resource.Id);
 			if (area.Width == 0)
 				area = image.Extent; // all of a pass's attachments share a domain → one render area
 
@@ -468,10 +516,10 @@ public sealed unsafe class GraphExecutor : IDisposable
 	// Terminal: hand the present target to the swapchain, copying it out first if a capture was requested.
 	private void FinishFrame(CommandBuffer cmd, Buffer captureBuffer)
 	{
-		if (_graph.PresentTarget is not { } present)
+		if (_graph!.PresentTarget is not { } present)
 			return; // Headless graph: nothing to present.
 
-		ref var image = ref _transients.Get(_currentFrame, present.Id);
+		ref var image = ref _transients!.Get(_currentFrame, present.Id);
 		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
 
 		if (captureBuffer.Handle != 0)
@@ -508,11 +556,11 @@ public sealed unsafe class GraphExecutor : IDisposable
 		// compute(StorageWrite) → vertex-input(VertexAttributeRead) hand-off for GPU particles (§7.6).
 		if (_bufferIds.Contains(id))
 		{
-			EmitBufferBarrier(cmd, _transients.GetBuffer(_currentFrame, id), StateMapping.For(transition.From), StateMapping.For(transition.To));
+			EmitBufferBarrier(cmd, _transients!.GetBuffer(_currentFrame, id), StateMapping.For(transition.From), StateMapping.For(transition.To));
 			return;
 		}
 
-		ref var image = ref _transients.Get(_currentFrame, id);
+		ref var image = ref _transients!.Get(_currentFrame, id);
 
 		// Persistent resources survive across frames. The barrier plan, derived per-frame, thinks every
 		// resource starts Undefined; for a persistent one that would discard the value the next frame's compute
@@ -716,7 +764,7 @@ public sealed unsafe class GraphExecutor : IDisposable
 		_vk.DeviceWaitIdle(_ctx.Device);
 		var oldImageCount = _swapchain.ImageCount;
 		_swapchain.Recreate(_windowExtent);
-		_transients.Recreate(_swapchain.Extent);
+		_transients?.Recreate(_swapchain.Extent);
 
 		if (_swapchain.ImageCount != oldImageCount)
 		{
@@ -733,17 +781,12 @@ public sealed unsafe class GraphExecutor : IDisposable
 		_renderFinished = [];
 	}
 
-	public void Dispose()
+	// Release the current graph's GPU resources (transients + readback staging). Used both when swapping the
+	// active graph and on teardown. The caller drains the GPU first.
+	private void DisposeGraphResources()
 	{
-		_vk.DeviceWaitIdle(_ctx.Device);
-
-		_context.Dispose();
-		_imgui?.Dispose(); // before the allocator — it holds VMA font/vertex/index allocations
-		_descriptors.Dispose();
-		_meshes.Dispose();
-		_transients.Dispose();
-		_allocator.Dispose(); // after every image/buffer it backed is freed
-		_techniques.Dispose();
+		_transients?.Dispose();
+		_transients = null;
 
 		for (var i = 0; i < _readbackBuffers.Length; i++)
 		{
@@ -752,6 +795,24 @@ public sealed unsafe class GraphExecutor : IDisposable
 			if (_readbackMemories[i].Handle != 0)
 				_vk.FreeMemory(_ctx.Device, _readbackMemories[i], null);
 		}
+		_readbackBuffers = [];
+		_readbackMemories = [];
+		_readbackValid = [];
+		_readbackCpu = [];
+		_readbackId = -1;
+	}
+
+	public void Dispose()
+	{
+		_vk.DeviceWaitIdle(_ctx.Device);
+
+		DisposeGraphResources();    // transients + readback staging (graph-level)
+		_context.Dispose();
+		_imgui?.Dispose(); // before the allocator — it holds VMA font/vertex/index allocations
+		_descriptors.Dispose();
+		_meshes.Dispose();
+		_allocator.Dispose(); // after every image/buffer it backed is freed
+		_techniques.Dispose();
 
 		DestroyRenderFinishedSemaphores();
 		foreach (var semaphore in _imageAvailable)
@@ -765,5 +826,6 @@ public sealed unsafe class GraphExecutor : IDisposable
 			_vk.DestroyCommandPool(_ctx.Device, _commandPool, null);
 
 		_swapchain.Dispose();
+		_ctx.Dispose(); // the device + instance — last, after everything that used them
 	}
 }

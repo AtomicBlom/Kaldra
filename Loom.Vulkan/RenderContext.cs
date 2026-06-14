@@ -13,7 +13,7 @@ namespace Loom.Vulkan;
 /// through. It is a thin recorder over the frame's command buffer: it resolves a technique name to a baked
 /// pipeline (baked against the current pass's target format), wires up any sampled input as a descriptor
 /// set, and emits the draw. State that changes per frame/pass (the command buffer, the target format) is
-/// pushed in by the <see cref="GraphExecutor"/> via <see cref="BeginFrame"/>/<see cref="BeginPass"/> so the
+/// pushed in by the <see cref="VulkanEngine"/> via <see cref="BeginFrame"/>/<see cref="BeginPass"/> so the
 /// callbacks stay the pure, capture-free closures the design wants (Planning.md §8).
 /// </summary>
 internal sealed unsafe class RenderContext : IRenderContext, IDisposable
@@ -22,7 +22,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private readonly Vk _vk;
 	private readonly TechniqueCache _techniques;
 	private readonly IReadOnlyDictionary<string, TechniqueTemplate> _registry;
-	private readonly TransientResources _resources;
+	// Set per active graph by the engine (SetTransients): a graph swap rebinds this to the new graph's transients
+	// while the rest of the context (samplers, technique cache, the registry) is reused.
+	private TransientResources _resources = null!;
 	private readonly DescriptorAllocator _descriptors;
 	private readonly MeshStore _meshes;
 	private readonly Sampler _nearestSampler;
@@ -64,7 +66,6 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		VulkanContext ctx,
 		TechniqueCache techniques,
 		IReadOnlyDictionary<string, TechniqueTemplate> registry,
-		TransientResources resources,
 		DescriptorAllocator descriptors,
 		MeshStore meshes)
 	{
@@ -72,14 +73,16 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_vk = ctx.Vk;
 		_techniques = techniques;
 		_registry = registry;
-		_resources = resources;
 		_descriptors = descriptors;
 		_meshes = meshes;
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
 	}
 
-	/// <summary>The host's ImGui renderer (backend-specific), wired in by the executor when ImGui is enabled.</summary>
+	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
+	public void SetTransients(TransientResources resources) => _resources = resources;
+
+	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
 	public void SetImGui(ImGuiRenderer renderer) => _imgui = renderer;
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, and timing before any pass records.</summary>

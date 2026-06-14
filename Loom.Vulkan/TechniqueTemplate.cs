@@ -1,3 +1,5 @@
+using Loom.Core;
+
 namespace Loom.Vulkan;
 
 /// <summary>

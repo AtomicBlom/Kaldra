@@ -1,6 +1,7 @@
 using System.Numerics;
 
 using Silk.NET.Vulkan;
+using BlendMode = Loom.Core.BlendMode;
 
 namespace Loom.Vulkan;
 
