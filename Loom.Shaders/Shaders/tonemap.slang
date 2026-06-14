@@ -6,6 +6,12 @@
 [[vk::binding(0, 0)]] Sampler2D sceneTex;    // bloomed scene (HDR)
 [[vk::binding(1, 0)]] Sampler2D exposureTex; // 1×1 auto-exposure multiplier
 
+// hdr != 0 selects the HDR-display output path (M7-B6): the engine sets it from the negotiated swapchain
+// (ctx.HdrOutput). On an scRGB (linear) swapchain the terminal pass writes these values straight through, so
+// the only difference HDR makes is here — preserve the extended range instead of compressing it to SDR.
+struct PushConstants { float hdr; };
+[[vk::push_constant]] PushConstants pc;
+
 struct VsOut
 {
 	float4 position : SV_Position;
@@ -28,6 +34,16 @@ float4 fragmentMain(VsOut input) : SV_Target
 {
 	float exposure = exposureTex.Sample(float2(0.5, 0.5)).r;
 	float3 c = sceneTex.Sample(input.uv).rgb * exposure;
-	c = c / (1.0 + c * 0.5); // gentle Reinhard shoulder — keeps the bright cube + glow from clipping flat
+
+	if (pc.hdr > 0.5)
+	{
+		// HDR output (scRGB linear, 1.0 == 80 nits): don't compress — scale SDR-white to a comfortable paper
+		// white so mid-tones sit at ~200 nits and the bright cube + glow push above paper white as real HDR
+		// highlights (clamped only by the display's peak). No transfer-function encode: scRGB is linear.
+		const float paperWhite = 2.5; // ~200-nit paper white relative to scRGB's 80-nit unit
+		return float4(c * paperWhite, 1.0);
+	}
+
+	c = c / (1.0 + c * 0.5); // SDR: gentle Reinhard shoulder — keeps the bright cube + glow from clipping flat
 	return float4(c, 1.0);
 }

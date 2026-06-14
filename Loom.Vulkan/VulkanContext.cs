@@ -36,6 +36,13 @@ public sealed unsafe class VulkanContext : IDisposable
 	public uint PresentFamily { get; private set; }
 	public string DeviceName { get; private set; } = "<unknown>";
 
+	/// <summary>
+	/// True if <c>VK_EXT_swapchain_colorspace</c> was enabled at instance creation — without it the surface
+	/// only reports the SDR sRGB colour space, so HDR swapchain colour spaces are unavailable (M7-A7). The
+	/// swapchain only attempts an HDR format when this is set.
+	/// </summary>
+	public bool HdrColorSpaceAvailable { get; private set; }
+
 	public VulkanContext(IVkSurface surface, bool enableValidation = true)
 	{
 		Vk = Vk.GetApi();
@@ -74,6 +81,21 @@ public sealed unsafe class VulkanContext : IDisposable
 		return true;
 	}
 
+	private HashSet<string> AvailableInstanceExtensions()
+	{
+		uint count = 0;
+		Vk.EnumerateInstanceExtensionProperties((byte*)null, ref count, null);
+		var properties = new ExtensionProperties[count];
+		var names = new HashSet<string>();
+		fixed (ExtensionProperties* pProperties = properties)
+		{
+			Vk.EnumerateInstanceExtensionProperties((byte*)null, ref count, pProperties);
+			for (uint i = 0; i < count; i++)
+				names.Add(SilkMarshal.PtrToString((nint)pProperties[i].ExtensionName) ?? "");
+		}
+		return names;
+	}
+
 	private void CreateInstance(IVkSurface surface)
 	{
 		ApplicationInfo appInfo = new()
@@ -91,6 +113,16 @@ public sealed unsafe class VulkanContext : IDisposable
 		var extensions = SilkMarshal.PtrToStringArray((nint)windowExtensions, (int)windowExtCount);
 		if (_validation)
 			extensions = [.. extensions, ExtDebugUtils.ExtensionName];
+
+		// VK_EXT_swapchain_colorspace lets the surface report HDR colour spaces (scRGB, HDR10) so the swapchain
+		// can negotiate one when EngineSettings.HdrOutput is set (M7-A7). Opt-in only if the loader has it;
+		// absence is fine — the swapchain falls back to SDR sRGB.
+		const string swapchainColorspace = "VK_EXT_swapchain_colorspace";
+		if (AvailableInstanceExtensions().Contains(swapchainColorspace))
+		{
+			extensions = [.. extensions, swapchainColorspace];
+			HdrColorSpaceAvailable = true;
+		}
 
 		InstanceCreateInfo createInfo = new()
 		{

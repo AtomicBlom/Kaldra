@@ -10,18 +10,28 @@ public sealed unsafe class Swapchain : IDisposable
 {
 	private readonly VulkanContext _ctx;
 	private readonly bool _vsync;
+	private readonly bool _hdrOutput;
 
 	public SwapchainKHR Handle { get; private set; }
 	public Format ImageFormat { get; private set; }
+	public ColorSpaceKHR ColorSpace { get; private set; }
 	public Extent2D Extent { get; private set; }
 	public Image[] Images { get; private set; } = [];
 	public ImageView[] ImageViews { get; private set; } = [];
 	public uint ImageCount => (uint)Images.Length;
 
-	public Swapchain(VulkanContext ctx, Extent2D windowExtent, bool vsync)
+	/// <summary>
+	/// True when an HDR colour space was negotiated (HDR output requested, the colour-space extension present,
+	/// and the surface offered an HDR format). The terminal tone-map maps to display nits in this mode rather
+	/// than compressing to SDR (M7-A7/B6). False when HDR was not requested or the surface only offers SDR.
+	/// </summary>
+	public bool HdrActive { get; private set; }
+
+	public Swapchain(VulkanContext ctx, Extent2D windowExtent, bool vsync, bool hdrOutput = false)
 	{
 		_ctx = ctx;
 		_vsync = vsync;
+		_hdrOutput = hdrOutput;
 		Create(windowExtent);
 	}
 
@@ -41,9 +51,15 @@ public sealed unsafe class Swapchain : IDisposable
 		var surfaceFormat = ChooseFormat();
 		var presentMode = ChoosePresentMode();
 		var extent = ChooseExtent(caps, windowExtent);
+		HdrActive = surfaceFormat.ColorSpace != ColorSpaceKHR.SpaceSrgbNonlinearKhr;
 
 		if (oldSwapchain.Handle == 0) // First create only — not every resize.
+		{
 			Console.WriteLine($"[loom] present={presentMode}, vsync={_vsync}");
+			Console.WriteLine($"[loom] swapchain format={surfaceFormat.Format}, colorspace={surfaceFormat.ColorSpace}, hdr={HdrActive}");
+			if (_hdrOutput && !HdrActive)
+				Console.WriteLine("[loom] HDR output requested but no HDR-capable surface format/colour space available — using SDR.");
+		}
 
 		var imageCount = caps.MinImageCount + 1;
 		if (caps.MaxImageCount > 0 && imageCount > caps.MaxImageCount)
@@ -88,6 +104,7 @@ public sealed unsafe class Swapchain : IDisposable
 			.Check("vkCreateSwapchainKHR");
 		Handle = swapchain;
 		ImageFormat = surfaceFormat.Format;
+		ColorSpace = surfaceFormat.ColorSpace;
 		Extent = extent;
 
 		uint count = 0;
@@ -107,10 +124,30 @@ public sealed unsafe class Swapchain : IDisposable
 		fixed (SurfaceFormatKHR* pFormats = formats)
 			_ctx.KhrSurface.GetPhysicalDeviceSurfaceFormats(_ctx.PhysicalDevice, _ctx.Surface, ref count, pFormats);
 
-		foreach (var format in formats)
-			if (format.Format == Format.B8G8R8A8Srgb && format.ColorSpace == ColorSpaceKHR.SpaceSrgbNonlinearKhr)
-				return format;
+		// HDR output (M7-A7): negotiate scRGB (linear FP16). Its linear transfer means the terminal pass writes
+		// its already-linear output straight through with no encode — the only HDR-specific change is the
+		// tone-map preserving the extended range (M7-B6). Needs VK_EXT_swapchain_colorspace, or the surface never
+		// reports it. (HDR10/PQ would need a PQ-encode in the terminal shader — deferred; scRGB covers Windows
+		// HDR.) Falls through to the SDR sRGB choice when HDR isn't requested or isn't available.
+		if (_hdrOutput && _ctx.HdrColorSpaceAvailable
+			&& TryFind(formats, Format.R16G16B16A16Sfloat, ColorSpaceKHR.SpaceExtendedSrgbLinearExt, out var scrgb))
+			return scrgb;
+
+		if (TryFind(formats, Format.B8G8R8A8Srgb, ColorSpaceKHR.SpaceSrgbNonlinearKhr, out var srgb))
+			return srgb;
 		return formats[0];
+	}
+
+	private static bool TryFind(SurfaceFormatKHR[] formats, Format format, ColorSpaceKHR colorSpace, out SurfaceFormatKHR found)
+	{
+		foreach (var candidate in formats)
+			if (candidate.Format == format && candidate.ColorSpace == colorSpace)
+			{
+				found = candidate;
+				return true;
+			}
+		found = default;
+		return false;
 	}
 
 	private PresentModeKHR ChoosePresentMode()

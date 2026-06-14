@@ -43,6 +43,15 @@ public interface IRenderContext
 	Camera Camera { get; }
 
 	/// <summary>
+	/// True when the engine negotiated an HDR display output (Planning.md §3 — requested via
+	/// <c>EngineSettings.HdrOutput</c> and granted by the surface). The terminal tone-map pulls this to map the
+	/// scene to display nits (extended-range, highlights above paper white) instead of compressing to SDR; false
+	/// means the standard SDR path. Engine-provided frame context, like <see cref="Camera"/> — pulled, not
+	/// captured (§8), so the same graph renders correctly under either output.
+	/// </summary>
+	bool HdrOutput { get; }
+
+	/// <summary>
 	/// Draw a fullscreen triangle with the named technique, sampling zero or more <paramref name="inputs"/>
 	/// (each bound, in the order given, as the technique's 0..N-1 sampled input — the backend maps that ordinal
 	/// to its own binding model). §5's

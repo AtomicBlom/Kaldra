@@ -101,7 +101,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_vk = _ctx.Vk;
 		_shaderDir = settings.ShaderDirectory;
 		_windowExtent = new Extent2D((uint)width, (uint)height);
-		_swapchain = new Swapchain(_ctx, _windowExtent, settings.VSync);
+		_swapchain = new Swapchain(_ctx, _windowExtent, settings.VSync, settings.HdrOutput);
 
 		// One VMA allocator backs both transients and meshes. The command pool must exist before the mesh
 		// store (geometry uploads use a one-time copy command), so create it up front.
@@ -300,6 +300,14 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_vk.ResetFences(_ctx.Device, 1, in _inFlight[_currentFrame]);
 
 		var capturePath = _capturePath;
+		// PNG capture decodes an 8-bit RGBA/BGRA swapchain; an HDR swapchain (FP16 / 10-bit packed) would
+		// decode to garbage, so skip it there rather than write a corrupt file (HDR is verified on-display).
+		if (capturePath is not null && !CaptureSupported())
+		{
+			Console.WriteLine($"[loom] capture skipped: swapchain format {_swapchain.ImageFormat} is not an 8-bit RGBA/BGRA format (HDR output).");
+			_capturePath = null;
+			capturePath = null;
+		}
 		var captureSize = (ulong)_swapchain.Extent.Width * _swapchain.Extent.Height * 4;
 		Buffer captureBuffer = default;
 		DeviceMemory captureMemory = default;
@@ -383,7 +391,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _swapchain.Extent);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _swapchain.Extent, _swapchain.HdrActive);
 
 		foreach (var pass in _plan.Passes)
 		{
@@ -694,6 +702,11 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_vk.BindBufferMemory(_ctx.Device, buffer, memory, 0).Check("vkBindBufferMemory");
 		return (buffer, memory);
 	}
+
+	// PNG capture only handles 8-bit RGBA/BGRA swapchains (the formats WriteCapture decodes); HDR swapchain
+	// formats (FP16 / 10-bit packed) are not capturable to PNG here.
+	private bool CaptureSupported() =>
+		_swapchain.ImageFormat is VkFormat.B8G8R8A8Srgb or VkFormat.B8G8R8A8Unorm or VkFormat.R8G8B8A8Srgb or VkFormat.R8G8B8A8Unorm;
 
 	private void WriteCapture(DeviceMemory memory, ulong size, uint width, uint height, string path)
 	{

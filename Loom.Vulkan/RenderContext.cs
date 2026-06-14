@@ -62,6 +62,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 	public Camera SunView => _sunView;
 
+	public bool HdrOutput { get; private set; }
+
 	public RenderContext(
 		VulkanContext ctx,
 		TechniqueCache techniques,
@@ -85,8 +87,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
 	public void SetImGui(ImGuiRenderer renderer) => _imgui = renderer;
 
-	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, and timing before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, Extent2D fbExtent)
+	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, and HDR-output state before any pass records.</summary>
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
@@ -97,6 +99,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_hoverId = hoverId;
 		_imguiDrawData = imguiDrawData;
 		_fbExtent = fbExtent;
+		HdrOutput = hdrOutput;
 	}
 
 	/// <summary>
