@@ -8,6 +8,8 @@ using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 using Silk.NET.Maths;
 
+using DxgiFormat = Silk.NET.DXGI.Format;
+
 namespace Loom.DX12;
 
 /// <summary>
@@ -27,6 +29,8 @@ public sealed unsafe class DX12Engine : IEngine
 	private readonly DX12Context _ctx;
 	private readonly DX12Swapchain _swapchain;
 	private readonly DX12Triangle _triangle;
+	private readonly DX12TechniqueCache _techniques;
+	private readonly DX12RenderContext _context;
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -36,6 +40,12 @@ public sealed unsafe class DX12Engine : IEngine
 	private nint _fenceEvent;
 	private int _debugErrors;
 	private bool _disposed;
+
+	// The active graph + its derived plan (null until SetGraph). Per-buffer backbuffer state is tracked because
+	// D3D12 transition barriers need the resource's exact current state (see DX12StateMapping).
+	private RenderGraph? _graph;
+	private BarrierPlan? _barrierPlan;
+	private readonly ResourceStates[] _backbufferState = new ResourceStates[BufferCount];
 
 	private string? _capturePath;
 	private ComPtr<ID3D12Resource> _readback;
@@ -61,6 +71,10 @@ public sealed unsafe class DX12Engine : IEngine
 			throw new InvalidOperationException("CreateEvent failed for the DX12 frame-pacing fence.");
 
 		_triangle = new DX12Triangle(_ctx, _swapchain.Format);
+		_techniques = new DX12TechniqueCache(_ctx);
+		_context = new DX12RenderContext(_techniques);
+		for (uint i = 0; i < BufferCount; i++)
+			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
 		Console.WriteLine($"[loom] DX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
 	}
@@ -69,6 +83,15 @@ public sealed unsafe class DX12Engine : IEngine
 	public string DeviceName => _ctx.DeviceName;
 
 	public void Render(FrameInputs inputs)
+	{
+		if (_graph is not null)
+			RenderGraphFrame(inputs);
+		else
+			RenderLegacy(inputs);
+	}
+
+	// Pre-executor path (slices 1-2): a fixed clear + hand-baked triangle, used when no graph is set.
+	private void RenderLegacy(FrameInputs inputs)
 	{
 		var index = _swapchain.CurrentIndex;
 		WaitForFrame(index); // the allocator we're about to reset must be free on the GPU
@@ -120,18 +143,142 @@ public sealed unsafe class DX12Engine : IEngine
 		}
 	}
 
+	// Graph-driven path: consume the neutral BarrierPlan derived in SetGraph. Per pass, emit its barriers, bind
+	// its derived render target(s), run its record callback; then the final present transition. The DX12 mirror
+	// of VulkanEngine's per-frame RecordGraph.
+	private void RenderGraphFrame(FrameInputs inputs)
+	{
+		var index = _swapchain.CurrentIndex;
+		WaitForFrame(index);
+
+		SilkMarshal.ThrowHResult(_allocators[index].Reset());
+		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
+		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput);
+
+		foreach (var pass in _barrierPlan!.Passes)
+		{
+			foreach (var transition in pass.Transitions)
+				EmitGraphTransition(index, transition);
+
+			if (pass.Pass.Kind == PassKind.Compute)
+				throw new NotSupportedException("DX12: compute passes land in a later executor slice.");
+
+			RecordRasterPass(index, pass);
+		}
+
+		// Optional capture: copy the present target before the final present transition (which then runs from
+		// COPY_SOURCE, since EmitGraphTransition tracks the real state).
+		var capturing = _capturePath is not null;
+		uint rowPitch = 0;
+		if (capturing)
+		{
+			var backbuffer = _swapchain.BackBuffer(index);
+			if (_backbufferState[index] != ResourceStates.CopySource)
+			{
+				Transition(backbuffer, _backbufferState[index], ResourceStates.CopySource);
+				_backbufferState[index] = ResourceStates.CopySource;
+			}
+			rowPitch = CopyBackbufferToReadback(backbuffer);
+		}
+
+		foreach (var transition in _barrierPlan.FinalTransitions)
+			EmitGraphTransition(index, transition);
+
+		SilkMarshal.ThrowHResult(_commandList.Close());
+		var list = (ID3D12CommandList*)_commandList.Handle;
+		_ctx.GraphicsQueue.ExecuteCommandLists(1, &list);
+		_swapchain.Present(_settings.VSync);
+
+		_fenceValue++;
+		SilkMarshal.ThrowHResult(_ctx.GraphicsQueue.Signal(_fence, _fenceValue));
+		_frameFenceValues[index] = _fenceValue;
+		_debugErrors += _ctx.DrainDebugMessages();
+
+		if (capturing)
+		{
+			WaitForFrame(index);
+			WriteCapture(_capturePath!, rowPitch);
+			_capturePath = null;
+		}
+	}
+
+	// Bind a raster pass's colour target(s) from its derived AttachmentActions, apply load actions, then run the
+	// callback. This first executor step handles the backbuffer target only (transient targets follow next slice).
+	private void RecordRasterPass(uint index, PassBarriers pass)
+	{
+		var rtv = stackalloc CpuDescriptorHandle[8];
+		var formats = stackalloc DxgiFormat[8];
+		var colorCount = 0;
+		uint width = 0, height = 0;
+
+		foreach (var attachment in pass.Attachments)
+		{
+			if (attachment.State != ResourceState.ColorAttachment)
+				throw new NotSupportedException("DX12: depth attachments land in a later executor slice.");
+			if (!attachment.Resource.IsBackbuffer)
+				throw new NotSupportedException("DX12: transient render targets land in the next executor slice.");
+
+			rtv[colorCount] = _swapchain.RtvHandle(index);
+			formats[colorCount] = _swapchain.Format;
+			width = _swapchain.Width;
+			height = _swapchain.Height;
+			colorCount++;
+		}
+
+		if (colorCount == 0)
+			throw new NotSupportedException("DX12: a raster pass with no colour target is not supported yet.");
+
+		_commandList.OMSetRenderTargets((uint)colorCount, rtv, false, (CpuDescriptorHandle*)null);
+
+		var clear = stackalloc float[4] { 0f, 0f, 0f, 1f };
+		for (var c = 0; c < pass.Attachments.Length; c++)
+		{
+			if (pass.Attachments[c].Load == LoadAction.Clear)
+				_commandList.ClearRenderTargetView(rtv[c], clear, 0u, (Box2D<int>*)null);
+		}
+
+		var viewport = new Viewport { TopLeftX = 0, TopLeftY = 0, Width = width, Height = height, MinDepth = 0, MaxDepth = 1 };
+		var scissor = new Box2D<int>(0, 0, (int)width, (int)height);
+		_commandList.RSSetViewports(1, &viewport);
+		_commandList.RSSetScissorRects(1, &scissor);
+
+		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount));
+		pass.Pass.Record?.Invoke(_context);
+	}
+
+	// Track the resource's real D3D12 state and emit a transition only when the required state differs (D3D12
+	// barriers need the exact current state, unlike Vulkan's "Undefined" old layout — see DX12StateMapping).
+	private void EmitGraphTransition(uint index, ResourceTransition transition)
+	{
+		if (!transition.Resource.IsBackbuffer)
+			throw new NotSupportedException("DX12: transient resources land in the next executor slice.");
+
+		var target = DX12StateMapping.For(transition.To);
+		if (_backbufferState[index] == target)
+			return;
+		Transition(_swapchain.BackBuffer(index), _backbufferState[index], target);
+		_backbufferState[index] = target;
+	}
+
 	/// <summary>
 	/// Record (into the open command list) the copy of the just-rendered backbuffer into the readback buffer,
 	/// leaving the backbuffer in PRESENT state. Returns the row pitch of the readback layout.
 	/// </summary>
 	private uint RecordCapture(ComPtr<ID3D12Resource> backbuffer)
 	{
+		Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.CopySource);
+		var rowPitch = CopyBackbufferToReadback(backbuffer);
+		Transition(backbuffer, ResourceStates.CopySource, ResourceStates.Present);
+		return rowPitch;
+	}
+
+	/// <summary>Record the copy of <paramref name="backbuffer"/> (already in COPY_SOURCE) into the readback buffer; returns the row pitch.</summary>
+	private uint CopyBackbufferToReadback(ComPtr<ID3D12Resource> backbuffer)
+	{
 		var width = _swapchain.Width;
 		var height = _swapchain.Height;
 		var rowPitch = Align(width * 4, 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
 		EnsureReadback((ulong)rowPitch * height);
-
-		Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.CopySource);
 
 		var dst = new TextureCopyLocation
 		{
@@ -153,8 +300,6 @@ public sealed unsafe class DX12Engine : IEngine
 			Anonymous = new TextureCopyLocationUnion { SubresourceIndex = 0 }
 		};
 		_commandList.CopyTextureRegion(&dst, 0, 0, 0, &src, (Box*)null);
-
-		Transition(backbuffer, ResourceStates.CopySource, ResourceStates.Present);
 		return rowPitch;
 	}
 
@@ -275,6 +420,7 @@ public sealed unsafe class DX12Engine : IEngine
 			CloseHandle(_fenceEvent);
 		if (_readback.Handle is not null)
 			_readback.Dispose();
+		_techniques.Dispose();
 		_triangle.Dispose();
 		_fence.Dispose();
 		_commandList.Dispose();
@@ -284,11 +430,40 @@ public sealed unsafe class DX12Engine : IEngine
 		_ctx.Dispose();
 	}
 
-	// --- Graph-driven surface: lands in the next slice (see the type remarks). ---
-	private const string NextSlice = "The DX12 backend's render-graph execution lands in the next slice; this first slice proves the seam with a cleared window + hand-baked triangle.";
-	public void DefineTechnique(string name, TechniqueDescriptor descriptor) => throw new NotSupportedException(NextSlice);
+	/// <summary>
+	/// Register a technique under a logical name. This first executor step resolves the built-in HLSL the demo
+	/// graphs use (the interim stand-in for the offline Slang→DXIL pipeline); a future slice resolves real
+	/// shader bytecode by name exactly as the Vulkan backend resolves embedded SPIR-V.
+	/// </summary>
+	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
+	{
+		if (!DX12Shaders.Builtins.TryGetValue(descriptor.Shader, out var hlsl))
+			throw new NotSupportedException($"DX12: no built-in HLSL for shader '{descriptor.Shader}' (the offline DXIL pipeline that resolves real shaders is a later slice).");
+
+		_techniques.Register(name, new DX12TechniqueTemplate(
+			hlsl, descriptor.VertexEntry, descriptor.FragmentEntry,
+			InputCount: 0, descriptor.HasFragmentPush));
+	}
+
+	/// <summary>
+	/// Make <paramref name="graph"/> the active graph: derive its schedule + barrier plan (the backend-neutral
+	/// Execute-layer products, identical to what the Vulkan engine consumes) and route <see cref="Render"/>
+	/// through the executor. Transient-resource allocation (aliasing, the sample/blit path) lands next slice.
+	/// </summary>
+	public void SetGraph(RenderGraph graph)
+	{
+		ArgumentNullException.ThrowIfNull(graph);
+		if (_graph is not null)
+			WaitIdle();
+
+		_graph = graph;
+		_barrierPlan = BarrierPlan.Derive(GraphSchedule.Derive(graph));
+		for (uint i = 0; i < BufferCount; i++)
+			_backbufferState[i] = ResourceStates.Present;
+	}
+
+	private const string NextSlice = "DX12: this IEngine member lands in a later executor slice.";
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => throw new NotSupportedException(NextSlice);
-	public void SetGraph(RenderGraph graph) => throw new NotSupportedException(NextSlice);
 	public void EnableImGui() => throw new NotSupportedException(NextSlice);
 	public float SamplePick(int x, int y) => throw new NotSupportedException(NextSlice);
 

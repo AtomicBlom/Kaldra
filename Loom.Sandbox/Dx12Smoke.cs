@@ -48,7 +48,21 @@ internal static class Dx12Smoke
 			?? throw new InvalidOperationException("The DX12 backend did not register into Engine.AvailableEngines.");
 		using var engine = backend.Create(hwnd, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 
-		Console.WriteLine($"Loom DX12 first slice on {engine.DeviceName} ({engine.BackendName}). Close the window to exit.");
+		// LOOM_DX12_GRAPH=1 routes through the render-graph executor (a graph-described fullscreen pass writing
+		// the backbuffer) instead of the fixed clear+triangle path — the proof the executor consumes the graph.
+		var graphMode = Environment.GetEnvironmentVariable("LOOM_DX12_GRAPH") is "1" or "true";
+		if (graphMode)
+		{
+			engine.DefineTechnique("gradient", new TechniqueDescriptor("gradient"));
+			var graph = RenderGraph.Define(g =>
+			{
+				g.Pass("gradient").Writes(g.Backbuffer).Draw(ctx => ctx.FullScreen("gradient"));
+				g.Present(g.Backbuffer);
+			});
+			engine.SetGraph(graph);
+		}
+
+		Console.WriteLine($"Loom DX12 {(graphMode ? "graph executor" : "first slice")} on {engine.DeviceName} ({engine.BackendName}). Close the window to exit.");
 
 		var frame = 0;
 		var elapsed = 0f;
