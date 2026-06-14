@@ -52,6 +52,39 @@ public sealed class GraphBuilder
 	}
 
 	/// <summary>
+	/// Declare a <em>backbuffer-relative</em> resolution domain: its pixel size is <paramref name="scale"/> ×
+	/// the native backbuffer, re-resolved at bake and on every resize so it tracks the window. Use this for
+	/// full- or fractional-screen targets (e.g. <c>scale: 0.5f</c> for a half-res pass). For a pixel-art world
+	/// that must stay a constant size regardless of window, use the fixed <see cref="Domain(string,int,int)"/>
+	/// overload instead. (<see cref="Screen"/> is the <c>scale: 1</c> case — the native-resolution domain.)
+	/// </summary>
+	public Domain Domain(string name, float scale)
+	{
+		if (scale <= 0f)
+			throw new ArgumentOutOfRangeException(nameof(scale), $"Domain '{name}' relative scale must be positive.");
+		if (!_domainNames.Add(name))
+			throw new InvalidOperationException($"Duplicate domain name '{name}'.");
+
+		var domain = new Domain(this, name, width: 0, height: 0, isBackbuffer: false, relativeScale: scale);
+		_domains.Add(domain);
+		return domain;
+	}
+
+	/// <summary>
+	/// The native-resolution screen domain — a convenience alias for <c>Backbuffer.Domain</c>. Declare
+	/// full-resolution sibling targets here (e.g. a HUD scratch buffer at native res, on top of a pixelated
+	/// world). Tracks the swapchain size on resize.
+	/// </summary>
+	public Domain Screen
+	{
+		get
+		{
+			_ = Backbuffer; // ensure the backbuffer domain exists
+			return _backbufferDomain!;
+		}
+	}
+
+	/// <summary>
 	/// The swapchain colour target (native resolution; backend-chosen format). This <em>is</em> the
 	/// present surface — hand it to <c>.Writes</c>/<c>.Blends</c> and to <see cref="Present"/>. Its
 	/// <see cref="ResourceHandle.Domain"/> is the native-resolution domain, for declaring sibling

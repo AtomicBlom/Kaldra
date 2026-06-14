@@ -27,6 +27,45 @@ public class DomainAndResourceTests
 			RenderGraph.Define(g => g.Domain("bad", width, height)));
 
 	[Fact]
+	public void Screen_is_the_backbuffer_domain()
+	{
+		RenderGraph.Define(g =>
+		{
+			var screen = g.Screen;
+			Assert.True(screen.IsBackbuffer);
+			Assert.Same(g.Backbuffer.Domain, screen); // the same native-resolution domain
+		});
+	}
+
+	[Fact]
+	public void Relative_domain_records_its_scale_and_is_not_fixed()
+	{
+		RenderGraph.Define(g =>
+		{
+			var half = g.Domain("half", scale: 0.5f);
+			Assert.Equal(0.5f, half.RelativeScale);
+			Assert.False(half.IsBackbuffer);
+			Assert.Equal(0, half.Width); // pixel size is backend-resolved against the swapchain
+			Assert.Equal(0, half.Height);
+		});
+	}
+
+	[Theory]
+	[InlineData(0f)]
+	[InlineData(-0.5f)]
+	public void Relative_domain_rejects_nonpositive_scale(float scale) =>
+		Assert.Throws<ArgumentOutOfRangeException>(() =>
+			RenderGraph.Define(g => g.Domain("bad", scale)));
+
+	[Fact]
+	public void Relative_scale_distinguishes_the_graph_hash()
+	{
+		var a = RenderGraph.Define(g => { g.Domain("d", scale: 0.5f); });
+		var b = RenderGraph.Define(g => { g.Domain("d", scale: 0.25f); });
+		Assert.NotEqual(a.Hash(), b.Hash());
+	}
+
+	[Fact]
 	public void Duplicate_domain_name_throws() =>
 		Assert.Throws<InvalidOperationException>(() =>
 			RenderGraph.Define(g =>

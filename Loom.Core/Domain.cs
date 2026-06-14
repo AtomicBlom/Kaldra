@@ -26,13 +26,23 @@ public sealed class Domain
 	/// <summary>True for the swapchain domain (native resolution, holds the present target).</summary>
 	public bool IsBackbuffer { get; }
 
-	internal Domain(GraphBuilder graph, string name, int width, int height, bool isBackbuffer)
+	/// <summary>
+	/// For a <em>backbuffer-relative</em> domain (<see cref="GraphBuilder.Domain(string,float)"/>), the fraction
+	/// of the native backbuffer this domain tracks — its pixel size is resolved against the swapchain at bake and
+	/// re-resolved on every resize. 0 for a fixed-size domain (use <see cref="Width"/>/<see cref="Height"/>) or
+	/// the native backbuffer domain (<see cref="IsBackbuffer"/>). A relative domain leaves Width/Height at 0; the
+	/// backend computes its extent.
+	/// </summary>
+	public float RelativeScale { get; }
+
+	internal Domain(GraphBuilder graph, string name, int width, int height, bool isBackbuffer, float relativeScale = 0f)
 	{
 		_graph = graph;
 		Name = name;
 		Width = width;
 		Height = height;
 		IsBackbuffer = isBackbuffer;
+		RelativeScale = relativeScale;
 	}
 
 	/// <summary>Declare a colour target in this domain.</summary>

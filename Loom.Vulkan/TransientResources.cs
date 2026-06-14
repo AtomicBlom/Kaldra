@@ -123,7 +123,8 @@ internal sealed unsafe class TransientResources : IDisposable
 
 		image.Format = FormatMapping.ToVulkan(resource.Format);
 		image.Usage = usage;
-		image.SwapchainSized = resource.Domain.IsBackbuffer;
+		// Backbuffer-domain and backbuffer-relative resources track the swapchain extent, so they're rebuilt on resize.
+		image.SwapchainSized = resource.Domain.IsBackbuffer || resource.Domain.RelativeScale > 0f;
 	}
 
 	// Group the owned (non-backbuffer) resources by their alias bucket and back each bucket with one VMA
@@ -244,11 +245,19 @@ internal sealed unsafe class TransientResources : IDisposable
 			}
 	}
 
-	// Backbuffer-domain resources follow the native swapchain extent; fixed domains use their declared size.
+	// Backbuffer-domain resources follow the native swapchain extent; backbuffer-relative domains follow a
+	// fraction of it; fixed domains use their declared size.
 	private Extent2D ExtentOf(ResourceHandle resource)
 	{
 		if (resource.Domain.IsBackbuffer)
 			return _swapExtent;
+		if (resource.Domain.RelativeScale > 0f)
+		{
+			var f = resource.Domain.RelativeScale * resource.Scale; // domain fraction × the resource's own (mip) scale
+			return new Extent2D(
+				Math.Max(1u, (uint)MathF.Round(_swapExtent.Width * f)),
+				Math.Max(1u, (uint)MathF.Round(_swapExtent.Height * f)));
+		}
 		var (w, h) = resource.Resolve();
 		return new Extent2D((uint)w, (uint)h);
 	}
