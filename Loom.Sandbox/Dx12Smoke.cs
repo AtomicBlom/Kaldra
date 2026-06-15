@@ -113,7 +113,7 @@ internal static class Dx12Smoke
 
 		// The sun: a directional light, constant — handed in every frame for the demos that read ctx.SunView
 		// (Shadows / Full). Neutral right-handed projection; the DX12 backend ingests it as-is (no Vulkan Y-flip).
-		var lightDir = Vector3.Normalize(new Vector3(0.6f, 0.55f, 0.45f));
+		var lightDir = Vector3.Normalize(new Vector3(0.45f, 0.55f, -0.6f));
 		var sunCamera = new Camera(
 			Matrix4x4.CreateLookAt(lightDir * 7f, Vector3.Zero, Vector3.UnitY),
 			Matrix4x4.CreateOrthographic(9f, 9f, 0.1f, 14f));
