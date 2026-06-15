@@ -156,6 +156,10 @@ internal static class Dx12Smoke
 			// it as-is (no Y-flip, unlike Vulkan), since D3D12 clip space is already +Y-up (Camera/M7-B5).
 			// When capturing, FREEZE the orbit at a fixed angle so DX12 and Vulkan grab the identical viewpoint
 			// (a deterministic A/B for pixel-diffing — see LOOM_CAPTURE).
+			// Deterministic capture: freeze the orbit AND the scene time + frame delta (matching Program.cs), so the
+			// two backends grab the identical viewpoint, particle phase, and delta-driven auto-exposure convergence.
+			const float captureTime = 1.0f;
+			const double captureDelta = 1.0 / 60.0;
 			var camTime = capturePath is not null ? 0.6f : elapsed;
 			var eye = new Vector3(MathF.Sin(camTime) * 2.5f, 1.6f, MathF.Cos(camTime) * 2.5f);
 			var view = Matrix4x4.CreateLookAt(eye, Vector3.Zero, Vector3.UnitY);
@@ -171,8 +175,8 @@ internal static class Dx12Smoke
 
 			// LOOM_CAPTURE=path grabs the frame to a PNG (a few frames in, so the swapchain has settled),
 			// then exits — the headless pixel-level proof the scene actually renders.
-			if (capturePath is not null && frame == 3)
-				engine.RequestCapture(capturePath);
+			if (capturePath is not null && frame == 60)
+				engine.RequestCapture(capturePath); // late enough that the delta-driven auto-exposure has converged
 
 			fpsTimer += (float)delta;
 			fpsFrames++;
@@ -218,9 +222,17 @@ internal static class Dx12Smoke
 			unsafe { imguiDrawData = (nint)ImGui.GetDrawData().NativePtr; }
 #endif
 
-			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed, Camera = camera, SunView = sunCamera, HoverId = hoverId, ImGuiDrawData = imguiDrawData });
+			engine.Render(new FrameInputs
+			{
+				DeltaSeconds = capturePath is not null ? captureDelta : delta,
+				Time = capturePath is not null ? captureTime : elapsed,
+				Camera = camera,
+				SunView = sunCamera,
+				HoverId = hoverId,
+				ImGuiDrawData = imguiDrawData,
+			});
 
-			if (capturePath is not null && frame >= 3)
+			if (capturePath is not null && frame >= 62)
 				window.Close();
 			else if (smokeFrames > 0 && frame >= smokeFrames)
 			{
