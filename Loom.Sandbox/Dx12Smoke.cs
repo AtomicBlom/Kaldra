@@ -10,18 +10,21 @@ using Silk.NET.Windowing;
 
 namespace Loom.Sandbox;
 
-// First-slice harness for the DirectX 12 backend (Planning.md §2 portability proof). The demo gallery in
-// Program.cs is graph-driven and Vulkan-surface-specific; the DX12 backend's first slice — like Vulkan's own
-// M0/M1 — predates the graph executor, so it gets a focused harness here: a window, the registry-selected DX12
-// engine picked by name (the host names no graphics-API type beyond DX12EngineSettings), and a clear-to-color
-// loop (the hand-baked triangle follows). Build with -p:UseDX12=true and select it at runtime with
-// LOOM_BACKEND=DX12; LOOM_SMOKE_FRAMES=N runs N frames headless then exits, as the Vulkan path does.
+// Harness for the DirectX 12 backend (Planning.md §2 portability proof). The default path runs the SAME IDemo
+// gallery Program.cs runs on Vulkan — identical graph descriptions and technique definitions, driven through
+// the DX12 executor — which is the portability thesis made concrete. Two env-selected low-level proofs sit
+// beside it for the executor's own machinery (transient alloc + cross-pass barrier; transient-memory aliasing).
+//
+// Build with -p:UseDX12=true and select it at runtime with LOOM_BACKEND=DX12. LOOM_SMOKE_FRAMES=N runs N frames
+// headless then exits, and LOOM_CAPTURE=path grabs a frame to a PNG — both as the Vulkan path does.
 internal static class Dx12Smoke
 {
 	public static void Run()
 	{
 		var vsyncEnv = Environment.GetEnvironmentVariable("LOOM_VSYNC");
 		var vsync = vsyncEnv is null || vsyncEnv.ToLowerInvariant() is not ("0" or "false" or "off" or "no");
+		var hdrEnv = Environment.GetEnvironmentVariable("LOOM_HDR");
+		var hdr = hdrEnv is not null && hdrEnv.ToLowerInvariant() is "1" or "true" or "on" or "yes";
 		var smokeFrames = int.TryParse(Environment.GetEnvironmentVariable("LOOM_SMOKE_FRAMES"), out var n) ? n : 0;
 		var capturePath = Environment.GetEnvironmentVariable("LOOM_CAPTURE");
 
@@ -29,7 +32,7 @@ internal static class Dx12Smoke
 		var options = WindowOptions.Default with
 		{
 			Size = new Vector2D<int>(1280, 720),
-			Title = "Loom - DX12 backend (first slice)",
+			Title = "Loom - DX12 backend (demo gallery)",
 			API = GraphicsAPI.None,
 		};
 		using var window = Window.Create(options);
@@ -43,96 +46,26 @@ internal static class Dx12Smoke
 		{
 			EnableValidation = true,
 			VSync = vsync,
+			HdrOutput = hdr,
 			PreferredBackend = "DX12",
-			// The Loom SDK copies the demo shaders' HLSL + reflection here next to the exe; the DX12 backend
-			// resolves a technique's <name>.hlsl/.json from this directory (falling back to its built-ins).
+			// The Loom SDK copies the app shaders' signed DXIL + reflection JSON next to the exe under shaders\;
+			// the DX12 backend resolves a technique's <name>.{vs,ps,cs}.dxil from this directory (engine shaders
+			// resolve from Loom.DX12's embedded DXIL first), falling back to its built-in stand-ins.
 			ShaderDirectory = Path.Combine(AppContext.BaseDirectory, "shaders"),
 		};
 		var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
 			?? throw new InvalidOperationException("The DX12 backend did not register into Engine.AvailableEngines.");
 		using var engine = backend.Create(hwnd, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 
-		// Env-selected graph modes exercise the executor (vs. the fixed clear+triangle path):
-		//   LOOM_DX12_GRAPH=1     — a two-pass offscreen->blit gradient (transient alloc + the cross-pass barrier).
-		//   LOOM_DX12_CUBE=1      — the lit cube + ground plane on a depth buffer (mesh upload, indexed draw, the
-		//                           MVP root constant, and a depth target), the DX12 twin of CubeLightingDemo.
-		//   LOOM_DX12_PARTICLES=1 — the GPU-particle path (§7.6): a compute pass writes a storage buffer, a draw
-		//                           reads it as a per-instance vertex stream (additive sparks over the lit scene).
-		//   LOOM_DX12_ALIAS=1     — a 4-transient blit chain whose non-overlapping lifetimes fold into 2 memory
-		//                           buckets (the §8/M4 AliasPlan → DX12 placed-resource heaps + aliasing barriers).
+		//   LOOM_DX12_GRAPH=1 — a two-pass offscreen->blit gradient (transient alloc + the cross-pass barrier).
+		//   LOOM_DX12_ALIAS=1 — a 4-transient blit chain whose non-overlapping lifetimes fold into 2 memory
+		//                       buckets (the §8/M4 AliasPlan → DX12 placed-resource heaps + aliasing barriers).
+		// With neither set, the real demo gallery runs (the default).
 		var graphMode = Environment.GetEnvironmentVariable("LOOM_DX12_GRAPH") is "1" or "true";
-		var cubeMode = Environment.GetEnvironmentVariable("LOOM_DX12_CUBE") is "1" or "true";
-		var particlesMode = Environment.GetEnvironmentVariable("LOOM_DX12_PARTICLES") is "1" or "true";
 		var aliasMode = Environment.GetEnvironmentVariable("LOOM_DX12_ALIAS") is "1" or "true";
 
-		Mesh cube = default, plane = default;
-		if (cubeMode || particlesMode)
-		{
-			engine.DefineTechnique("lit", new TechniqueDescriptor("lit", HasVertexInput: true));
-			var (cubeVerts, cubeIndices) = Geometry.BuildCube();
-			var (planeVerts, planeIndices) = Geometry.BuildPlane();
-			cube = engine.CreateMesh(cubeVerts, cubeIndices);
-			plane = engine.CreateMesh(planeVerts, planeIndices);
-
-			RenderGraph graph;
-			if (particlesMode)
-			{
-				engine.DefineTechnique("particle.update", new TechniqueDescriptor("particle_update", FragmentEntry: "computeMain", IsCompute: true, HasFragmentPush: true));
-				engine.DefineTechnique("particle.render", new TechniqueDescriptor("particle_render", Blend: BlendMode.Additive, ParticleInput: true));
-				engine.DefineTechnique("blit", new TechniqueDescriptor("blit", LinearFilter: true));
-
-				const int particleCount = 4096;
-				graph = RenderGraph.Define(g =>
-				{
-					var screen = g.Backbuffer;
-					var lit = g.Screen.Color("lit", Format.Rgba16F);
-					var depth = g.Screen.Depth("depth", Format.Depth32F);
-					var particles = g.Buffer("particles", particleCount * 16); // float4 per particle
-
-					g.Pass("scene")
-						.Writes(lit)
-						.WritesDepth(depth)
-						.Draw(ctx =>
-						{
-							ctx.Draw(cube, "lit");
-							ctx.Draw(plane, "lit");
-						});
-
-					// Compute writes the buffer; the draw reads it as a vertex stream — the engine derives the
-					// compute->vertex-input barrier between the two edges (.ReadWrites then .ReadsVertex).
-					g.Compute("particle.update")
-						.ReadWrites(particles)
-						.Dispatch(ctx => ctx.Dispatch("particle.update", ((uint)(particleCount / 64), 1, 1), [ctx.Time, particleCount], [], [particles]));
-
-					g.Pass("particles")
-						.Blends(lit)
-						.ReadsVertex(particles)
-						.Draw(ctx => ctx.DrawParticles(particles, particleCount, "particle.render"));
-
-					g.Pass("blit").Samples(lit).Writes(screen).Draw(ctx => ctx.FullScreen("blit", lit));
-					g.Present(screen);
-				});
-			}
-			else
-			{
-				graph = RenderGraph.Define(g =>
-				{
-					var screen = g.Backbuffer;
-					var depth = g.Screen.Depth("depth", Format.Depth32F);
-					g.Pass("scene")
-						.Writes(screen)
-						.WritesDepth(depth)
-						.Draw(ctx =>
-						{
-							ctx.Draw(cube, "lit");
-							ctx.Draw(plane, "lit");
-						});
-					g.Present(screen);
-				});
-			}
-			engine.SetGraph(graph);
-		}
-		else if (aliasMode)
+		string mode;
+		if (aliasMode)
 		{
 			engine.DefineTechnique("gradient", new TechniqueDescriptor("gradient"));
 			engine.DefineTechnique("blit", new TechniqueDescriptor("blit", LinearFilter: true));
@@ -141,7 +74,7 @@ internal static class Dx12Smoke
 			// memory buckets); the engine places each bucket's pair on one heap and emits the aliasing barrier on
 			// each member's reactivation. A correct result is still the gradient (corruption would mean a missing
 			// or mis-ordered aliasing barrier). The fold is logged at SetGraph.
-			var graph = RenderGraph.Define(g =>
+			engine.SetGraph(RenderGraph.Define(g =>
 			{
 				var a = g.Screen.Color("a", Format.Rgba8Unorm);
 				var b = g.Screen.Color("b", Format.Rgba8Unorm);
@@ -153,28 +86,37 @@ internal static class Dx12Smoke
 				g.Pass("b3").Samples(c).Writes(d).Draw(ctx => ctx.FullScreen("blit", c));
 				g.Pass("b4").Samples(d).Writes(g.Backbuffer).Draw(ctx => ctx.FullScreen("blit", d));
 				g.Present(g.Backbuffer);
-			});
-			engine.SetGraph(graph);
+			}));
+			mode = "transient aliasing";
 		}
 		else if (graphMode)
 		{
 			engine.DefineTechnique("gradient", new TechniqueDescriptor("gradient"));
 			engine.DefineTechnique("blit", new TechniqueDescriptor("blit", LinearFilter: true));
-			// Two passes: render a gradient into an offscreen target, then sample it into the backbuffer. This
-			// exercises the executor's transient allocation + the COLOR_ATTACHMENT->SHADER_READ barrier between
-			// the passes + the SRV/sampler descriptor-table path.
-			var graph = RenderGraph.Define(g =>
+			// Two passes: render a gradient into an offscreen target, then sample it into the backbuffer. Exercises
+			// the executor's transient allocation + the COLOR_ATTACHMENT->SHADER_READ barrier + the SRV/sampler path.
+			engine.SetGraph(RenderGraph.Define(g =>
 			{
 				var offscreen = g.Screen.Color("offscreen", Format.Rgba8Unorm);
 				g.Pass("gradient").Writes(offscreen).Draw(ctx => ctx.FullScreen("gradient"));
 				g.Pass("blit").Samples(offscreen).Writes(g.Backbuffer).Draw(ctx => ctx.FullScreen("blit", offscreen));
 				g.Present(g.Backbuffer);
-			});
-			engine.SetGraph(graph);
+			}));
+			mode = "graph executor";
+		}
+		else
+		{
+			mode = RunGallery(engine);
 		}
 
-		var mode = particlesMode ? "GPU particles" : cubeMode ? "lit cube" : aliasMode ? "transient aliasing" : graphMode ? "graph executor" : "first slice";
 		Console.WriteLine($"Loom DX12 {mode} on {engine.DeviceName} ({engine.BackendName}). Close the window to exit.");
+
+		// The sun: a directional light, constant — handed in every frame for the demos that read ctx.SunView
+		// (Shadows / Full). Neutral right-handed projection; the DX12 backend ingests it as-is (no Vulkan Y-flip).
+		var lightDir = Vector3.Normalize(new Vector3(0.6f, 0.55f, 0.45f));
+		var sunCamera = new Camera(
+			Matrix4x4.CreateLookAt(lightDir * 7f, Vector3.Zero, Vector3.UnitY),
+			Matrix4x4.CreateOrthographic(9f, 9f, 0.1f, 14f));
 
 		var frame = 0;
 		var elapsed = 0f;
@@ -184,8 +126,8 @@ internal static class Dx12Smoke
 			frame++;
 			elapsed += (float)delta;
 
-			// Orbit the cube. Neutral right-handed, +Y-up projection — the DX12 backend ingests it as-is (no
-			// Y-flip, unlike Vulkan), since D3D12 clip space is already +Y-up (Camera/M7-B5).
+			// Orbit the camera around the cube. Neutral right-handed, +Y-up projection — the DX12 backend ingests
+			// it as-is (no Y-flip, unlike Vulkan), since D3D12 clip space is already +Y-up (Camera/M7-B5).
 			var eye = new Vector3(MathF.Sin(elapsed) * 2.5f, 1.6f, MathF.Cos(elapsed) * 2.5f);
 			var view = Matrix4x4.CreateLookAt(eye, Vector3.Zero, Vector3.UnitY);
 			var aspect = window.FramebufferSize.Y == 0 ? 1f : (float)window.FramebufferSize.X / window.FramebufferSize.Y;
@@ -197,7 +139,7 @@ internal static class Dx12Smoke
 			if (capturePath is not null && frame == 3)
 				engine.RequestCapture(capturePath);
 
-			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed, Camera = camera });
+			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed, Camera = camera, SunView = sunCamera });
 
 			if (capturePath is not null && frame >= 3)
 				window.Close();
@@ -207,6 +149,49 @@ internal static class Dx12Smoke
 
 		window.Run();
 		engine.WaitIdle();
+	}
+
+	// Build + run the per-capability demo gallery (the same IDemo classes Program.cs runs on Vulkan), selecting
+	// one by LOOM_DEMO=<name|index>. Every demo's techniques are registered once (idempotent across demos that
+	// share one) and every graph is built; only the selected graph is made active. Returns the selected demo's
+	// name for the status line. Demos that exercise a not-yet-ported DX12 capability (Tonemapping's persistent
+	// storage image; Highlighting/Full's readback) throw a clear NotSupportedException at SetGraph if selected.
+	private static string RunGallery(IEngine engine)
+	{
+		var (cubeVerts, cubeIndices) = Geometry.BuildCube();
+		var (planeVerts, planeIndices) = Geometry.BuildPlane();
+		var scene = new DemoScene(engine.CreateMesh(cubeVerts, cubeIndices), engine.CreateMesh(planeVerts, planeIndices));
+
+		IDemo[] demos =
+		[
+			new CubeLightingDemo(),
+			new ShadowsDemo(),
+			new SsaoDemo(),
+			new TonemappingDemo(),
+			new BloomDemo(),
+			new ParticlesDemo(),
+			new HighlightingDemo(),
+			new FullReferenceDemo(),
+		];
+		foreach (var demo in demos)
+			demo.DefineTechniques(engine);
+		var graphs = demos.Select(d => d.Build(scene)).ToArray();
+
+		var selected = 0;
+		var demoEnv = Environment.GetEnvironmentVariable("LOOM_DEMO");
+		if (demoEnv is not null)
+		{
+			var byName = Array.FindIndex(demos, d => string.Equals(d.Name, demoEnv, StringComparison.OrdinalIgnoreCase));
+			if (byName >= 0)
+				selected = byName;
+			else if (int.TryParse(demoEnv, out var byIndex) && byIndex >= 0 && byIndex < demos.Length)
+				selected = byIndex;
+			else
+				Console.WriteLine($"[loom] LOOM_DEMO='{demoEnv}' is not a known demo ({string.Join(", ", demos.Select(d => d.Name))}); starting on {demos[selected].Name}.");
+		}
+
+		engine.SetGraph(graphs[selected]);
+		return $"demo: {demos[selected].Name}";
 	}
 }
 #endif

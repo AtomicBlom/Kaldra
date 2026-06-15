@@ -179,28 +179,37 @@ internal sealed unsafe class DX12Technique : IDisposable
 				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &range } },
 			};
 		}
-		var sampler = new StaticSamplerDesc
-		{
-			Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-			AddressU = TextureAddressMode.Clamp,
-			AddressV = TextureAddressMode.Clamp,
-			AddressW = TextureAddressMode.Clamp,
-			ComparisonFunc = ComparisonFunc.Never,
-			BorderColor = StaticBorderColor.OpaqueBlack,
-			MinLOD = 0f,
-			MaxLOD = float.MaxValue,
-			ShaderRegister = 0,
-			RegisterSpace = 0,
-			ShaderVisibility = ShaderVisibility.Pixel,
-		};
+		// One static sampler PER sampled input: Slang lowers each combined Sampler2D to a Texture2D + its OWN
+		// SamplerState (texture t_i paired with sampler s_i), so a pass that samples N inputs references s0..s(N-1).
+		// A single shared sampler (s0) satisfies a 1-input pass (blit, the bloom down/up taps) but a 2+-input pass
+		// (bloom composite, SSAO, deferred lighting) references s1.. — absent from the root signature, the PS would
+		// reference a sampler the root signature doesn't declare and CreateGraphicsPipelineState fails. Static
+		// samplers don't count against the 64-DWORD root budget, so N of them is free.
+		var samplerCount = template.InputCount;
+		var samplers = stackalloc StaticSamplerDesc[samplerCount > 0 ? samplerCount : 1];
+		for (var i = 0; i < samplerCount; i++)
+			samplers[i] = new StaticSamplerDesc
+			{
+				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
+				AddressU = TextureAddressMode.Clamp,
+				AddressV = TextureAddressMode.Clamp,
+				AddressW = TextureAddressMode.Clamp,
+				ComparisonFunc = ComparisonFunc.Never,
+				BorderColor = StaticBorderColor.OpaqueBlack,
+				MinLOD = 0f,
+				MaxLOD = float.MaxValue,
+				ShaderRegister = (uint)i,
+				RegisterSpace = 0,
+				ShaderVisibility = ShaderVisibility.Pixel,
+			};
 		// A mesh/particle pass reads a vertex buffer, so the root signature must allow the input-assembler layout.
 		var flags = template.HasVertexInput || template.ParticleInput ? RootSignatureFlags.AllowInputAssemblerInputLayout : RootSignatureFlags.None;
 		var rootDesc = new RootSignatureDesc
 		{
 			NumParameters = (uint)paramCount,
 			PParameters = paramCount > 0 ? parameters : null,
-			NumStaticSamplers = template.InputCount > 0 ? 1u : 0u,
-			PStaticSamplers = template.InputCount > 0 ? &sampler : null,
+			NumStaticSamplers = (uint)samplerCount,
+			PStaticSamplers = samplerCount > 0 ? samplers : null,
 			Flags = flags,
 		};
 		SerializeRootSignature(ctx, &rootDesc);

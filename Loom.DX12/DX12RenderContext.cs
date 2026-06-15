@@ -146,7 +146,9 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 
 			var srv = new ShaderResourceViewDesc
 			{
-				Format = _transients.Format(_slot, id),
+				// Sample through the SRV-compatible format: R32_FLOAT for a depth target (a shadow map), whose
+				// resource is TYPELESS and whose DSV format (D32_FLOAT) is not SRV-creatable; == the colour format otherwise.
+				Format = _transients.SrvFormat(_slot, id),
 				ViewDimension = SrvDimension.Texture2D,
 				Shader4ComponentMapping = DefaultShader4ComponentMapping,
 				Anonymous = new ShaderResourceViewDescUnion

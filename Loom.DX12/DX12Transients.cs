@@ -30,7 +30,8 @@ internal sealed unsafe class DX12Transients : IDisposable
 	{
 		public ComPtr<ID3D12Resource> Resource;
 		public CpuDescriptorHandle View; // RTV for a colour target, DSV for a depth target
-		public DxgiFormat Format;
+		public DxgiFormat Format;        // the RTV/DSV (and PSO) format — D32_FLOAT for depth, the typed colour format otherwise
+		public DxgiFormat SrvFormat;     // the format to sample it through — R32_FLOAT for depth, == Format for colour
 		public ResourceStates State;
 		public bool IsDepth;
 	}
@@ -152,7 +153,10 @@ internal sealed unsafe class DX12Transients : IDisposable
 			{
 				var desc = BuildDesc(resource);
 				var isDepth = resource.Kind == ResourceKind.Depth;
-				var clear = BuildClear(desc.Format, isDepth);
+				// A depth target is created TYPELESS (so it can also be sampled); its DSV/clear use the typed depth
+				// format (D32_FLOAT) and its SRV the typed colour-compatible format (R32_FLOAT). Colour: all the same.
+				var (_, viewFormat, srvFormat) = DX12FormatMapping.ToDxgiViews(resource.Format);
+				var clear = BuildClear(viewFormat, isDepth);
 				ComPtr<ID3D12Resource> texture = default;
 				SilkMarshal.ThrowHResult(ctx.Device.CreatePlacedResource(heap, 0, &desc, ResourceStates.Common, &clear, out texture));
 
@@ -160,14 +164,16 @@ internal sealed unsafe class DX12Transients : IDisposable
 				if (isDepth)
 				{
 					view = new CpuDescriptorHandle { Ptr = dsvStart.Ptr + (nuint)(dsvCursor++ * dsvInc) };
-					ctx.Device.CreateDepthStencilView(texture, (DepthStencilViewDesc*)null, view);
+					// A typeless resource can't infer its DSV format — pass an explicit typed (D32_FLOAT) DSV desc.
+					var dsvDesc = new DepthStencilViewDesc { Format = viewFormat, ViewDimension = DsvDimension.Texture2D };
+					ctx.Device.CreateDepthStencilView(texture, &dsvDesc, view);
 				}
 				else
 				{
 					view = new CpuDescriptorHandle { Ptr = rtvStart.Ptr + (nuint)(rtvCursor++ * rtvInc) };
 					ctx.Device.CreateRenderTargetView(texture, (RenderTargetViewDesc*)null, view);
 				}
-				_targets[slot][resource.Id] = new Target { Resource = texture, View = view, Format = desc.Format, State = ResourceStates.Common, IsDepth = isDepth };
+				_targets[slot][resource.Id] = new Target { Resource = texture, View = view, Format = viewFormat, SrvFormat = srvFormat, State = ResourceStates.Common, IsDepth = isDepth };
 			}
 		}
 	}
@@ -180,7 +186,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 			foreach (var resource in bufferTargets)
 			{
 				var buffer = CreateBufferResource(ctx, _byteSizes[resource.Id]);
-				_targets[slot][resource.Id] = new Target { Resource = buffer, View = default, Format = DxgiFormat.FormatUnknown, State = ResourceStates.Common, IsDepth = false };
+				_targets[slot][resource.Id] = new Target { Resource = buffer, View = default, Format = DxgiFormat.FormatUnknown, SrvFormat = DxgiFormat.FormatUnknown, State = ResourceStates.Common, IsDepth = false };
 			}
 	}
 
@@ -189,6 +195,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 	public (uint W, uint H) Extent(int id) => _extents[id];
 	public uint ByteSize(int id) => _byteSizes[id];
 	public DxgiFormat Format(uint slot, int id) => _targets[slot][id].Format;
+	public DxgiFormat SrvFormat(uint slot, int id) => _targets[slot][id].SrvFormat;
 	public CpuDescriptorHandle View(uint slot, int id) => _targets[slot][id].View;
 	public ComPtr<ID3D12Resource> Resource(uint slot, int id) => _targets[slot][id].Resource;
 	public ResourceStates State(uint slot, int id) => _targets[slot][id].State;
@@ -197,7 +204,9 @@ internal sealed unsafe class DX12Transients : IDisposable
 	private ResourceDesc BuildDesc(ResourceHandle resource)
 	{
 		var (w, h) = _extents[resource.Id];
-		var format = DX12FormatMapping.ToDxgi(resource.Format);
+		// Depth is created TYPELESS (R32_TYPELESS) so the same resource can carry a typed DSV and a typed SRV (a
+		// D32_FLOAT resource can't be sampled); colour uses its typed format directly.
+		var (format, _, _) = DX12FormatMapping.ToDxgiViews(resource.Format);
 		var flags = resource.Kind == ResourceKind.Depth ? ResourceFlags.AllowDepthStencil : ResourceFlags.AllowRenderTarget;
 		return new ResourceDesc
 		{

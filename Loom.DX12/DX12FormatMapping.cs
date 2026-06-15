@@ -23,4 +23,18 @@ internal static class DX12FormatMapping
 		Format.Depth32F => DxgiFormat.FormatD32Float,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "No DXGI format mapping."),
 	};
+
+	/// <summary>
+	/// The trio of DXGI formats a transient texture needs: the format the <em>resource</em> is created with, the
+	/// format its render-/depth-stencil <em>view</em> uses, and the format a <em>shader-resource view</em> uses
+	/// when the transient is sampled. They differ only for depth: a depth target that is later sampled (e.g. a
+	/// shadow map) must be created <c>TYPELESS</c> (R32_TYPELESS), because a typed D32_FLOAT resource cannot carry
+	/// an SRV — the typeless resource then carries a typed DSV (D32_FLOAT) and a typed SRV (R32_FLOAT). Colour
+	/// formats are identical across all three.
+	/// </summary>
+	public static (DxgiFormat Resource, DxgiFormat View, DxgiFormat Srv) ToDxgiViews(Format format) => format switch
+	{
+		Format.Depth32F => (DxgiFormat.FormatR32Typeless, DxgiFormat.FormatD32Float, DxgiFormat.FormatR32Float),
+		_ => (ToDxgi(format), ToDxgi(format), ToDxgi(format)),
+	};
 }
