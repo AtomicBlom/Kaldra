@@ -75,3 +75,7 @@ Load-bearing; violating them silently breaks the design:
 - **Pure per-frame closures.** `.Draw` / `.Dispatch` callbacks pull from `ctx` (`ctx.Scene`, `ctx.Camera`, `ctx.DeltaTime`) instead of capturing, keeping the graph description frame-independent and cacheable.
 - **Ping-pong via handle swap.** Two physical resources + a `(read, write)` tuple swapped in a normal loop; the graph follows the handles (bloom, JFA).
 - **Vulkan 1.3 baseline.** Dynamic rendering, synchronization2, and timeline semaphores are enabled as device features — no renderpass/framebuffer objects; emit `vkCmdPipelineBarrier2`.
+
+## Agent Behaviour
+A note on using image captures to determine whether something has worked or not, images take up a LOT of context
+When verifying whether an image is correct or not, use a subagent and tell it what you're expecting the image to contain in as much detail as possible, the sub-agent should return whether it met your expectations or not.
