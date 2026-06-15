@@ -17,7 +17,17 @@ internal sealed unsafe class DX12Swapchain : IDisposable
 	private readonly nint _hwnd;
 	private readonly uint _bufferCount;
 
+	/// <summary>The swapchain buffer format — must be a plain UNORM under the flip model (no _SRGB swapchain).</summary>
 	public Format Format { get; }
+
+	/// <summary>
+	/// The format the backbuffer RTV is created with — the _SRGB variant of <see cref="Format"/>. Writing through
+	/// an sRGB RTV makes the hardware gamma-encode the (linear) shader output on present, matching the Vulkan
+	/// backend's sRGB swapchain. Flip-model swapchains can't BE _SRGB, but a UNORM buffer can carry an _SRGB RTV
+	/// (same cast family). PSOs that render to the backbuffer must bake against this format, not <see cref="Format"/>.
+	/// </summary>
+	public Format RenderTargetFormat { get; }
+
 	public ComPtr<IDXGISwapChain1> SwapChain;
 	private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
 	private readonly ComPtr<ID3D12Resource>[] _backBuffers;
@@ -37,6 +47,7 @@ internal sealed unsafe class DX12Swapchain : IDisposable
 		_bufferCount = bufferCount;
 		_backBuffers = new ComPtr<ID3D12Resource>[bufferCount];
 		Format = Format.FormatR8G8B8A8Unorm; // SDR; HDR colour-space negotiation is a later slice
+		RenderTargetFormat = Format.FormatR8G8B8A8UnormSrgb; // sRGB-encode the linear shader output on present (matches Vulkan)
 
 		var heapDesc = new DescriptorHeapDesc
 		{
@@ -78,10 +89,14 @@ internal sealed unsafe class DX12Swapchain : IDisposable
 
 	private void CreateBackBuffers()
 	{
+		// Create an _SRGB RTV over the UNORM backbuffer so the (linear) shader output is gamma-encoded on write —
+		// the flip-model way to get sRGB present (the swapchain buffer itself must stay UNORM). Without an explicit
+		// desc the RTV would inherit the UNORM format and present linear values un-encoded (too dark/saturated).
+		var rtvDesc = new RenderTargetViewDesc { Format = RenderTargetFormat, ViewDimension = RtvDimension.Texture2D };
 		for (uint i = 0; i < _bufferCount; i++)
 		{
 			SilkMarshal.ThrowHResult(SwapChain.GetBuffer(i, out _backBuffers[i]));
-			_ctx.Device.CreateRenderTargetView(_backBuffers[i], (RenderTargetViewDesc*)null, RtvHandle(i));
+			_ctx.Device.CreateRenderTargetView(_backBuffers[i], &rtvDesc, RtvHandle(i));
 		}
 	}
 

@@ -259,7 +259,7 @@ public sealed unsafe class DX12Engine : IEngine
 				if (attachment.Resource.IsBackbuffer)
 				{
 					rtv[colorCount] = _swapchain.RtvHandle(index);
-					formats[colorCount] = _swapchain.Format;
+					formats[colorCount] = _swapchain.RenderTargetFormat; // the sRGB RTV format — the PSO must match the actual view
 					width = _swapchain.Width;
 					height = _swapchain.Height;
 				}
