@@ -5,16 +5,31 @@
        feature flags (UseImGui, …) live in the repo-root Directory.Build.props; backend *selection* (UseDX12)
        is the app SDK's job — this project only exists to be referenced when UseDX12=true. -->
 
+  <!-- Shared shader-compile machinery (imported before the body so $(LoomShaderSourceDir) is set when the
+       targets evaluate). Compiles the backend-neutral engine shaders to SIGNED DXIL and embeds them. -->
+  <Import Project="..\build\Loom.Sdk\Loom.Shaders.props" />
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <!-- The marshaling seam is pointer-heavy COM interop, exactly as in Loom.Vulkan. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- The SAME backend-neutral engine shaders Loom.Vulkan compiles (..\Loom.Shaders\Shaders); this backend
+         emits + embeds them as signed DXIL (manifest prefix "Loom.DX12.Shaders.", = $(AssemblyName).Shaders.).
+         The DX12 backend always emits DXIL; ImGui's shader needs HLSL semantics + a DX12 ImGui renderer (later),
+         so exclude it for now. -->
+    <LoomShaderSourceDir>$(MSBuildProjectDirectory)\..\Loom.Shaders\Shaders</LoomShaderSourceDir>
+    <LoomShaderOutputMode>Embed</LoomShaderOutputMode>
+    <LoomEmitDxil>true</LoomEmitDxil>
+    <LoomShaderExclude>$(LoomShaderSourceDir)\imgui.slang</LoomShaderExclude>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
+    <!-- Hermetic slangc for compiling the engine shaders to DXIL (bundled in the package; win-x64 / win-arm64). -->
+    <PackageReference Include="Slang.Sdk" Version="0.5.1" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 
   <!-- The DirectX 12 stack, quarantined here. D3DCompiler is the in-box FXC (d3dcompiler_47.dll) — slice 1
@@ -26,5 +41,8 @@
     <PackageReference Include="Silk.NET.Direct3D.Compilers" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Maths" Version="2.23.0" />
   </ItemGroup>
+
+  <!-- Shared shader-compile targets (after the body, so LoomShaderSourceDir is set). -->
+  <Import Project="..\build\Loom.Sdk\Loom.Shaders.targets" />
 
 </Project>

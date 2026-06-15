@@ -17,16 +17,35 @@ namespace Loom.DX12;
 /// </summary>
 internal static unsafe class DX12Shaders
 {
+	// Engine shaders are embedded in this backend assembly under "<assembly>.Shaders." (the SDK's Embed prefix
+	// matches $(AssemblyName)); app shaders are loose under the shader directory. Mirrors Vulkan's resolution.
+	private static readonly string EmbeddedPrefix = typeof(DX12Shaders).Assembly.GetName().Name + ".Shaders.";
+
 	/// <summary>
 	/// Resolve a logical shader name + stage to its build-emitted <em>signed DXIL</em> blob
-	/// (<c>&lt;name&gt;.&lt;stage&gt;.dxil</c>, stage = <c>vs</c>/<c>ps</c>/<c>cs</c>), or null if absent. The Loom
-	/// build emits one self-contained signed-DXIL module per stage (offline, like the Vulkan <c>.spv</c>); the
-	/// backend loads the blob straight into the PSO — no runtime compiler is shipped.
+	/// (<c>&lt;name&gt;.&lt;stage&gt;.dxil</c>, stage = <c>vs</c>/<c>ps</c>/<c>cs</c>), or null if absent. Tries the
+	/// engine shaders embedded in this backend assembly first, then the app shaders loose under
+	/// <paramref name="shaderDir"/> — the DX12 counterpart of Vulkan's embedded-then-disk SPIR-V resolution. The
+	/// blob is the offline-built signed DXIL the backend loads straight into the PSO (no runtime compiler shipped).
 	/// </summary>
 	public static byte[]? TryResolveStageDxil(string shaderDir, string name, string stage)
 	{
+		var embedded = TryReadEmbedded($"{name}.{stage}.dxil");
+		if (embedded is not null)
+			return embedded;
 		var path = Path.Combine(shaderDir, $"{name}.{stage}.dxil");
 		return File.Exists(path) ? File.ReadAllBytes(path) : null;
+	}
+
+	private static byte[]? TryReadEmbedded(string suffix)
+	{
+		var asm = typeof(DX12Shaders).Assembly;
+		using var stream = asm.GetManifestResourceStream(EmbeddedPrefix + suffix);
+		if (stream is null)
+			return null;
+		var bytes = new byte[stream.Length];
+		stream.ReadExactly(bytes);
+		return bytes;
 	}
 
 	/// <summary>Compile built-in HLSL to a DXBC bytecode blob via the in-box FXC (the fallback stand-in path; ships nothing — d3dcompiler is in Windows).</summary>
@@ -48,10 +67,16 @@ internal static unsafe class DX12Shaders
 	/// </summary>
 	public static int ResolveSampledInputCount(string shaderDir, string name)
 	{
-		var path = Path.Combine(shaderDir, name + ".json");
-		if (!File.Exists(path))
-			return 0;
-		using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+		// Engine shaders embed their reflection JSON; app shaders keep it loose beside the .dxil.
+		var json = TryReadEmbedded(name + ".json");
+		if (json is null)
+		{
+			var path = Path.Combine(shaderDir, name + ".json");
+			if (!File.Exists(path))
+				return 0;
+			json = File.ReadAllBytes(path);
+		}
+		using var doc = JsonDocument.Parse(json);
 		var count = 0;
 		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
 			foreach (var p in parameters.EnumerateArray())

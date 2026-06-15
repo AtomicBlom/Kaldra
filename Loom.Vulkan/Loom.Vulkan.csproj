@@ -13,11 +13,16 @@
     <!-- The marshaling seam is pointer-heavy interop. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-    <!-- Engine shaders, embedded under the manifest prefix "Loom.Vulkan.Shaders." (= $(AssemblyName).Shaders.). -->
-    <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
+    <!-- Engine shaders are backend-neutral Slang source shared by every backend (..\Loom.Shaders\Shaders); each
+         backend compiles + embeds its own artifact from them (Vulkan → .spv here, DX12 → signed .dxil), so the
+         shaders aren't owned by any one backend. Embedded under the manifest prefix "Loom.Vulkan.Shaders." (= $(AssemblyName).Shaders.). -->
+    <LoomShaderSourceDir>$(MSBuildProjectDirectory)\..\Loom.Shaders\Shaders</LoomShaderSourceDir>
     <LoomShaderOutputMode>Embed</LoomShaderOutputMode>
+    <!-- The Vulkan backend emits SPIR-V only; never DXIL (even in a -p:UseDX12=true build, where the flag would
+         otherwise default it on). Loom.DX12 is the one that compiles these shared shaders to DXIL. -->
+    <LoomEmitDxil>false</LoomEmitDxil>
     <!-- Built without ImGui (UseImGui=false): don't compile/embed the ImGui shader either. -->
-    <LoomShaderExclude Condition="'$(UseImGui)' != 'true'">$(MSBuildProjectDirectory)\Shaders\imgui.slang</LoomShaderExclude>
+    <LoomShaderExclude Condition="'$(UseImGui)' != 'true'">$(LoomShaderSourceDir)\imgui.slang</LoomShaderExclude>
   </PropertyGroup>
 
   <ItemGroup>
