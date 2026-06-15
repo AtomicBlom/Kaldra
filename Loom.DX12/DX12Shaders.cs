@@ -97,22 +97,30 @@ internal static unsafe class DX12Shaders
 
 	/// <summary>
 	/// The compute storage resources a shader binds, from its reflection sidecar: how many read-write TEXTURES
-	/// (storage images — bound via a UAV descriptor table on DX12, e.g. the auto-exposure 1×1 image) and how many
-	/// read-write BUFFERS (bound as a root UAV by GPU address — no heap entry, e.g. the GPU-particle buffer). Lets
-	/// <c>BakeCompute</c> pick the matching root-signature shape. (0,0) when there's no sidecar.
+	/// (storage images — bound via a UAV descriptor table on DX12, e.g. the auto-exposure 1×1 image), how many
+	/// read-write BUFFERS (e.g. the GPU-particle buffer), and a structured buffer's element STRIDE in bytes.
+	/// <para>
+	/// The stride matters: Slang lowers <c>RWStructuredBuffer&lt;T&gt;</c> to a <c>descriptorTableSlot</c> UAV, and
+	/// the DXIL's <c>GetDimensions</c> (which the particle update uses to bound its loop) only returns a non-zero
+	/// element count when the buffer is bound as a real UAV <em>descriptor</em> carrying <c>StructureByteStride</c>
+	/// + <c>NumElements</c> — NOT as a root UAV (a raw GPU address with no metadata, where GetDimensions yields 0
+	/// and every thread early-outs, so nothing is written). A non-zero stride tells <c>BakeCompute</c> to bind a
+	/// structured-buffer UAV descriptor; stride 0 (a raw <c>ByteAddressBuffer</c>, or the FXC built-in with no
+	/// sidecar) keeps the root-UAV path. (0,0,0) when there's no sidecar.
+	/// </para>
 	/// </summary>
-	public static (int Images, int Buffers) ResolveComputeStorage(string shaderDir, string name)
+	public static (int Images, int Buffers, int BufferStride) ResolveComputeStorage(string shaderDir, string name)
 	{
 		var json = TryReadEmbedded(name + ".json");
 		if (json is null)
 		{
 			var path = Path.Combine(shaderDir, name + ".json");
 			if (!File.Exists(path))
-				return (0, 0);
+				return (0, 0, 0);
 			json = File.ReadAllBytes(path);
 		}
 		using var doc = JsonDocument.Parse(json);
-		int images = 0, buffers = 0;
+		int images = 0, buffers = 0, bufferStride = 0;
 		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
 			foreach (var p in parameters.EnumerateArray())
 			{
@@ -122,11 +130,44 @@ internal static unsafe class DX12Shaders
 					continue; // sampled (read-only) resources are SRV-table entries, counted by ResolveSampledInputCount
 				var baseShape = type.TryGetProperty("baseShape", out var shape) ? shape.GetString() : null;
 				if (baseShape is "structuredBuffer" or "byteAddressBuffer")
+				{
 					buffers++;
+					if (baseShape == "structuredBuffer" && type.TryGetProperty("resultType", out var resultType))
+						bufferStride = Math.Max(bufferStride, TypeByteSize(resultType)); // element size → the UAV's StructureByteStride
+				}
 				else
+				{
 					images++; // a read-write texture (RWTexture2D) — a storage image bound via a UAV descriptor
+				}
 			}
-		return (images, buffers);
+		return (images, buffers, bufferStride);
+	}
+
+	// The byte size of a Slang reflection type (scalar / vector / matrix) — used to derive a structured buffer's
+	// element stride. Returns 0 for an unsizeable type (a struct element), which falls back to the root-UAV path.
+	private static int TypeByteSize(JsonElement type)
+	{
+		var kind = type.TryGetProperty("kind", out var k) ? k.GetString() : null;
+		switch (kind)
+		{
+			case "scalar":
+				var scalar = type.TryGetProperty("scalarType", out var s) ? s.GetString() : null;
+				return scalar switch
+				{
+					"float16" or "int16" or "uint16" => 2,
+					"float64" or "int64" or "uint64" => 8,
+					_ => 4, // float32/int32/uint32 and friends
+				};
+			case "vector":
+				var count = type.TryGetProperty("elementCount", out var e) ? e.GetInt32() : 0;
+				return count * (type.TryGetProperty("elementType", out var et) ? TypeByteSize(et) : 0);
+			case "matrix":
+				var rows = type.TryGetProperty("rowCount", out var r) ? r.GetInt32() : 0;
+				var cols = type.TryGetProperty("columnCount", out var c) ? c.GetInt32() : 0;
+				return rows * cols * (type.TryGetProperty("elementType", out var met) ? TypeByteSize(met) : 4);
+			default:
+				return 0; // struct/unknown — can't size generically (would need field walking)
+		}
 	}
 
 	/// <summary>Built-in HLSL + sampled-input count, keyed by the logical shader name a <c>TechniqueDescriptor</c> carries.</summary>

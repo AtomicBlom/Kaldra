@@ -18,7 +18,7 @@ internal readonly record struct DX12TechniqueTemplate(
 	byte[] VertexBytecode, byte[] FragmentBytecode, string VertexEntry, string FragmentEntry, int InputCount,
 	bool HasVertexInput, bool HasFragmentPush, bool LinearFilter,
 	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None,
-	int StorageImages = 0, int StorageBuffers = 0);
+	int StorageImages = 0, int StorageBuffers = 0, int StorageBufferStride = 0);
 
 /// <summary>
 /// Bakes and caches DX12 pipelines per technique — the counterpart of the Vulkan backend's
@@ -91,12 +91,16 @@ internal sealed unsafe class DX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the storage-buffer root UAV (a compute's <c>.ReadWrites</c> of a buffer), or -1 if none.</summary>
 	public int UavRootParam { get; private set; } = -1;
 
-	/// <summary>Root-parameter slot for the storage-image UAV descriptor table (a compute's <c>.ReadWrites</c> of a texture, e.g. auto-exposure), or -1 if none.</summary>
+	/// <summary>Root-parameter slot for the storage-image / structured-buffer UAV descriptor table (a compute's <c>.ReadWrites</c> of a texture or structured buffer), or -1 if none.</summary>
 	public int UavTableParam { get; private set; } = -1;
+
+	/// <summary>Element stride (bytes) of a structured-buffer storage resource, for building its UAV descriptor's <c>StructureByteStride</c>/<c>NumElements</c>; 0 for a texture or raw buffer.</summary>
+	public int StorageBufferStride { get; private set; }
 
 	public DX12Technique(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		IsCompute = template.IsCompute;
+		StorageBufferStride = template.StorageBufferStride;
 
 		if (template.IsCompute)
 		{
@@ -108,16 +112,23 @@ internal sealed unsafe class DX12Technique : IDisposable
 
 	// A compute root signature shaped to the technique: a 16-float scalar root constant at b0 (always) + an
 	// optional t0.. SRV table for sampled inputs (e.g. the auto-exposure compute metering the lit scene) + the
-	// storage binding — a RW texture (the 1×1 exposure image) via a u0 UAV descriptor table, or a RW buffer (the
-	// GPU-particle stream) as a u0 root UAV by GPU address (no descriptor-heap entry). No compute technique mixes
-	// an image and a buffer, so u0 is unambiguous. All visible to ShaderVisibility.All (compute isn't covered by
-	// the per-stage VERTEX/PIXEL visibilities). Static samplers s0.. pair with the SRV table, as in the graphics path.
+	// storage binding — a RW texture (the 1×1 exposure image) OR a RW STRUCTURED buffer (the GPU-particle stream)
+	// via a u0 UAV descriptor TABLE, since both need a real descriptor (a structured buffer's StructureByteStride/
+	// NumElements is what makes the shader's GetDimensions return a non-zero count; a root UAV is a raw GPU address
+	// with no metadata, so GetDimensions yields 0 and the particle update early-outs every thread). Only a RAW
+	// buffer with no reflected stride (the FXC built-in's ByteAddressBuffer) keeps the u0 root-UAV-by-address path.
+	// No compute technique mixes an image and a buffer, so u0 is unambiguous. All visible to ShaderVisibility.All
+	// (compute isn't covered by the per-stage VERTEX/PIXEL visibilities). Static samplers s0.. pair with the SRV table.
 	private void BakeCompute(DX12Context ctx, DX12TechniqueTemplate template)
 	{
 		var parameters = stackalloc RootParameter[3];
 		var paramCount = 0;
+		var uavTableCount = template.StorageImages > 0 ? template.StorageImages : template.StorageBuffers;
 		var srvRange = new DescriptorRange { RangeType = DescriptorRangeType.Srv, NumDescriptors = (uint)template.InputCount, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
-		var uavRange = new DescriptorRange { RangeType = DescriptorRangeType.Uav, NumDescriptors = (uint)template.StorageImages, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
+		var uavRange = new DescriptorRange { RangeType = DescriptorRangeType.Uav, NumDescriptors = (uint)uavTableCount, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
+		// A structured buffer (stride known from reflection) and a storage image both bind via the u0 UAV table;
+		// only a raw buffer (stride 0) falls back to a root UAV.
+		var bufferViaTable = template.StorageBuffers > 0 && template.StorageBufferStride > 0;
 
 		RootConstantParam = paramCount;
 		parameters[paramCount++] = new RootParameter
@@ -136,7 +147,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &srvRange } },
 			};
 		}
-		if (template.StorageImages > 0)
+		if (template.StorageImages > 0 || bufferViaTable)
 		{
 			UavTableParam = paramCount;
 			parameters[paramCount++] = new RootParameter

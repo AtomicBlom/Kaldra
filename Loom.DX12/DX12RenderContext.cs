@@ -227,9 +227,12 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 			_cmd.SetComputeRootDescriptorTable((uint)baked.TableParam, gpu);
 		}
 
-		// Storage: a RW buffer (the particle stream) binds as a root UAV by GPU address — no descriptor-heap entry;
-		// a RW texture (the 1×1 exposure image) needs a UAV descriptor in the ring + a UAV table. The graph put the
-		// resource in UNORDERED_ACCESS first.
+		// Storage (the graph put the resource in UNORDERED_ACCESS first):
+		//  * a RW STRUCTURED buffer (the particle stream) or a RW texture (the 1×1 exposure image) binds a UAV
+		//    DESCRIPTOR in the ring + a UAV table. The structured-buffer descriptor carries StructureByteStride +
+		//    NumElements, which is what makes the shader's GetDimensions report the real count (a root UAV is a raw
+		//    address with no metadata → GetDimensions 0 → the particle update early-outs every thread, writes nothing).
+		//  * a RAW buffer (the FXC built-in's ByteAddressBuffer, no reflected stride) binds as a root UAV by address.
 		if (storage.Length > 0)
 		{
 			var id = storage[0].Id;
@@ -240,12 +243,29 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 			else if (baked.UavTableParam >= 0)
 			{
 				var (cpu, gpu) = _ring.Allocate(1);
-				var uav = new UnorderedAccessViewDesc
+				UnorderedAccessViewDesc uav;
+				if (storage[0].Kind == ResourceKind.Buffer)
 				{
-					Format = _transients.SrvFormat(_slot, id),
-					ViewDimension = UavDimension.Texture2D,
-					Anonymous = new UnorderedAccessViewDescUnion { Texture2D = new Tex2DUav { MipSlice = 0, PlaneSlice = 0 } }
-				};
+					var stride = (uint)baked.StorageBufferStride;
+					uav = new UnorderedAccessViewDesc
+					{
+						Format = DxgiFormat.FormatUnknown, // a structured buffer is format-less; the stride defines the element
+						ViewDimension = UavDimension.Buffer,
+						Anonymous = new UnorderedAccessViewDescUnion
+						{
+							Buffer = new BufferUav { FirstElement = 0, NumElements = _transients.ByteSize(id) / stride, StructureByteStride = stride, CounterOffsetInBytes = 0, Flags = BufferUavFlags.None }
+						}
+					};
+				}
+				else
+				{
+					uav = new UnorderedAccessViewDesc
+					{
+						Format = _transients.SrvFormat(_slot, id),
+						ViewDimension = UavDimension.Texture2D,
+						Anonymous = new UnorderedAccessViewDescUnion { Texture2D = new Tex2DUav { MipSlice = 0, PlaneSlice = 0 } }
+					};
+				}
 				_ctx.Device.CreateUnorderedAccessView(_transients.Resource(_slot, id), default(ComPtr<ID3D12Resource>), &uav, cpu);
 				_cmd.SetComputeRootDescriptorTable((uint)baked.UavTableParam, gpu);
 			}

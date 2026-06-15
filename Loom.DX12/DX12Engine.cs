@@ -661,6 +661,7 @@ public sealed unsafe class DX12Engine : IEngine
 		int inputCount;
 		var storageImages = 0;
 		var storageBuffers = 0;
+		var storageBufferStride = 0;
 		string source;
 
 		if (descriptor.IsCompute)
@@ -670,8 +671,9 @@ public sealed unsafe class DX12Engine : IEngine
 			{
 				(vertexBytecode, fragmentBytecode) = ([], cs);
 				inputCount = DX12Shaders.ResolveSampledInputCount(dir, shader);
-				// Compute storage shape from reflection: a RW texture (exposure) → UAV table; a RW buffer (particles) → root UAV.
-				(storageImages, storageBuffers) = DX12Shaders.ResolveComputeStorage(dir, shader);
+				// Compute storage shape from reflection: a RW texture (exposure) / RW structured buffer (particles)
+				// → UAV table (the stride lets the shader's GetDimensions work); a raw buffer (stride 0) → root UAV.
+				(storageImages, storageBuffers, storageBufferStride) = DX12Shaders.ResolveComputeStorage(dir, shader);
 				source = $"{shader}.cs.dxil (Slang→signed DXIL)";
 			}
 			else if (DX12Shaders.Builtins.TryGetValue(shader, out var builtin))
@@ -713,7 +715,7 @@ public sealed unsafe class DX12Engine : IEngine
 		_techniques.Register(name, new DX12TechniqueTemplate(
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
-			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers));
+			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride));
 	}
 
 	/// <summary>
