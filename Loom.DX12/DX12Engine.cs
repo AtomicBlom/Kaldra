@@ -58,6 +58,16 @@ public sealed unsafe class DX12Engine : IEngine
 	private ComPtr<ID3D12Resource> _readback;
 	private ulong _readbackSize;
 
+	// Picking (§7.4): the graph's first readback target (the object-id buffer) is copied into a per-slot READBACK
+	// buffer each frame; after that slot's fence the copy is decoded to _pickCpu, which SamplePick reads (a few
+	// frames stale — invisible for hover). _pickId < 0 when the active graph declares no readback target.
+	private int _pickId = -1;
+	private uint _pickWidth, _pickHeight, _pickRowPitch;
+	private Loom.Core.Format _pickFormat;
+	private readonly ComPtr<ID3D12Resource>[] _pickReadback = new ComPtr<ID3D12Resource>[BufferCount];
+	private readonly bool[] _pickValid = new bool[BufferCount];
+	private float[] _pickCpu = [];
+
 	public DX12Engine(nint hwnd, int width, int height, DX12EngineSettings settings)
 	{
 		_settings = settings;
@@ -160,6 +170,10 @@ public sealed unsafe class DX12Engine : IEngine
 		var index = _swapchain.CurrentIndex;
 		WaitForFrame(index);
 
+		// This slot's GPU work (a couple frames back) is now done, so its readback buffer is safe to map — decode
+		// the object-id copy it holds into _pickCpu for SamplePick (a few frames stale; invisible for hover).
+		DownloadPick(index);
+
 		SilkMarshal.ThrowHResult(_allocators[index].Reset());
 		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
 
@@ -180,6 +194,9 @@ public sealed unsafe class DX12Engine : IEngine
 			else
 				RecordRasterPass(index, pass);
 		}
+
+		// Picking: copy this frame's object-id target into the slot's readback buffer (no-op if the graph has none).
+		RecordPick(index);
 
 		// Optional capture: copy the present target before the final present transition (which then runs from
 		// COPY_SOURCE, since EmitGraphTransition tracks the real state).
@@ -434,6 +451,92 @@ public sealed unsafe class DX12Engine : IEngine
 		Console.WriteLine($"[loom] DX12 captured {width}x{height} -> {path}");
 	}
 
+	// Record the copy of this frame's object-id target into the slot's READBACK buffer (after the passes that wrote
+	// + read it). Transition the id target to COPY_SOURCE and track the new state, so next frame's first use of it
+	// transitions from the right state (D3D12 needs the exact current state). No-op when the graph has no readback.
+	private void RecordPick(uint index)
+	{
+		if (_pickId < 0)
+			return;
+
+		var current = _transients!.State(index, _pickId);
+		if (current != ResourceStates.CopySource)
+		{
+			Transition(_transients.Resource(index, _pickId), current, ResourceStates.CopySource);
+			_transients.SetState(index, _pickId, ResourceStates.CopySource);
+		}
+
+		var dst = new TextureCopyLocation
+		{
+			PResource = _pickReadback[index].Handle,
+			Type = TextureCopyType.PlacedFootprint,
+			Anonymous = new TextureCopyLocationUnion
+			{
+				PlacedFootprint = new PlacedSubresourceFootprint
+				{
+					Offset = 0,
+					Footprint = new SubresourceFootprint { Format = _transients.Format(index, _pickId), Width = _pickWidth, Height = _pickHeight, Depth = 1, RowPitch = _pickRowPitch }
+				}
+			}
+		};
+		var src = new TextureCopyLocation
+		{
+			PResource = _transients.Resource(index, _pickId).Handle,
+			Type = TextureCopyType.SubresourceIndex,
+			Anonymous = new TextureCopyLocationUnion { SubresourceIndex = 0 }
+		};
+		_commandList.CopyTextureRegion(&dst, 0, 0, 0, &src, (Box*)null);
+		_pickValid[index] = true;
+	}
+
+	// Decode the slot's readback buffer (this frame's wait guaranteed its copy finished) into _pickCpu. The id
+	// targets are R16F (Half); read row by row to skip the 256-aligned row padding. No-op until the slot's first copy.
+	private void DownloadPick(uint index)
+	{
+		if (_pickId < 0 || !_pickValid[index])
+			return;
+
+		void* mapped;
+		SilkMarshal.ThrowHResult(_pickReadback[index].Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
+		var src = (byte*)mapped;
+		for (uint y = 0; y < _pickHeight; y++)
+		{
+			var row = new ReadOnlySpan<Half>(src + (long)y * _pickRowPitch, (int)_pickWidth);
+			for (uint x = 0; x < _pickWidth; x++)
+				_pickCpu[y * _pickWidth + x] = (float)row[(int)x];
+		}
+		_pickReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+	}
+
+	private ComPtr<ID3D12Resource> CreateReadbackBuffer(ulong size)
+	{
+		var heapProps = new HeapProperties { Type = HeapType.Readback, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
+		var desc = new ResourceDesc
+		{
+			Dimension = ResourceDimension.Buffer,
+			Alignment = 0,
+			Width = size,
+			Height = 1,
+			DepthOrArraySize = 1,
+			MipLevels = 1,
+			Format = DxgiFormat.FormatUnknown,
+			SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
+			Layout = TextureLayout.LayoutRowMajor,
+			Flags = ResourceFlags.None
+		};
+		ComPtr<ID3D12Resource> buffer = default;
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommittedResource(
+			&heapProps, HeapFlags.None, &desc, ResourceStates.CopyDest, (ClearValue*)null, out buffer));
+		return buffer;
+	}
+
+	private static uint BytesPerTexel(Loom.Core.Format format) => format switch
+	{
+		Loom.Core.Format.R16F => 2,
+		Loom.Core.Format.R32Uint => 4,
+		_ => throw new NotSupportedException($"DX12: readback of format {format} is not supported (the id buffer is R16F)."),
+	};
+
 	private static uint Align(uint value, uint alignment) => (value + alignment - 1) & ~(alignment - 1);
 
 	private void WaitForFrame(uint index)
@@ -511,6 +614,9 @@ public sealed unsafe class DX12Engine : IEngine
 			CloseHandle(_fenceEvent);
 		if (_readback.Handle is not null)
 			_readback.Dispose();
+		foreach (ref var buffer in _pickReadback.AsSpan())
+			if (buffer.Handle is not null)
+				buffer.Dispose();
 		_transients?.Dispose();
 		_meshes.Dispose();
 		_ring.Dispose();
@@ -627,12 +733,45 @@ public sealed unsafe class DX12Engine : IEngine
 		_transients?.Dispose();
 		_transients = new DX12Transients(_ctx, graph, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
 		_context.SetTransients(_transients);
+		SetupPick(graph);
+	}
+
+	// Wire up GPU→CPU picking for this graph: its first readback target (the object-id buffer, §7.4) gets a per-slot
+	// READBACK buffer the executor copies into each frame. Mirrors the Vulkan backend (graph.ReadbackTargets[0]).
+	private void SetupPick(RenderGraph graph)
+	{
+		foreach (ref var buffer in _pickReadback.AsSpan())
+			if (buffer.Handle is not null) { buffer.Dispose(); buffer = default; }
+		Array.Clear(_pickValid);
+		_pickId = -1;
+		if (graph.ReadbackTargets.Length == 0)
+			return;
+
+		var target = graph.ReadbackTargets[0];
+		_pickId = target.Id;
+		_pickFormat = target.Format;
+		(_pickWidth, _pickHeight) = _transients!.Extent(_pickId);
+		_pickRowPitch = Align(_pickWidth * BytesPerTexel(_pickFormat), 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
+		_pickCpu = new float[_pickWidth * _pickHeight];
+		for (uint i = 0; i < BufferCount; i++)
+			_pickReadback[i] = CreateReadbackBuffer((ulong)_pickRowPitch * _pickHeight);
 	}
 
 	private const string NextSlice = "DX12: this IEngine member lands in a later executor slice.";
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 	public void EnableImGui() => throw new NotSupportedException(NextSlice);
-	public float SamplePick(int x, int y) => throw new NotSupportedException(NextSlice);
+
+	/// <summary>
+	/// The object id at picking-domain pixel (<paramref name="x"/>, <paramref name="y"/>) — read from the CPU copy
+	/// of the graph's first readback target, a few frames stale (invisible for hover). 0 when out of bounds, before
+	/// the first copy lands, or when the active graph declares no readback target. The DX12 twin of Vulkan's SamplePick.
+	/// </summary>
+	public float SamplePick(int x, int y)
+	{
+		if (_pickId < 0 || (uint)x >= _pickWidth || (uint)y >= _pickHeight)
+			return 0f;
+		return _pickCpu[y * _pickWidth + x];
+	}
 
 	/// <summary>Capture the next rendered frame to a PNG at <paramref name="path"/> (Planning.md §12 M10 verification).</summary>
 	public void RequestCapture(string path) => _capturePath = path;

@@ -134,17 +134,26 @@ internal static class Dx12Smoke
 			var projection = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3f, aspect, 0.1f, 100f);
 			var camera = new Camera(view, projection);
 
+			// Picking (Highlighting / Full): sample the centre of the 320×180 pick domain — the cube sits there — to
+			// exercise the GPU→CPU id readback; demos without a readback target return 0. In capture, force the cube
+			// hovered (id 1) so the outline shows regardless of the few-frame readback latency (as Program.cs does).
+			var picked = engine.SamplePick(160, 90);
+			var hoverId = capturePath is not null ? 1u : (uint)MathF.Round(picked);
+
 			// LOOM_CAPTURE=path grabs the frame to a PNG (a few frames in, so the swapchain has settled),
 			// then exits — the headless pixel-level proof the scene actually renders.
 			if (capturePath is not null && frame == 3)
 				engine.RequestCapture(capturePath);
 
-			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed, Camera = camera, SunView = sunCamera });
+			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed, Camera = camera, SunView = sunCamera, HoverId = hoverId });
 
 			if (capturePath is not null && frame >= 3)
 				window.Close();
 			else if (smokeFrames > 0 && frame >= smokeFrames)
+			{
+				Console.WriteLine($"[loom] DX12 SamplePick(160,90) = {picked:F2} (the centred cube's object id ≈ 1 once readback settles).");
 				window.Close();
+			}
 		};
 
 		window.Run();
