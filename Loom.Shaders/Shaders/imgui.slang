@@ -16,9 +16,11 @@ struct PushConstants
 
 struct VsIn
 {
-	[[vk::location(0)]] float2 position; // ImGui pixel coordinates
-	[[vk::location(1)]] float2 uv;
-	[[vk::location(2)]] float4 colour;   // R8G8B8A8_UNORM → [0,1]
+	// HLSL semantics alongside the vk::location qualifiers (see lit.slang): one cross-target source — Slang pins
+	// the SPIR-V locations (Vulkan) AND emits the semantics the HLSL/DXIL target (DX12) needs.
+	[[vk::location(0)]] float2 position : POSITION; // ImGui pixel coordinates
+	[[vk::location(1)]] float2 uv       : TEXCOORD0;
+	[[vk::location(2)]] float4 colour   : COLOR0;   // R8G8B8A8_UNORM → [0,1]
 };
 
 struct VsOut
