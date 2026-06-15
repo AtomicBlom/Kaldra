@@ -95,6 +95,40 @@ internal static unsafe class DX12Shaders
 		return count;
 	}
 
+	/// <summary>
+	/// The compute storage resources a shader binds, from its reflection sidecar: how many read-write TEXTURES
+	/// (storage images — bound via a UAV descriptor table on DX12, e.g. the auto-exposure 1×1 image) and how many
+	/// read-write BUFFERS (bound as a root UAV by GPU address — no heap entry, e.g. the GPU-particle buffer). Lets
+	/// <c>BakeCompute</c> pick the matching root-signature shape. (0,0) when there's no sidecar.
+	/// </summary>
+	public static (int Images, int Buffers) ResolveComputeStorage(string shaderDir, string name)
+	{
+		var json = TryReadEmbedded(name + ".json");
+		if (json is null)
+		{
+			var path = Path.Combine(shaderDir, name + ".json");
+			if (!File.Exists(path))
+				return (0, 0);
+			json = File.ReadAllBytes(path);
+		}
+		using var doc = JsonDocument.Parse(json);
+		int images = 0, buffers = 0;
+		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
+			foreach (var p in parameters.EnumerateArray())
+			{
+				if (!p.TryGetProperty("type", out var type) || !type.TryGetProperty("kind", out var tk) || tk.GetString() != "resource")
+					continue;
+				if (!type.TryGetProperty("access", out var access) || access.GetString() != "readWrite")
+					continue; // sampled (read-only) resources are SRV-table entries, counted by ResolveSampledInputCount
+				var baseShape = type.TryGetProperty("baseShape", out var shape) ? shape.GetString() : null;
+				if (baseShape is "structuredBuffer" or "byteAddressBuffer")
+					buffers++;
+				else
+					images++; // a read-write texture (RWTexture2D) — a storage image bound via a UAV descriptor
+			}
+		return (images, buffers);
+	}
+
 	/// <summary>Built-in HLSL + sampled-input count, keyed by the logical shader name a <c>TechniqueDescriptor</c> carries.</summary>
 	public static readonly IReadOnlyDictionary<string, (string Hlsl, int InputCount)> Builtins = new Dictionary<string, (string, int)>
 	{

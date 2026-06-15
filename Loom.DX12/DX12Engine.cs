@@ -543,6 +543,8 @@ public sealed unsafe class DX12Engine : IEngine
 		// FXC-compiled here (d3dcompiler ships with Windows), so the port never breaks a demo mid-way.
 		byte[] vertexBytecode, fragmentBytecode;
 		int inputCount;
+		var storageImages = 0;
+		var storageBuffers = 0;
 		string source;
 
 		if (descriptor.IsCompute)
@@ -552,12 +554,15 @@ public sealed unsafe class DX12Engine : IEngine
 			{
 				(vertexBytecode, fragmentBytecode) = ([], cs);
 				inputCount = DX12Shaders.ResolveSampledInputCount(dir, shader);
+				// Compute storage shape from reflection: a RW texture (exposure) → UAV table; a RW buffer (particles) → root UAV.
+				(storageImages, storageBuffers) = DX12Shaders.ResolveComputeStorage(dir, shader);
 				source = $"{shader}.cs.dxil (Slang→signed DXIL)";
 			}
 			else if (DX12Shaders.Builtins.TryGetValue(shader, out var builtin))
 			{
 				(vertexBytecode, fragmentBytecode) = ([], DX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.FragmentEntry, "cs_5_1"));
 				inputCount = builtin.InputCount;
+				storageBuffers = 1; // the built-in compute stand-in is the GPU-particle buffer (root UAV at u0)
 				source = "built-in (FXC)";
 			}
 			else
@@ -592,7 +597,7 @@ public sealed unsafe class DX12Engine : IEngine
 		_techniques.Register(name, new DX12TechniqueTemplate(
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
-			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend));
+			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers));
 	}
 
 	/// <summary>

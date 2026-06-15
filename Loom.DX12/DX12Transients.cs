@@ -40,6 +40,10 @@ internal sealed unsafe class DX12Transients : IDisposable
 	private readonly (uint W, uint H)[] _extents; // by resourceId (same across slots)
 	private readonly uint[] _byteSizes; // by resourceId, for Buffer-kind resources
 	private readonly bool[] _isTransient; // by resourceId
+	// Persistent resources (e.g. the auto-exposure 1×1 image) live ACROSS frames — allocated ONCE, not per-slot,
+	// and never aliased. Stored in slot 0; the accessors redirect persistent ids there so state is shared (a
+	// transition this frame must see where last frame left it), exactly as the Vulkan backend shares one image.
+	private readonly bool[] _isPersistent; // by resourceId
 	private readonly HashSet<int> _aliasedMemberIds = []; // ids in a multi-member bucket — need an aliasing barrier
 	private readonly List<ComPtr<ID3D12Heap>> _heaps = []; // per-bucket-per-slot placed-resource heaps
 	private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
@@ -49,21 +53,30 @@ internal sealed unsafe class DX12Transients : IDisposable
 	{
 		var count = graph.Resources.Length;
 		_isTransient = new bool[count];
+		_isPersistent = new bool[count];
 		_extents = new (uint, uint)[count];
 		_byteSizes = new uint[count];
 
 		var aliasable = new List<ResourceHandle>(); // colour + depth targets (the AliasPlan's domain)
 		var bufferTargets = new List<ResourceHandle>();
+		var persistentTargets = new List<ResourceHandle>();
 		var colorCount = 0;
 		var depthCount = 0;
 		foreach (var resource in graph.Resources)
 		{
 			if (resource.Kind == ResourceKind.Backbuffer)
 				continue; // the swapchain facade, owned by the engine
-			if (resource.Kind is not (ResourceKind.Color or ResourceKind.Depth or ResourceKind.Buffer))
-				throw new NotSupportedException($"DX12: resource kind {resource.Kind} ('{resource.Name}') lands in a later executor slice (persistent).");
-			_isTransient[resource.Id] = true;
-			if (resource.Kind == ResourceKind.Buffer)
+			if (resource.Kind is not (ResourceKind.Color or ResourceKind.Depth or ResourceKind.Buffer or ResourceKind.Persistent))
+				throw new NotSupportedException($"DX12: resource kind {resource.Kind} ('{resource.Name}') is not supported yet.");
+			_isTransient[resource.Id] = true; // managed + sampleable (true for persistent too, so it can be sampled)
+			if (resource.Kind == ResourceKind.Persistent)
+			{
+				// Cross-frame storage (auto-exposure): one R16F UAV texture, allocated once, sampled + read-written.
+				_isPersistent[resource.Id] = true;
+				_extents[resource.Id] = Size(resource, swapWidth, swapHeight);
+				persistentTargets.Add(resource);
+			}
+			else if (resource.Kind == ResourceKind.Buffer)
 			{
 				_byteSizes[resource.Id] = (uint)resource.ByteSize;
 				bufferTargets.Add(resource);
@@ -104,6 +117,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 			AllocateAliasedTargets(ctx, aliasPlan, aliasable, slot, rtvStart, dsvStart, rtvInc, dsvInc, ref rtvCursor, ref dsvCursor);
 
 		AllocateBuffers(ctx, bufferTargets, bufferCount);
+		AllocatePersistent(ctx, persistentTargets);
 
 		// A resource that shares a bucket with at least one other resource reuses memory mid-frame, so the
 		// executor must aliasing-barrier it before each (re)activation. Singletons need no barrier.
@@ -190,16 +204,51 @@ internal sealed unsafe class DX12Transients : IDisposable
 			}
 	}
 
+	// Persistent resources (auto-exposure) carry state across frames, so each is ONE texture shared by every frame
+	// slot — NOT multi-buffered like a transient. Stored only in slot 0; the accessors redirect persistent ids there.
+	// Created with AllowUnorderedAccess (a compute read-writes it as a storage image) and sampled later as an SRV;
+	// R16F is directly UAV- and SRV-creatable, so no typeless split is needed (unlike depth). Uninitialised on the
+	// first frame by design — the auto-exposure shader clamps the garbage into a sane range before easing from it.
+	private void AllocatePersistent(DX12Context ctx, List<ResourceHandle> persistentTargets)
+	{
+		foreach (var resource in persistentTargets)
+		{
+			var (w, h) = _extents[resource.Id];
+			var (resFormat, _, srvFormat) = DX12FormatMapping.ToDxgiViews(resource.Format);
+			var heapProps = new HeapProperties { Type = HeapType.Default, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
+			var desc = new ResourceDesc
+			{
+				Dimension = ResourceDimension.Texture2D,
+				Alignment = 0,
+				Width = w,
+				Height = h,
+				DepthOrArraySize = 1,
+				MipLevels = 1,
+				Format = resFormat,
+				SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = 1, Quality = 0 },
+				Layout = TextureLayout.LayoutUnknown,
+				Flags = ResourceFlags.AllowUnorderedAccess,
+			};
+			ComPtr<ID3D12Resource> texture = default;
+			SilkMarshal.ThrowHResult(ctx.Device.CreateCommittedResource(
+				&heapProps, HeapFlags.None, &desc, ResourceStates.Common, (ClearValue*)null, out texture));
+			_targets[0][resource.Id] = new Target { Resource = texture, View = default, Format = resFormat, SrvFormat = srvFormat, State = ResourceStates.Common, IsDepth = false };
+		}
+	}
+
+	// Persistent resources live in slot 0 only (one shared instance); redirect their lookups there.
+	private uint SlotOf(uint slot, int id) => _isPersistent[id] ? 0u : slot;
+
 	public bool IsTransient(int id) => _isTransient[id];
 	public bool IsAliasedMember(int id) => _aliasedMemberIds.Contains(id);
 	public (uint W, uint H) Extent(int id) => _extents[id];
 	public uint ByteSize(int id) => _byteSizes[id];
-	public DxgiFormat Format(uint slot, int id) => _targets[slot][id].Format;
-	public DxgiFormat SrvFormat(uint slot, int id) => _targets[slot][id].SrvFormat;
-	public CpuDescriptorHandle View(uint slot, int id) => _targets[slot][id].View;
-	public ComPtr<ID3D12Resource> Resource(uint slot, int id) => _targets[slot][id].Resource;
-	public ResourceStates State(uint slot, int id) => _targets[slot][id].State;
-	public void SetState(uint slot, int id, ResourceStates state) => _targets[slot][id].State = state;
+	public DxgiFormat Format(uint slot, int id) => _targets[SlotOf(slot, id)][id].Format;
+	public DxgiFormat SrvFormat(uint slot, int id) => _targets[SlotOf(slot, id)][id].SrvFormat;
+	public CpuDescriptorHandle View(uint slot, int id) => _targets[SlotOf(slot, id)][id].View;
+	public ComPtr<ID3D12Resource> Resource(uint slot, int id) => _targets[SlotOf(slot, id)][id].Resource;
+	public ResourceStates State(uint slot, int id) => _targets[SlotOf(slot, id)][id].State;
+	public void SetState(uint slot, int id, ResourceStates state) => _targets[SlotOf(slot, id)][id].State = state;
 
 	private ResourceDesc BuildDesc(ResourceHandle resource)
 	{

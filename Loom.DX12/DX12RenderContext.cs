@@ -142,33 +142,37 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 		{
 			var id = inputs[i].Id;
 			if (!_transients.IsTransient(id))
-				throw new NotSupportedException("DX12: sampling the backbuffer or a persistent/buffer resource lands in a later slice.");
-
-			var srv = new ShaderResourceViewDesc
-			{
-				// Sample through the SRV-compatible format: R32_FLOAT for a depth target (a shadow map), whose
-				// resource is TYPELESS and whose DSV format (D32_FLOAT) is not SRV-creatable; == the colour format otherwise.
-				Format = _transients.SrvFormat(_slot, id),
-				ViewDimension = SrvDimension.Texture2D,
-				Shader4ComponentMapping = DefaultShader4ComponentMapping,
-				Anonymous = new ShaderResourceViewDescUnion
-				{
-					Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f }
-				}
-			};
-			_ctx.Device.CreateShaderResourceView(_transients.Resource(_slot, id), &srv, _ring.Offset(cpu, (uint)i));
+				throw new NotSupportedException("DX12: sampling the backbuffer or a buffer resource lands in a later slice.");
+			WriteSrv(id, _ring.Offset(cpu, (uint)i));
 		}
 		_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
+	}
+
+	// Create a Texture2D SRV for a transient (or persistent) resource at <paramref name="dest"/>. Samples through
+	// the SRV-compatible format: R32_FLOAT for a depth target (a shadow map), whose resource is TYPELESS and whose
+	// DSV format (D32_FLOAT) is not SRV-creatable; == the colour format otherwise. Shared by the raster sampling
+	// path and the compute-sampling path (the auto-exposure reduction reads the lit scene).
+	private void WriteSrv(int id, CpuDescriptorHandle dest)
+	{
+		var srv = new ShaderResourceViewDesc
+		{
+			Format = _transients!.SrvFormat(_slot, id),
+			ViewDimension = SrvDimension.Texture2D,
+			Shader4ComponentMapping = DefaultShader4ComponentMapping,
+			Anonymous = new ShaderResourceViewDescUnion
+			{
+				Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f }
+			}
+		};
+		_ctx.Device.CreateShaderResourceView(_transients.Resource(_slot, id), &srv, dest);
 	}
 
 	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
 	{
 		if (_transients is null)
 			throw new InvalidOperationException("DX12: compute requires an active graph (SetGraph).");
-		if (sampled.Length > 0)
-			throw new NotSupportedException("DX12: sampled inputs in a compute pass land with the offline-DXIL slice (SSAO/auto-exposure).");
 		if (storage.Length > 1)
-			throw new NotSupportedException("DX12: a compute pass binds one storage buffer for now (the GPU-particle path); multi-buffer compute lands later.");
+			throw new NotSupportedException("DX12: a compute pass binds one storage resource for now (the particle buffer / the exposure image); multi-storage compute lands later.");
 
 		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
 		_cmd.SetComputeRootSignature(baked.RootSignature);
@@ -181,9 +185,39 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 				block[i] = push[i];
 			_cmd.SetComputeRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
 		}
-		// The storage buffer binds as a root UAV (by GPU address) — the graph put it in UNORDERED_ACCESS first.
-		if (storage.Length > 0 && baked.UavRootParam >= 0)
-			_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, storage[0].Id).GetGPUVirtualAddress());
+
+		// Sampled inputs → an SRV descriptor table (e.g. the auto-exposure compute metering the lit scene).
+		if (sampled.Length > 0 && baked.TableParam >= 0)
+		{
+			var (cpu, gpu) = _ring.Allocate((uint)sampled.Length);
+			for (var i = 0; i < sampled.Length; i++)
+				WriteSrv(sampled[i].Id, _ring.Offset(cpu, (uint)i));
+			_cmd.SetComputeRootDescriptorTable((uint)baked.TableParam, gpu);
+		}
+
+		// Storage: a RW buffer (the particle stream) binds as a root UAV by GPU address — no descriptor-heap entry;
+		// a RW texture (the 1×1 exposure image) needs a UAV descriptor in the ring + a UAV table. The graph put the
+		// resource in UNORDERED_ACCESS first.
+		if (storage.Length > 0)
+		{
+			var id = storage[0].Id;
+			if (storage[0].Kind == ResourceKind.Buffer && baked.UavRootParam >= 0)
+			{
+				_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, id).GetGPUVirtualAddress());
+			}
+			else if (baked.UavTableParam >= 0)
+			{
+				var (cpu, gpu) = _ring.Allocate(1);
+				var uav = new UnorderedAccessViewDesc
+				{
+					Format = _transients.SrvFormat(_slot, id),
+					ViewDimension = UavDimension.Texture2D,
+					Anonymous = new UnorderedAccessViewDescUnion { Texture2D = new Tex2DUav { MipSlice = 0, PlaneSlice = 0 } }
+				};
+				_ctx.Device.CreateUnorderedAccessView(_transients.Resource(_slot, id), default(ComPtr<ID3D12Resource>), &uav, cpu);
+				_cmd.SetComputeRootDescriptorTable((uint)baked.UavTableParam, gpu);
+			}
+		}
 
 		_cmd.Dispatch(groups.X, groups.Y, groups.Z);
 	}

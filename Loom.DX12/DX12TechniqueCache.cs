@@ -17,7 +17,8 @@ namespace Loom.DX12;
 internal readonly record struct DX12TechniqueTemplate(
 	byte[] VertexBytecode, byte[] FragmentBytecode, string VertexEntry, string FragmentEntry, int InputCount,
 	bool HasVertexInput, bool HasFragmentPush, bool LinearFilter,
-	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None);
+	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None,
+	int StorageImages = 0, int StorageBuffers = 0);
 
 /// <summary>
 /// Bakes and caches DX12 pipelines per technique — the counterpart of the Vulkan backend's
@@ -90,6 +91,9 @@ internal sealed unsafe class DX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the storage-buffer root UAV (a compute's <c>.ReadWrites</c> of a buffer), or -1 if none.</summary>
 	public int UavRootParam { get; private set; } = -1;
 
+	/// <summary>Root-parameter slot for the storage-image UAV descriptor table (a compute's <c>.ReadWrites</c> of a texture, e.g. auto-exposure), or -1 if none.</summary>
+	public int UavTableParam { get; private set; } = -1;
+
 	public DX12Technique(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		IsCompute = template.IsCompute;
@@ -102,28 +106,82 @@ internal sealed unsafe class DX12Technique : IDisposable
 		BakeGraphics(ctx, template, colorFormats, depthFormat, depthReadOnly);
 	}
 
-	// A compute root signature: a 16-float scalar root constant at b0 plus a storage-buffer root UAV at u0
-	// (DX12 root descriptors bind a raw buffer by GPU address — no descriptor heap entry). Both visible to all
-	// stages (compute is not covered by the per-stage VERTEX/PIXEL visibilities). Storage IMAGES / sampled
-	// inputs in a compute land with the offline-DXIL slice (auto-exposure, SSAO).
+	// A compute root signature shaped to the technique: a 16-float scalar root constant at b0 (always) + an
+	// optional t0.. SRV table for sampled inputs (e.g. the auto-exposure compute metering the lit scene) + the
+	// storage binding — a RW texture (the 1×1 exposure image) via a u0 UAV descriptor table, or a RW buffer (the
+	// GPU-particle stream) as a u0 root UAV by GPU address (no descriptor-heap entry). No compute technique mixes
+	// an image and a buffer, so u0 is unambiguous. All visible to ShaderVisibility.All (compute isn't covered by
+	// the per-stage VERTEX/PIXEL visibilities). Static samplers s0.. pair with the SRV table, as in the graphics path.
 	private void BakeCompute(DX12Context ctx, DX12TechniqueTemplate template)
 	{
-		var parameters = stackalloc RootParameter[2];
-		RootConstantParam = 0;
-		parameters[0] = new RootParameter
+		var parameters = stackalloc RootParameter[3];
+		var paramCount = 0;
+		var srvRange = new DescriptorRange { RangeType = DescriptorRangeType.Srv, NumDescriptors = (uint)template.InputCount, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
+		var uavRange = new DescriptorRange { RangeType = DescriptorRangeType.Uav, NumDescriptors = (uint)template.StorageImages, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
+
+		RootConstantParam = paramCount;
+		parameters[paramCount++] = new RootParameter
 		{
 			ParameterType = RootParameterType.Type32BitConstants,
 			ShaderVisibility = ShaderVisibility.All,
 			Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = 16 } },
 		};
-		UavRootParam = 1;
-		parameters[1] = new RootParameter
+		if (template.InputCount > 0)
 		{
-			ParameterType = RootParameterType.TypeUav,
-			ShaderVisibility = ShaderVisibility.All,
-			Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = 0, RegisterSpace = 0 } },
+			TableParam = paramCount;
+			parameters[paramCount++] = new RootParameter
+			{
+				ParameterType = RootParameterType.TypeDescriptorTable,
+				ShaderVisibility = ShaderVisibility.All,
+				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &srvRange } },
+			};
+		}
+		if (template.StorageImages > 0)
+		{
+			UavTableParam = paramCount;
+			parameters[paramCount++] = new RootParameter
+			{
+				ParameterType = RootParameterType.TypeDescriptorTable,
+				ShaderVisibility = ShaderVisibility.All,
+				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &uavRange } },
+			};
+		}
+		else if (template.StorageBuffers > 0)
+		{
+			UavRootParam = paramCount;
+			parameters[paramCount++] = new RootParameter
+			{
+				ParameterType = RootParameterType.TypeUav,
+				ShaderVisibility = ShaderVisibility.All,
+				Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = 0, RegisterSpace = 0 } },
+			};
+		}
+
+		var samplers = stackalloc StaticSamplerDesc[template.InputCount > 0 ? template.InputCount : 1];
+		for (var i = 0; i < template.InputCount; i++)
+			samplers[i] = new StaticSamplerDesc
+			{
+				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
+				AddressU = TextureAddressMode.Clamp,
+				AddressV = TextureAddressMode.Clamp,
+				AddressW = TextureAddressMode.Clamp,
+				ComparisonFunc = ComparisonFunc.Never,
+				BorderColor = StaticBorderColor.OpaqueBlack,
+				MinLOD = 0f,
+				MaxLOD = float.MaxValue,
+				ShaderRegister = (uint)i,
+				RegisterSpace = 0,
+				ShaderVisibility = ShaderVisibility.All,
+			};
+
+		var rootDesc = new RootSignatureDesc
+		{
+			NumParameters = (uint)paramCount,
+			PParameters = parameters,
+			NumStaticSamplers = (uint)template.InputCount,
+			PStaticSamplers = template.InputCount > 0 ? samplers : null,
+			Flags = RootSignatureFlags.None,
 		};
-		var rootDesc = new RootSignatureDesc { NumParameters = 2, PParameters = parameters, NumStaticSamplers = 0, PStaticSamplers = null, Flags = RootSignatureFlags.None };
 		SerializeRootSignature(ctx, &rootDesc);
 
 		// The compute bytecode is prebuilt (signed DXIL from the build, or FXC-compiled built-in bytes); pin it
