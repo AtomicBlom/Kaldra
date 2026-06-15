@@ -262,12 +262,18 @@ internal sealed unsafe class TransientResources : IDisposable
 			}
 	}
 
-	// Backbuffer-domain resources follow the native swapchain extent; backbuffer-relative domains follow a
-	// fraction of it; fixed domains use their declared size.
+	// Backbuffer-domain resources follow the native swapchain extent — scaled by the resource's OWN scale, so a
+	// fractional sibling declared in g.Screen (the bloom mip chain: scale 1/2..1/32) shrinks while a full-res
+	// target (scale 1) stays native. Backbuffer-relative domains follow a fraction of it; fixed domains use their
+	// declared size. (This branch previously returned _swapExtent unconditionally, dropping resource.Scale — so
+	// the bloom mips were created FULL-resolution and the "downsample" chain became a no-op 1:1 copy with no glow
+	// spread, i.e. no bloom halo. DX12's DX12Transients had this right via Scale(swap, resource.Scale).)
 	private Extent2D ExtentOf(ResourceHandle resource)
 	{
 		if (resource.Domain.IsBackbuffer)
-			return _swapExtent;
+			return new Extent2D(
+				Math.Max(1u, (uint)MathF.Round(_swapExtent.Width * resource.Scale)),
+				Math.Max(1u, (uint)MathF.Round(_swapExtent.Height * resource.Scale)));
 		if (resource.Domain.RelativeScale > 0f)
 		{
 			var f = resource.Domain.RelativeScale * resource.Scale; // domain fraction × the resource's own (mip) scale
