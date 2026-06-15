@@ -18,12 +18,12 @@
 
     <!-- The SAME backend-neutral engine shaders Loom.Vulkan compiles (..\Loom.Shaders\Shaders); this backend
          emits + embeds them as signed DXIL (manifest prefix "Loom.DX12.Shaders.", = $(AssemblyName).Shaders.).
-         The DX12 backend always emits DXIL; ImGui's shader needs HLSL semantics + a DX12 ImGui renderer (later),
-         so exclude it for now. -->
+         The DX12 backend always emits DXIL; the ImGui shader is emitted only when built with ImGui (UseImGui=true),
+         exactly as the Vulkan backend gates its imgui.spv — off, the DX12 ImGui renderer compiles out too. -->
     <LoomShaderSourceDir>$(MSBuildProjectDirectory)\..\Loom.Shaders\Shaders</LoomShaderSourceDir>
     <LoomShaderOutputMode>Embed</LoomShaderOutputMode>
     <LoomEmitDxil>true</LoomEmitDxil>
-    <LoomShaderExclude>$(LoomShaderSourceDir)\imgui.slang</LoomShaderExclude>
+    <LoomShaderExclude Condition="'$(UseImGui)' != 'true'">$(LoomShaderSourceDir)\imgui.slang</LoomShaderExclude>
   </PropertyGroup>
 
   <ItemGroup>
@@ -40,6 +40,10 @@
     <PackageReference Include="Silk.NET.DXGI" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Direct3D.Compilers" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Maths" Version="2.23.0" />
+    <!-- ImGui rendering is inherently backend-specific (like imgui_impl_dx12), so the DX12 ImGui renderer
+         lives here. Only Loom.DX12 + the host see ImGui.NET; Loom.Core/Graph stay UI-agnostic. Gated on
+         <UseImGui> (repo-wide, Directory.Build.props) — off drops the dependency and the renderer entirely. -->
+    <PackageReference Include="ImGui.NET" Version="1.91.6.1" Condition="'$(UseImGui)' == 'true'" />
   </ItemGroup>
 
   <!-- Shared shader-compile targets (after the body, so LoomShaderSourceDir is set). -->

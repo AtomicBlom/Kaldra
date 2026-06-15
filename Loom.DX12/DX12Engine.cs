@@ -34,6 +34,9 @@ public sealed unsafe class DX12Engine : IEngine
 	private readonly DX12MeshStore _meshes;
 	private readonly DX12RenderContext _context;
 	private DX12Transients? _transients;
+#if LOOM_IMGUI
+	private DX12ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
+#endif
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -182,7 +185,7 @@ public sealed unsafe class DX12Engine : IEngine
 		_commandList.SetDescriptorHeaps(1, &heap);
 		_ring.Reset();
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
-		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index);
+		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _swapchain.Width, _swapchain.Height);
 
 		foreach (var pass in _barrierPlan!.Passes)
 		{
@@ -621,6 +624,9 @@ public sealed unsafe class DX12Engine : IEngine
 		foreach (ref var buffer in _pickReadback.AsSpan())
 			if (buffer.Handle is not null)
 				buffer.Dispose();
+#if LOOM_IMGUI
+		_imgui?.Dispose();
+#endif
 		_transients?.Dispose();
 		_meshes.Dispose();
 		_ring.Dispose();
@@ -761,9 +767,27 @@ public sealed unsafe class DX12Engine : IEngine
 			_pickReadback[i] = CreateReadbackBuffer((ulong)_pickRowPitch * _pickHeight);
 	}
 
-	private const string NextSlice = "DX12: this IEngine member lands in a later executor slice.";
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
-	public void EnableImGui() => throw new NotSupportedException(NextSlice);
+
+	/// <summary>
+	/// Stand up the backend's Dear ImGui renderer (the <c>imgui_impl_dx12</c> equivalent) and wire it to the
+	/// render context, so the graph's "hud" pass <c>ctx.DrawImGui()</c> draws the host's UI. Resolves the
+	/// build-emitted signed DXIL for the engine's imgui shader (embedded, like every engine shader). When the
+	/// engine is built without ImGui (UseImGui=false) this is a compiled-out no-op and ctx.DrawImGui() draws
+	/// nothing — exactly as the Vulkan backend behaves.
+	/// </summary>
+	public void EnableImGui()
+	{
+#if LOOM_IMGUI
+		var vs = DX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "imgui", "vs")
+			?? throw new NotSupportedException("DX12: the ImGui shader DXIL (imgui.vs.dxil) was not found — build with UseImGui=true so it is emitted + embedded.");
+		var ps = DX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "imgui", "ps")
+			?? throw new NotSupportedException("DX12: the ImGui shader DXIL (imgui.ps.dxil) was not found — build with UseImGui=true so it is emitted + embedded.");
+		_imgui = new DX12ImGuiRenderer(_ctx, _ring, vs, ps, _swapchain.RenderTargetFormat, (int)BufferCount);
+		_context.SetImGui(_imgui);
+#endif
+		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
+	}
 
 	/// <summary>
 	/// The object id at picking-domain pixel (<paramref name="x"/>, <paramref name="y"/>) — read from the CPU copy

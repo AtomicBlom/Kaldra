@@ -1,10 +1,14 @@
 #if LOOM_DX12
 using System.Numerics;
 
+#if LOOM_IMGUI
+using ImGuiNET;
+#endif
 using Loom.Core;
 using Loom.DX12; // the one sanctioned backend type the host names; constructing DX12EngineSettings self-registers it
 using Loom.Sandbox.Demos;
 
+using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
 
@@ -111,6 +115,28 @@ internal static class Dx12Smoke
 
 		Console.WriteLine($"Loom DX12 {mode} on {engine.DeviceName} ({engine.BackendName}). Close the window to exit.");
 
+		// Input + the Dear ImGui HUD (§6/§9), the same control panel Program.cs builds on Vulkan — proving the
+		// DX12 ImGui renderer end-to-end. The host owns the context + input; the engine's renderer does the GPU
+		// work. Compiled out entirely when built without ImGui (UseImGui=false); the hud pass's ctx.DrawImGui()
+		// is then a no-op, so the gallery still renders, just without the overlay.
+		using var input = window.CreateInput();
+		var mouse = input.Mice.Count > 0 ? input.Mice[0] : null;
+		var fpsTimer = 0f;
+		var fpsFrames = 0;
+		var displayFps = 0.0;
+		var displayMs = 0.0;
+#if LOOM_IMGUI
+		ImGui.CreateContext();
+		var io = ImGui.GetIO();
+		unsafe { io.NativePtr->IniFilename = null; } // don't persist a layout .ini next to the exe
+		io.DisplaySize = new Vector2(window.FramebufferSize.X, window.FramebufferSize.Y);
+		io.DisplayFramebufferScale = Vector2.One;
+		io.Fonts.AddFontDefault();
+		ImGui.StyleColorsDark();
+		engine.EnableImGui();
+		var showDemoWindow = false;
+#endif
+
 		// The sun: a directional light, constant — handed in every frame for the demos that read ctx.SunView
 		// (Shadows / Full). Neutral right-handed projection; the DX12 backend ingests it as-is (no Vulkan Y-flip).
 		var lightDir = Vector3.Normalize(new Vector3(0.45f, 0.55f, -0.6f));
@@ -148,7 +174,51 @@ internal static class Dx12Smoke
 			if (capturePath is not null && frame == 3)
 				engine.RequestCapture(capturePath);
 
-			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed, Camera = camera, SunView = sunCamera, HoverId = hoverId });
+			fpsTimer += (float)delta;
+			fpsFrames++;
+			if (fpsTimer >= 0.25f)
+			{
+				displayFps = fpsFrames / fpsTimer;
+				displayMs = fpsTimer / fpsFrames * 1000.0;
+				fpsTimer = 0f;
+				fpsFrames = 0;
+			}
+
+			// ImDrawData* for this frame; stays null (no UI) when built without ImGui — the hud pass's
+			// ctx.DrawImGui() is then a no-op, so the gallery still renders, just without the overlay.
+			nint imguiDrawData = 0;
+#if LOOM_IMGUI
+			io.DisplaySize = new Vector2(window.FramebufferSize.X, window.FramebufferSize.Y);
+			io.DisplayFramebufferScale = Vector2.One;
+			io.DeltaTime = delta > 0 ? (float)delta : 1f / 60f;
+			if (mouse is not null)
+			{
+				io.AddMousePosEvent(mouse.Position.X, mouse.Position.Y);
+				io.AddMouseButtonEvent(0, mouse.IsButtonPressed(MouseButton.Left));
+				io.AddMouseButtonEvent(1, mouse.IsButtonPressed(MouseButton.Right));
+				io.AddMouseWheelEvent(0f, mouse.ScrollWheels.Count > 0 ? mouse.ScrollWheels[0].Y : 0f);
+			}
+
+			ImGui.NewFrame();
+			if (ImGui.BeginMainMenuBar())
+			{
+				if (ImGui.BeginMenu("Loom"))
+				{
+					ImGui.MenuItem($"{engine.BackendName} backend", "", false, false);
+					ImGui.MenuItem("ImGui demo window", "", ref showDemoWindow);
+					ImGui.EndMenu();
+				}
+				ImGui.Separator();
+				ImGui.Text($"{displayFps:F0} fps ({displayMs:F2} ms)   |   {mode}   |   hovered {hoverId}   |   {engine.DeviceName}");
+				ImGui.EndMainMenuBar();
+			}
+			if (showDemoWindow)
+				ImGui.ShowDemoWindow(ref showDemoWindow);
+			ImGui.Render();
+			unsafe { imguiDrawData = (nint)ImGui.GetDrawData().NativePtr; }
+#endif
+
+			engine.Render(new FrameInputs { DeltaSeconds = delta, Time = elapsed, Camera = camera, SunView = sunCamera, HoverId = hoverId, ImGuiDrawData = imguiDrawData });
 
 			if (capturePath is not null && frame >= 3)
 				window.Close();
@@ -161,6 +231,9 @@ internal static class Dx12Smoke
 
 		window.Run();
 		engine.WaitIdle();
+#if LOOM_IMGUI
+		ImGui.DestroyContext();
+#endif
 	}
 
 	// Build + run the per-capability demo gallery (the same IDemo classes Program.cs runs on Vulkan), selecting

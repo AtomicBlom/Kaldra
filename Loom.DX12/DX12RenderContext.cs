@@ -28,9 +28,19 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 	private readonly DX12DescriptorRing _ring;
 	private readonly DX12MeshStore _meshes;
 	private DX12Transients? _transients;
+#if LOOM_IMGUI
+	// The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled. The HUD pass's
+	// ctx.DrawImGui() forwards this frame's draw data to it. Null when EnableImGui hasn't been called.
+	private DX12ImGuiRenderer? _imgui;
+#endif
 
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
+	// This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
+	// DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
+	private nint _imguiDrawData;
+	private uint _fbWidth;
+	private uint _fbHeight;
 	private DxgiFormat[] _colorFormats = [];
 	private int _colorCount;
 	private DxgiFormat _depthFormat;
@@ -54,10 +64,18 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
 	public void SetTransients(DX12Transients transients) => _transients = transients;
 
-	public void BeginFrame(ComPtr<ID3D12GraphicsCommandList> cmd, FrameInputs inputs, bool hdrOutput, uint slot)
+#if LOOM_IMGUI
+	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
+	public void SetImGui(DX12ImGuiRenderer renderer) => _imgui = renderer;
+#endif
+
+	public void BeginFrame(ComPtr<ID3D12GraphicsCommandList> cmd, FrameInputs inputs, bool hdrOutput, uint slot, uint fbWidth, uint fbHeight)
 	{
 		_cmd = cmd;
 		_slot = slot;
+		_imguiDrawData = inputs.ImGuiDrawData;
+		_fbWidth = fbWidth;
+		_fbHeight = fbHeight;
 		DeltaTime = (float)inputs.DeltaSeconds;
 		Time = inputs.Time;
 		HoverId = inputs.HoverId;
@@ -262,5 +280,13 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 		_cmd.DrawInstanced(6, (uint)count, 0, 0);
 	}
 
-	public void DrawImGui() { } // neutral no-op until the DX12 ImGui renderer lands
+	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
+	// scope (the engine has bound the backbuffer RTV + negative-height viewport). No-op when ImGui isn't enabled
+	// or the host produced no draw data this frame — and a compiled-out no-op when built without ImGui.
+	public void DrawImGui()
+	{
+#if LOOM_IMGUI
+		_imgui?.Render(_cmd, _imguiDrawData, _fbWidth, _fbHeight, _slot);
+#endif
+	}
 }
