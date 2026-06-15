@@ -61,9 +61,23 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 		DeltaTime = (float)inputs.DeltaSeconds;
 		Time = inputs.Time;
 		HoverId = inputs.HoverId;
-		Camera = inputs.Camera;
-		SunView = inputs.SunView;
+		Camera = ClipSpace(inputs.Camera);
+		SunView = ClipSpace(inputs.SunView);
 		HdrOutput = hdrOutput;
+	}
+
+	// Adopt the Vulkan backend's clip-space convention (negate the projection's Y row), so the shared shaders need
+	// NO per-backend branch — ndc.y matches the +Y-down texture V everywhere (mesh MVP, fullscreen reprojection,
+	// the JFA's SV_Position). On its own this flips D3D12 upside down; the engine pairs it with a negative-height
+	// viewport (DX12Engine.RecordRasterPass) that turns D3D12's (1-ndc.y) screen map into Vulkan's (ndc.y+1), so
+	// geometry stays upright. The host supplies a neutral +Y-up projection in FrameInputs (M7-B5); both backends
+	// flip it the same way here. (Earlier "identity ingest, no Y-flip" rendered mesh upright but left every
+	// fullscreen pass vertically mirrored vs Vulkan — one mesh→fullscreen→backbuffer hop = upside down.)
+	private static Camera ClipSpace(Camera camera)
+	{
+		var projection = camera.Projection;
+		projection.M22 *= -1f;
+		return new Camera(camera.View, projection);
 	}
 
 	/// <summary>

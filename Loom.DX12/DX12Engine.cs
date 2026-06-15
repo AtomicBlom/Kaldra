@@ -294,7 +294,11 @@ public sealed unsafe class DX12Engine : IEngine
 		if (hasDepth && depthClear)
 			_commandList.ClearDepthStencilView(dsv, ClearFlags.Depth, 1f, 0, 0u, (Box2D<int>*)null);
 
-		var viewport = new Viewport { TopLeftX = 0, TopLeftY = 0, Width = width, Height = height, MinDepth = 0, MaxDepth = 1 };
+		// Negative-height viewport (origin at the bottom): turns D3D12's (1-ndc.y) NDC→screen map into Vulkan's
+		// (ndc.y+1). Paired with the Vulkan-style flipped projection (DX12RenderContext.ClipSpace) this renders
+		// geometry upright AND makes every fullscreen pass map uv→screen exactly like Vulkan — so the shared
+		// shaders need no per-backend Y handling (see ClipSpace). The scissor stays in pixel space (not flipped).
+		var viewport = new Viewport { TopLeftX = 0, TopLeftY = height, Width = width, Height = -(float)height, MinDepth = 0, MaxDepth = 1 };
 		var scissor = new Box2D<int>(0, 0, (int)width, (int)height);
 		_commandList.RSSetViewports(1, &viewport);
 		_commandList.RSSetScissorRects(1, &scissor);
