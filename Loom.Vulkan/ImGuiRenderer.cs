@@ -141,6 +141,7 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 	private void CreatePipeline(VkFormat colorFormat, byte[] spirv)
 	{
 		var module = CreateShaderModule(spirv);
+		_ctx.SetObjectName(ObjectType.ShaderModule, module.Handle, "shader:imgui");
 		try
 		{
 			var setLayout = _setLayout;
@@ -271,6 +272,7 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 				RenderPass = default, // dynamic rendering
 			};
 			_vk.CreateGraphicsPipelines(_ctx.Device, default, 1, in createInfo, null, out _pipeline).Check("vkCreateGraphicsPipelines");
+			_ctx.SetObjectName(ObjectType.Pipeline, _pipeline.Handle, "pipeline:imgui");
 		}
 		finally
 		{

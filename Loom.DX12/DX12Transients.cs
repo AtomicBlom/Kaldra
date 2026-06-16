@@ -173,6 +173,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 				var clear = BuildClear(viewFormat, isDepth);
 				ComPtr<ID3D12Resource> texture = default;
 				SilkMarshal.ThrowHResult(ctx.Device.CreatePlacedResource(heap, 0, &desc, ResourceStates.Common, &clear, out texture));
+				ctx.SetObjectName((ID3D12Object*)texture.Handle, $"{resource.Name}#{slot}");
 
 				CpuDescriptorHandle view;
 				if (isDepth)
@@ -200,6 +201,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 			foreach (var resource in bufferTargets)
 			{
 				var buffer = CreateBufferResource(ctx, _byteSizes[resource.Id]);
+				ctx.SetObjectName((ID3D12Object*)buffer.Handle, $"{resource.Name}#{slot}");
 				_targets[slot][resource.Id] = new Target { Resource = buffer, View = default, Format = DxgiFormat.FormatUnknown, SrvFormat = DxgiFormat.FormatUnknown, State = ResourceStates.Common, IsDepth = false };
 			}
 	}
@@ -232,6 +234,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 			ComPtr<ID3D12Resource> texture = default;
 			SilkMarshal.ThrowHResult(ctx.Device.CreateCommittedResource(
 				&heapProps, HeapFlags.None, &desc, ResourceStates.Common, (ClearValue*)null, out texture));
+			ctx.SetObjectName((ID3D12Object*)texture.Handle, $"{resource.Name}#persistent");
 			_targets[0][resource.Id] = new Target { Resource = texture, View = default, Format = resFormat, SrvFormat = srvFormat, State = ResourceStates.Common, IsDepth = false };
 		}
 	}

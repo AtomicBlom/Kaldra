@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Text;
+
 using Silk.NET.Core.Contexts;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
@@ -127,6 +130,40 @@ internal sealed unsafe class DX12Context : IDisposable
 		InfoQueue.ClearStoredMessages();
 		return errors;
 	}
+
+	// GPU object names + per-pass debug-label scopes (UseNamedGPUObjects), for PIX/RenderDoc captures — the DX12
+	// counterpart of VulkanContext's helpers. [Conditional] so the calls (and their string marshalling) vanish
+	// entirely without the flag; they no-op safely if the debug layer/capture tooling isn't present.
+
+	/// <summary>Attach a human-readable name to a D3D12 object (pipeline state, resource, command list, …). Pass e.g. <c>(ID3D12Object*)pso.Handle</c>.</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	public void SetObjectName(ID3D12Object* obj, string name)
+	{
+		if (obj is null)
+			return;
+		fixed (char* p = name) // C# strings are null-terminated, so this is a valid LPCWSTR
+			obj->SetName(p);
+	}
+
+	// PIX legacy string-event metadata (pix_win.h): 0 = UNICODE, 1 = ANSI, 2 = PIX3BLOB (a binary blob — NOT a
+	// string). PIX and RenderDoc both decode the ANSI form; metadata 2 with a plain string is a malformed blob the
+	// D3D12 debug layer silently drops (the begin goes uncounted while its EndEvent still does — an imbalance).
+	private const uint PixEventAnsiVersion = 1;
+
+	/// <summary>Open a named debug-label region on a command list (a PIX/RenderDoc marker scope).</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	public void BeginDebugLabel(ComPtr<ID3D12GraphicsCommandList> cmd, string label)
+	{
+		// ANSI string event: a null-terminated UTF-8 payload, Size in bytes including the NUL.
+		var bytes = (uint)Encoding.UTF8.GetByteCount(label) + 1;
+		var p = (byte*)SilkMarshal.StringToPtr(label, NativeStringEncoding.UTF8);
+		cmd.BeginEvent(PixEventAnsiVersion, p, bytes);
+		SilkMarshal.Free((nint)p);
+	}
+
+	/// <summary>Close the most recently opened debug-label region on a command list.</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	public void EndDebugLabel(ComPtr<ID3D12GraphicsCommandList> cmd) => cmd.EndEvent();
 
 	public void Dispose()
 	{

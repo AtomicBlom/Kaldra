@@ -297,7 +297,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			template.Spirv, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
-			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput));
+			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
 		// HasFragmentPush are folded into the TechniqueDescription hash, and LinearFilter only affects the
 		// descriptor's sampler, not the pipeline.

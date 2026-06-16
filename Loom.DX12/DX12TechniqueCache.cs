@@ -52,6 +52,11 @@ internal sealed unsafe class DX12TechniqueCache : IDisposable
 			return cached;
 
 		var technique = new DX12Technique(_ctx, template, colorFormats, depthFormat, depthReadOnly);
+		// Name the baked PSO + root signature for GPU debuggers (DX12 has no separate shader objects — the DXIL
+		// lives in the PSO, so naming the PSO is the shader-naming equivalent). [Conditional]: stripped without
+		// UseNamedGPUObjects. Distinct target-format variants of one technique share the logical name.
+		_ctx.SetObjectName((ID3D12Object*)technique.Pipeline.Handle, $"pipeline:{name}");
+		_ctx.SetObjectName((ID3D12Object*)technique.RootSignature.Handle, $"rootsig:{name}");
 		_baked[key] = technique;
 		return technique;
 	}

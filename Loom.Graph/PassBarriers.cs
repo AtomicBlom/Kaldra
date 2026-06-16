@@ -9,6 +9,11 @@ namespace Loom.Graph;
 /// recording it, and the load/store actions for its render targets. Backend-neutral — the Vulkan backend
 /// turns <see cref="Transitions"/> into <c>vkCmdPipelineBarrier2</c> and <see cref="Attachments"/> into the
 /// dynamic-rendering attachment infos.
+/// <para>
+/// It also carries the derived GPU debug-label nesting (<see cref="DebugLabelScopes"/>): before recording,
+/// the backend closes <see cref="LabelCloses"/> open groups, opens each of <see cref="LabelOpens"/>, then
+/// opens the pass's own <see cref="LeafLabel"/> scope (closed after the pass). Diagnostic-only.
+/// </para>
 /// </summary>
 public sealed class PassBarriers
 {
@@ -24,11 +29,23 @@ public sealed class PassBarriers
 	/// <summary>Load/store decisions for the pass's colour and depth attachments (raster passes only).</summary>
 	public ImmutableArray<AttachmentAction> Attachments { get; }
 
-	internal PassBarriers(GraphPass pass, int order, ImmutableArray<ResourceTransition> transitions, ImmutableArray<AttachmentAction> attachments)
+	/// <summary>Open debug-label groups to close before this pass (derived from the dotted pass name; see <see cref="DebugLabelScopes"/>).</summary>
+	public int LabelCloses { get; }
+
+	/// <summary>Debug-label groups to open before this pass, outermost first.</summary>
+	public ImmutableArray<string> LabelOpens { get; }
+
+	/// <summary>The pass's own debug-label scope (the last dotted segment of its name).</summary>
+	public string LeafLabel { get; }
+
+	internal PassBarriers(GraphPass pass, int order, ImmutableArray<ResourceTransition> transitions, ImmutableArray<AttachmentAction> attachments, int labelCloses, ImmutableArray<string> labelOpens, string leafLabel)
 	{
 		Pass = pass;
 		Order = order;
 		Transitions = transitions;
 		Attachments = attachments;
+		LabelCloses = labelCloses;
+		LabelOpens = labelOpens;
+		LeafLabel = leafLabel;
 	}
 }

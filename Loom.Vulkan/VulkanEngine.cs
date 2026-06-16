@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using Loom.Core;
 using Loom.Graph;
 using Silk.NET.Core.Contexts;
@@ -409,20 +411,42 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		foreach (var pass in _plan.Passes)
 		{
-			// Wrap each pass (its pre-barriers + its draws/dispatch) in a named debug-label scope, so a RenderDoc
-			// capture reads as "gbuffer", "lighting", "bloom", … instead of a flat command list. [Conditional]:
-			// compiles to nothing without UseNamedGPUObjects.
-			_ctx.BeginDebugLabel(cmd, pass.Pass.Name);
+			// Wrap each pass (its pre-barriers + its draws/dispatch) in a debug-label scope, nested under groups
+			// derived from the dotted pass name — so a RenderDoc capture reads as a "bloom" group containing
+			// "down1", "up0", … instead of a flat command list. [Conditional]: vanishes without UseNamedGPUObjects.
+			BeginPassLabels(cmd, pass);
 			foreach (var transition in pass.Transitions)
 				EmitTransition(cmd, transition);
 			RecordPass(cmd, pass);
-			_ctx.EndDebugLabel(cmd);
+			_ctx.EndDebugLabel(cmd); // close the leaf scope opened by BeginPassLabels
 		}
+		CloseTrailingLabels(cmd); // close any groups still open after the last pass
 
 		RecordReadback(cmd);
 		FinishFrame(cmd, captureBuffer);
 
 		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
+	}
+
+	// Open this pass's debug-label scopes: close the groups it leaves behind, open the ones it enters, then open
+	// its own leaf scope (closed by the caller after the pass records). [Conditional] so the whole thing — loops
+	// and all — compiles away without UseNamedGPUObjects.
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	private void BeginPassLabels(CommandBuffer cmd, PassBarriers pass)
+	{
+		for (var i = 0; i < pass.LabelCloses; i++)
+			_ctx.EndDebugLabel(cmd);
+		foreach (var group in pass.LabelOpens)
+			_ctx.BeginDebugLabel(cmd, group);
+		_ctx.BeginDebugLabel(cmd, pass.LeafLabel);
+	}
+
+	// Close the debug-label groups still open after the final pass (balances BeginPassLabels' opens).
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	private void CloseTrailingLabels(CommandBuffer cmd)
+	{
+		for (var i = 0; i < _plan.TrailingLabelCloses; i++)
+			_ctx.EndDebugLabel(cmd);
 	}
 
 	// Copy the readback target (its last graph use is a .Samples, so it's in SHADER_READ) into this slot's

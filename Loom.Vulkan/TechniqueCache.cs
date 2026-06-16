@@ -15,14 +15,15 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 
 	public int Count => _cache.Count;
 
-	public Technique GetOrBake(in TechniqueDescription description)
+	public Technique GetOrBake(in TechniqueDescription description, string name)
 	{
 		var spirv = description.Spirv;
 		var key = ComputeKey(spirv, description);
 		if (_cache.TryGetValue(key, out var cached))
 			return cached;
 
-		var technique = new Technique(ctx, description, spirv);
+		// `name` is diagnostic-only (the shader-module label) — deliberately not part of the content-hash key.
+		var technique = new Technique(ctx, description, spirv, name);
 		_cache[key] = technique;
 		return technique;
 	}

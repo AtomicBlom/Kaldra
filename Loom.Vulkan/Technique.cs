@@ -26,12 +26,15 @@ public sealed unsafe class Technique : IDisposable
 	/// </summary>
 	public DescriptorSetLayout DescriptorSetLayout { get; }
 
-	public Technique(VulkanContext ctx, in TechniqueDescription description, byte[] spirv)
+	public Technique(VulkanContext ctx, in TechniqueDescription description, byte[] spirv, string name)
 	{
 		_vk = ctx.Vk;
 		_device = ctx.Device;
 
 		var module = CreateShaderModule(spirv);
+		// Name the module for GPU debuggers before it's destroyed below ([Conditional] — stripped without
+		// UseNamedGPUObjects). The pipeline gets its own "pipeline:…" name once it's baked (RenderContext).
+		ctx.SetObjectName(ObjectType.ShaderModule, module.Handle, $"shader:{name}");
 		try
 		{
 			var stage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.FragmentBit;

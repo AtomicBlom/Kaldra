@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 using Loom.Core;
@@ -78,12 +79,16 @@ public sealed unsafe class DX12Engine : IEngine
 		_swapchain = new DX12Swapchain(_ctx, hwnd, width, height, BufferCount);
 
 		for (uint i = 0; i < BufferCount; i++)
+		{
 			SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandAllocator(CommandListType.Direct, out _allocators[i]));
+			_ctx.SetObjectName((ID3D12Object*)_allocators[i].Handle, $"frame-alloc#{i}");
+		}
 
 		// Created in the recording state, then immediately closed — Render() resets it at the top of each frame.
 		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandList(
 			0, CommandListType.Direct, _allocators[0], default(ComPtr<ID3D12PipelineState>), out _commandList));
 		SilkMarshal.ThrowHResult(_commandList.Close());
+		_ctx.SetObjectName((ID3D12Object*)_commandList.Handle, "graph-cmdlist");
 
 		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out _fence));
 		_fenceEvent = CreateEventW(0, 0, 0, 0);
@@ -189,6 +194,10 @@ public sealed unsafe class DX12Engine : IEngine
 
 		foreach (var pass in _barrierPlan!.Passes)
 		{
+			// Wrap each pass in a debug-label scope, nested under groups derived from its dotted name, so a PIX
+			// capture reads as a "bloom" group containing "down1", … instead of a flat list. [Conditional]:
+			// vanishes without UseNamedGPUObjects.
+			BeginPassLabels(pass);
 			foreach (var transition in pass.Transitions)
 				EmitGraphTransition(index, transition);
 
@@ -196,7 +205,9 @@ public sealed unsafe class DX12Engine : IEngine
 				RecordComputePass(pass);
 			else
 				RecordRasterPass(index, pass);
+			_ctx.EndDebugLabel(_commandList); // close the leaf scope opened by BeginPassLabels
 		}
+		CloseTrailingLabels(); // close any groups still open after the last pass
 
 		// Picking: copy this frame's object-id target into the slot's readback buffer (no-op if the graph has none).
 		RecordPick(index);
@@ -317,6 +328,27 @@ public sealed unsafe class DX12Engine : IEngine
 	{
 		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
 		pass.Pass.Record?.Invoke(_context);
+	}
+
+	// Open this pass's debug-label scopes: close the groups it leaves behind, open the ones it enters, then open
+	// its own leaf scope (closed by the caller after the pass records). [Conditional] so the whole thing — loops
+	// and all — compiles away without UseNamedGPUObjects.
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	private void BeginPassLabels(PassBarriers pass)
+	{
+		for (var i = 0; i < pass.LabelCloses; i++)
+			_ctx.EndDebugLabel(_commandList);
+		foreach (var group in pass.LabelOpens)
+			_ctx.BeginDebugLabel(_commandList, group);
+		_ctx.BeginDebugLabel(_commandList, pass.LeafLabel);
+	}
+
+	// Close the debug-label groups still open after the final pass (balances BeginPassLabels' opens).
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	private void CloseTrailingLabels()
+	{
+		for (var i = 0; i < _barrierPlan!.TrailingLabelCloses; i++)
+			_ctx.EndDebugLabel(_commandList);
 	}
 
 	// Track the resource's real D3D12 state and emit a transition only when the required state differs (D3D12

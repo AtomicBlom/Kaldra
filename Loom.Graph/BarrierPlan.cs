@@ -25,10 +25,14 @@ public sealed class BarrierPlan
 	/// <summary>Transitions to emit after the last pass — currently the present target to <see cref="ResourceState.Present"/>.</summary>
 	public ImmutableArray<ResourceTransition> FinalTransitions { get; }
 
-	private BarrierPlan(ImmutableArray<PassBarriers> passes, ImmutableArray<ResourceTransition> finalTransitions)
+	/// <summary>Debug-label groups still open after the last pass — the backend closes this many before the frame ends (see <see cref="DebugLabelScopes"/>).</summary>
+	public int TrailingLabelCloses { get; }
+
+	private BarrierPlan(ImmutableArray<PassBarriers> passes, ImmutableArray<ResourceTransition> finalTransitions, int trailingLabelCloses)
 	{
 		Passes = passes;
 		FinalTransitions = finalTransitions;
+		TrailingLabelCloses = trailingLabelCloses;
 	}
 
 	private readonly record struct Use(ResourceHandle Resource, ResourceState State, bool IsAttachment, bool IsBlend, bool IsReadOnlyAttachment);
@@ -47,13 +51,17 @@ public sealed class BarrierPlan
 
 		var presentId = schedule.Graph.PresentTarget?.Id ?? -1;
 
+		// Derive the nested GPU debug-label scopes from the dotted pass names (diagnostic-only, computed once).
+		var labels = DebugLabelScopes.Derive([.. ordered.Select(s => s.Pass.Name)]);
+
 		// Second walk: track each resource's current state and emit transitions + attachment actions.
 		var currentState = new Dictionary<int, ResourceState>();
 		var seen = new HashSet<int>();
 		var passBarriers = ImmutableArray.CreateBuilder<PassBarriers>(ordered.Length);
 
-		foreach (var scheduled in ordered)
+		for (var idx = 0; idx < ordered.Length; idx++)
 		{
+			var scheduled = ordered[idx];
 			var transitions = ImmutableArray.CreateBuilder<ResourceTransition>();
 			var attachments = ImmutableArray.CreateBuilder<AttachmentAction>();
 
@@ -85,7 +93,8 @@ public sealed class BarrierPlan
 				seen.Add(id);
 			}
 
-			passBarriers.Add(new PassBarriers(scheduled.Pass, scheduled.Order, transitions.ToImmutable(), attachments.ToImmutable()));
+			var label = labels.Passes[idx];
+			passBarriers.Add(new PassBarriers(scheduled.Pass, scheduled.Order, transitions.ToImmutable(), attachments.ToImmutable(), label.Closes, label.Opens, label.Leaf));
 		}
 
 		var finals = ImmutableArray.CreateBuilder<ResourceTransition>();
@@ -95,7 +104,7 @@ public sealed class BarrierPlan
 			finals.Add(new ResourceTransition(present, from, ResourceState.Present));
 		}
 
-		return new BarrierPlan(passBarriers.ToImmutable(), finals.ToImmutable());
+		return new BarrierPlan(passBarriers.ToImmutable(), finals.ToImmutable(), labels.TrailingCloses);
 	}
 
 	private static bool IsWritingState(ResourceState state) =>

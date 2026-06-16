@@ -176,6 +176,7 @@ internal sealed unsafe class DX12ImGuiRenderer : IDisposable
 			};
 			pso.RTVFormats[0] = rtvFormat;
 			SilkMarshal.ThrowHResult(_ctx.Device.CreateGraphicsPipelineState(&pso, out _pipeline));
+			_ctx.SetObjectName((ID3D12Object*)_pipeline.Handle, "pipeline:imgui");
 		}
 	}
 
