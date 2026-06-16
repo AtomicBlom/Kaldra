@@ -1,6 +1,9 @@
 using System.Runtime.CompilerServices;
 
 using Loom.Core;
+using Silk.NET.Core.Native;
+using Silk.NET.Direct3D12;
+using Silk.NET.DXGI;
 
 namespace Loom.DX12;
 
@@ -13,9 +16,42 @@ namespace Loom.DX12;
 /// </summary>
 public sealed class DX12Backend : IRenderBackend
 {
-	/// <summary>Register the DX12 backend as the Loom.DX12 assembly loads (Planning.md §5 backend registry).</summary>
+    #pragma warning disable CA2255
+	/// <summary>
+	/// Register the DX12 backend as the Loom.DX12 assembly loads (Planning.md §5 backend registry) — but only if
+	/// <see cref="IsSupported"/> confirms D3D12 is actually available. On a box (or OS) without it the backend then
+	/// never appears in <see cref="Engine.AvailableEngines"/>, so selection falls through to a working one instead
+	/// of crashing later in <see cref="Create"/>.
+	/// </summary>
 	[ModuleInitializer]
-	internal static void Register() => Engine.Register(new DX12Backend());
+	internal static void Register()
+	{
+		if (IsSupported())
+			Engine.Register(new DX12Backend());
+	}
+    #pragma warning restore CA2255
+
+	/// <summary>
+	/// Probe — without throwing — whether this machine can run the DX12 backend: D3D12 loads and a device can be
+	/// created at the engine's minimum feature level (11_0). The probe device is released immediately. Any failure
+	/// (no <c>d3d12.dll</c> on a non-Windows OS, no DX12-capable adapter) is swallowed and reported as <c>false</c>
+	/// rather than faulting assembly load.
+	/// </summary>
+	private static bool IsSupported()
+	{
+		try
+		{
+			var d3d12 = D3D12.GetApi();
+			var hr = d3d12.CreateDevice(default(ComPtr<IDXGIAdapter>), D3DFeatureLevel.Level110, out ComPtr<ID3D12Device> device);
+			if (hr >= 0)
+				device.Dispose(); // a device can be created — release the probe instance
+			return hr >= 0;
+		}
+		catch
+		{
+			return false; // d3d12.dll absent (non-Windows) or no capable adapter — DX12 isn't available here
+		}
+	}
 
 	public string Name => "DX12";
 
