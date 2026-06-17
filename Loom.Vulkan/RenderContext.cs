@@ -27,8 +27,13 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private TransientResources _resources = null!;
 	private readonly DescriptorAllocator _descriptors;
 	private readonly MeshStore _meshes;
+	private readonly TextureStore _textures;
+	private readonly MaterialStore _materials;
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
+	// Repeat-addressing, mip-sampling sampler for material textures (tiled across geometry). Mirrors the DX12
+	// material static sampler (Wrap + MinMagMipLinear); the existing nearest/linear samplers clamp.
+	private readonly Sampler _textureSampler;
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), set by the executor when the host enables ImGui. The HUD
 	// pass's ctx.DrawImGui() forwards this frame's draw data to it. Null when ImGui is not in use.
@@ -73,7 +78,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		TechniqueCache techniques,
 		IReadOnlyDictionary<string, TechniqueTemplate> registry,
 		DescriptorAllocator descriptors,
-		MeshStore meshes)
+		MeshStore meshes,
+		TextureStore textures,
+		MaterialStore materials)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
@@ -81,8 +88,11 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_registry = registry;
 		_descriptors = descriptors;
 		_meshes = meshes;
+		_textures = textures;
+		_materials = materials;
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
+		_textureSampler = CreateSampler(Filter.Linear, SamplerAddressMode.Repeat);
 	}
 
 	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
@@ -187,6 +197,56 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
+	}
+
+	public void Draw(Mesh mesh, Material material, string technique) => Draw(mesh, material, technique, _camera);
+
+	public void Draw(Mesh mesh, Material material, string technique, Camera view)
+	{
+		var baked = Bake(technique);
+		var template = _registry[technique];
+		var mvp = view.ViewProjection;
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+
+		// Bind the material's textures into the technique's reflected sampler slots 0..N-1 — the same
+		// combined-image-sampler mechanism FullScreen uses, but the views come from the TextureStore (loaded
+		// textures), not the transients. A technique that reflects nothing (depth-only/shadow) skips this and the
+		// material is ignored. Material textures sample with Repeat addressing when the technique asks for it.
+		if (template.SampleCount > 0)
+		{
+			var textures = _materials.TexturesOf(material.Id);
+			if (textures.Length < template.SampleCount)
+				throw new VulkanException($"Material supplies {textures.Length} textures but technique '{technique}' samples {template.SampleCount}.");
+
+			var sampler = template.Address == SamplerAddress.Repeat ? _textureSampler
+				: template.LinearFilter ? _linearSampler : _nearestSampler;
+			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+			var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];
+			var writes = stackalloc WriteDescriptorSet[template.SampleCount];
+			for (var i = 0; i < template.SampleCount; i++)
+			{
+				imageInfos[i] = new DescriptorImageInfo
+				{
+					Sampler = sampler,
+					ImageView = _textures.View(textures[i]),
+					ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
+				};
+				writes[i] = new WriteDescriptorSet
+				{
+					SType = StructureType.WriteDescriptorSet,
+					DstSet = set,
+					DstBinding = (uint)i,
+					DescriptorCount = 1,
+					DescriptorType = DescriptorType.CombinedImageSampler,
+					PImageInfo = &imageInfos[i],
+				};
+			}
+			_vk.UpdateDescriptorSets(_ctx.Device, (uint)template.SampleCount, writes, 0, null);
+			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+		}
+
+		_meshes.Draw(_cmd, mesh.Id);
 	}
 
 	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
@@ -375,7 +435,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// Nearest keeps the §9 pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
 	// the smooth filtering a chunky pixel glow still wants internally. The sampler is part of the combined
 	// image-sampler descriptor, so the technique's LinearFilter flag just selects which one FullScreen binds.
-	private Sampler CreateSampler(Filter filter)
+	private Sampler CreateSampler(Filter filter, SamplerAddressMode address = SamplerAddressMode.ClampToEdge)
 	{
 		var mip = filter == Filter.Linear ? SamplerMipmapMode.Linear : SamplerMipmapMode.Nearest;
 		SamplerCreateInfo info = new()
@@ -384,9 +444,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			MagFilter = filter,
 			MinFilter = filter,
 			MipmapMode = mip,
-			AddressModeU = SamplerAddressMode.ClampToEdge,
-			AddressModeV = SamplerAddressMode.ClampToEdge,
-			AddressModeW = SamplerAddressMode.ClampToEdge,
+			AddressModeU = address,
+			AddressModeV = address,
+			AddressModeW = address,
 			MaxLod = Vk.LodClampNone,
 		};
 		_vk.CreateSampler(_ctx.Device, in info, null, out var sampler).Check("vkCreateSampler");
@@ -399,5 +459,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			_vk.DestroySampler(_ctx.Device, _nearestSampler, null);
 		if (_linearSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _linearSampler, null);
+		if (_textureSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _textureSampler, null);
 	}
 }

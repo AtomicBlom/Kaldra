@@ -50,6 +50,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly TechniqueCache _techniques;
 	private readonly MeshStore _meshes;
+	private readonly TextureStore _textures;
+	private readonly MaterialStore _materials;
 	private readonly DescriptorAllocator _descriptors;
 	private readonly RenderContext _context;
 	private readonly Dictionary<string, TechniqueTemplate> _registry = []; // logical name → backend baked-input form
@@ -120,8 +122,10 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		_techniques = new TechniqueCache(_ctx);
 		_meshes = new MeshStore(_ctx, _allocator, _commandPool);
+		_textures = new TextureStore(_ctx, _allocator, _commandPool);
+		_materials = new MaterialStore();
 		_descriptors = new DescriptorAllocator(_ctx, MaxFramesInFlight);
-		_context = new RenderContext(_ctx, _techniques, _registry, _descriptors, _meshes);
+		_context = new RenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, _materials);
 
 		CreateCommandBuffers();
 		CreateSyncObjects();
@@ -148,10 +152,15 @@ internal sealed unsafe class VulkanEngine : IEngine
 			descriptor.IsCompute,
 			reflection.StorageImageCount,
 			reflection.StorageBufferCount,
-			descriptor.ParticleInput);
+			descriptor.ParticleInput,
+			descriptor.Address);
 	}
 
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+
+	public Texture CreateTexture(TextureData data) => _textures.Create(data);
+
+	public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	public void SetGraph(RenderGraph graph)
 	{
@@ -882,6 +891,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 #endif
 		_descriptors.Dispose();
 		_meshes.Dispose();
+		_textures.Dispose(); // before the allocator — it holds VMA image allocations
 		_allocator.Dispose(); // after every image/buffer it backed is freed
 		_techniques.Dispose();
 

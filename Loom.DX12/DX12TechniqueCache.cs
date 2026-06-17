@@ -4,6 +4,7 @@ using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 
 using BlendMode = Loom.Core.BlendMode;
+using SamplerAddress = Loom.Core.SamplerAddress;
 
 namespace Loom.DX12;
 
@@ -18,7 +19,8 @@ internal readonly record struct DX12TechniqueTemplate(
 	byte[] VertexBytecode, byte[] FragmentBytecode, string VertexEntry, string FragmentEntry, int InputCount,
 	bool HasVertexInput, bool HasFragmentPush, bool LinearFilter,
 	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None,
-	int StorageImages = 0, int StorageBuffers = 0, int StorageBufferStride = 0);
+	int StorageImages = 0, int StorageBuffers = 0, int StorageBufferStride = 0,
+	SamplerAddress Address = SamplerAddress.Clamp);
 
 /// <summary>
 /// Bakes and caches DX12 pipelines per technique — the counterpart of the Vulkan backend's
@@ -93,6 +95,9 @@ internal sealed unsafe class DX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the SRV descriptor table (sampled inputs), or -1 if the technique samples nothing.</summary>
 	public int TableParam { get; private set; } = -1;
 
+	/// <summary>Number of sampled inputs the technique binds (the SRV table's descriptor count) — how many textures a material fills.</summary>
+	public int InputCount { get; }
+
 	/// <summary>Root-parameter slot for the storage-buffer root UAV (a compute's <c>.ReadWrites</c> of a buffer), or -1 if none.</summary>
 	public int UavRootParam { get; private set; } = -1;
 
@@ -106,6 +111,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 	{
 		IsCompute = template.IsCompute;
 		StorageBufferStride = template.StorageBufferStride;
+		InputCount = template.InputCount;
 
 		if (template.IsCompute)
 		{
@@ -178,9 +184,9 @@ internal sealed unsafe class DX12Technique : IDisposable
 			samplers[i] = new StaticSamplerDesc
 			{
 				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-				AddressU = TextureAddressMode.Clamp,
-				AddressV = TextureAddressMode.Clamp,
-				AddressW = TextureAddressMode.Clamp,
+				AddressU = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
+				AddressV = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
+				AddressW = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
 				ComparisonFunc = ComparisonFunc.Never,
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
@@ -265,9 +271,9 @@ internal sealed unsafe class DX12Technique : IDisposable
 			samplers[i] = new StaticSamplerDesc
 			{
 				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-				AddressU = TextureAddressMode.Clamp,
-				AddressV = TextureAddressMode.Clamp,
-				AddressW = TextureAddressMode.Clamp,
+				AddressU = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
+				AddressV = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
+				AddressW = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
 				ComparisonFunc = ComparisonFunc.Never,
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
@@ -349,15 +355,18 @@ internal sealed unsafe class DX12Technique : IDisposable
 				ReadOnlySpan<byte> position = "POSITION\0"u8;
 				ReadOnlySpan<byte> normal = "NORMAL\0"u8;
 				ReadOnlySpan<byte> texcoord = "TEXCOORD\0"u8;
+				ReadOnlySpan<byte> tangent = "TANGENT\0"u8;
 				fixed (byte* pPos = position)
 				fixed (byte* pNorm = normal)
 				fixed (byte* pTex = texcoord)
+				fixed (byte* pTan = tangent)
 				{
-					var elements = stackalloc InputElementDesc[3];
+					var elements = stackalloc InputElementDesc[4];
 					elements[0] = new InputElementDesc { SemanticName = pPos, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 0, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
 					elements[1] = new InputElementDesc { SemanticName = pNorm, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 12, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
 					elements[2] = new InputElementDesc { SemanticName = pTex, SemanticIndex = 0, Format = Format.FormatR32G32Float, InputSlot = 0, AlignedByteOffset = 24, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
-					pso.InputLayout = new InputLayoutDesc { NumElements = 3, PInputElementDescs = elements };
+					elements[3] = new InputElementDesc { SemanticName = pTan, SemanticIndex = 0, Format = Format.FormatR32G32B32A32Float, InputSlot = 0, AlignedByteOffset = 32, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
+					pso.InputLayout = new InputLayoutDesc { NumElements = 4, PInputElementDescs = elements };
 					SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
 				}
 			}

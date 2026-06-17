@@ -25,6 +25,7 @@ namespace Loom.Core;
 /// <param name="HasFragmentPush">True if the shader's fragment (or compute) stage reads a small inline scalar block (up to sixteen floats) — the per-pass scalar channel (JFA step, hovered id, exposure rate, a light-space matrix).</param>
 /// <param name="IsCompute">True for a compute technique: one compute entry point (in <see cref="FragmentEntry"/>), dispatched rather than drawn (Planning.md §5 <c>.Dispatch</c>).</param>
 /// <param name="ParticleInput">True if the technique reads a per-instance particle stream (a <c>float4</c> per particle) straight from a storage buffer.</param>
+/// <param name="Address">How the technique's sampler treats out-of-range texture coordinates — <see cref="SamplerAddress.Clamp"/> (the default, used by every fullscreen/post pass) or <see cref="SamplerAddress.Repeat"/> for material techniques that tile a texture across geometry.</param>
 public readonly record struct TechniqueDescriptor(
 	string Shader,
 	string VertexEntry = "vertexMain",
@@ -34,4 +35,5 @@ public readonly record struct TechniqueDescriptor(
 	bool LinearFilter = false,
 	bool HasFragmentPush = false,
 	bool IsCompute = false,
-	bool ParticleInput = false);
+	bool ParticleInput = false,
+	SamplerAddress Address = SamplerAddress.Clamp);

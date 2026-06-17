@@ -27,6 +27,8 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 	private readonly DX12TechniqueCache _techniques;
 	private readonly DX12DescriptorRing _ring;
 	private readonly DX12MeshStore _meshes;
+	private readonly DX12TextureStore _textures;
+	private readonly DX12MaterialStore _materials;
 	private DX12Transients? _transients;
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled. The HUD pass's
@@ -53,12 +55,14 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 	public Camera Camera { get; private set; } = Camera.Identity;
 	public bool HdrOutput { get; private set; }
 
-	public DX12RenderContext(DX12Context ctx, DX12TechniqueCache techniques, DX12DescriptorRing ring, DX12MeshStore meshes)
+	public DX12RenderContext(DX12Context ctx, DX12TechniqueCache techniques, DX12DescriptorRing ring, DX12MeshStore meshes, DX12TextureStore textures, DX12MaterialStore materials)
 	{
 		_ctx = ctx;
 		_techniques = techniques;
 		_ring = ring;
 		_meshes = meshes;
+		_textures = textures;
+		_materials = materials;
 	}
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
@@ -147,6 +151,52 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
 		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
+	}
+
+	public void Draw(Mesh mesh, Material material, string technique) => Draw(mesh, material, technique, Camera);
+
+	public void Draw(Mesh mesh, Material material, string technique, Camera view)
+	{
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = view.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		// Bind the material's textures into the technique's reflected SRV table (slots 0..N-1) — the same path
+		// FullScreen uses for transients, but the SRVs come from the TextureStore (loaded textures, multi-mip).
+		// A technique that samples nothing (depth-only/shadow) has no table and ignores the material.
+		if (baked.TableParam >= 0 && baked.InputCount > 0)
+		{
+			var textures = _materials.TexturesOf(material.Id);
+			if (textures.Length < baked.InputCount)
+				throw new InvalidOperationException($"DX12: material supplies {textures.Length} textures but technique '{technique}' samples {baked.InputCount}.");
+			var (cpu, gpu) = _ring.Allocate((uint)baked.InputCount);
+			for (var i = 0; i < baked.InputCount; i++)
+				WriteTextureSrv(textures[i], _ring.Offset(cpu, (uint)i));
+			_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
+		}
+
+		_meshes.Draw(_cmd, mesh.Id);
+	}
+
+	// Create a Texture2D SRV over a loaded texture, exposing its full mip chain (unlike the transient WriteSrv,
+	// which is single-mip). Material textures sample through this.
+	private void WriteTextureSrv(int textureId, CpuDescriptorHandle dest)
+	{
+		var srv = new ShaderResourceViewDesc
+		{
+			Format = _textures.SrvFormat(textureId),
+			ViewDimension = SrvDimension.Texture2D,
+			Shader4ComponentMapping = DefaultShader4ComponentMapping,
+			Anonymous = new ShaderResourceViewDescUnion
+			{
+				Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = _textures.MipLevels(textureId), PlaneSlice = 0, ResourceMinLODClamp = 0f }
+			}
+		};
+		_ctx.Device.CreateShaderResourceView(_textures.Resource(textureId), &srv, dest);
 	}
 
 	// Push a scalar block to the pass's root constants (the per-pass channel: JFA step, exposure rate, a

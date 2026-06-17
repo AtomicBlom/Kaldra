@@ -31,6 +31,22 @@ public interface IEngine : IDisposable
 	Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
 
 	/// <summary>
+	/// Upload a texture (and its mip chain) once and get a stable <see cref="Texture"/> handle to bundle into a
+	/// <see cref="Material"/>. Takes neutral <see cref="TextureData"/> — no graphics-API type crosses the
+	/// boundary; the backend's texture store decodes nothing and just uploads the levels. Call after creation,
+	/// before the first <see cref="Render"/>; the handle lives for the engine's lifetime (survives graph swaps).
+	/// </summary>
+	Texture CreateTexture(TextureData data);
+
+	/// <summary>
+	/// Bundle textures into a stable <see cref="Material"/> handle, in the order a material technique's shader
+	/// binds them (texture 0 → sampler slot 0, …). Passed to <see cref="IRenderContext.Draw(Mesh, Material, string)"/>;
+	/// the technique still picks the pipeline, so a depth-only/shadow pass (no reflected samplers) ignores the
+	/// material. Call up front like <see cref="CreateMesh"/>; the handle lives for the engine's lifetime.
+	/// </summary>
+	Material CreateMaterial(params ReadOnlySpan<Texture> textures);
+
+	/// <summary>
 	/// Make <paramref name="graph"/> the active graph: derive its schedule, barriers, and transient-memory plan
 	/// and prepare per-graph GPU resources, reusing the device and pipeline cache. Call once before the first
 	/// frame; calling it again swaps the active graph at runtime (the engine drains the GPU, releases the old
