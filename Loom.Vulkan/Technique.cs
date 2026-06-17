@@ -154,8 +154,9 @@ public sealed unsafe class Technique : IDisposable
 	}
 
 	// Vertex input for the one canonical interleaved layout (Loom.Core.Vertex: Vector3 Position, Vector3
-	// Normal, Vector2 Uv — sequential, 32 bytes). Offsets mirror that field order. Per-technique layouts
-	// (reflected or declared) can come later.
+	// Normal, Vector2 Uv, Vector4 Tangent — sequential, 48 bytes). Offsets mirror that field order. A shader
+	// that doesn't read the tangent simply ignores location 3. Per-technique layouts (reflected or declared)
+	// can come later.
 	private static PipelineVertexInputStateCreateInfo* VertexInputForMesh(NativeArena arena)
 	{
 		var binding = arena.Write(new VertexInputBindingDescription
@@ -165,17 +166,18 @@ public sealed unsafe class Technique : IDisposable
 			InputRate = VertexInputRate.Vertex,
 		});
 
-		var attributes = arena.Alloc<VertexInputAttributeDescription>(3);
-		attributes[0] = new VertexInputAttributeDescription { Location = 0, Binding = 0, Format = Format.R32G32B32Sfloat, Offset = 0 };  // Position
-		attributes[1] = new VertexInputAttributeDescription { Location = 1, Binding = 0, Format = Format.R32G32B32Sfloat, Offset = 12 }; // Normal
-		attributes[2] = new VertexInputAttributeDescription { Location = 2, Binding = 0, Format = Format.R32G32Sfloat, Offset = 24 };    // Uv
+		var attributes = arena.Alloc<VertexInputAttributeDescription>(4);
+		attributes[0] = new VertexInputAttributeDescription { Location = 0, Binding = 0, Format = Format.R32G32B32Sfloat, Offset = 0 };     // Position
+		attributes[1] = new VertexInputAttributeDescription { Location = 1, Binding = 0, Format = Format.R32G32B32Sfloat, Offset = 12 };    // Normal
+		attributes[2] = new VertexInputAttributeDescription { Location = 2, Binding = 0, Format = Format.R32G32Sfloat, Offset = 24 };       // Uv
+		attributes[3] = new VertexInputAttributeDescription { Location = 3, Binding = 0, Format = Format.R32G32B32A32Sfloat, Offset = 32 }; // Tangent
 
 		return arena.Write(new PipelineVertexInputStateCreateInfo
 		{
 			SType = StructureType.PipelineVertexInputStateCreateInfo,
 			VertexBindingDescriptionCount = 1,
 			PVertexBindingDescriptions = binding,
-			VertexAttributeDescriptionCount = 3,
+			VertexAttributeDescriptionCount = 4,
 			PVertexAttributeDescriptions = attributes,
 		});
 	}

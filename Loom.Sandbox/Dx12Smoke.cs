@@ -257,7 +257,12 @@ internal static class Dx12Smoke
 	{
 		var (cubeVerts, cubeIndices) = Geometry.BuildCube();
 		var (planeVerts, planeIndices) = Geometry.BuildPlane();
-		var scene = new DemoScene(engine.CreateMesh(cubeVerts, cubeIndices), engine.CreateMesh(planeVerts, planeIndices));
+		// The shared brick material (albedo + normal map), decoded from committed PNGs via Loom.Assets (M11).
+		var assets = Path.Combine(AppContext.BaseDirectory, "assets");
+		var brick = engine.CreateMaterial(
+			engine.CreateTexture(Loom.Assets.ImageLoader.Load(Path.Combine(assets, "brick_albedo.png"), TextureFormat.Rgba8Srgb)),
+			engine.CreateTexture(Loom.Assets.ImageLoader.Load(Path.Combine(assets, "brick_normal.png"), TextureFormat.Rgba8Unorm)));
+		var scene = new DemoScene(engine.CreateMesh(cubeVerts, cubeIndices), engine.CreateMesh(planeVerts, planeIndices), brick);
 
 		IDemo[] demos =
 		[
@@ -269,6 +274,8 @@ internal static class Dx12Smoke
 			new ParticlesDemo(),
 			new HighlightingDemo(),
 			new FullReferenceDemo(),
+			new NormalMappingDemo(),
+			new GltfDemo(),
 		];
 		foreach (var demo in demos)
 			demo.DefineTechniques(engine);

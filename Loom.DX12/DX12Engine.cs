@@ -33,6 +33,8 @@ public sealed unsafe class DX12Engine : IEngine
 	private readonly DX12TechniqueCache _techniques;
 	private readonly DX12DescriptorRing _ring;
 	private readonly DX12MeshStore _meshes;
+	private readonly DX12TextureStore _textures;
+	private readonly DX12MaterialStore _materials;
 	private readonly DX12RenderContext _context;
 	private DX12Transients? _transients;
 #if LOOM_IMGUI
@@ -99,7 +101,9 @@ public sealed unsafe class DX12Engine : IEngine
 		_techniques = new DX12TechniqueCache(_ctx);
 		_ring = new DX12DescriptorRing(_ctx, 256);
 		_meshes = new DX12MeshStore(_ctx);
-		_context = new DX12RenderContext(_ctx, _techniques, _ring, _meshes);
+		_textures = new DX12TextureStore(_ctx);
+		_materials = new DX12MaterialStore();
+		_context = new DX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, _materials);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
@@ -661,6 +665,7 @@ public sealed unsafe class DX12Engine : IEngine
 #endif
 		_transients?.Dispose();
 		_meshes.Dispose();
+		_textures.Dispose();
 		_ring.Dispose();
 		_techniques.Dispose();
 		_triangle.Dispose();
@@ -747,7 +752,8 @@ public sealed unsafe class DX12Engine : IEngine
 		_techniques.Register(name, new DX12TechniqueTemplate(
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
-			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride));
+			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
+			descriptor.Address));
 	}
 
 	/// <summary>
@@ -802,6 +808,10 @@ public sealed unsafe class DX12Engine : IEngine
 	}
 
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+
+	public Texture CreateTexture(TextureData data) => _textures.Create(data);
+
+	public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	/// <summary>
 	/// Stand up the backend's Dear ImGui renderer (the <c>imgui_impl_dx12</c> equivalent) and wire it to the

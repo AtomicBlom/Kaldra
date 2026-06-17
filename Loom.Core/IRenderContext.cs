@@ -99,6 +99,23 @@ public interface IRenderContext
 	void Draw(Mesh mesh, string technique, Camera view);
 
 	/// <summary>
+	/// Draw GPU-resident geometry with a <paramref name="material"/> whose textures fill the technique's
+	/// reflected sampler slots, in order (texture 0 → binding 0, …) — the geometry-with-textures counterpart to
+	/// <see cref="Draw(Mesh, string)"/>. The <paramref name="technique"/> still selects the pipeline; a technique
+	/// that reflects no samplers (depth-only/shadow) ignores the material, so the same material draws into a
+	/// G-buffer pass and a shadow pass unchanged. The material must supply at least as many textures as the
+	/// technique samples (extras are ignored). Per-frame inputs are pulled from the context, not captured (§8).
+	/// </summary>
+	void Draw(Mesh mesh, Material material, string technique);
+
+	/// <summary>
+	/// As <see cref="Draw(Mesh, Material, string)"/>, but from an explicit <paramref name="view"/> instead of
+	/// <see cref="Camera"/> (the §7.2 <c>view:</c> parameter) — the textured draw used when a pass renders from a
+	/// non-camera viewpoint.
+	/// </summary>
+	void Draw(Mesh mesh, Material material, string technique, Camera view);
+
+	/// <summary>
 	/// Draw <paramref name="count"/> points whose per-vertex data is read straight from <paramref name="buffer"/>
 	/// — a GPU storage buffer a compute pass just wrote (GPU particles, §7.6). The buffer must be one the pass
 	/// declared with <c>.ReadsVertex</c>, so the graph derives the compute→vertex-input barrier. The technique
