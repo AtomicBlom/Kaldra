@@ -83,6 +83,21 @@ public interface IEngine : IDisposable
 	/// </summary>
 	double LastFrameGpuMilliseconds { get; }
 
+	/// <summary>
+	/// The active graph's image resources the debug viewer can preview (colour + depth; M13). Empty until
+	/// <see cref="SetGraph"/>, rebuilt on each swap, and empty in a build without the ImGui debug UI. Neutral types.
+	/// </summary>
+	IReadOnlyList<InspectableResource> InspectableResources { get; }
+
+	/// <summary>
+	/// An opaque per-frame ImGui texture id (<c>ImTextureID</c>) for the resource, to pass to <c>ImGui.Image</c>;
+	/// the backend maps it back to a GPU binding when it records the HUD (M13 resource viewer). Returns 0 if the id
+	/// is not inspectable or the ImGui debug UI is not built/enabled. Call during the frame's ImGui build; the id is
+	/// valid for that frame's draw list only. <c>nint</c> is the same opaque currency as
+	/// <see cref="FrameInputs.ImGuiDrawData"/> — no graphics-API type leaks.
+	/// </summary>
+	nint GetDebugTextureId(int resourceId);
+
 	/// <summary>Block until the GPU is idle — call before disposing host-owned resources the engine may still be using.</summary>
 	void WaitIdle();
 }

@@ -141,6 +141,35 @@ public sealed class RenderGraph
 		return sb.ToString();
 	}
 
+	/// <summary>
+	/// Return a graph identical to this one but with extra <see cref="AccessKind.Sample"/> edges from the terminal
+	/// (last) pass to the given resources — the M13 debug-viewer hook. Making the read a real graph edge means the
+	/// Execute layer <em>derives</em> the keep-alive (the resource isn't recycled by transient aliasing before the
+	/// terminal pass) and the shader-read transition, so the viewer samples a live, correctly-laid-out image instead
+	/// of an aliased corpse — "derived, not declared" (Planning.md §8). The author's graph is untouched; the engine
+	/// applies this only to the graph it executes when the debug UI is present. Ids the terminal pass already
+	/// accesses are skipped; an empty set (or a graph with no passes) returns <c>this</c>.
+	/// </summary>
+	public RenderGraph WithDebugSampling(IReadOnlyCollection<int> resourceIds)
+	{
+		ArgumentNullException.ThrowIfNull(resourceIds);
+		if (resourceIds.Count == 0 || Passes.Length == 0)
+			return this;
+
+		var lastIndex = Passes.Length - 1;
+		var last = Passes[lastIndex];
+		var existing = last.Accesses.Select(a => a.Resource.Id).ToHashSet();
+		var additions = resourceIds.Where(id => id >= 0 && id < Resources.Length && existing.Add(id)).ToArray();
+		if (additions.Length == 0)
+			return this;
+
+		var accesses = last.Accesses.ToBuilder();
+		foreach (var id in additions)
+			accesses.Add(new ResourceAccess(Resources[id], AccessKind.Sample));
+		var newLast = new GraphPass(last.Name, last.Kind, last.Queue, accesses.ToImmutable(), last.Record);
+		return new RenderGraph(Domains, Resources, Passes.SetItem(lastIndex, newLast), PresentTarget, ReadbackTargets);
+	}
+
 	// Reads (resource -> pass) vs writes (pass -> resource); Blend/ReadWrite are both (read-modify-write).
 	private static bool IsRead(AccessKind kind) => kind is AccessKind.Sample or AccessKind.ReadDepth or AccessKind.ReadVertex;
 	private static bool IsWrite(AccessKind kind) => kind is AccessKind.Write or AccessKind.WriteDepth;

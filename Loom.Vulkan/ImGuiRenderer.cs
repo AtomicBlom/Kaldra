@@ -57,6 +57,26 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 
 	private const uint PushSize = 4 * sizeof(float); // scale (float2) + translate (float2)
 
+	// Debug resource viewer (M13): combined-image-sampler sets for arbitrary graph textures the host draws via
+	// ImGui.Image. Sets are pooled per frame slot and reused (updated in place each frame) — safe because the
+	// slot's prior use is fenced before the executor records it again. _debugBindings maps this frame's texture id
+	// (ImTextureID, an nint) to the set the Render loop binds for draws that carry it.
+	private const int DebugCapacity = 128; // max debug sets (≈ inspectable resources × frames in flight)
+	private DescriptorPool _debugPool;
+	private readonly List<DescriptorSet>[] _debugSets;
+	private readonly int[] _debugCursor;
+	// Per-slot vertex/index buffers for the engine-drawn thumbnail quads (the resource viewer's images — see
+	// DrawThumbnails; ImGui.Image can't be used on win-arm64 because of by-value-ImVec2 marshalling).
+	private readonly Buffer[] _thumbVtx;
+	private readonly Allocation?[] _thumbVtxAlloc;
+	private readonly ulong[] _thumbVtxSize;
+	private readonly Buffer[] _thumbIdx;
+	private readonly Allocation?[] _thumbIdxAlloc;
+	private readonly ulong[] _thumbIdxSize;
+
+	/// <summary>A textured quad the resource viewer draws (M13): a graph texture's view + a pixel-space rect.</summary>
+	internal readonly record struct Thumbnail(ImageView View, float X, float Y, float W, float H);
+
 	public ImGuiRenderer(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool, VkFormat colorFormat, byte[] spirv, int framesInFlight)
 	{
 		_ctx = ctx;
@@ -69,14 +89,147 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 		_idxBuffers = new Buffer[framesInFlight];
 		_idxAllocations = new Allocation?[framesInFlight];
 		_idxSizes = new ulong[framesInFlight];
+		_debugSets = new List<DescriptorSet>[framesInFlight];
+		_debugCursor = new int[framesInFlight];
+		for (var i = 0; i < framesInFlight; i++)
+			_debugSets[i] = [];
+		_thumbVtx = new Buffer[framesInFlight];
+		_thumbVtxAlloc = new Allocation?[framesInFlight];
+		_thumbVtxSize = new ulong[framesInFlight];
+		_thumbIdx = new Buffer[framesInFlight];
+		_thumbIdxAlloc = new Allocation?[framesInFlight];
+		_thumbIdxSize = new ulong[framesInFlight];
 
 		// We index the concatenated vertex buffer per draw-cmd, so advertise VtxOffset support.
 		ImGui.GetIO().BackendFlags |= ImGuiBackendFlags.RendererHasVtxOffset;
 
 		CreateFontSampler();
 		CreateDescriptors();
+		CreateDebugPool();
 		CreatePipeline(colorFormat, spirv);
 		UploadFontAtlas(commandPool);
+	}
+
+	// A pool the debug resource viewer (M13) draws combined-image-sampler sets from (one per inspected texture per
+	// frame slot, reused across frames). Shares the font set's layout — same binding-0 CIS, fragment stage.
+	private void CreateDebugPool()
+	{
+		DescriptorPoolSize poolSize = new() { Type = DescriptorType.CombinedImageSampler, DescriptorCount = DebugCapacity };
+		DescriptorPoolCreateInfo poolInfo = new()
+		{
+			SType = StructureType.DescriptorPoolCreateInfo,
+			MaxSets = DebugCapacity,
+			PoolSizeCount = 1,
+			PPoolSizes = &poolSize,
+		};
+		_vk.CreateDescriptorPool(_ctx.Device, in poolInfo, null, out _debugPool).Check("vkCreateDescriptorPool(debug)");
+	}
+
+	// Grab the next pooled debug set for the slot (allocating on first use) and point it at <paramref name="view"/>.
+	// Reused across frames — safe to update in place because the slot's prior frame is fenced before recording.
+	// Returns the font set (a harmless fallback) when the pool is exhausted.
+	private DescriptorSet AcquireDebugSet(int frameSlot, ImageView view)
+	{
+		var cursor = _debugCursor[frameSlot];
+		var slotSets = _debugSets[frameSlot];
+		if (cursor >= slotSets.Count)
+		{
+			if (slotSets.Count * _framesInFlight >= DebugCapacity)
+				return _fontSet; // pool exhausted — skip extra previews rather than overflow
+			var layout = _setLayout;
+			DescriptorSetAllocateInfo allocInfo = new()
+			{
+				SType = StructureType.DescriptorSetAllocateInfo,
+				DescriptorPool = _debugPool,
+				DescriptorSetCount = 1,
+				PSetLayouts = &layout,
+			};
+			_vk.AllocateDescriptorSets(_ctx.Device, in allocInfo, out var newSet).Check("vkAllocateDescriptorSets(debug)");
+			slotSets.Add(newSet);
+		}
+
+		var set = slotSets[cursor];
+		_debugCursor[frameSlot] = cursor + 1;
+		DescriptorImageInfo descImage = new()
+		{
+			Sampler = _fontSampler,
+			ImageView = view,
+			ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
+		};
+		WriteDescriptorSet write = new()
+		{
+			SType = StructureType.WriteDescriptorSet,
+			DstSet = set,
+			DstBinding = 0,
+			DescriptorCount = 1,
+			DescriptorType = DescriptorType.CombinedImageSampler,
+			PImageInfo = &descImage,
+		};
+		_vk.UpdateDescriptorSets(_ctx.Device, 1, &write, 0, null);
+		return set;
+	}
+
+	/// <summary>
+	/// Draw the resource-viewer thumbnails (M13): one textured quad per <see cref="Thumbnail"/> in pixel space, into
+	/// the (already-open) HUD-pass scope after the ImGui UI. The engine draws these instead of <c>ImGui.Image</c>
+	/// because ImGui.NET's by-value-ImVec2 marshalling no-ops on win-arm64. Reuses the ImGui pipeline + a per-slot
+	/// quad buffer (positions written as raw floats — no by-value struct crosses P/Invoke).
+	/// </summary>
+	public void DrawThumbnails(CommandBuffer cmd, ReadOnlySpan<Thumbnail> thumbs, Extent2D fbExtent, int frameSlot)
+	{
+		if (thumbs.Length == 0)
+			return;
+
+		var vtxBytes = (ulong)(thumbs.Length * 4 * sizeof(ImDrawVert));
+		var idxBytes = (ulong)(thumbs.Length * 6 * sizeof(ushort));
+		EnsureBuffer(ref _thumbVtx[frameSlot], ref _thumbVtxAlloc[frameSlot], ref _thumbVtxSize[frameSlot], vtxBytes, BufferUsageFlags.VertexBufferBit);
+		EnsureBuffer(ref _thumbIdx[frameSlot], ref _thumbIdxAlloc[frameSlot], ref _thumbIdxSize[frameSlot], idxBytes, BufferUsageFlags.IndexBufferBit);
+
+		const uint white = 0xFFFFFFFFu;
+		var verts = (ImDrawVert*)_thumbVtxAlloc[frameSlot]!.Map();
+		var indices = (ushort*)_thumbIdxAlloc[frameSlot]!.Map();
+		for (var i = 0; i < thumbs.Length; i++)
+		{
+			var t = thumbs[i];
+			var v = verts + i * 4;
+			v[0] = new ImDrawVert { pos = new Vector2(t.X, t.Y), uv = new Vector2(0, 0), col = white };
+			v[1] = new ImDrawVert { pos = new Vector2(t.X + t.W, t.Y), uv = new Vector2(1, 0), col = white };
+			v[2] = new ImDrawVert { pos = new Vector2(t.X + t.W, t.Y + t.H), uv = new Vector2(1, 1), col = white };
+			v[3] = new ImDrawVert { pos = new Vector2(t.X, t.Y + t.H), uv = new Vector2(0, 1), col = white };
+			var ix = indices + i * 6;
+			var b = (ushort)(i * 4);
+			ix[0] = b; ix[1] = (ushort)(b + 1); ix[2] = (ushort)(b + 2);
+			ix[3] = b; ix[4] = (ushort)(b + 2); ix[5] = (ushort)(b + 3);
+		}
+		_thumbVtxAlloc[frameSlot]!.Unmap();
+		_thumbIdxAlloc[frameSlot]!.Unmap();
+
+		_vk.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _pipeline);
+		var vtxBuffer = _thumbVtx[frameSlot];
+		ulong vbOffset = 0;
+		_vk.CmdBindVertexBuffers(cmd, 0, 1, in vtxBuffer, in vbOffset);
+		_vk.CmdBindIndexBuffer(cmd, _thumbIdx[frameSlot], 0, IndexType.Uint16);
+
+		Viewport viewport = new() { X = 0, Y = 0, Width = fbExtent.Width, Height = fbExtent.Height, MinDepth = 0, MaxDepth = 1 };
+		_vk.CmdSetViewport(cmd, 0, 1, in viewport);
+		Rect2D scissor = new(new Offset2D(0, 0), fbExtent);
+		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
+
+		// Same pixel→clip push as the ImGui draw (no display offset — thumbnails are in framebuffer pixels).
+		var push = stackalloc float[4];
+		push[0] = 2.0f / fbExtent.Width;
+		push[1] = 2.0f / fbExtent.Height;
+		push[2] = -1.0f;
+		push[3] = -1.0f;
+		_vk.CmdPushConstants(cmd, _layout, ShaderStageFlags.VertexBit, 0, PushSize, push);
+
+		_debugCursor[frameSlot] = 0; // reuse the debug-set pool for this frame's thumbnails
+		for (var i = 0; i < thumbs.Length; i++)
+		{
+			var set = AcquireDebugSet(frameSlot, thumbs[i].View);
+			_vk.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _layout, 0, 1, in set, 0, null);
+			_vk.CmdDrawIndexed(cmd, 6, 1, (uint)(i * 6), i * 4, 0);
+		}
 	}
 
 	private void CreateFontSampler()
@@ -423,7 +576,7 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 		_idxAllocations[frameSlot]!.Unmap();
 
 		_vk.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _pipeline);
-		var set = _fontSet;
+		var set = _fontSet; // the UI uses only the font atlas; resource thumbnails are drawn separately (DrawThumbnails)
 		_vk.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _layout, 0, 1, in set, 0, null);
 		var vtxBuffer = _vtxBuffers[frameSlot];
 		ulong vbOffset = 0;
@@ -571,6 +724,8 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 			_vk.DestroyPipelineLayout(_ctx.Device, _layout, null);
 		if (_descriptorPool.Handle != 0)
 			_vk.DestroyDescriptorPool(_ctx.Device, _descriptorPool, null);
+		if (_debugPool.Handle != 0)
+			_vk.DestroyDescriptorPool(_ctx.Device, _debugPool, null);
 		if (_setLayout.Handle != 0)
 			_vk.DestroyDescriptorSetLayout(_ctx.Device, _setLayout, null);
 		if (_fontSampler.Handle != 0)
@@ -592,6 +747,16 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 			{
 				_vk.DestroyBuffer(_ctx.Device, _idxBuffers[i], null);
 				_idxAllocations[i]?.Dispose();
+			}
+			if (_thumbVtx[i].Handle != 0)
+			{
+				_vk.DestroyBuffer(_ctx.Device, _thumbVtx[i], null);
+				_thumbVtxAlloc[i]?.Dispose();
+			}
+			if (_thumbIdx[i].Handle != 0)
+			{
+				_vk.DestroyBuffer(_ctx.Device, _thumbIdx[i], null);
+				_thumbIdxAlloc[i]?.Dispose();
 			}
 		}
 	}

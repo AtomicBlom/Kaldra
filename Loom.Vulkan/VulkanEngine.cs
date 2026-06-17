@@ -101,6 +101,9 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private PassTiming[] _timings = [];      // decoded, reused as the LastFrameTimings backing
 	private double _frameGpuMs;
 
+	// M13 resource viewer: the active graph's colour/depth resources the host can preview. Rebuilt each SetGraph.
+	private readonly List<InspectableResource> _inspectable = [];
+
 	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
 	private Camera _frameCamera = Camera.Identity;
 	private Camera _frameSun = Camera.Identity;
@@ -123,6 +126,20 @@ internal sealed unsafe class VulkanEngine : IEngine
 	}
 	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
 	public double LastFrameGpuMilliseconds => _frameGpuMs;
+
+	public IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
+
+	public nint GetDebugTextureId(int resourceId)
+	{
+#if LOOM_IMGUI
+		if (_imgui is not null && resourceId >= 0 && _inspectable.Exists(r => r.Id == resourceId))
+		{
+			_context.RequestThumbnail(resourceId); // engine draws the image in the HUD pass (ImGui.Image no-ops on arm64)
+			return (nint)(resourceId + RenderContext.DebugTextureBase);
+		}
+#endif
+		return 0;
+	}
 
 	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
 	{
@@ -194,8 +211,25 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		_graph = graph;
 
+		// M13 resource viewer: enumerate the colour/depth resources the host can preview, and (in an ImGui build)
+		// inject HUD .Samples edges for them so the Execute layer derives their keep-alive + ShaderRead transition —
+		// the viewer samples live images, not aliased corpses. The author's graph is untouched; we execute `executed`.
+		_inspectable.Clear();
+		var executed = graph;
+#if LOOM_IMGUI
+		// Gate on ImGui being live: graphs set before EnableImGui (the DX12 aliasing diagnostics) keep their exact
+		// aliasing; gallery graphs (set/switched with the UI up) get the inspection edges.
+		if (_imgui is not null)
+		{
+			foreach (var resource in graph.Resources)
+				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
+					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
+			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
+		}
+#endif
+
 		// Derive once — the graph is immutable, so order/barriers/load-store/lifetimes are frame-invariant.
-		var schedule = GraphSchedule.Derive(graph);
+		var schedule = GraphSchedule.Derive(executed);
 		_plan = BarrierPlan.Derive(schedule);
 		_aliasPlan = AliasPlan.Derive(LifetimePlan.Derive(schedule));
 
@@ -221,7 +255,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
 			Console.WriteLine($"[loom] transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
-		_transients = new TransientResources(_ctx, graph, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
+		// Build transients from `executed` so the injected debug-sample edges add SampledBit to inspected resources.
+		_transients = new TransientResources(_ctx, executed, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
 		_context.SetTransients(_transients);
 
 		// Readback staging (§7.4): one host-visible buffer per frame slot for the first g.Readback target.

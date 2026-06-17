@@ -84,6 +84,9 @@ public sealed unsafe class DX12Engine : IEngine
 	private PassTiming[] _timings = [];
 	private double _frameGpuMs;
 
+	// M13 resource viewer: the active graph's colour/depth resources the host can preview. Rebuilt each SetGraph.
+	private readonly List<InspectableResource> _inspectable = [];
+
 	public DX12Engine(nint hwnd, int width, int height, DX12EngineSettings settings)
 	{
 		_settings = settings;
@@ -109,7 +112,7 @@ public sealed unsafe class DX12Engine : IEngine
 
 		_triangle = new DX12Triangle(_ctx, _swapchain.Format);
 		_techniques = new DX12TechniqueCache(_ctx);
-		_ring = new DX12DescriptorRing(_ctx, 256);
+		_ring = new DX12DescriptorRing(_ctx, 512); // headroom for per-pass SRVs + the M13 resource viewer's debug SRVs
 		_meshes = new DX12MeshStore(_ctx);
 		_context = new DX12RenderContext(_ctx, _techniques, _ring, _meshes);
 		for (uint i = 0; i < BufferCount; i++)
@@ -134,6 +137,20 @@ public sealed unsafe class DX12Engine : IEngine
 	}
 	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
 	public double LastFrameGpuMilliseconds => _frameGpuMs;
+
+	public IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
+
+	public nint GetDebugTextureId(int resourceId)
+	{
+#if LOOM_IMGUI
+		if (_imgui is not null && resourceId >= 0 && _inspectable.Exists(r => r.Id == resourceId))
+		{
+			_context.RequestThumbnail(resourceId); // engine draws the image in the HUD pass (ImGui.Image no-ops on arm64)
+			return (nint)(resourceId + DX12RenderContext.DebugTextureBase);
+		}
+#endif
+		return 0;
+	}
 
 	public void Render(FrameInputs inputs)
 	{
@@ -836,10 +853,27 @@ public sealed unsafe class DX12Engine : IEngine
 			WaitIdle();
 
 		_graph = graph;
+
+		// M13 resource viewer: enumerate the colour/depth resources the host can preview, and (with the debug UI
+		// live) inject HUD .Samples edges so the Execute layer derives their keep-alive + PixelShaderResource
+		// transition — the viewer samples live images, not aliased corpses. Graphs set before EnableImGui (the DX12
+		// aliasing diagnostics) keep their exact aliasing. The author's graph is untouched; we execute `executed`.
+		_inspectable.Clear();
+		var executed = graph;
+#if LOOM_IMGUI
+		if (_imgui is not null)
+		{
+			foreach (var resource in graph.Resources)
+				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
+					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
+			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
+		}
+#endif
+
 		// Derive once — the graph is immutable, so order/barriers/lifetimes/aliasing are frame-invariant. The
 		// AliasPlan (the §8/M4 transient-memory partition) is the SAME backend-neutral product the Vulkan engine
 		// consumes; this backend turns each bucket into a placed-resource heap shared by its members.
-		var schedule = GraphSchedule.Derive(graph);
+		var schedule = GraphSchedule.Derive(executed);
 		_barrierPlan = BarrierPlan.Derive(schedule);
 		_aliasPlan = AliasPlan.Derive(LifetimePlan.Derive(schedule));
 		for (uint i = 0; i < BufferCount; i++)
@@ -849,7 +883,8 @@ public sealed unsafe class DX12Engine : IEngine
 			Console.WriteLine($"[loom] DX12 transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
 		_transients?.Dispose();
-		_transients = new DX12Transients(_ctx, graph, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
+		// Build transients from `executed` (same resources/ids; the injected edges only affect derived state).
+		_transients = new DX12Transients(_ctx, executed, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
 		_context.SetTransients(_transients);
 		SetupPick(graph);
 		SetupTiming();

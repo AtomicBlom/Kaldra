@@ -36,6 +36,9 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
+	// M13 resource viewer: resources to show as thumbnails this frame (the engine draws the images; ImGui.Image
+	// no-ops on win-arm64). Populated by RequestThumbnail as the host enumerates resources, drawn + cleared each HUD pass.
+	private readonly List<int> _thumbRequests = [];
 	// This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
 	// DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
 	private nint _imguiDrawData;
@@ -63,6 +66,14 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
 	public void SetTransients(DX12Transients transients) => _transients = transients;
+
+	/// <summary>Request that <paramref name="resourceId"/> be shown as a thumbnail in this frame's resource-viewer
+	/// grid (M13). Called by the engine's GetDebugTextureId as the host enumerates resources to display.</summary>
+	public void RequestThumbnail(int resourceId)
+	{
+		if (!_thumbRequests.Contains(resourceId))
+			_thumbRequests.Add(resourceId);
+	}
 
 #if LOOM_IMGUI
 	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
@@ -306,7 +317,34 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 	public void DrawImGui()
 	{
 #if LOOM_IMGUI
-		_imgui?.Render(_cmd, _imguiDrawData, _fbWidth, _fbHeight, _slot);
+		if (_imgui is null)
+			return;
+
+		// The ImGui UI (menu, windows, the resource-viewer name list) first.
+		_imgui.Render(_cmd, _imguiDrawData, _fbWidth, _fbHeight, _slot);
+
+		// M13 resource viewer: draw the requested resources as a thumbnail grid (engine-drawn — ImGui.Image no-ops on
+		// win-arm64). The injected HUD .Samples edge put each in PixelShaderResource — sampling a live image. Laid
+		// out to the right of the name list.
+		if (_thumbRequests.Count > 0 && _transients is not null)
+		{
+			const float x0 = 300f, y0 = 30f, w = 200f, h = 112f, gap = 10f;
+			var cols = Math.Max(1, (int)((_fbWidth - x0 - 10f) / (w + gap)));
+			var thumbs = new DX12ImGuiRenderer.Thumbnail[_thumbRequests.Count];
+			for (var i = 0; i < _thumbRequests.Count; i++)
+			{
+				var id = _thumbRequests[i];
+				var gx = x0 + i % cols * (w + gap);
+				var gy = y0 + i / cols * (h + gap);
+				thumbs[i] = new DX12ImGuiRenderer.Thumbnail(_transients.Resource(_slot, id), _transients.SrvFormat(_slot, id), gx, gy, w, h);
+			}
+			_imgui.DrawThumbnails(_cmd, thumbs, _fbWidth, _fbHeight, _slot);
+			_thumbRequests.Clear();
+		}
 #endif
 	}
+
+	// M13 resource viewer: GetDebugTextureId returns (resourceId + DebugTextureBase) — a non-zero id the host uses to
+	// gate "inspectable?". The engine draws the matching thumbnail grid in the HUD pass.
+	internal const int DebugTextureBase = 0x10000;
 }
