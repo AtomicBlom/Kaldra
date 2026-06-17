@@ -57,9 +57,14 @@ public static class GltfLoader
 		foreach (var mesh in model.LogicalMeshes)
 			foreach (var prim in mesh.Primitives)
 			{
+				// M11 draws triangle lists; skip points/lines/strips/fans rather than reinterpret their
+				// vertices as a triangle list (which would produce scrambled geometry).
+				if (prim.DrawPrimitiveType != PrimitiveType.TRIANGLES)
+					continue;
+
 				var positions = prim.GetVertexAccessor("POSITION")?.AsVector3Array();
 				if (positions is null || positions.Count == 0)
-					continue; // not triangle geometry we can draw
+					continue;
 
 				var normals = prim.GetVertexAccessor("NORMAL")?.AsVector3Array();
 				var uvs = prim.GetVertexAccessor("TEXCOORD_0")?.AsVector2Array();

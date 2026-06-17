@@ -31,9 +31,11 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private readonly MaterialStore _materials;
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
-	// Repeat-addressing, mip-sampling sampler for material textures (tiled across geometry). Mirrors the DX12
-	// material static sampler (Wrap + MinMagMipLinear); the existing nearest/linear samplers clamp.
-	private readonly Sampler _textureSampler;
+	// Repeat-addressing, mip-sampling samplers for material textures (tiled across geometry) — a linear and a
+	// nearest variant, selected by the technique's LinearFilter flag exactly as the DX12 static sampler is
+	// (Wrap + MinMagMip{Linear,Point}). The existing nearest/linear samplers above clamp (post passes never tile).
+	private readonly Sampler _repeatLinearSampler;
+	private readonly Sampler _repeatNearestSampler;
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), set by the executor when the host enables ImGui. The HUD
 	// pass's ctx.DrawImGui() forwards this frame's draw data to it. Null when ImGui is not in use.
@@ -92,7 +94,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_materials = materials;
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
-		_textureSampler = CreateSampler(Filter.Linear, SamplerAddressMode.Repeat);
+		_repeatLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.Repeat);
+		_repeatNearestSampler = CreateSampler(Filter.Nearest, SamplerAddressMode.Repeat);
 	}
 
 	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
@@ -219,8 +222,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			if (textures.Length < template.SampleCount)
 				throw new VulkanException($"Material supplies {textures.Length} textures but technique '{technique}' samples {template.SampleCount}.");
 
-			var sampler = template.Address == SamplerAddress.Repeat ? _textureSampler
-				: template.LinearFilter ? _linearSampler : _nearestSampler;
+			var sampler = template.Address == SamplerAddress.Repeat
+				? (template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler)
+				: (template.LinearFilter ? _linearSampler : _nearestSampler);
 			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 			var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];
 			var writes = stackalloc WriteDescriptorSet[template.SampleCount];
@@ -459,7 +463,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			_vk.DestroySampler(_ctx.Device, _nearestSampler, null);
 		if (_linearSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _linearSampler, null);
-		if (_textureSampler.Handle != 0)
-			_vk.DestroySampler(_ctx.Device, _textureSampler, null);
+		if (_repeatLinearSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _repeatLinearSampler, null);
+		if (_repeatNearestSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _repeatNearestSampler, null);
 	}
 }
