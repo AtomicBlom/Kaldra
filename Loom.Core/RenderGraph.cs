@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace Loom.Core;
 
@@ -139,4 +140,93 @@ public sealed class RenderGraph
 		sb.AppendLine($"  Present: {PresentTarget?.Name ?? "(none)"}");
 		return sb.ToString();
 	}
+
+	// Reads (resource -> pass) vs writes (pass -> resource); Blend/ReadWrite are both (read-modify-write).
+	private static bool IsRead(AccessKind kind) => kind is AccessKind.Sample or AccessKind.ReadDepth or AccessKind.ReadVertex;
+	private static bool IsWrite(AccessKind kind) => kind is AccessKind.Write or AccessKind.WriteDepth;
+
+	/// <summary>
+	/// A GraphViz DOT rendering of the graph's data-flow (M13 viz export): a bipartite digraph of passes (boxes,
+	/// coloured by <see cref="PassKind"/>) and resources (ellipses for images, notes for buffers, coloured by
+	/// <see cref="ResourceKind"/>). Read edges point resource→pass, write edges pass→resource, and read-modify-write
+	/// (<c>.Blends</c>/<c>.ReadWrites</c>) edges are dashed + bidirectional. The present target is highlighted.
+	/// Deterministic (declaration order) so it diffs cleanly. Render with <c>dot -Tpng</c>.
+	/// </summary>
+	public string ToDot()
+	{
+		var sb = new StringBuilder();
+		sb.AppendLine("digraph RenderGraph {");
+		sb.AppendLine("  rankdir=LR;");
+		sb.AppendLine("  node [fontname=\"Segoe UI\"];");
+		sb.AppendLine($"  labelloc=\"t\"; label=\"RenderGraph (hash {Hash()[..12]})\";");
+
+		sb.AppendLine("  // resources");
+		foreach (var r in Resources)
+		{
+			var shape = r.Kind == ResourceKind.Buffer ? "note" : "ellipse";
+			var fill = r.Kind switch
+			{
+				ResourceKind.Color => "#cfe8ff",
+				ResourceKind.Depth => "#ffe0b3",
+				ResourceKind.Buffer => "#e0d4ff",
+				ResourceKind.Persistent => "#d6f5d6",
+				ResourceKind.Backbuffer => "#ffd6d6",
+				_ => "#eeeeee",
+			};
+			var border = ReferenceEquals(r, PresentTarget) ? ", penwidth=3, color=\"#cc0000\"" : "";
+			sb.AppendLine($"  \"res:{r.Name}\" [shape={shape}, style=filled, fillcolor=\"{fill}\", label=\"{r.Name}\\n{r.Kind} {r.Format}\"{border}];");
+		}
+
+		sb.AppendLine("  // passes");
+		foreach (var p in Passes)
+		{
+			var fill = p.Kind == PassKind.Compute ? "#fff2b3" : "#d9d9d9";
+			sb.AppendLine($"  \"pass:{p.Name}\" [shape=box, style=\"filled,rounded\", fillcolor=\"{fill}\", label=\"{p.Name}\\n[{p.Kind} on {p.Queue}]\"];");
+		}
+
+		sb.AppendLine("  // edges");
+		foreach (var p in Passes)
+		{
+			foreach (var a in p.Accesses)
+			{
+				var pass = $"\"pass:{p.Name}\"";
+				var res = $"\"res:{a.Resource.Name}\"";
+				if (IsRead(a.Kind))
+					sb.AppendLine($"  {res} -> {pass} [label=\"{a.Kind}\"];");
+				else if (IsWrite(a.Kind))
+					sb.AppendLine($"  {pass} -> {res} [label=\"{a.Kind}\"];");
+				else // Blend / ReadWrite — read-modify-write
+					sb.AppendLine($"  {pass} -> {res} [label=\"{a.Kind}\", dir=both, style=dashed];");
+			}
+		}
+
+		sb.AppendLine("}");
+		return sb.ToString();
+	}
+
+	/// <summary>
+	/// A deterministic JSON rendering of the graph's structure (M13 viz export): domains, resources, passes (with
+	/// their access edges) and the present target — the same content as <see cref="Dump"/>, machine-readable for
+	/// external tooling. Excludes record callbacks (frame data, not structure), matching <see cref="Hash"/>.
+	/// </summary>
+	public string ToJson()
+	{
+		var dto = new GraphDto(
+			Hash(),
+			[.. Domains.Select(d => new DomainDto(d.Name, d.Width, d.Height, d.IsBackbuffer, d.RelativeScale, d.Samples))],
+			[.. Resources.Select(r => new ResourceDto(r.Id, r.Name, r.Kind.ToString(), r.Format.ToString(), r.Domain.Name, r.Scale, r.Count, r.ByteSize))],
+			[.. Passes.Select(p => new PassDto(
+				p.Name, p.Kind.ToString(), p.Queue.ToString(),
+				[.. p.Accesses.Select(a => new AccessDto(a.Kind.ToString(), a.Resource.Id, a.Resource.Name))]))],
+			PresentTarget?.Name);
+		return JsonSerializer.Serialize(dto, JsonExportOptions);
+	}
+
+	private static readonly JsonSerializerOptions JsonExportOptions = new() { WriteIndented = true };
+
+	private sealed record GraphDto(string Hash, DomainDto[] Domains, ResourceDto[] Resources, PassDto[] Passes, string? Present);
+	private sealed record DomainDto(string Name, int Width, int Height, bool IsBackbuffer, float RelativeScale, int Samples);
+	private sealed record ResourceDto(int Id, string Name, string Kind, string Format, string Domain, float Scale, int Count, int ByteSize);
+	private sealed record PassDto(string Name, string Kind, string Queue, AccessDto[] Accesses);
+	private sealed record AccessDto(string Kind, int ResourceId, string ResourceName);
 }
