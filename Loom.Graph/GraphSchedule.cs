@@ -234,4 +234,32 @@ public sealed class GraphSchedule
 		}
 		return sb.ToString();
 	}
+
+	/// <summary>
+	/// A GraphViz DOT rendering of the <em>derived</em> execution DAG (M13 viz export): one node per pass in
+	/// execution order (ranked top→bottom), with an edge from each prerequisite to the pass that depends on it.
+	/// This is the scheduling story — what <see cref="RenderGraph.ToDot"/>'s data-flow view derives into. Pairs
+	/// with it; render with <c>dot -Tpng</c>. Deterministic (execution order).
+	/// </summary>
+	public string ToDot()
+	{
+		var sb = new StringBuilder();
+		sb.AppendLine("digraph GraphSchedule {");
+		sb.AppendLine("  rankdir=TB;");
+		sb.AppendLine("  node [shape=box, style=\"filled,rounded\", fontname=\"Segoe UI\"];");
+		sb.AppendLine($"  labelloc=\"t\"; label=\"GraphSchedule ({Passes.Length} passes, source hash {Graph.Hash()[..12]})\";");
+
+		foreach (var scheduled in Passes)
+		{
+			var fill = scheduled.Pass.Kind == PassKind.Compute ? "#fff2b3" : "#d9d9d9";
+			sb.AppendLine($"  \"{scheduled.Pass.Name}\" [fillcolor=\"{fill}\", label=\"{scheduled.Order}: {scheduled.Pass.Name}\\n[{scheduled.Pass.Queue}]\"];");
+		}
+
+		foreach (var scheduled in Passes)
+			foreach (var dep in scheduled.DependsOn)
+				sb.AppendLine($"  \"{Graph.Passes[dep].Name}\" -> \"{scheduled.Pass.Name}\";");
+
+		sb.AppendLine("}");
+		return sb.ToString();
+	}
 }

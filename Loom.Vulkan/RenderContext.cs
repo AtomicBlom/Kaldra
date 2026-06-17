@@ -42,6 +42,16 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// pass's ctx.DrawImGui() forwards this frame's draw data to it. Null when ImGui is not in use.
 	private ImGuiRenderer? _imgui;
 #endif
+	// M13 resource viewer: GetDebugTextureId returns (resourceId + DebugTextureBase) — a non-zero id the host uses to
+	// gate "inspectable?" — and records the resource for this frame's thumbnail grid (the engine draws the images;
+	// ImGui.Image can't be used on win-arm64). Cleared after each HUD pass draws them.
+	internal const int DebugTextureBase = 0x10000;
+	private readonly List<int> _thumbRequests = [];
+	// M13 frustum-freeze wireframe: screen-space line segments (x0,y0,x1,y1 in pixels) the host sets each frame.
+	private Vector4[] _debugLines = [];
+	private int _debugLineCount;
+	private const uint DebugLineColor = 0xFF00FFFFu; // IM_COL32 yellow
+
 	// The native ImDrawData* the host produced this frame; stays a plain nint so the field (and the neutral
 	// ctx.DrawImGui() seam) exist even when the engine is built without ImGui (UseImGui=false).
 	private nint _imguiDrawData;
@@ -104,6 +114,28 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
 	public void SetTransients(TransientResources resources) => _resources = resources;
+
+	/// <summary>Drop the per-(name,formats) baked-pipeline cache so the next draw re-bakes (shader hot-reload, M13).
+	/// The Technique objects are owned by the TechniqueCache; the engine resets that separately after draining.</summary>
+	public void ClearBaked() => _baked.Clear();
+
+	/// <summary>Request that <paramref name="resourceId"/> be shown as a thumbnail in this frame's resource-viewer
+	/// grid (M13). Called by the engine's GetDebugTextureId as the host enumerates resources to display.</summary>
+	public void RequestThumbnail(int resourceId)
+	{
+		if (!_thumbRequests.Contains(resourceId))
+			_thumbRequests.Add(resourceId);
+	}
+
+	/// <summary>Set this frame's debug line segments (screen pixels, x0,y0,x1,y1) — the frustum-freeze wireframe the
+	/// HUD pass draws as an overlay (M13). Pass an empty span to clear. Overwritten each frame by the host.</summary>
+	public void SetDebugLines(ReadOnlySpan<Vector4> segments)
+	{
+		if (_debugLines.Length < segments.Length)
+			_debugLines = new Vector4[segments.Length];
+		segments.CopyTo(_debugLines);
+		_debugLineCount = segments.Length;
+	}
 
 #if LOOM_IMGUI
 	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
@@ -364,7 +396,34 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	public void DrawImGui()
 	{
 #if LOOM_IMGUI
-		_imgui?.Render(_cmd, _imguiDrawData, _fbExtent, _frameSlot);
+		if (_imgui is null)
+			return;
+
+		// The ImGui UI (menu, windows, the resource-viewer's name list) first.
+		_imgui.Render(_cmd, _imguiDrawData, _fbExtent, _frameSlot);
+
+		// M13 resource viewer: draw the requested resources as a thumbnail grid (engine-drawn — ImGui.Image no-ops on
+		// win-arm64). The engine injected a HUD .Samples edge for each inspectable resource, so they're live and in
+		// ShaderRead here — sampling a real image, not an aliased corpse. Laid out to the right of the name list.
+		if (_thumbRequests.Count > 0)
+		{
+			const float x0 = 300f, y0 = 30f, w = 200f, h = 112f, gap = 10f;
+			var cols = Math.Max(1, (int)((_fbExtent.Width - x0 - 10f) / (w + gap)));
+			var thumbs = new ImGuiRenderer.Thumbnail[_thumbRequests.Count];
+			for (var i = 0; i < _thumbRequests.Count; i++)
+			{
+				ref var image = ref _resources.Get(_frameSlot, _thumbRequests[i]);
+				var gx = x0 + i % cols * (w + gap);
+				var gy = y0 + i / cols * (h + gap);
+				thumbs[i] = new ImGuiRenderer.Thumbnail(image.View, gx, gy, w, h);
+			}
+			_imgui.DrawThumbnails(_cmd, thumbs, _fbExtent, _frameSlot);
+			_thumbRequests.Clear();
+		}
+
+		// M13 frustum-freeze wireframe: the host projected the frozen frustum's edges to screen pixels; draw them.
+		if (_debugLineCount > 0)
+			_imgui.DrawLines(_cmd, _debugLines.AsSpan(0, _debugLineCount), DebugLineColor, 2f, _fbExtent, _frameSlot);
 #endif
 	}
 

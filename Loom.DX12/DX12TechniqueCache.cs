@@ -73,12 +73,16 @@ internal sealed unsafe class DX12TechniqueCache : IDisposable
 		return key;
 	}
 
-	public void Dispose()
+	/// <summary>Dispose every baked PSO and empty the bake cache — used by shader hot-reload (M13) to force a fresh
+	/// bake from re-registered templates. Templates are kept (re-registered by DefineTechnique). Drain the GPU first.</summary>
+	public void Reset()
 	{
 		foreach (var technique in _baked.Values)
 			technique.Dispose();
 		_baked.Clear();
 	}
+
+	public void Dispose() => Reset();
 }
 
 /// <summary>One baked pipeline + its root signature, with the root-parameter slots the context binds against.</summary>

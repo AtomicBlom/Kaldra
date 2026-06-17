@@ -27,6 +27,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
+    <!-- Neutral asset layer: the M13 shader hot-reload watcher (no graphics types). -->
+    <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <!-- VMASharp (RaymondEllis fork): pure-managed VMA port on Silk.NET 2.23/net10, MIT, as a submodule.
          Deliberately NOT in Loom.slnx so `dotnet format` never reformats vendored code; the ProjectReference
          still builds it transitively. The transient-memory aliaser (M4) builds on it. -->

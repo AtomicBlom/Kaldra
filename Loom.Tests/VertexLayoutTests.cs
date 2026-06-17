@@ -20,9 +20,9 @@ public class VertexLayoutTests
 
 		Assert.Equal(VertexInputRate.PerVertex, layout.InputRate);
 		Assert.Equal(0, layout.Binding);
-		Assert.Equal(32, layout.Stride); // Vector3 + Vector3 + Vector2 — the same 32 bytes as Loom.Core.Vertex
-		Assert.Equal(new[] { 0, 12, 24 }, layout.Offsets.ToArray());
-		Assert.Equal(new[] { "POSITION", "NORMAL", "TEXCOORD" }, layout.Attributes.Select(a => a.Semantic).ToArray());
+		Assert.Equal(48, layout.Stride); // Vector3 + Vector3 + Vector2 + Vector4 — the same 48 bytes as Loom.Core.Vertex (M11 added the tangent)
+		Assert.Equal(new[] { 0, 12, 24, 32 }, layout.Offsets.ToArray());
+		Assert.Equal(new[] { "POSITION", "NORMAL", "TEXCOORD", "TANGENT" }, layout.Attributes.Select(a => a.Semantic).ToArray());
 	}
 
 	[Fact]

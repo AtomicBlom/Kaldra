@@ -1,13 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Neutral asset-I/O layer (PlanningPhase2.md §8): no graphics-API reference, sits beside Loom.Core as a
+       producer of neutral descriptions. M11 adds the image/glTF loaders (decode/parse to Loom.Core's neutral
+       descriptions); M13 adds the file-watching half (shader hot-reload). -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
-  <!-- Neutral asset producer (PlanningPhase2.md §8): image + glTF loaders that decode/parse to Loom.Core's
-       neutral descriptions. Sits beside Loom.Core; carries NO graphics-API reference. -->
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
   </ItemGroup>

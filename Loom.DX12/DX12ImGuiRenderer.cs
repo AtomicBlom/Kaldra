@@ -51,6 +51,180 @@ internal sealed unsafe class DX12ImGuiRenderer : IDisposable
 
 	private const uint PushCount = 4; // scale (float2) + translate (float2) — 4 DWORDs at b0
 
+	// Per frame-in-flight slot: UPLOAD-heap vertex/index buffers for the resource-viewer thumbnail quads (M13),
+	// grown on demand like the ImGui geometry buffers. The engine draws these instead of ImGui.Image.
+	private readonly ComPtr<ID3D12Resource>[] _thumbVtx;
+	private readonly ulong[] _thumbVtxSize;
+	private readonly ComPtr<ID3D12Resource>[] _thumbIdx;
+	private readonly ulong[] _thumbIdxSize;
+	// Per-slot buffers for the debug line overlay (the frustum-freeze wireframe — M13). Each segment is a thin quad
+	// sampling the font atlas's solid white texel, so the vertex colour is the line colour.
+	private readonly ComPtr<ID3D12Resource>[] _lineVtx;
+	private readonly ulong[] _lineVtxSize;
+	private readonly ComPtr<ID3D12Resource>[] _lineIdx;
+	private readonly ulong[] _lineIdxSize;
+	private Vector2 _whiteUv; // ImGui font atlas's solid-white texel UV — solid fills sample it
+
+	/// <summary>A textured quad the resource viewer draws (M13): a graph texture + its SRV format + a pixel rect.</summary>
+	internal readonly record struct Thumbnail(ComPtr<ID3D12Resource> Resource, DxgiFormat SrvFormat, float X, float Y, float W, float H);
+
+	/// <summary>
+	/// Draw the resource-viewer thumbnails (M13): one textured quad per <see cref="Thumbnail"/> in pixel space, into
+	/// the (already-open) HUD-pass scope after the ImGui UI. The engine draws these instead of <c>ImGui.Image</c>
+	/// (ImGui.NET's by-value-ImVec2 marshalling no-ops on win-arm64). Reuses the ImGui PSO + a per-slot quad buffer.
+	/// </summary>
+	public void DrawThumbnails(ComPtr<ID3D12GraphicsCommandList> cmd, ReadOnlySpan<Thumbnail> thumbs, uint fbWidth, uint fbHeight, uint frameSlot)
+	{
+		if (thumbs.Length == 0)
+			return;
+
+		var vtxStride = (uint)sizeof(ImDrawVert);
+		var vtxBytes = (ulong)(thumbs.Length * 4) * vtxStride;
+		var idxBytes = (ulong)(thumbs.Length * 6) * sizeof(ushort);
+		EnsureBuffer(ref _thumbVtx[frameSlot], ref _thumbVtxSize[frameSlot], vtxBytes);
+		EnsureBuffer(ref _thumbIdx[frameSlot], ref _thumbIdxSize[frameSlot], idxBytes);
+
+		const uint white = 0xFFFFFFFFu;
+		void* vtxMapped;
+		void* idxMapped;
+		var noRead = new Silk.NET.Direct3D12.Range { Begin = 0, End = 0 };
+		SilkMarshal.ThrowHResult(_thumbVtx[frameSlot].Map(0, &noRead, &vtxMapped));
+		SilkMarshal.ThrowHResult(_thumbIdx[frameSlot].Map(0, &noRead, &idxMapped));
+		var verts = (ImDrawVert*)vtxMapped;
+		var indices = (ushort*)idxMapped;
+		for (var i = 0; i < thumbs.Length; i++)
+		{
+			var t = thumbs[i];
+			var v = verts + i * 4;
+			v[0] = new ImDrawVert { pos = new Vector2(t.X, t.Y), uv = new Vector2(0, 0), col = white };
+			v[1] = new ImDrawVert { pos = new Vector2(t.X + t.W, t.Y), uv = new Vector2(1, 0), col = white };
+			v[2] = new ImDrawVert { pos = new Vector2(t.X + t.W, t.Y + t.H), uv = new Vector2(1, 1), col = white };
+			v[3] = new ImDrawVert { pos = new Vector2(t.X, t.Y + t.H), uv = new Vector2(0, 1), col = white };
+			var ix = indices + i * 6;
+			var b = (ushort)(i * 4);
+			ix[0] = b; ix[1] = (ushort)(b + 1); ix[2] = (ushort)(b + 2);
+			ix[3] = b; ix[4] = (ushort)(b + 2); ix[5] = (ushort)(b + 3);
+		}
+		_thumbVtx[frameSlot].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+		_thumbIdx[frameSlot].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+
+		cmd.SetGraphicsRootSignature(_rootSignature);
+		cmd.SetPipelineState(_pipeline);
+		var vbv = new VertexBufferView { BufferLocation = _thumbVtx[frameSlot].GetGPUVirtualAddress(), SizeInBytes = (uint)vtxBytes, StrideInBytes = vtxStride };
+		var ibv = new IndexBufferView { BufferLocation = _thumbIdx[frameSlot].GetGPUVirtualAddress(), SizeInBytes = (uint)idxBytes, Format = DxgiFormat.FormatR16Uint };
+		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		cmd.IASetVertexBuffers(0, 1, &vbv);
+		cmd.IASetIndexBuffer(&ibv);
+
+		// Negative-height viewport + the same pixel→clip push as the ImGui render (no display offset).
+		var viewport = new Viewport { TopLeftX = 0, TopLeftY = fbHeight, Width = fbWidth, Height = -(float)fbHeight, MinDepth = 0, MaxDepth = 1 };
+		cmd.RSSetViewports(1, &viewport);
+		var fullScissor = new Silk.NET.Maths.Box2D<int>(0, 0, (int)fbWidth, (int)fbHeight);
+		cmd.RSSetScissorRects(1, &fullScissor);
+		var push = stackalloc float[4];
+		push[0] = 2.0f / fbWidth;
+		push[1] = 2.0f / fbHeight;
+		push[2] = -1.0f;
+		push[3] = -1.0f;
+		cmd.SetGraphicsRoot32BitConstants(0, PushCount, push, 0);
+
+		for (var i = 0; i < thumbs.Length; i++)
+		{
+			var (cpu, gpu) = _ring.Allocate(1);
+			var srvDesc = new ShaderResourceViewDesc
+			{
+				Format = thumbs[i].SrvFormat,
+				ViewDimension = SrvDimension.Texture2D,
+				Shader4ComponentMapping = 0x1688, // D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
+				Anonymous = new ShaderResourceViewDescUnion { Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f } },
+			};
+			_ctx.Device.CreateShaderResourceView(thumbs[i].Resource, &srvDesc, cpu);
+			cmd.SetGraphicsRootDescriptorTable(1, gpu);
+			cmd.DrawIndexedInstanced(6, 1, (uint)(i * 6), i * 4, 0);
+		}
+	}
+
+	/// <summary>
+	/// Draw screen-space debug line segments (M13 frustum-freeze wireframe) as thin quads in the HUD overlay. Each
+	/// <paramref name="segments"/> entry is (x0,y0,x1,y1) in framebuffer pixels; <paramref name="color"/> is a packed
+	/// IM_COL32. Samples the font atlas's white texel for a solid colour. Engine-drawn (ImGui's line helpers take
+	/// by-value ImVec2, which no-ops on win-arm64).
+	/// </summary>
+	public void DrawLines(ComPtr<ID3D12GraphicsCommandList> cmd, ReadOnlySpan<Vector4> segments, uint color, float thickness, uint fbWidth, uint fbHeight, uint frameSlot)
+	{
+		if (segments.Length == 0)
+			return;
+
+		var vtxStride = (uint)sizeof(ImDrawVert);
+		var vtxBytes = (ulong)(segments.Length * 4) * vtxStride;
+		var idxBytes = (ulong)(segments.Length * 6) * sizeof(ushort);
+		EnsureBuffer(ref _lineVtx[frameSlot], ref _lineVtxSize[frameSlot], vtxBytes);
+		EnsureBuffer(ref _lineIdx[frameSlot], ref _lineIdxSize[frameSlot], idxBytes);
+
+		var half = MathF.Max(0.5f, thickness * 0.5f);
+		void* vtxMapped;
+		void* idxMapped;
+		var noRead = new Silk.NET.Direct3D12.Range { Begin = 0, End = 0 };
+		SilkMarshal.ThrowHResult(_lineVtx[frameSlot].Map(0, &noRead, &vtxMapped));
+		SilkMarshal.ThrowHResult(_lineIdx[frameSlot].Map(0, &noRead, &idxMapped));
+		var verts = (ImDrawVert*)vtxMapped;
+		var indices = (ushort*)idxMapped;
+		for (var i = 0; i < segments.Length; i++)
+		{
+			var s = segments[i];
+			var a = new Vector2(s.X, s.Y);
+			var b = new Vector2(s.Z, s.W);
+			var dir = b - a;
+			var len = dir.Length();
+			var perp = len > 1e-4f ? new Vector2(-dir.Y, dir.X) / len * half : new Vector2(0, half);
+			var v = verts + i * 4;
+			v[0] = new ImDrawVert { pos = a - perp, uv = _whiteUv, col = color };
+			v[1] = new ImDrawVert { pos = b - perp, uv = _whiteUv, col = color };
+			v[2] = new ImDrawVert { pos = b + perp, uv = _whiteUv, col = color };
+			v[3] = new ImDrawVert { pos = a + perp, uv = _whiteUv, col = color };
+			var ix = indices + i * 6;
+			var bo = (ushort)(i * 4);
+			ix[0] = bo; ix[1] = (ushort)(bo + 1); ix[2] = (ushort)(bo + 2);
+			ix[3] = bo; ix[4] = (ushort)(bo + 2); ix[5] = (ushort)(bo + 3);
+		}
+		_lineVtx[frameSlot].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+		_lineIdx[frameSlot].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+
+		cmd.SetGraphicsRootSignature(_rootSignature);
+		cmd.SetPipelineState(_pipeline);
+
+		// The white-texel font SRV (the quads sample it for a solid colour).
+		var (cpu, gpu) = _ring.Allocate(1);
+		var srvDesc = new ShaderResourceViewDesc
+		{
+			Format = DxgiFormat.FormatR8G8B8A8Unorm,
+			ViewDimension = SrvDimension.Texture2D,
+			Shader4ComponentMapping = 0x1688,
+			Anonymous = new ShaderResourceViewDescUnion { Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f } },
+		};
+		_ctx.Device.CreateShaderResourceView(_fontTexture, &srvDesc, cpu);
+		cmd.SetGraphicsRootDescriptorTable(1, gpu);
+
+		var vbv = new VertexBufferView { BufferLocation = _lineVtx[frameSlot].GetGPUVirtualAddress(), SizeInBytes = (uint)vtxBytes, StrideInBytes = vtxStride };
+		var ibv = new IndexBufferView { BufferLocation = _lineIdx[frameSlot].GetGPUVirtualAddress(), SizeInBytes = (uint)idxBytes, Format = DxgiFormat.FormatR16Uint };
+		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		cmd.IASetVertexBuffers(0, 1, &vbv);
+		cmd.IASetIndexBuffer(&ibv);
+
+		var viewport = new Viewport { TopLeftX = 0, TopLeftY = fbHeight, Width = fbWidth, Height = -(float)fbHeight, MinDepth = 0, MaxDepth = 1 };
+		cmd.RSSetViewports(1, &viewport);
+		var fullScissor = new Silk.NET.Maths.Box2D<int>(0, 0, (int)fbWidth, (int)fbHeight);
+		cmd.RSSetScissorRects(1, &fullScissor);
+		var push = stackalloc float[4];
+		push[0] = 2.0f / fbWidth;
+		push[1] = 2.0f / fbHeight;
+		push[2] = -1.0f;
+		push[3] = -1.0f;
+		cmd.SetGraphicsRoot32BitConstants(0, PushCount, push, 0);
+
+		cmd.DrawIndexedInstanced((uint)(segments.Length * 6), 1, 0, 0, 0);
+	}
+
 	public DX12ImGuiRenderer(DX12Context ctx, DX12DescriptorRing ring, byte[] vertexDxil, byte[] fragmentDxil, DxgiFormat rtvFormat, int framesInFlight)
 	{
 		_ctx = ctx;
@@ -60,6 +234,14 @@ internal sealed unsafe class DX12ImGuiRenderer : IDisposable
 		_vtxSizes = new ulong[framesInFlight];
 		_idxBuffers = new ComPtr<ID3D12Resource>[framesInFlight];
 		_idxSizes = new ulong[framesInFlight];
+		_thumbVtx = new ComPtr<ID3D12Resource>[framesInFlight];
+		_thumbVtxSize = new ulong[framesInFlight];
+		_thumbIdx = new ComPtr<ID3D12Resource>[framesInFlight];
+		_thumbIdxSize = new ulong[framesInFlight];
+		_lineVtx = new ComPtr<ID3D12Resource>[framesInFlight];
+		_lineVtxSize = new ulong[framesInFlight];
+		_lineIdx = new ComPtr<ID3D12Resource>[framesInFlight];
+		_lineIdxSize = new ulong[framesInFlight];
 
 		// We index the concatenated vertex buffer per draw-cmd, so advertise VtxOffset support.
 		ImGui.GetIO().BackendFlags |= ImGuiBackendFlags.RendererHasVtxOffset;
@@ -294,6 +476,7 @@ internal sealed unsafe class DX12ImGuiRenderer : IDisposable
 		staging.Dispose();
 
 		io.Fonts.SetTexID((nint)1); // non-null id; we always bind the one font atlas
+		_whiteUv = io.Fonts.TexUvWhitePixel; // a field read — safe on win-arm64 (unlike by-value ImVec2 args)
 	}
 
 	/// <summary>
@@ -352,7 +535,7 @@ internal sealed unsafe class DX12ImGuiRenderer : IDisposable
 			Anonymous = new ShaderResourceViewDescUnion { Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f } },
 		};
 		_ctx.Device.CreateShaderResourceView(_fontTexture, &srvDesc, cpu);
-		cmd.SetGraphicsRootDescriptorTable(1, gpu);
+		cmd.SetGraphicsRootDescriptorTable(1, gpu); // the UI uses only the font atlas; thumbnails draw separately
 
 		var vbv = new VertexBufferView { BufferLocation = _vtxBuffers[frameSlot].GetGPUVirtualAddress(), SizeInBytes = (uint)vtxBytes, StrideInBytes = vtxStride };
 		var ibv = new IndexBufferView { BufferLocation = _idxBuffers[frameSlot].GetGPUVirtualAddress(), SizeInBytes = (uint)idxBytes, Format = DxgiFormat.FormatR16Uint };
@@ -454,6 +637,14 @@ internal sealed unsafe class DX12ImGuiRenderer : IDisposable
 				_vtxBuffers[i].Dispose();
 			if (_idxBuffers[i].Handle is not null)
 				_idxBuffers[i].Dispose();
+			if (_thumbVtx[i].Handle is not null)
+				_thumbVtx[i].Dispose();
+			if (_thumbIdx[i].Handle is not null)
+				_thumbIdx[i].Dispose();
+			if (_lineVtx[i].Handle is not null)
+				_lineVtx[i].Dispose();
+			if (_lineIdx[i].Handle is not null)
+				_lineIdx[i].Dispose();
 		}
 	}
 

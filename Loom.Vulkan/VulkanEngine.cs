@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
+using Loom.Assets;
 using Loom.Core;
 using Loom.Graph;
 using Silk.NET.Core.Contexts;
@@ -55,6 +57,14 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private readonly DescriptorAllocator _descriptors;
 	private readonly RenderContext _context;
 	private readonly Dictionary<string, TechniqueTemplate> _registry = []; // logical name → backend baked-input form
+
+	// Shader hot-reload (M13): reverse map shader name → the techniques that use it, plus each technique's original
+	// descriptor (so a reload can rebuild the template). The watcher fires on a background thread → it enqueues the
+	// changed shader name; the render thread drains the queue at the top of the frame (fence-safe).
+	private readonly Dictionary<string, List<string>> _techniquesByShader = [];
+	private readonly Dictionary<string, TechniqueDescriptor> _descriptorsByName = [];
+	private readonly ConcurrentQueue<string> _reloadQueue = new();
+	private AssetWatcher? _shaderWatcher;
 #if LOOM_IMGUI
 	private ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
@@ -91,6 +101,21 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private int _readbackWidth;
 	private int _readbackHeight;
 
+	// GPU per-pass timing (§12 M13 profiler): a TIMESTAMP query pool per frame slot, 2 queries (begin/end) per
+	// pass. Decoded after the slot's fence — like the picking readback above — so the numbers are a frame or two
+	// old. Runtime-toggled (off by default); device support (timestampPeriod / valid bits) is probed in the ctor.
+	private bool _gpuTimingEnabled;
+	private QueryPool[] _timingPools = [];   // per frame slot, each sized 2*passCount
+	private bool[] _timingValid = [];        // slot has recorded timestamps at least once
+	private int _timingPassCount;
+	private float _timestampPeriod;          // ns per tick (device limit)
+	private uint _timestampValidBits;        // 0 ⇒ the graphics queue can't timestamp (timing unavailable)
+	private PassTiming[] _timings = [];      // decoded, reused as the LastFrameTimings backing
+	private double _frameGpuMs;
+
+	// M13 resource viewer: the active graph's colour/depth resources the host can preview. Rebuilt each SetGraph.
+	private readonly List<InspectableResource> _inspectable = [];
+
 	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
 	private Camera _frameCamera = Camera.Identity;
 	private Camera _frameSun = Camera.Identity;
@@ -106,11 +131,47 @@ internal sealed unsafe class VulkanEngine : IEngine
 	public string BackendName => "Vulkan";
 	public string DeviceName => _ctx.DeviceName;
 
+	public bool GpuTimingEnabled
+	{
+		get => _gpuTimingEnabled;
+		set => _gpuTimingEnabled = value && _timestampValidBits != 0; // can't enable on a queue with no timestamps
+	}
+	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
+	public double LastFrameGpuMilliseconds => _frameGpuMs;
+
+	public IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
+
+	public nint GetDebugTextureId(int resourceId)
+	{
+#if LOOM_IMGUI
+		if (_imgui is not null && resourceId >= 0 && _inspectable.Exists(r => r.Id == resourceId))
+		{
+			_context.RequestThumbnail(resourceId); // engine draws the image in the HUD pass (ImGui.Image no-ops on arm64)
+			return (nint)(resourceId + RenderContext.DebugTextureBase);
+		}
+#endif
+		return 0;
+	}
+
+	public void SetDebugLines(ReadOnlySpan<System.Numerics.Vector4> segments)
+	{
+#if LOOM_IMGUI
+		_context.SetDebugLines(segments);
+#endif
+	}
+
 	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
 	{
 		_ctx = new VulkanContext(surface, settings.EnableValidation);
 		_vk = _ctx.Vk;
 		_shaderDir = settings.ShaderDirectory;
+
+		// GPU-timing device support (M13). 0 valid bits ⇒ the graphics queue can't timestamp, so the profiler stays
+		// permanently unavailable (the GpuTimingEnabled setter enforces this).
+		_timestampPeriod = _ctx.TimestampPeriod;
+		_timestampValidBits = _ctx.GraphicsTimestampValidBits;
+		if (_timestampValidBits == 0)
+			Console.WriteLine("[loom] GPU timing unavailable: the graphics queue reports 0 timestamp valid bits.");
 		_windowExtent = new Extent2D((uint)width, (uint)height);
 		_swapchain = new Swapchain(_ctx, _windowExtent, settings.VSync, settings.HdrOutput);
 
@@ -129,6 +190,25 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		CreateCommandBuffers();
 		CreateSyncObjects();
+
+		// Shader hot-reload (M13), opt-in. An external process rewrites the loose .spv/.json on disk; this watcher
+		// (debounced) notifies us, and we pick up the new bytecode + rebuild affected pipelines. Off by default.
+		if (settings.WatchShaderDirectory)
+		{
+			var source = new LayeredAssetSource(_shaderDir);
+			_shaderWatcher = new AssetWatcher(source, [".spv", ".json"], debounceMs: 150);
+			_shaderWatcher.Changed += OnShaderArtifactChanged;
+			Console.WriteLine($"[loom] watching shaders for hot-reload: {_shaderDir}");
+		}
+	}
+
+	// Background-thread watcher callback: map the changed artifact (e.g. "gbuffer.spv") back to its shader name and,
+	// if a technique uses it, queue it for the render thread to reload. No GPU work here.
+	private void OnShaderArtifactChanged(string leaf)
+	{
+		var shader = Path.GetFileNameWithoutExtension(leaf); // "gbuffer.spv"/"gbuffer.json" → "gbuffer"
+		if (_techniquesByShader.ContainsKey(shader))
+			_reloadQueue.Enqueue(shader);
 	}
 
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
@@ -160,6 +240,41 @@ internal sealed unsafe class VulkanEngine : IEngine
 			descriptor.Address,
 			layout,
 			descriptor.Instance);
+
+		// Hot-reload bookkeeping (M13): remember which techniques a shader backs (one shader → many techniques, e.g.
+		// bloom_sample → bloom.down + bloom.up) and each technique's descriptor, so a reload can rebuild the template.
+		_descriptorsByName[name] = descriptor;
+		if (!_techniquesByShader.TryGetValue(descriptor.Shader, out var users))
+			_techniquesByShader[descriptor.Shader] = users = [];
+		if (!users.Contains(name))
+			users.Add(name);
+	}
+
+	// Drain queued shader reloads on the render thread (M13). Rare, human-paced events, so we drain the GPU once and
+	// rebuild every affected technique template, then clear both pipeline-cache layers — the next frame re-bakes from
+	// the new bytecode. Called at the top of the frame, before any recording.
+	private void DrainShaderReloads()
+	{
+		if (_reloadQueue.IsEmpty)
+			return;
+
+		var shaders = new HashSet<string>();
+		while (_reloadQueue.TryDequeue(out var shader))
+			shaders.Add(shader);
+		if (shaders.Count == 0)
+			return;
+
+		_vk.DeviceWaitIdle(_ctx.Device); // no pipeline in flight before we drop them
+		foreach (var shader in shaders)
+		{
+			if (!_techniquesByShader.TryGetValue(shader, out var techniques))
+				continue;
+			foreach (var name in techniques)
+				DefineTechnique(name, _descriptorsByName[name]); // re-resolve bytecode + reflection, rebuild the template
+			Console.WriteLine($"[loom] reloaded shader '{shader}' → {string.Join(", ", techniques)}");
+		}
+		_context.ClearBaked();   // drop per-(name,formats) cached pipelines
+		_techniques.Reset();     // dispose the stale VkPipelines; next Bake rebuilds from the new templates
 	}
 
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
@@ -190,8 +305,25 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		_graph = graph;
 
+		// M13 resource viewer: enumerate the colour/depth resources the host can preview, and (in an ImGui build)
+		// inject HUD .Samples edges for them so the Execute layer derives their keep-alive + ShaderRead transition —
+		// the viewer samples live images, not aliased corpses. The author's graph is untouched; we execute `executed`.
+		_inspectable.Clear();
+		var executed = graph;
+#if LOOM_IMGUI
+		// Gate on ImGui being live: graphs set before EnableImGui (the DX12 aliasing diagnostics) keep their exact
+		// aliasing; gallery graphs (set/switched with the UI up) get the inspection edges.
+		if (_imgui is not null)
+		{
+			foreach (var resource in graph.Resources)
+				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
+					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
+			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
+		}
+#endif
+
 		// Derive once — the graph is immutable, so order/barriers/load-store/lifetimes are frame-invariant.
-		var schedule = GraphSchedule.Derive(graph);
+		var schedule = GraphSchedule.Derive(executed);
 		_plan = BarrierPlan.Derive(schedule);
 		_aliasPlan = AliasPlan.Derive(LifetimePlan.Derive(schedule));
 
@@ -217,7 +349,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
 			Console.WriteLine($"[loom] transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
-		_transients = new TransientResources(_ctx, graph, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
+		// Build transients from `executed` so the injected debug-sample edges add SampledBit to inspected resources.
+		_transients = new TransientResources(_ctx, executed, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
 		_context.SetTransients(_transients);
 
 		// Readback staging (§7.4): one host-visible buffer per frame slot for the first g.Readback target.
@@ -233,6 +366,25 @@ internal sealed unsafe class VulkanEngine : IEngine
 			_readbackValid = new bool[MaxFramesInFlight];
 			for (var i = 0; i < MaxFramesInFlight; i++)
 				(_readbackBuffers[i], _readbackMemories[i]) = CreateStagingBuffer(bytes);
+		}
+
+		// GPU-timing pools (M13): 2 timestamps (begin/end) per pass, one pool per frame slot. Sized to this graph's
+		// pass count, so a swap to a graph with a different count reallocates (DisposeGraphResources freed the old).
+		_timingPassCount = _plan.Passes.Length;
+		_timings = [];
+		_frameGpuMs = 0;
+		if (_timestampValidBits != 0 && _timingPassCount > 0)
+		{
+			_timingPools = new QueryPool[MaxFramesInFlight];
+			_timingValid = new bool[MaxFramesInFlight];
+			var info = new QueryPoolCreateInfo
+			{
+				SType = StructureType.QueryPoolCreateInfo,
+				QueryType = QueryType.Timestamp,
+				QueryCount = (uint)(2 * _timingPassCount),
+			};
+			for (var i = 0; i < MaxFramesInFlight; i++)
+				_vk.CreateQueryPool(_ctx.Device, in info, null, out _timingPools[i]).Check("vkCreateQueryPool");
 		}
 	}
 
@@ -316,12 +468,16 @@ internal sealed unsafe class VulkanEngine : IEngine
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
 			return; // Minimized — nothing to draw.
 
+		DrainShaderReloads(); // M13: pick up any hot-reloaded shaders before recording this frame
+
 		_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
 
 		// The fence just signalled, so this slot's readback buffer holds the copy from when it last ran (~2
 		// frames ago). Decode it into _readbackCpu before this frame overwrites it — that's the latency §7.4
 		// is upfront about. (Done before recording, so SamplePick always sees the freshest available.)
 		DownloadReadback(_currentFrame);
+		// Same story for the timing pool: the fence guarantees this slot's last timestamps are complete.
+		DownloadTimings(_currentFrame);
 
 		uint imageIndex = 0;
 		var acquire = _ctx.KhrSwapchain.AcquireNextImage(
@@ -432,6 +588,13 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _swapchain.Extent, _swapchain.HdrActive);
 
+		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
+		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).
+		var timing = _gpuTimingEnabled && _timingPools.Length > 0;
+		if (timing)
+			_vk.CmdResetQueryPool(cmd, _timingPools[_currentFrame], 0, (uint)(2 * _timingPassCount));
+
+		var passIndex = 0;
 		foreach (var pass in _plan.Passes)
 		{
 			// Wrap each pass (its pre-barriers + its draws/dispatch) in a debug-label scope, nested under groups
@@ -440,9 +603,18 @@ internal sealed unsafe class VulkanEngine : IEngine
 			BeginPassLabels(cmd, pass);
 			foreach (var transition in pass.Transitions)
 				EmitTransition(cmd, transition);
+			// Timestamp the pass's own work (after its pre-barriers, around RecordPass) — the barriers belong to the
+			// transition, not the pass. Top/Bottom-of-pipe is the portable choice; the device coarsens as needed.
+			if (timing)
+				_vk.CmdWriteTimestamp2(cmd, PipelineStageFlags2.TopOfPipeBit, _timingPools[_currentFrame], (uint)(2 * passIndex));
 			RecordPass(cmd, pass);
+			if (timing)
+				_vk.CmdWriteTimestamp2(cmd, PipelineStageFlags2.BottomOfPipeBit, _timingPools[_currentFrame], (uint)(2 * passIndex + 1));
 			_ctx.EndDebugLabel(cmd); // close the leaf scope opened by BeginPassLabels
+			passIndex++;
 		}
+		if (timing)
+			_timingValid[_currentFrame] = true;
 		CloseTrailingLabels(cmd); // close any groups still open after the last pass
 
 		RecordReadback(cmd);
@@ -509,6 +681,34 @@ internal sealed unsafe class VulkanEngine : IEngine
 		for (var i = 0; i < count; i++)
 			_readbackCpu[i] = (float)halves[i];
 		_vk.UnmapMemory(_ctx.Device, _readbackMemories[slot]);
+	}
+
+	// Read this slot's timestamps (begin/end per pass) into _timings and the frame total (M13). Called after the
+	// slot's fence signals, so the queries are complete. Mask to the queue's valid bits; guard end>=begin against
+	// wrap / driver oddities (Adreno). ticks * timestampPeriod(ns) / 1e6 = milliseconds.
+	private void DownloadTimings(int slot)
+	{
+		if (!_gpuTimingEnabled || _timingPools.Length == 0 || _timingPassCount == 0 || !_timingValid[slot])
+			return;
+
+		var n = 2 * _timingPassCount;
+		ulong* raw = stackalloc ulong[n];
+		_vk.GetQueryPoolResults(_ctx.Device, _timingPools[slot], 0, (uint)n,
+			(nuint)(n * sizeof(ulong)), raw, (ulong)sizeof(ulong), QueryResultFlags.Result64Bit).Check("vkGetQueryPoolResults");
+
+		var mask = _timestampValidBits >= 64 ? ulong.MaxValue : (1UL << (int)_timestampValidBits) - 1UL;
+		if (_timings.Length != _timingPassCount)
+			_timings = new PassTiming[_timingPassCount];
+		for (var i = 0; i < _timingPassCount; i++)
+		{
+			var begin = raw[2 * i] & mask;
+			var end = raw[2 * i + 1] & mask;
+			var ticks = end >= begin ? end - begin : 0UL;
+			_timings[i] = new PassTiming(_plan.Passes[i].Pass.Name, ticks * _timestampPeriod / 1_000_000.0);
+		}
+		var first = raw[0] & mask;
+		var last = raw[n - 1] & mask;
+		_frameGpuMs = (last >= first ? last - first : 0UL) * _timestampPeriod / 1_000_000.0;
 	}
 
 	private void RecordPass(CommandBuffer cmd, PassBarriers pass)
@@ -892,10 +1092,19 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_readbackValid = [];
 		_readbackCpu = [];
 		_readbackId = -1;
+
+		foreach (var pool in _timingPools)
+			if (pool.Handle != 0)
+				_vk.DestroyQueryPool(_ctx.Device, pool, null);
+		_timingPools = [];
+		_timingValid = [];
+		_timings = [];
+		_timingPassCount = 0;
 	}
 
 	public void Dispose()
 	{
+		_shaderWatcher?.Dispose(); // stop the hot-reload watcher before tearing the device down (M13)
 		_vk.DeviceWaitIdle(_ctx.Device);
 
 		DisposeGraphResources();    // transients + readback staging (graph-level)

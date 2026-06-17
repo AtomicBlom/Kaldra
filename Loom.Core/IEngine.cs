@@ -86,6 +86,50 @@ public interface IEngine : IDisposable
 	/// <summary>Capture the next presented frame to a PNG at <paramref name="path"/> (debug/validation). Synchronous on that frame.</summary>
 	void RequestCapture(string path);
 
+	/// <summary>
+	/// Enable per-pass GPU timestamp collection (M13 profiling spine). Off by default; cheap to toggle live (an
+	/// ImGui HUD checkbox) — no graph rebuild. A backend that cannot time (e.g. a queue with no timestamp support)
+	/// keeps this false. When off, <see cref="LastFrameTimings"/> stays empty and the per-frame cost is nil.
+	/// </summary>
+	bool GpuTimingEnabled { get; set; }
+
+	/// <summary>
+	/// Per-pass GPU timings from the most recently <em>completed</em> frame (a frame or two stale, like
+	/// <see cref="SamplePick"/> — timestamps are read back after the slot's fence). In execution order; the entries
+	/// align with the active graph's leaf passes. Empty when timing is disabled or no timed frame has retired.
+	/// </summary>
+	IReadOnlyList<PassTiming> LastFrameTimings { get; }
+
+	/// <summary>
+	/// Total GPU time for the most recent completed frame, in milliseconds — the span from the first pass's begin
+	/// timestamp to the last pass's end timestamp (so it includes inter-pass gaps the per-pass sum misses). 0 when
+	/// timing is disabled or no timed frame has retired.
+	/// </summary>
+	double LastFrameGpuMilliseconds { get; }
+
+	/// <summary>
+	/// The active graph's image resources the debug viewer can preview (colour + depth; M13). Empty until
+	/// <see cref="SetGraph"/>, rebuilt on each swap, and empty in a build without the ImGui debug UI. Neutral types.
+	/// </summary>
+	IReadOnlyList<InspectableResource> InspectableResources { get; }
+
+	/// <summary>
+	/// An opaque per-frame ImGui texture id (<c>ImTextureID</c>) for the resource, to pass to <c>ImGui.Image</c>;
+	/// the backend maps it back to a GPU binding when it records the HUD (M13 resource viewer). Returns 0 if the id
+	/// is not inspectable or the ImGui debug UI is not built/enabled. Call during the frame's ImGui build; the id is
+	/// valid for that frame's draw list only. <c>nint</c> is the same opaque currency as
+	/// <see cref="FrameInputs.ImGuiDrawData"/> — no graphics-API type leaks.
+	/// </summary>
+	nint GetDebugTextureId(int resourceId);
+
+	/// <summary>
+	/// Set the debug overlay's line segments for the next frame (M13 detached-camera frustum freeze): each
+	/// <see cref="System.Numerics.Vector4"/> is a screen-space segment <c>(x0, y0, x1, y1)</c> in framebuffer pixels,
+	/// drawn over the HUD. The host projects world-space geometry (e.g. a frozen frustum's edges) to pixels and calls
+	/// this each frame; an empty span clears it. A no-op in a build without the ImGui debug UI.
+	/// </summary>
+	void SetDebugLines(ReadOnlySpan<System.Numerics.Vector4> segments);
+
 	/// <summary>Block until the GPU is idle — call before disposing host-owned resources the engine may still be using.</summary>
 	void WaitIdle();
 }

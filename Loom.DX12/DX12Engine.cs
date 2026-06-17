@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
+using Loom.Assets;
 using Loom.Core;
 using Loom.Graph;
 
@@ -74,6 +76,28 @@ public sealed unsafe class DX12Engine : IEngine
 	private readonly bool[] _pickValid = new bool[BufferCount];
 	private float[] _pickCpu = [];
 
+	// GPU per-pass timing (§12 M13 profiler): one TIMESTAMP query heap with 2 queries (begin/end) per pass and a
+	// per-slot sub-range, plus a per-slot READBACK buffer ResolveQueryData writes into. Decoded after the slot's
+	// fence (like the pick readback) — a frame or two stale. Runtime-toggled (off by default).
+	private bool _gpuTimingEnabled;
+	private ComPtr<ID3D12QueryHeap> _timingHeap;
+	private readonly ComPtr<ID3D12Resource>[] _timingReadback = new ComPtr<ID3D12Resource>[BufferCount];
+	private readonly bool[] _timingValid = new bool[BufferCount];
+	private int _timingPassCount;
+	private ulong _timestampFrequency; // ticks per second, from the graphics queue (0 ⇒ timing unavailable)
+	private PassTiming[] _timings = [];
+	private double _frameGpuMs;
+
+	// M13 resource viewer: the active graph's colour/depth resources the host can preview. Rebuilt each SetGraph.
+	private readonly List<InspectableResource> _inspectable = [];
+
+	// Shader hot-reload (M13): shader name → techniques using it, each technique's descriptor, and a queue the
+	// background watcher posts to (drained on the render thread). Mirrors the Vulkan backend.
+	private readonly Dictionary<string, List<string>> _techniquesByShader = [];
+	private readonly Dictionary<string, TechniqueDescriptor> _descriptorsByName = [];
+	private readonly ConcurrentQueue<string> _reloadQueue = new();
+	private AssetWatcher? _shaderWatcher;
+
 	public DX12Engine(nint hwnd, int width, int height, DX12EngineSettings settings)
 	{
 		_settings = settings;
@@ -99,7 +123,7 @@ public sealed unsafe class DX12Engine : IEngine
 
 		_triangle = new DX12Triangle(_ctx, _swapchain.Format);
 		_techniques = new DX12TechniqueCache(_ctx);
-		_ring = new DX12DescriptorRing(_ctx, 256);
+		_ring = new DX12DescriptorRing(_ctx, 512); // headroom for per-pass SRVs + the M13 resource viewer's debug SRVs
 		_meshes = new DX12MeshStore(_ctx);
 		_textures = new DX12TextureStore(_ctx);
 		_materials = new DX12MaterialStore();
@@ -107,11 +131,92 @@ public sealed unsafe class DX12Engine : IEngine
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
+		// GPU-timing clock (M13): the graphics (Direct) queue's timestamp frequency. A Direct queue always supports
+		// timestamps on D3D12; 0 only if the call fails, which disables the profiler (the GpuTimingEnabled setter guards it).
+		ulong frequency = 0;
+		if (_ctx.GraphicsQueue.GetTimestampFrequency(ref frequency) >= 0)
+			_timestampFrequency = frequency;
+
 		Console.WriteLine($"[loom] DX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
+
+		// Shader hot-reload (M13), opt-in. Watch the loose DXIL/reflection artifacts; an external process rewrites
+		// them and this picks up the new bytecode + rebuilds affected PSOs. Off by default.
+		if (settings.WatchShaderDirectory)
+		{
+			var source = new LayeredAssetSource(settings.ShaderDirectory);
+			_shaderWatcher = new AssetWatcher(source, [".dxil", ".json"], debounceMs: 150);
+			_shaderWatcher.Changed += OnShaderArtifactChanged;
+			Console.WriteLine($"[loom] watching shaders for hot-reload: {settings.ShaderDirectory}");
+		}
+	}
+
+	// Background-thread watcher callback: map the changed artifact (e.g. "gbuffer.ps.dxil") back to its shader name
+	// and queue it if a technique uses it. No GPU work here.
+	private void OnShaderArtifactChanged(string leaf)
+	{
+		var name = Path.GetFileNameWithoutExtension(leaf); // "gbuffer.ps.dxil" → "gbuffer.ps"; "gbuffer.json" → "gbuffer"
+		if (name.EndsWith(".vs", StringComparison.Ordinal) || name.EndsWith(".ps", StringComparison.Ordinal) || name.EndsWith(".cs", StringComparison.Ordinal))
+			name = name[..^3];
+		if (_techniquesByShader.ContainsKey(name))
+			_reloadQueue.Enqueue(name);
+	}
+
+	// Drain queued shader reloads on the render thread (M13): drain the GPU once, rebuild affected templates, evict
+	// the baked PSOs — the next frame re-bakes from the new bytecode. Called at the top of the graph frame.
+	private void DrainShaderReloads()
+	{
+		if (_reloadQueue.IsEmpty)
+			return;
+
+		var shaders = new HashSet<string>();
+		while (_reloadQueue.TryDequeue(out var shader))
+			shaders.Add(shader);
+		if (shaders.Count == 0)
+			return;
+
+		WaitIdle(); // no PSO in flight before we drop them
+		foreach (var shader in shaders)
+		{
+			if (!_techniquesByShader.TryGetValue(shader, out var techniques))
+				continue;
+			foreach (var name in techniques)
+				DefineTechnique(name, _descriptorsByName[name]); // re-resolve DXIL + reflection, re-register the template
+			Console.WriteLine($"[loom] reloaded shader '{shader}' → {string.Join(", ", techniques)}");
+		}
+		_techniques.Reset(); // dispose stale PSOs; next GetOrBake rebuilds from the re-registered templates
 	}
 
 	public string BackendName => "DX12";
 	public string DeviceName => _ctx.DeviceName;
+
+	public bool GpuTimingEnabled
+	{
+		get => _gpuTimingEnabled;
+		set => _gpuTimingEnabled = value && _timestampFrequency != 0;
+	}
+	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
+	public double LastFrameGpuMilliseconds => _frameGpuMs;
+
+	public IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
+
+	public nint GetDebugTextureId(int resourceId)
+	{
+#if LOOM_IMGUI
+		if (_imgui is not null && resourceId >= 0 && _inspectable.Exists(r => r.Id == resourceId))
+		{
+			_context.RequestThumbnail(resourceId); // engine draws the image in the HUD pass (ImGui.Image no-ops on arm64)
+			return (nint)(resourceId + DX12RenderContext.DebugTextureBase);
+		}
+#endif
+		return 0;
+	}
+
+	public void SetDebugLines(ReadOnlySpan<System.Numerics.Vector4> segments)
+	{
+#if LOOM_IMGUI
+		_context.SetDebugLines(segments);
+#endif
+	}
 
 	public void Render(FrameInputs inputs)
 	{
@@ -179,12 +284,16 @@ public sealed unsafe class DX12Engine : IEngine
 	// of VulkanEngine's per-frame RecordGraph.
 	private void RenderGraphFrame(FrameInputs inputs)
 	{
+		DrainShaderReloads(); // M13: pick up any hot-reloaded shaders before recording this frame
+
 		var index = _swapchain.CurrentIndex;
 		WaitForFrame(index);
 
 		// This slot's GPU work (a couple frames back) is now done, so its readback buffer is safe to map — decode
 		// the object-id copy it holds into _pickCpu for SamplePick (a few frames stale; invisible for hover).
 		DownloadPick(index);
+		// Same story for the timing queries the slot resolved.
+		DownloadTiming(index);
 
 		SilkMarshal.ThrowHResult(_allocators[index].Reset());
 		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
@@ -196,6 +305,12 @@ public sealed unsafe class DX12Engine : IEngine
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
 		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _swapchain.Width, _swapchain.Height);
 
+		// GPU timing (M13): bracket each pass's own work (after its pre-barriers) with a begin/end timestamp into this
+		// slot's sub-range of the heap. Timestamp queries use EndQuery only (no BeginQuery).
+		var timing = _gpuTimingEnabled && _timingHeap.Handle is not null;
+		var timingBase = (uint)(2 * _timingPassCount) * index;
+		var passIndex = 0;
+
 		foreach (var pass in _barrierPlan!.Passes)
 		{
 			// Wrap each pass in a debug-label scope, nested under groups derived from its dotted name, so a PIX
@@ -205,16 +320,28 @@ public sealed unsafe class DX12Engine : IEngine
 			foreach (var transition in pass.Transitions)
 				EmitGraphTransition(index, transition);
 
+			if (timing)
+				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex));
 			if (pass.Pass.Kind == PassKind.Compute)
 				RecordComputePass(pass);
 			else
 				RecordRasterPass(index, pass);
+			if (timing)
+				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex + 1));
 			_ctx.EndDebugLabel(_commandList); // close the leaf scope opened by BeginPassLabels
+			passIndex++;
 		}
 		CloseTrailingLabels(); // close any groups still open after the last pass
 
 		// Picking: copy this frame's object-id target into the slot's readback buffer (no-op if the graph has none).
 		RecordPick(index);
+
+		// Resolve this slot's timestamps into its readback buffer (read back after the slot's next fence).
+		if (timing)
+		{
+			_commandList.ResolveQueryData(_timingHeap, QueryType.Timestamp, timingBase, (uint)(2 * _timingPassCount), _timingReadback[index], 0);
+			_timingValid[index] = true;
+		}
 
 		// Optional capture: copy the present target before the final present transition (which then runs from
 		// COPY_SOURCE, since EmitGraphTransition tracks the real state).
@@ -551,6 +678,29 @@ public sealed unsafe class DX12Engine : IEngine
 		_pickReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 	}
 
+	// Decode this slot's resolved timestamps (begin/end per pass) into _timings + the frame total (M13). Called after
+	// the slot's fence, so the resolve is complete. The readback buffer is tightly-packed UINT64 (no row pitch).
+	// ticks / frequency = seconds; ×1000 = ms. Guard end>=begin against any non-monotonic driver oddity (Adreno).
+	private void DownloadTiming(uint index)
+	{
+		if (!_gpuTimingEnabled || _timingHeap.Handle is null || _timingPassCount == 0 || !_timingValid[index])
+			return;
+
+		void* mapped;
+		SilkMarshal.ThrowHResult(_timingReadback[index].Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
+		var t = new ReadOnlySpan<ulong>(mapped, 2 * _timingPassCount);
+		if (_timings.Length != _timingPassCount)
+			_timings = new PassTiming[_timingPassCount];
+		for (var i = 0; i < _timingPassCount; i++)
+		{
+			var ticks = t[2 * i + 1] >= t[2 * i] ? t[2 * i + 1] - t[2 * i] : 0UL;
+			_timings[i] = new PassTiming(_barrierPlan!.Passes[i].Pass.Name, ticks * 1000.0 / _timestampFrequency);
+		}
+		var span = t[^1] >= t[0] ? t[^1] - t[0] : 0UL;
+		_frameGpuMs = span * 1000.0 / _timestampFrequency;
+		_timingReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+	}
+
 	private ComPtr<ID3D12Resource> CreateReadbackBuffer(ulong size)
 	{
 		var heapProps = new HeapProperties { Type = HeapType.Readback, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
@@ -646,6 +796,8 @@ public sealed unsafe class DX12Engine : IEngine
 			return;
 		_disposed = true;
 
+		_shaderWatcher?.Dispose(); // stop the hot-reload watcher before tearing the device down (M13)
+
 		try { WaitIdle(); }
 		catch { /* the device may already be lost; tear down regardless */ }
 
@@ -658,6 +810,11 @@ public sealed unsafe class DX12Engine : IEngine
 		if (_readback.Handle is not null)
 			_readback.Dispose();
 		foreach (ref var buffer in _pickReadback.AsSpan())
+			if (buffer.Handle is not null)
+				buffer.Dispose();
+		if (_timingHeap.Handle is not null)
+			_timingHeap.Dispose();
+		foreach (ref var buffer in _timingReadback.AsSpan())
 			if (buffer.Handle is not null)
 				buffer.Dispose();
 #if LOOM_IMGUI
@@ -758,6 +915,13 @@ public sealed unsafe class DX12Engine : IEngine
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
 			descriptor.Address, layout, descriptor.Instance));
+
+		// Hot-reload bookkeeping (M13): one shader → many techniques; remember the descriptor so a reload rebuilds it.
+		_descriptorsByName[name] = descriptor;
+		if (!_techniquesByShader.TryGetValue(descriptor.Shader, out var users))
+			_techniquesByShader[descriptor.Shader] = users = [];
+		if (!users.Contains(name))
+			users.Add(name);
 	}
 
 	/// <summary>
@@ -772,10 +936,27 @@ public sealed unsafe class DX12Engine : IEngine
 			WaitIdle();
 
 		_graph = graph;
+
+		// M13 resource viewer: enumerate the colour/depth resources the host can preview, and (with the debug UI
+		// live) inject HUD .Samples edges so the Execute layer derives their keep-alive + PixelShaderResource
+		// transition — the viewer samples live images, not aliased corpses. Graphs set before EnableImGui (the DX12
+		// aliasing diagnostics) keep their exact aliasing. The author's graph is untouched; we execute `executed`.
+		_inspectable.Clear();
+		var executed = graph;
+#if LOOM_IMGUI
+		if (_imgui is not null)
+		{
+			foreach (var resource in graph.Resources)
+				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
+					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
+			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
+		}
+#endif
+
 		// Derive once — the graph is immutable, so order/barriers/lifetimes/aliasing are frame-invariant. The
 		// AliasPlan (the §8/M4 transient-memory partition) is the SAME backend-neutral product the Vulkan engine
 		// consumes; this backend turns each bucket into a placed-resource heap shared by its members.
-		var schedule = GraphSchedule.Derive(graph);
+		var schedule = GraphSchedule.Derive(executed);
 		_barrierPlan = BarrierPlan.Derive(schedule);
 		_aliasPlan = AliasPlan.Derive(LifetimePlan.Derive(schedule));
 		for (uint i = 0; i < BufferCount; i++)
@@ -785,9 +966,33 @@ public sealed unsafe class DX12Engine : IEngine
 			Console.WriteLine($"[loom] DX12 transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
 		_transients?.Dispose();
-		_transients = new DX12Transients(_ctx, graph, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
+		// Build transients from `executed` (same resources/ids; the injected edges only affect derived state).
+		_transients = new DX12Transients(_ctx, executed, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
 		_context.SetTransients(_transients);
 		SetupPick(graph);
+		SetupTiming();
+	}
+
+	// Allocate the GPU-timing query heap + per-slot readback buffers for this graph (M13): 2 timestamps (begin/end)
+	// per pass, a sub-range per frame slot. Resized with the graph's pass count; mirrors SetupPick. WaitIdle()
+	// already drained the GPU in SetGraph before this, so disposing the old heap/buffers is safe.
+	private void SetupTiming()
+	{
+		if (_timingHeap.Handle is not null) { _timingHeap.Dispose(); _timingHeap = default; }
+		foreach (ref var buffer in _timingReadback.AsSpan())
+			if (buffer.Handle is not null) { buffer.Dispose(); buffer = default; }
+		Array.Clear(_timingValid);
+		_timings = [];
+		_frameGpuMs = 0;
+		_timingPassCount = _barrierPlan!.Passes.Length;
+		if (_timestampFrequency == 0 || _timingPassCount == 0)
+			return;
+
+		var perSlot = (uint)(2 * _timingPassCount);
+		var desc = new QueryHeapDesc { Type = QueryHeapType.Timestamp, Count = perSlot * BufferCount, NodeMask = 0 };
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateQueryHeap(&desc, out _timingHeap));
+		for (uint i = 0; i < BufferCount; i++)
+			_timingReadback[i] = CreateReadbackBuffer((ulong)perSlot * sizeof(ulong));
 	}
 
 	// Wire up GPU→CPU picking for this graph: its first readback target (the object-id buffer, §7.4) gets a per-slot

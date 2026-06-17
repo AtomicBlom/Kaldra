@@ -61,6 +61,11 @@ internal static class Dx12Smoke
 			?? throw new InvalidOperationException("The DX12 backend did not register into Engine.AvailableEngines.");
 		using var engine = backend.Create(hwnd, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 
+		// M13 GPU profiler: enable timing in a headless smoke run so the final frame can dump per-pass numbers for a
+		// cross-backend sanity check against the Vulkan harness (no-op if the queue can't timestamp).
+		if (smokeFrames > 0)
+			engine.GpuTimingEnabled = true;
+
 		//   LOOM_DX12_GRAPH=1 — a two-pass offscreen->blit gradient (transient alloc + the cross-pass barrier).
 		//   LOOM_DX12_ALIAS=1 — a 4-transient blit chain whose non-overlapping lifetimes fold into 2 memory
 		//                       buckets (the §8/M4 AliasPlan → DX12 placed-resource heaps + aliasing barriers).
@@ -214,6 +219,9 @@ internal static class Dx12Smoke
 				{
 					ImGui.MenuItem($"{engine.BackendName} backend", "", false, false);
 					ImGui.MenuItem("ImGui demo window", "", ref showDemoWindow);
+					var gpuTiming = engine.GpuTimingEnabled;
+					if (ImGui.MenuItem("GPU timing", "", ref gpuTiming))
+						engine.GpuTimingEnabled = gpuTiming;
 					ImGui.EndMenu();
 				}
 				ImGui.Separator();
@@ -225,6 +233,17 @@ internal static class Dx12Smoke
 			}
 			if (showDemoWindow)
 				ImGui.ShowDemoWindow(ref showDemoWindow);
+			if (engine.GpuTimingEnabled)
+			{
+				if (ImGui.Begin("GPU Timing"))
+				{
+					foreach (var t in engine.LastFrameTimings)
+						ImGui.Text($"{t.Name,-18} {t.GpuMilliseconds,7:F3} ms");
+					ImGui.Separator();
+					ImGui.Text($"{"frame total",-18} {engine.LastFrameGpuMilliseconds,7:F3} ms");
+				}
+				ImGui.End();
+			}
 			ImGui.Render();
 			unsafe { imguiDrawData = (nint)ImGui.GetDrawData().NativePtr; }
 #endif
@@ -244,6 +263,13 @@ internal static class Dx12Smoke
 			else if (smokeFrames > 0 && frame >= smokeFrames)
 			{
 				Console.WriteLine($"[loom] DX12 SamplePick(160,90) = {picked:F2} (the centred cube's object id ≈ 1 once readback settles).");
+				if (engine.GpuTimingEnabled && engine.LastFrameTimings.Count > 0)
+				{
+					Console.WriteLine($"[loom] GPU timing ({engine.BackendName}, {mode}):");
+					foreach (var t in engine.LastFrameTimings)
+						Console.WriteLine($"  {t.Name,-18} {t.GpuMilliseconds,7:F3} ms");
+					Console.WriteLine($"  {"frame total",-18} {engine.LastFrameGpuMilliseconds,7:F3} ms");
+				}
 				window.Close();
 			}
 		};

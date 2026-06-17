@@ -1,3 +1,5 @@
+using System.Numerics;
+
 using Loom.Core;
 
 using Silk.NET.Core.Native;
@@ -39,6 +41,13 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
+	// M13 resource viewer: resources to show as thumbnails this frame (the engine draws the images; ImGui.Image
+	// no-ops on win-arm64). Populated by RequestThumbnail as the host enumerates resources, drawn + cleared each HUD pass.
+	private readonly List<int> _thumbRequests = [];
+	// M13 frustum-freeze wireframe: screen-space line segments (x0,y0,x1,y1 in pixels) the host sets each frame.
+	private Vector4[] _debugLines = [];
+	private int _debugLineCount;
+	private const uint DebugLineColor = 0xFF00FFFFu; // IM_COL32 yellow
 	// This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
 	// DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
 	private nint _imguiDrawData;
@@ -69,6 +78,24 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
 	public void SetTransients(DX12Transients transients) => _transients = transients;
+
+	/// <summary>Request that <paramref name="resourceId"/> be shown as a thumbnail in this frame's resource-viewer
+	/// grid (M13). Called by the engine's GetDebugTextureId as the host enumerates resources to display.</summary>
+	public void RequestThumbnail(int resourceId)
+	{
+		if (!_thumbRequests.Contains(resourceId))
+			_thumbRequests.Add(resourceId);
+	}
+
+	/// <summary>Set this frame's debug line segments (screen pixels, x0,y0,x1,y1) — the frustum-freeze wireframe the
+	/// HUD pass draws as an overlay (M13). Pass an empty span to clear. Overwritten each frame by the host.</summary>
+	public void SetDebugLines(ReadOnlySpan<Vector4> segments)
+	{
+		if (_debugLines.Length < segments.Length)
+			_debugLines = new Vector4[segments.Length];
+		segments.CopyTo(_debugLines);
+		_debugLineCount = segments.Length;
+	}
 
 #if LOOM_IMGUI
 	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
@@ -406,9 +433,40 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void DrawImGui()
 	{
 #if LOOM_IMGUI
-		_imgui?.Render(_cmd, _imguiDrawData, _fbWidth, _fbHeight, _slot);
+		if (_imgui is null)
+			return;
+
+		// The ImGui UI (menu, windows, the resource-viewer name list) first.
+		_imgui.Render(_cmd, _imguiDrawData, _fbWidth, _fbHeight, _slot);
+
+		// M13 resource viewer: draw the requested resources as a thumbnail grid (engine-drawn — ImGui.Image no-ops on
+		// win-arm64). The injected HUD .Samples edge put each in PixelShaderResource — sampling a live image. Laid
+		// out to the right of the name list.
+		if (_thumbRequests.Count > 0 && _transients is not null)
+		{
+			const float x0 = 300f, y0 = 30f, w = 200f, h = 112f, gap = 10f;
+			var cols = Math.Max(1, (int)((_fbWidth - x0 - 10f) / (w + gap)));
+			var thumbs = new DX12ImGuiRenderer.Thumbnail[_thumbRequests.Count];
+			for (var i = 0; i < _thumbRequests.Count; i++)
+			{
+				var id = _thumbRequests[i];
+				var gx = x0 + i % cols * (w + gap);
+				var gy = y0 + i / cols * (h + gap);
+				thumbs[i] = new DX12ImGuiRenderer.Thumbnail(_transients.Resource(_slot, id), _transients.SrvFormat(_slot, id), gx, gy, w, h);
+			}
+			_imgui.DrawThumbnails(_cmd, thumbs, _fbWidth, _fbHeight, _slot);
+			_thumbRequests.Clear();
+		}
+
+		// M13 frustum-freeze wireframe: the host projected the frozen frustum's edges to screen pixels; draw them.
+		if (_debugLineCount > 0)
+			_imgui.DrawLines(_cmd, _debugLines.AsSpan(0, _debugLineCount), DebugLineColor, 2f, _fbWidth, _fbHeight, _slot);
 #endif
 	}
+
+	// M13 resource viewer: GetDebugTextureId returns (resourceId + DebugTextureBase) — a non-zero id the host uses to
+	// gate "inspectable?". The engine draws the matching thumbnail grid in the HUD pass.
+	internal const int DebugTextureBase = 0x10000;
 
 	public void Dispose() => _instanceUpload.Dispose();
 }
