@@ -6,7 +6,7 @@
 >
 > **First Claude Code prompt for this phase:** *"Read Planning.md, then PlanningPhase2.md. We're starting M11 — the asset & material foundation. Expand it from the board and let's go."*
 
-**Status date:** 2026-06-17. Phase 1 (M0–M10) complete; M9 partial. **Phase 2: M11 + M12 complete.** M11 (asset & material foundation) — texture loading + CPU mips, `Material`/multi-texture binding, normal mapping, `Loom.Assets` with image + glTF loaders, normal-map + glTF reference demos at cross-backend parity. M12 (geometry generalization) — per-technique vertex layouts, GPU instancing (CPU-uploaded + compute-filled), an optional `Scene` draw-list with CPU frustum culling, and an instanced-field demo, all at cross-backend parity. M13–M16 planned.
+**Status date:** 2026-06-17. Phase 1 (M0–M10) complete; M9 partial. **Phase 2: M11 + M12 + M13 complete** (the shared spine), integrated together on branch `Phase2-spine`. M11 (asset & material foundation) — texture loading + CPU mips, `Material`/multi-texture binding, normal mapping, `Loom.Assets` with image + glTF loaders, normal-map + glTF reference demos at cross-backend parity. M12 (geometry generalization) — per-technique vertex layouts (the canonical `MeshStandard` now carries the M11 tangent, 48 bytes), GPU instancing (CPU-uploaded + compute-filled), an optional `Scene` draw-list with CPU frustum culling, and an instanced-field demo, all at cross-backend parity. M13 (debug & profiling spine) — per-pass GPU timing HUD, generic resource viewer, shader hot-reload (the `Loom.Assets` watcher), render-graph viz export, golden-image regression, and a detached debug camera + frustum freeze, both backends. M14–M16 planned.
 
 ---
 
