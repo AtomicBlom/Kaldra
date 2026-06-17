@@ -73,6 +73,15 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 	private readonly Buffer[] _thumbIdx;
 	private readonly Allocation?[] _thumbIdxAlloc;
 	private readonly ulong[] _thumbIdxSize;
+	// Per-slot buffers for the debug line overlay (the frustum-freeze wireframe — M13). Each segment is a thin quad
+	// sampling the font atlas's solid white texel, so the vertex colour is the line colour.
+	private readonly Buffer[] _lineVtx;
+	private readonly Allocation?[] _lineVtxAlloc;
+	private readonly ulong[] _lineVtxSize;
+	private readonly Buffer[] _lineIdx;
+	private readonly Allocation?[] _lineIdxAlloc;
+	private readonly ulong[] _lineIdxSize;
+	private Vector2 _whiteUv; // ImGui font atlas's solid-white texel UV — solid fills sample it
 
 	/// <summary>A textured quad the resource viewer draws (M13): a graph texture's view + a pixel-space rect.</summary>
 	internal readonly record struct Thumbnail(ImageView View, float X, float Y, float W, float H);
@@ -99,6 +108,12 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 		_thumbIdx = new Buffer[framesInFlight];
 		_thumbIdxAlloc = new Allocation?[framesInFlight];
 		_thumbIdxSize = new ulong[framesInFlight];
+		_lineVtx = new Buffer[framesInFlight];
+		_lineVtxAlloc = new Allocation?[framesInFlight];
+		_lineVtxSize = new ulong[framesInFlight];
+		_lineIdx = new Buffer[framesInFlight];
+		_lineIdxAlloc = new Allocation?[framesInFlight];
+		_lineIdxSize = new ulong[framesInFlight];
 
 		// We index the concatenated vertex buffer per draw-cmd, so advertise VtxOffset support.
 		ImGui.GetIO().BackendFlags |= ImGuiBackendFlags.RendererHasVtxOffset;
@@ -230,6 +245,69 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 			_vk.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _layout, 0, 1, in set, 0, null);
 			_vk.CmdDrawIndexed(cmd, 6, 1, (uint)(i * 6), i * 4, 0);
 		}
+	}
+
+	/// <summary>
+	/// Draw screen-space debug line segments (M13 frustum-freeze wireframe) as thin quads in the HUD overlay. Each
+	/// <paramref name="segments"/> entry is (x0,y0,x1,y1) in framebuffer pixels; <paramref name="color"/> is a packed
+	/// IM_COL32. Samples the font atlas's white texel so the quad is a solid colour. Engine-drawn (ImGui's line
+	/// helpers take by-value ImVec2, which no-ops on win-arm64).
+	/// </summary>
+	public void DrawLines(CommandBuffer cmd, ReadOnlySpan<Vector4> segments, uint color, float thickness, Extent2D fbExtent, int frameSlot)
+	{
+		if (segments.Length == 0)
+			return;
+
+		var vtxBytes = (ulong)(segments.Length * 4 * sizeof(ImDrawVert));
+		var idxBytes = (ulong)(segments.Length * 6 * sizeof(ushort));
+		EnsureBuffer(ref _lineVtx[frameSlot], ref _lineVtxAlloc[frameSlot], ref _lineVtxSize[frameSlot], vtxBytes, BufferUsageFlags.VertexBufferBit);
+		EnsureBuffer(ref _lineIdx[frameSlot], ref _lineIdxAlloc[frameSlot], ref _lineIdxSize[frameSlot], idxBytes, BufferUsageFlags.IndexBufferBit);
+
+		var half = MathF.Max(0.5f, thickness * 0.5f);
+		var verts = (ImDrawVert*)_lineVtxAlloc[frameSlot]!.Map();
+		var indices = (ushort*)_lineIdxAlloc[frameSlot]!.Map();
+		for (var i = 0; i < segments.Length; i++)
+		{
+			var s = segments[i];
+			var a = new Vector2(s.X, s.Y);
+			var b = new Vector2(s.Z, s.W);
+			var dir = b - a;
+			var len = dir.Length();
+			var perp = len > 1e-4f ? new Vector2(-dir.Y, dir.X) / len * half : new Vector2(0, half);
+			var v = verts + i * 4;
+			v[0] = new ImDrawVert { pos = a - perp, uv = _whiteUv, col = color };
+			v[1] = new ImDrawVert { pos = b - perp, uv = _whiteUv, col = color };
+			v[2] = new ImDrawVert { pos = b + perp, uv = _whiteUv, col = color };
+			v[3] = new ImDrawVert { pos = a + perp, uv = _whiteUv, col = color };
+			var ix = indices + i * 6;
+			var bo = (ushort)(i * 4);
+			ix[0] = bo; ix[1] = (ushort)(bo + 1); ix[2] = (ushort)(bo + 2);
+			ix[3] = bo; ix[4] = (ushort)(bo + 2); ix[5] = (ushort)(bo + 3);
+		}
+		_lineVtxAlloc[frameSlot]!.Unmap();
+		_lineIdxAlloc[frameSlot]!.Unmap();
+
+		_vk.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _pipeline);
+		var set = _fontSet; // the font atlas holds the white texel the line quads sample
+		_vk.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _layout, 0, 1, in set, 0, null);
+		var vtxBuffer = _lineVtx[frameSlot];
+		ulong vbOffset = 0;
+		_vk.CmdBindVertexBuffers(cmd, 0, 1, in vtxBuffer, in vbOffset);
+		_vk.CmdBindIndexBuffer(cmd, _lineIdx[frameSlot], 0, IndexType.Uint16);
+
+		Viewport viewport = new() { X = 0, Y = 0, Width = fbExtent.Width, Height = fbExtent.Height, MinDepth = 0, MaxDepth = 1 };
+		_vk.CmdSetViewport(cmd, 0, 1, in viewport);
+		Rect2D scissor = new(new Offset2D(0, 0), fbExtent);
+		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
+
+		var push = stackalloc float[4];
+		push[0] = 2.0f / fbExtent.Width;
+		push[1] = 2.0f / fbExtent.Height;
+		push[2] = -1.0f;
+		push[3] = -1.0f;
+		_vk.CmdPushConstants(cmd, _layout, ShaderStageFlags.VertexBit, 0, PushSize, push);
+
+		_vk.CmdDrawIndexed(cmd, (uint)(segments.Length * 6), 1, 0, 0, 0);
 	}
 
 	private void CreateFontSampler()
@@ -537,6 +615,7 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 		_vk.UpdateDescriptorSets(_ctx.Device, 1, &write, 0, null);
 
 		io.Fonts.SetTexID((IntPtr)1); // non-null id; we always bind the one font set
+		_whiteUv = io.Fonts.TexUvWhitePixel; // a field read — safe on win-arm64 (unlike by-value ImVec2 args)
 	}
 
 	/// <summary>
@@ -757,6 +836,16 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 			{
 				_vk.DestroyBuffer(_ctx.Device, _thumbIdx[i], null);
 				_thumbIdxAlloc[i]?.Dispose();
+			}
+			if (_lineVtx[i].Handle != 0)
+			{
+				_vk.DestroyBuffer(_ctx.Device, _lineVtx[i], null);
+				_lineVtxAlloc[i]?.Dispose();
+			}
+			if (_lineIdx[i].Handle != 0)
+			{
+				_vk.DestroyBuffer(_ctx.Device, _lineIdx[i], null);
+				_lineIdxAlloc[i]?.Dispose();
 			}
 		}
 	}

@@ -39,6 +39,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// ImGui.Image can't be used on win-arm64). Cleared after each HUD pass draws them.
 	internal const int DebugTextureBase = 0x10000;
 	private readonly List<int> _thumbRequests = [];
+	// M13 frustum-freeze wireframe: screen-space line segments (x0,y0,x1,y1 in pixels) the host sets each frame.
+	private Vector4[] _debugLines = [];
+	private int _debugLineCount;
+	private const uint DebugLineColor = 0xFF00FFFFu; // IM_COL32 yellow
 
 	// The native ImDrawData* the host produced this frame; stays a plain nint so the field (and the neutral
 	// ctx.DrawImGui() seam) exist even when the engine is built without ImGui (UseImGui=false).
@@ -100,6 +104,16 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	{
 		if (!_thumbRequests.Contains(resourceId))
 			_thumbRequests.Add(resourceId);
+	}
+
+	/// <summary>Set this frame's debug line segments (screen pixels, x0,y0,x1,y1) — the frustum-freeze wireframe the
+	/// HUD pass draws as an overlay (M13). Pass an empty span to clear. Overwritten each frame by the host.</summary>
+	public void SetDebugLines(ReadOnlySpan<Vector4> segments)
+	{
+		if (_debugLines.Length < segments.Length)
+			_debugLines = new Vector4[segments.Length];
+		segments.CopyTo(_debugLines);
+		_debugLineCount = segments.Length;
 	}
 
 #if LOOM_IMGUI
@@ -310,6 +324,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			_imgui.DrawThumbnails(_cmd, thumbs, _fbExtent, _frameSlot);
 			_thumbRequests.Clear();
 		}
+
+		// M13 frustum-freeze wireframe: the host projected the frozen frustum's edges to screen pixels; draw them.
+		if (_debugLineCount > 0)
+			_imgui.DrawLines(_cmd, _debugLines.AsSpan(0, _debugLineCount), DebugLineColor, 2f, _fbExtent, _frameSlot);
 #endif
 	}
 

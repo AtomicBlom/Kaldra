@@ -152,6 +152,13 @@ public sealed unsafe class DX12Engine : IEngine
 		return 0;
 	}
 
+	public void SetDebugLines(ReadOnlySpan<System.Numerics.Vector4> segments)
+	{
+#if LOOM_IMGUI
+		_context.SetDebugLines(segments);
+#endif
+	}
+
 	public void Render(FrameInputs inputs)
 	{
 		if (_graph is not null)

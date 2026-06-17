@@ -98,6 +98,14 @@ public interface IEngine : IDisposable
 	/// </summary>
 	nint GetDebugTextureId(int resourceId);
 
+	/// <summary>
+	/// Set the debug overlay's line segments for the next frame (M13 detached-camera frustum freeze): each
+	/// <see cref="System.Numerics.Vector4"/> is a screen-space segment <c>(x0, y0, x1, y1)</c> in framebuffer pixels,
+	/// drawn over the HUD. The host projects world-space geometry (e.g. a frozen frustum's edges) to pixels and calls
+	/// this each frame; an empty span clears it. A no-op in a build without the ImGui debug UI.
+	/// </summary>
+	void SetDebugLines(ReadOnlySpan<System.Numerics.Vector4> segments);
+
 	/// <summary>Block until the GPU is idle — call before disposing host-owned resources the engine may still be using.</summary>
 	void WaitIdle();
 }

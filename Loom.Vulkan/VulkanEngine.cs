@@ -141,6 +141,13 @@ internal sealed unsafe class VulkanEngine : IEngine
 		return 0;
 	}
 
+	public void SetDebugLines(ReadOnlySpan<System.Numerics.Vector4> segments)
+	{
+#if LOOM_IMGUI
+		_context.SetDebugLines(segments);
+#endif
+	}
+
 	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
 	{
 		_ctx = new VulkanContext(surface, settings.EnableValidation);
