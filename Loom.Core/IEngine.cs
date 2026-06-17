@@ -26,9 +26,17 @@ public interface IEngine : IDisposable
 	/// <summary>
 	/// Upload geometry once and get a stable <see cref="Mesh"/> handle that passes draw via <c>ctx.Draw</c>.
 	/// Call after creation, before the first <see cref="Render"/>; the handle lives for the engine's lifetime
-	/// (it survives graph swaps).
+	/// (it survives graph swaps). Uses the canonical <see cref="VertexLayout.MeshStandard"/> layout.
 	/// </summary>
 	Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
+
+	/// <summary>
+	/// Upload geometry with an explicit <paramref name="layout"/> (M12 — per-technique vertex layouts). The
+	/// vertex element type <typeparamref name="T"/> must be laid out to match <paramref name="layout"/>
+	/// (<c>sizeof(T) == layout.Stride</c>), and the technique the mesh is drawn with must declare the same
+	/// per-vertex layout. The neutral path for skinned meshes, tangents, and (M15) glTF imports.
+	/// </summary>
+	Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged;
 
 	/// <summary>
 	/// Upload a texture (and its mip chain) once and get a stable <see cref="Texture"/> handle to bundle into a

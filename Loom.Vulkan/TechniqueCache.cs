@@ -51,7 +51,25 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 		hash.AppendData(BitConverter.GetBytes(description.StorageCount));
 		hash.AppendData(BitConverter.GetBytes(description.StorageBufferCount));
 		hash.AppendData(BitConverter.GetBytes(description.ParticleInput));
+		AppendLayout(hash, description.Layout);
+		AppendLayout(hash, description.Instance);
 		return Convert.ToHexString(hash.GetHashAndReset());
+	}
+
+	// Fold a vertex layout into the content hash so two techniques sharing a shader but differing in layout
+	// (per-vertex attributes or the presence/shape of a per-instance stream) bake distinct pipelines.
+	private static void AppendLayout(IncrementalHash hash, Loom.Core.VertexLayout? layout)
+	{
+		if (layout is null)
+		{
+			hash.AppendData(BitConverter.GetBytes(-1));
+			return;
+		}
+		hash.AppendData(BitConverter.GetBytes((int)layout.InputRate));
+		hash.AppendData(BitConverter.GetBytes(layout.Binding));
+		hash.AppendData(BitConverter.GetBytes(layout.Stride));
+		foreach (var attribute in layout.Attributes)
+			hash.AppendData(BitConverter.GetBytes((int)attribute.Format));
 	}
 
 	public void Dispose()

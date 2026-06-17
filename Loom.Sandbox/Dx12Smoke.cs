@@ -69,6 +69,7 @@ internal static class Dx12Smoke
 		var aliasMode = Environment.GetEnvironmentVariable("LOOM_DX12_ALIAS") is "1" or "true";
 
 		string mode;
+		IDemo? activeDemo = null; // the gallery's selected demo, so the loop can run its per-frame Update (M12 cull)
 		if (aliasMode)
 		{
 			engine.DefineTechnique("gradient", new TechniqueDescriptor("gradient"));
@@ -110,7 +111,7 @@ internal static class Dx12Smoke
 		}
 		else
 		{
-			mode = RunGallery(engine);
+			mode = RunGallery(engine, out activeDemo);
 		}
 
 		Console.WriteLine($"Loom DX12 {mode} on {engine.DeviceName} ({engine.BackendName}). Close the window to exit.");
@@ -167,6 +168,9 @@ internal static class Dx12Smoke
 			var projection = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3f, aspect, 0.1f, 100f);
 			var camera = new Camera(view, projection);
 
+			// Per-frame CPU work for the active demo (the instancing demo's frustum cull) before Render.
+			activeDemo?.Update(camera);
+
 			// Picking (Highlighting / Full): sample the centre of the 320×180 pick domain — the cube sits there — to
 			// exercise the GPU→CPU id readback; demos without a readback target return 0. In capture, force the cube
 			// hovered (id 1) so the outline shows regardless of the few-frame readback latency (as Program.cs does).
@@ -213,7 +217,10 @@ internal static class Dx12Smoke
 					ImGui.EndMenu();
 				}
 				ImGui.Separator();
-				ImGui.Text($"{displayFps:F0} fps ({displayMs:F2} ms)   |   {mode}   |   hovered {hoverId}   |   {engine.DeviceName}");
+				var status = $"{displayFps:F0} fps ({displayMs:F2} ms)   |   {mode}   |   hovered {hoverId}   |   {engine.DeviceName}";
+				if (activeDemo?.HudStatus is { } demoStatus)
+					status += $"   |   {demoStatus}";
+				ImGui.Text(status);
 				ImGui.EndMainMenuBar();
 			}
 			if (showDemoWindow)
@@ -253,7 +260,7 @@ internal static class Dx12Smoke
 	// share one) and every graph is built; only the selected graph is made active. Returns the selected demo's
 	// name for the status line. Demos that exercise a not-yet-ported DX12 capability (Tonemapping's persistent
 	// storage image; Highlighting/Full's readback) throw a clear NotSupportedException at SetGraph if selected.
-	private static string RunGallery(IEngine engine)
+	private static string RunGallery(IEngine engine, out IDemo? selectedDemo)
 	{
 		var (cubeVerts, cubeIndices) = Geometry.BuildCube();
 		var (planeVerts, planeIndices) = Geometry.BuildPlane();
@@ -273,29 +280,47 @@ internal static class Dx12Smoke
 			new BloomDemo(),
 			new ParticlesDemo(),
 			new HighlightingDemo(),
+			new InstancingDemo(),
 			new FullReferenceDemo(),
 			new NormalMappingDemo(),
 			new GltfDemo(),
 		];
+		// Register each demo's techniques, skipping any whose shaders have no DX12 DXIL on this toolchain (the
+		// build emits per-stage DXIL best-effort — e.g. ssao_blur's fragment stage doesn't cross-compile on
+		// win-arm64). DefineTechnique throws NotSupportedException for the missing stage; drop that demo from the
+		// gallery rather than crashing the whole harness at startup (the same spirit as the SetGraph-time guards).
+		var live = new List<IDemo>();
 		foreach (var demo in demos)
-			demo.DefineTechniques(engine);
-		var graphs = demos.Select(d => d.Build(scene)).ToArray();
+		{
+			try
+			{
+				demo.DefineTechniques(engine);
+				live.Add(demo);
+			}
+			catch (NotSupportedException ex)
+			{
+				Console.WriteLine($"[loom] DX12: skipping demo '{demo.Name}' — {ex.Message}");
+			}
+		}
+		var galleryDemos = live.ToArray();
+		var graphs = galleryDemos.Select(d => d.Build(scene)).ToArray();
 
 		var selected = 0;
 		var demoEnv = Environment.GetEnvironmentVariable("LOOM_DEMO");
 		if (demoEnv is not null)
 		{
-			var byName = Array.FindIndex(demos, d => string.Equals(d.Name, demoEnv, StringComparison.OrdinalIgnoreCase));
+			var byName = Array.FindIndex(galleryDemos, d => string.Equals(d.Name, demoEnv, StringComparison.OrdinalIgnoreCase));
 			if (byName >= 0)
 				selected = byName;
-			else if (int.TryParse(demoEnv, out var byIndex) && byIndex >= 0 && byIndex < demos.Length)
+			else if (int.TryParse(demoEnv, out var byIndex) && byIndex >= 0 && byIndex < galleryDemos.Length)
 				selected = byIndex;
 			else
-				Console.WriteLine($"[loom] LOOM_DEMO='{demoEnv}' is not a known demo ({string.Join(", ", demos.Select(d => d.Name))}); starting on {demos[selected].Name}.");
+				Console.WriteLine($"[loom] LOOM_DEMO='{demoEnv}' is not a known/available demo ({string.Join(", ", galleryDemos.Select(d => d.Name))}); starting on {galleryDemos[selected].Name}.");
 		}
 
 		engine.SetGraph(graphs[selected]);
-		return $"demo: {demos[selected].Name}";
+		selectedDemo = galleryDemos[selected];
+		return $"demo: {galleryDemos[selected].Name}";
 	}
 }
 #endif

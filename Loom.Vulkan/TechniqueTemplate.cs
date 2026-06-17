@@ -33,4 +33,6 @@ public readonly record struct TechniqueTemplate(
 	int StorageCount = 0,
 	int StorageBufferCount = 0,
 	bool ParticleInput = false,
-	SamplerAddress Address = SamplerAddress.Clamp);
+	SamplerAddress Address = SamplerAddress.Clamp,
+	VertexLayout? Layout = null,
+	VertexLayout? Instance = null);

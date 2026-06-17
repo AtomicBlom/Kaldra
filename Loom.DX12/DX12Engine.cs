@@ -103,7 +103,7 @@ public sealed unsafe class DX12Engine : IEngine
 		_meshes = new DX12MeshStore(_ctx);
 		_textures = new DX12TextureStore(_ctx);
 		_materials = new DX12MaterialStore();
-		_context = new DX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, _materials);
+		_context = new DX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, _materials, (int)BufferCount);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
@@ -664,6 +664,7 @@ public sealed unsafe class DX12Engine : IEngine
 		_imgui?.Dispose();
 #endif
 		_transients?.Dispose();
+		_context.Dispose();
 		_meshes.Dispose();
 		_textures.Dispose();
 		_ring.Dispose();
@@ -749,11 +750,14 @@ public sealed unsafe class DX12Engine : IEngine
 		}
 
 		Console.WriteLine($"[loom] DX12 technique '{name}' ← {source}.");
+		// Resolve the per-vertex layout (explicit, else canonical pos/normal/uv for a mesh technique, else none),
+		// mirroring the Vulkan backend — a non-null Instance marks it instanced (M12 — per-technique layouts).
+		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
 		_techniques.Register(name, new DX12TechniqueTemplate(
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
-			descriptor.Address));
+			descriptor.Address, layout, descriptor.Instance));
 	}
 
 	/// <summary>
@@ -808,6 +812,14 @@ public sealed unsafe class DX12Engine : IEngine
 	}
 
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+
+	public Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged
+	{
+		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
+		if (stride != layout.Stride)
+			throw new InvalidOperationException($"DX12: vertex element size ({stride} bytes) does not match the layout stride ({layout.Stride} bytes).");
+		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
+	}
 
 	public Texture CreateTexture(TextureData data) => _textures.Create(data);
 

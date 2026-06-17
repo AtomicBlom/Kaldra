@@ -124,6 +124,26 @@ public interface IRenderContext
 	void DrawParticles(ResourceHandle buffer, int count, string technique);
 
 	/// <summary>
+	/// Draw <paramref name="mesh"/> once per element of <paramref name="instances"/> (M12 — GPU instancing,
+	/// CPU-driven). The engine uploads the span to a per-frame host-visible instance buffer and binds it as the
+	/// technique's per-instance stream (binding 1). <paramref name="technique"/> must declare a per-instance
+	/// <see cref="VertexLayout"/> whose <see cref="VertexLayout.Stride"/> equals <c>sizeof(T)</c> (e.g. a
+	/// <see cref="System.Numerics.Matrix4x4"/> per instance for <see cref="VertexLayout.Transform"/>). This is
+	/// the path the CPU frustum cull feeds: the app compacts the visible transforms and hands them here. No
+	/// graph edge — the data is CPU-sourced, so no <c>.ReadsVertex</c> is needed.
+	/// </summary>
+	void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances) where T : unmanaged;
+
+	/// <summary>
+	/// Draw <paramref name="mesh"/> <paramref name="count"/> times, reading the per-instance stream from
+	/// <paramref name="instances"/> — a GPU storage buffer a compute pass filled (M12 — GPU-driven instancing,
+	/// the foliage/placement path). The buffer must be one the pass declared with <c>.ReadsVertex</c>, so the
+	/// graph derives the compute→vertex-input barrier exactly as for GPU particles. The technique must declare a
+	/// per-instance <see cref="VertexLayout"/>.
+	/// </summary>
+	void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count);
+
+	/// <summary>
 	/// Render the host's Dear ImGui draw data into the current pass's target — the screen-space HUD/debug
 	/// overlay (Planning.md §6/§9: a native-resolution UI layer on top of the pixelated world). The host owns
 	/// the ImGui context and produces the draw data each frame (<c>ImGui.Render()</c>); this verb is the neutral

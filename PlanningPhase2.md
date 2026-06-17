@@ -6,7 +6,7 @@
 >
 > **First Claude Code prompt for this phase:** *"Read Planning.md, then PlanningPhase2.md. We're starting M11 — the asset & material foundation. Expand it from the board and let's go."*
 
-**Status date:** 2026-06-17. Phase 1 (M0–M10) complete; M9 partial. **Phase 2: M11 complete** (asset & material foundation — texture loading + CPU mips, `Material`/multi-texture binding, normal mapping, `Loom.Assets` with image + glTF loaders, normal-map + glTF reference demos at cross-backend parity); M12–M16 planned, not started.
+**Status date:** 2026-06-17. Phase 1 (M0–M10) complete; M9 partial. **Phase 2: M11 + M12 complete.** M11 (asset & material foundation) — texture loading + CPU mips, `Material`/multi-texture binding, normal mapping, `Loom.Assets` with image + glTF loaders, normal-map + glTF reference demos at cross-backend parity. M12 (geometry generalization) — per-technique vertex layouts, GPU instancing (CPU-uploaded + compute-filled), an optional `Scene` draw-list with CPU frustum culling, and an instanced-field demo, all at cross-backend parity. M13–M16 planned.
 
 ---
 
@@ -115,9 +115,10 @@ Texture loading + mips · material / multi-texture technique inputs · **normal 
 - *Touches:* new `TextureStore` mirroring `MeshStore`; a `Material` abstraction in `Loom.Core`; the deferred shaders.
 - *Unlocks:* A's lighting signature, B/C surfaces.
 
-### M12 — Geometry generalization *(unblocks all 3; critical for B/C scale)*
-Per-technique vertex layouts · GPU instancing + indirect draw · `Scene` draw-list abstraction with bounds · optional CPU frustum culling · instanced-field demo with cull stats.
-- *Decision:* vertex-layout & instancing API shape — reflection-derived layouts; instance buffer modeled like the existing `.ReadsVertex` particle path; indirect args buffer produced by a compute pass.
+### M12 — Geometry generalization *(unblocks all 3; critical for B/C scale)* — **IMPLEMENTED**
+Per-technique vertex layouts · GPU instancing · `Scene` draw-list abstraction with bounds · optional CPU frustum culling · instanced-field demo with cull stats. *(Indirect draw was deferred to M16 — see below.)*
+- *Decision (resolved):* vertex-layout & instancing API shape — **explicit `VertexLayout`** (declared attribute set → packed offsets/stride), not reflection-derived: it is the natural output of an asset importer (glTF defines its attribute set independently of any shader), needs the least machinery on both backends, and makes the per-vertex/per-instance stream split unambiguous. The instance buffer is modeled like the existing `.ReadsVertex` particle path. `VertexLayout.MeshStandard` preserves the canonical pos/normal/uv so every prior demo is unchanged.
+- *Decision (resolved):* **indirect draw deferred to M16.** M12's cull demo uses CPU frustum culling (CPU-known count), so it needs no indirect path; the GPU-count indirect path (args buffer from compute + `DrawIndirect` + DX12 command-signature/`ExecuteIndirect`) lands with its real consumer, GPU-driven culling, in M16.
 - *Touches:* `Vertex`/`Mesh`/`MeshStore`, `TechniqueDescriptor`, `IRenderContext` (instanced/indirect verbs), new `Loom.Core/Scene.cs`, `Camera`.
 
 ```csharp
@@ -178,7 +179,7 @@ Recorded here and on the board as `DECIDE`/`DECISION` cards; resolve each before
 |---|---|---|---|
 | 1 | Image-decode library (StbImageSharp / ImageSharp / custom) | M11 | StbImageSharp (light, MIT, no native deps) |
 | 2 | glTF library + when (SharpGLTF; M11 or M15) | M11/M15 | SharpGLTF, in M15 unless C needs meshes sooner |
-| 3 | Vertex-layout + instancing API shape | M12 | Reflection-derived layouts; instance buffer like particles |
+| 3 | Vertex-layout + instancing API shape | M12 | **Resolved:** explicit `VertexLayout` (declared, not reflection-derived) — importer-friendly, least cross-backend machinery; instance buffer modeled like the particle `.ReadsVertex` path. Indirect draw deferred to M16. |
 | 4 | Skinning approach (compute pre-skin vs VS skinning) | M15 | Compute pre-skin into a transient buffer (reused by depth + g-buffer) |
 | 5 | Terrain representation (clipmap heightfield vs voxel/SDF) | M16 | Decide on caves/overhangs/digging need |
 | 6 | GPU-driven culling + large-world precision (floating origin) | M16 | Indirect + Hi-Z; camera-relative transforms |

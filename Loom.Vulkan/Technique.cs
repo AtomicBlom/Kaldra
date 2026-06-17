@@ -153,34 +153,50 @@ public sealed unsafe class Technique : IDisposable
 		return pipeline;
 	}
 
-	// Vertex input for the one canonical interleaved layout (Loom.Core.Vertex: Vector3 Position, Vector3
-	// Normal, Vector2 Uv, Vector4 Tangent — sequential, 48 bytes). Offsets mirror that field order. A shader
-	// that doesn't read the tangent simply ignores location 3. Per-technique layouts (reflected or declared)
-	// can come later.
-	private static PipelineVertexInputStateCreateInfo* VertexInputForMesh(NativeArena arena)
+	// Vertex input built from the technique's declared layouts (M12 — per-technique vertex layouts). The
+	// per-vertex layout is binding 0 (e.g. the canonical Loom.Core.Vertex: Position/Normal/Uv/Tangent, 48
+	// bytes); an optional per-instance layout adds binding 1 with InputRate.Instance (e.g. a 4×float4 world
+	// matrix — instanced drawing). Vulkan vertex-input locations are one flat namespace across bindings, so
+	// locations are assigned in order: per-vertex attributes get 0..k-1, per-instance attributes continue at
+	// k.. — the instanced shader's [[vk::location]]s must match.
+	private static PipelineVertexInputStateCreateInfo* VertexInput(NativeArena arena, Loom.Core.VertexLayout vertexLayout, Loom.Core.VertexLayout? instanceLayout)
 	{
-		var binding = arena.Write(new VertexInputBindingDescription
-		{
-			Binding = 0,
-			Stride = (uint)sizeof(Loom.Core.Vertex),
-			InputRate = VertexInputRate.Vertex,
-		});
+		var bindingCount = instanceLayout is null ? 1 : 2;
+		var attributeCount = vertexLayout.Attributes.Length + (instanceLayout?.Attributes.Length ?? 0);
+		var bindings = arena.Alloc<VertexInputBindingDescription>(bindingCount);
+		var attributes = arena.Alloc<VertexInputAttributeDescription>(attributeCount);
 
-		var attributes = arena.Alloc<VertexInputAttributeDescription>(4);
-		attributes[0] = new VertexInputAttributeDescription { Location = 0, Binding = 0, Format = Format.R32G32B32Sfloat, Offset = 0 };     // Position
-		attributes[1] = new VertexInputAttributeDescription { Location = 1, Binding = 0, Format = Format.R32G32B32Sfloat, Offset = 12 };    // Normal
-		attributes[2] = new VertexInputAttributeDescription { Location = 2, Binding = 0, Format = Format.R32G32Sfloat, Offset = 24 };       // Uv
-		attributes[3] = new VertexInputAttributeDescription { Location = 3, Binding = 0, Format = Format.R32G32B32A32Sfloat, Offset = 32 }; // Tangent
+		uint location = 0;
+		var a = 0;
+		bindings[0] = new VertexInputBindingDescription { Binding = 0, Stride = (uint)vertexLayout.Stride, InputRate = VertexInputRate.Vertex };
+		for (var i = 0; i < vertexLayout.Attributes.Length; i++)
+			attributes[a++] = new VertexInputAttributeDescription { Location = location++, Binding = 0, Format = ToVkFormat(vertexLayout.Attributes[i].Format), Offset = (uint)vertexLayout.Offsets[i] };
+
+		if (instanceLayout is not null)
+		{
+			bindings[1] = new VertexInputBindingDescription { Binding = 1, Stride = (uint)instanceLayout.Stride, InputRate = VertexInputRate.Instance };
+			for (var i = 0; i < instanceLayout.Attributes.Length; i++)
+				attributes[a++] = new VertexInputAttributeDescription { Location = location++, Binding = 1, Format = ToVkFormat(instanceLayout.Attributes[i].Format), Offset = (uint)instanceLayout.Offsets[i] };
+		}
 
 		return arena.Write(new PipelineVertexInputStateCreateInfo
 		{
 			SType = StructureType.PipelineVertexInputStateCreateInfo,
-			VertexBindingDescriptionCount = 1,
-			PVertexBindingDescriptions = binding,
-			VertexAttributeDescriptionCount = 4,
+			VertexBindingDescriptionCount = (uint)bindingCount,
+			PVertexBindingDescriptions = bindings,
+			VertexAttributeDescriptionCount = (uint)attributeCount,
 			PVertexAttributeDescriptions = attributes,
 		});
 	}
+
+	private static Format ToVkFormat(Loom.Core.VertexFormat format) => format switch
+	{
+		Loom.Core.VertexFormat.Float => Format.R32Sfloat,
+		Loom.Core.VertexFormat.Float2 => Format.R32G32Sfloat,
+		Loom.Core.VertexFormat.Float3 => Format.R32G32B32Sfloat,
+		Loom.Core.VertexFormat.Float4 => Format.R32G32B32A32Sfloat,
+		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
+	};
 
 	// Particle vertex input: one float4 PER INSTANCE (xyz position + w life), stride 16, read straight from
 	// the storage buffer a compute wrote. Each particle is one instance of a fabricated 6-vertex quad
@@ -225,7 +241,7 @@ public sealed unsafe class Technique : IDisposable
 		};
 
 		var vertexInput = description.ParticleInput ? VertexInputForParticles(arena)
-			: description.HasVertexInput ? VertexInputForMesh(arena)
+			: description.Layout is not null ? VertexInput(arena, description.Layout, description.Instance)
 			// No vertex buffers: the fullscreen triangle is fabricated from SV_VertexID.
 			: arena.Write(new PipelineVertexInputStateCreateInfo { SType = StructureType.PipelineVertexInputStateCreateInfo });
 		var inputAssembly = arena.Write(new PipelineInputAssemblyStateCreateInfo

@@ -36,14 +36,22 @@ internal sealed unsafe class DX12MeshStore : IDisposable
 
 	public DX12MeshStore(DX12Context ctx) => _ctx = ctx;
 
-	/// <summary>Upload geometry and return a handle the graph's <c>ctx.Draw</c> can reference.</summary>
-	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices)
+	/// <summary>Upload canonical <see cref="Vertex"/> geometry (the <see cref="VertexLayout.MeshStandard"/> layout) and return a handle.</summary>
+	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
+		Create(MemoryMarshal.AsBytes(vertices), sizeof(Vertex), indices);
+
+	/// <summary>
+	/// Upload raw vertex bytes laid out at <paramref name="vertexStride"/> (M12 — arbitrary
+	/// <see cref="VertexLayout"/>s). The stride rides in the vertex-buffer view (DX12 binds with a per-bind
+	/// stride), so the technique's per-vertex layout must match the data the app uploaded here.
+	/// </summary>
+	public Mesh Create(ReadOnlySpan<byte> vertexData, int vertexStride, ReadOnlySpan<uint> indices)
 	{
-		var stride = (uint)sizeof(Vertex);
-		var vertexBytes = (uint)(vertices.Length * sizeof(Vertex));
+		var stride = (uint)vertexStride;
+		var vertexBytes = (uint)vertexData.Length;
 		var indexBytes = (uint)(indices.Length * sizeof(uint));
 
-		var vertexBuffer = CreateUploadBuffer(MemoryMarshal.AsBytes(vertices), vertexBytes);
+		var vertexBuffer = CreateUploadBuffer(vertexData, vertexBytes);
 		var indexBuffer = CreateUploadBuffer(MemoryMarshal.AsBytes(indices), indexBytes);
 
 		var id = _meshes.Count;
@@ -78,6 +86,23 @@ internal sealed unsafe class DX12MeshStore : IDisposable
 		cmd.IASetVertexBuffers(0, 1, &vbv);
 		cmd.IASetIndexBuffer(&ibv);
 		cmd.DrawIndexedInstanced(mesh.IndexCount, 1, 0, 0, 0);
+	}
+
+	/// <summary>
+	/// Bind a mesh at slot 0 (per-vertex) plus <paramref name="instanceView"/> at slot 1 (per-instance) and
+	/// record an instanced indexed draw of <paramref name="instanceCount"/> copies (M12 — GPU instancing). The
+	/// instance view points at either an engine-managed per-frame upload buffer or a graph storage buffer a
+	/// compute filled.
+	/// </summary>
+	public void DrawInstanced(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, VertexBufferView instanceView, uint instanceCount)
+	{
+		var mesh = _meshes[meshId];
+		var ibv = mesh.IndexView;
+		var views = stackalloc VertexBufferView[2] { mesh.VertexView, instanceView };
+		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		cmd.IASetVertexBuffers(0, 2, views);
+		cmd.IASetIndexBuffer(&ibv);
+		cmd.DrawIndexedInstanced(mesh.IndexCount, instanceCount, 0, 0, 0);
 	}
 
 	// An UPLOAD-heap committed buffer holding the data, left in GENERIC_READ so the GPU can read it directly

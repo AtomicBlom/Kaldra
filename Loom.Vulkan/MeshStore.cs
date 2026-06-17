@@ -40,10 +40,19 @@ internal sealed unsafe class MeshStore : IDisposable
 		_commandPool = commandPool;
 	}
 
-	/// <summary>Upload geometry and return a handle the graph's <c>ctx.Draw</c> can reference.</summary>
-	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices)
+	/// <summary>Upload canonical <see cref="Vertex"/> geometry (the <see cref="VertexLayout.MeshStandard"/> layout) and return a handle.</summary>
+	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
+		Create(MemoryMarshal.AsBytes(vertices), sizeof(Vertex), indices);
+
+	/// <summary>
+	/// Upload raw vertex bytes laid out at <paramref name="vertexStride"/> (M12 — arbitrary
+	/// <see cref="VertexLayout"/>s). The per-vertex stride lives in the technique's pipeline (Vulkan binds
+	/// vertex buffers without a stride), so the technique's layout must match the data the app uploaded here.
+	/// </summary>
+	public Mesh Create(ReadOnlySpan<byte> vertexData, int vertexStride, ReadOnlySpan<uint> indices)
 	{
-		var vertexBuffer = Upload(MemoryMarshal.AsBytes(vertices), BufferUsageFlags.VertexBufferBit, out var vertexAllocation);
+		_ = vertexStride; // recorded by the technique's pipeline, not at bind time on Vulkan
+		var vertexBuffer = Upload(vertexData, BufferUsageFlags.VertexBufferBit, out var vertexAllocation);
 		var indexBuffer = Upload(MemoryMarshal.AsBytes(indices), BufferUsageFlags.IndexBufferBit, out var indexAllocation);
 
 		var id = _meshes.Count;
@@ -66,6 +75,22 @@ internal sealed unsafe class MeshStore : IDisposable
 		_vk.CmdBindVertexBuffers(cmd, 0, 1, in mesh.VertexBuffer, in offset);
 		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
 		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, 1, 0, 0, 0);
+	}
+
+	/// <summary>
+	/// Bind a mesh at binding 0 (per-vertex) plus <paramref name="instanceBuffer"/> at binding 1 (per-instance,
+	/// starting at <paramref name="instanceOffset"/> bytes) and record an instanced indexed draw of
+	/// <paramref name="instanceCount"/> copies (M12 — GPU instancing). The instance buffer is either an
+	/// engine-managed per-frame upload buffer (CPU-driven) or a graph storage buffer a compute filled.
+	/// </summary>
+	public void DrawInstanced(CommandBuffer cmd, int meshId, Buffer instanceBuffer, ulong instanceOffset, uint instanceCount)
+	{
+		var mesh = _meshes[meshId];
+		var buffers = stackalloc Buffer[2] { mesh.VertexBuffer, instanceBuffer };
+		var offsets = stackalloc ulong[2] { 0ul, instanceOffset };
+		_vk.CmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
+		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, instanceCount, 0, 0, 0);
 	}
 
 	// Stage in host-visible memory, copy into a device-local buffer, free the staging buffer.

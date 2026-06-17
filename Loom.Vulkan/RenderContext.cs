@@ -29,6 +29,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private readonly MeshStore _meshes;
 	private readonly TextureStore _textures;
 	private readonly MaterialStore _materials;
+	private readonly InstanceUploadBuffer _instanceUpload;
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
 	// Repeat-addressing, mip-sampling samplers for material textures (tiled across geometry) — a linear and a
@@ -82,7 +83,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		DescriptorAllocator descriptors,
 		MeshStore meshes,
 		TextureStore textures,
-		MaterialStore materials)
+		MaterialStore materials,
+		VMASharp.VulkanMemoryAllocator allocator,
+		int framesInFlight)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
@@ -92,6 +95,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_meshes = meshes;
 		_textures = textures;
 		_materials = materials;
+		_instanceUpload = new InstanceUploadBuffer(ctx, allocator, framesInFlight);
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
 		_repeatLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.Repeat);
@@ -119,6 +123,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_imguiDrawData = imguiDrawData;
 		_fbExtent = fbExtent;
 		HdrOutput = hdrOutput;
+		_instanceUpload.BeginFrame(frameSlot); // reset this slot's per-frame instance staging
 	}
 
 	/// <summary>
@@ -330,6 +335,29 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_vk.CmdDraw(_cmd, 6, (uint)count, 0, 0);
 	}
 
+	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances) where T : unmanaged
+	{
+		if (instances.Length == 0)
+			return;
+		var baked = Bake(technique);
+		var mvp = _camera.ViewProjection; // the per-instance world matrix rides in the instance stream
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
+		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, offset, (uint)instances.Length);
+	}
+
+	public void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count)
+	{
+		var baked = Bake(technique);
+		var mvp = _camera.ViewProjection;
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+		// The instance stream is a graph storage buffer a compute filled; the pass's .ReadsVertex derived the barrier.
+		var buffer = _resources.GetBuffer(_frameSlot, instances.Id);
+		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, 0ul, (uint)count);
+	}
+
 	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
 	// rendering scope. No-op when ImGui isn't enabled or the host produced no draw data this frame — and a
 	// compiled-out no-op entirely when the engine is built without ImGui (UseImGui=false).
@@ -361,7 +389,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			template.Spirv, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
-			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput), technique);
+			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput,
+			Layout: template.Layout, Instance: template.Instance), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
 		// HasFragmentPush are folded into the TechniqueDescription hash, and LinearFilter only affects the
 		// descriptor's sampler, not the pipeline.
@@ -459,6 +488,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 	public void Dispose()
 	{
+		_instanceUpload.Dispose();
 		if (_nearestSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _nearestSampler, null);
 		if (_linearSampler.Handle != 0)

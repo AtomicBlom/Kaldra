@@ -130,4 +130,22 @@ public class BarrierPlanTests
 
 		Assert.Equal(StoreAction.DontCare, Attachment(Pass(plan, "only"), "scratch").Store);
 	}
+
+	[Fact]
+	public void Instance_buffer_filled_by_compute_transitions_storage_to_vertex_input_for_the_draw()
+	{
+		// M12 GPU-driven instancing reuses the GPU-particle edge: a compute .ReadWrites the instance buffer, the
+		// draw .ReadsVertex it, so the graph derives the same Storage -> VertexInput barrier (no graphics-API type
+		// in the describe/execute layers — the buffer is just a resource with read/write edges).
+		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var instances = g.Buffer("instances", 1024 * 64); // a 4x4 matrix per instance
+			var screen = g.Backbuffer;
+			g.Compute("place").ReadWrites(instances);
+			g.Pass("foliage").Writes(screen).ReadsVertex(instances);
+			g.Present(screen);
+		})));
+
+		Assert.True(HasTransition(Pass(plan, "foliage"), "instances", ResourceState.Storage, ResourceState.VertexInput));
+	}
 }

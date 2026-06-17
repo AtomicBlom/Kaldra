@@ -26,6 +26,8 @@ namespace Loom.Core;
 /// <param name="IsCompute">True for a compute technique: one compute entry point (in <see cref="FragmentEntry"/>), dispatched rather than drawn (Planning.md §5 <c>.Dispatch</c>).</param>
 /// <param name="ParticleInput">True if the technique reads a per-instance particle stream (a <c>float4</c> per particle) straight from a storage buffer.</param>
 /// <param name="Address">How the technique's sampler treats out-of-range texture coordinates — <see cref="SamplerAddress.Clamp"/> (the default, used by every fullscreen/post pass) or <see cref="SamplerAddress.Repeat"/> for material techniques that tile a texture across geometry.</param>
+/// <param name="Layout">The per-vertex layout the technique consumes (M12). Defaults to <see cref="VertexLayout.MeshStandard"/> when <paramref name="HasVertexInput"/> is set and this is null, so existing pos/normal/uv techniques need no change. The mesh drawn with this technique must share the layout.</param>
+/// <param name="Instance">The per-instance layout for an instanced technique (M12) — non-null marks the technique as instanced and adds a second vertex stream at binding 1 (e.g. <see cref="VertexLayout.Transform"/>). The <c>ctx.DrawInstanced</c> data's stride must match its <see cref="VertexLayout.Stride"/>.</param>
 public readonly record struct TechniqueDescriptor(
 	string Shader,
 	string VertexEntry = "vertexMain",
@@ -36,4 +38,6 @@ public readonly record struct TechniqueDescriptor(
 	bool HasFragmentPush = false,
 	bool IsCompute = false,
 	bool ParticleInput = false,
-	SamplerAddress Address = SamplerAddress.Clamp);
+	SamplerAddress Address = SamplerAddress.Clamp,
+	VertexLayout? Layout = null,
+	VertexLayout? Instance = null);

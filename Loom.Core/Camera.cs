@@ -20,4 +20,29 @@ public readonly record struct Camera(Matrix4x4 View, Matrix4x4 Projection)
 
 	/// <summary>An identity camera (clip space == world space) — the default before the host sets one.</summary>
 	public static Camera Identity => new(Matrix4x4.Identity, Matrix4x4.Identity);
+
+	/// <summary>
+	/// Extract the six world-space frustum planes from <see cref="ViewProjection"/> (Gribb–Hartmann), for the
+	/// engine's optional CPU frustum cull (M12). Uses the neutral projection convention (right-handed, +Y up,
+	/// z ∈ [0,1]), so the near plane is the bare z-column; the result is backend-independent. Each plane is
+	/// normalized and oriented inside-positive — see <see cref="Frustum"/>.
+	/// </summary>
+	public Frustum ExtractFrustum()
+	{
+		var m = ViewProjection;
+		// Columns of m (row-vector convention: a clip component is the dot of the homogeneous point with a column).
+		var col1 = new Vector4(m.M11, m.M21, m.M31, m.M41); // x
+		var col2 = new Vector4(m.M12, m.M22, m.M32, m.M42); // y
+		var col3 = new Vector4(m.M13, m.M23, m.M33, m.M43); // z
+		var col4 = new Vector4(m.M14, m.M24, m.M34, m.M44); // w
+		return new Frustum(
+			ToPlane(col4 + col1), // left:   x ≥ -w
+			ToPlane(col4 - col1), // right:  x ≤  w
+			ToPlane(col4 + col2), // bottom: y ≥ -w
+			ToPlane(col4 - col2), // top:    y ≤  w
+			ToPlane(col3),        // near:   z ≥  0  (z ∈ [0,1] NDC)
+			ToPlane(col4 - col3)); // far:    z ≤  w
+	}
+
+	private static Plane ToPlane(Vector4 v) => Plane.Normalize(new Plane(v.X, v.Y, v.Z, v.W));
 }
