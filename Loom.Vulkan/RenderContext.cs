@@ -98,6 +98,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
 	public void SetTransients(TransientResources resources) => _resources = resources;
 
+	/// <summary>Drop the per-(name,formats) baked-pipeline cache so the next draw re-bakes (shader hot-reload, M13).
+	/// The Technique objects are owned by the TechniqueCache; the engine resets that separately after draining.</summary>
+	public void ClearBaked() => _baked.Clear();
+
 	/// <summary>Request that <paramref name="resourceId"/> be shown as a thumbnail in this frame's resource-viewer
 	/// grid (M13). Called by the engine's GetDebugTextureId as the host enumerates resources to display.</summary>
 	public void RequestThumbnail(int resourceId)

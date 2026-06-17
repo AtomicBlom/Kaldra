@@ -28,6 +28,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
+    <!-- Neutral asset layer: the M13 shader hot-reload watcher (no graphics types). -->
+    <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <!-- Hermetic slangc for compiling the engine shaders to DXIL (bundled in the package; win-x64 / win-arm64). -->
     <PackageReference Include="Slang.Sdk" Version="0.5.1" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>

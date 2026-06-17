@@ -3,6 +3,7 @@
     <File Path="CLAUDE.md" />
     <File Path="Planning.md" />
   </Folder>
+  <Project Path="Loom.Assets/Loom.Assets.csproj" />
   <Project Path="Loom.Core/Loom.Core.csproj" />
   <Project Path="Loom.DX12/Loom.DX12.csproj" />
   <Project Path="Loom.Graph/Loom.Graph.csproj" />

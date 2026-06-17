@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
+using Loom.Assets;
 using Loom.Core;
 using Loom.Graph;
 using Silk.NET.Core.Contexts;
@@ -53,6 +55,14 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private readonly DescriptorAllocator _descriptors;
 	private readonly RenderContext _context;
 	private readonly Dictionary<string, TechniqueTemplate> _registry = []; // logical name → backend baked-input form
+
+	// Shader hot-reload (M13): reverse map shader name → the techniques that use it, plus each technique's original
+	// descriptor (so a reload can rebuild the template). The watcher fires on a background thread → it enqueues the
+	// changed shader name; the render thread drains the queue at the top of the frame (fence-safe).
+	private readonly Dictionary<string, List<string>> _techniquesByShader = [];
+	private readonly Dictionary<string, TechniqueDescriptor> _descriptorsByName = [];
+	private readonly ConcurrentQueue<string> _reloadQueue = new();
+	private AssetWatcher? _shaderWatcher;
 #if LOOM_IMGUI
 	private ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
@@ -176,6 +186,25 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		CreateCommandBuffers();
 		CreateSyncObjects();
+
+		// Shader hot-reload (M13), opt-in. An external process rewrites the loose .spv/.json on disk; this watcher
+		// (debounced) notifies us, and we pick up the new bytecode + rebuild affected pipelines. Off by default.
+		if (settings.WatchShaderDirectory)
+		{
+			var source = new LayeredAssetSource(_shaderDir);
+			_shaderWatcher = new AssetWatcher(source, [".spv", ".json"], debounceMs: 150);
+			_shaderWatcher.Changed += OnShaderArtifactChanged;
+			Console.WriteLine($"[loom] watching shaders for hot-reload: {_shaderDir}");
+		}
+	}
+
+	// Background-thread watcher callback: map the changed artifact (e.g. "gbuffer.spv") back to its shader name and,
+	// if a technique uses it, queue it for the render thread to reload. No GPU work here.
+	private void OnShaderArtifactChanged(string leaf)
+	{
+		var shader = Path.GetFileNameWithoutExtension(leaf); // "gbuffer.spv"/"gbuffer.json" → "gbuffer"
+		if (_techniquesByShader.ContainsKey(shader))
+			_reloadQueue.Enqueue(shader);
 	}
 
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
@@ -200,6 +229,41 @@ internal sealed unsafe class VulkanEngine : IEngine
 			reflection.StorageImageCount,
 			reflection.StorageBufferCount,
 			descriptor.ParticleInput);
+
+		// Hot-reload bookkeeping (M13): remember which techniques a shader backs (one shader → many techniques, e.g.
+		// bloom_sample → bloom.down + bloom.up) and each technique's descriptor, so a reload can rebuild the template.
+		_descriptorsByName[name] = descriptor;
+		if (!_techniquesByShader.TryGetValue(descriptor.Shader, out var users))
+			_techniquesByShader[descriptor.Shader] = users = [];
+		if (!users.Contains(name))
+			users.Add(name);
+	}
+
+	// Drain queued shader reloads on the render thread (M13). Rare, human-paced events, so we drain the GPU once and
+	// rebuild every affected technique template, then clear both pipeline-cache layers — the next frame re-bakes from
+	// the new bytecode. Called at the top of the frame, before any recording.
+	private void DrainShaderReloads()
+	{
+		if (_reloadQueue.IsEmpty)
+			return;
+
+		var shaders = new HashSet<string>();
+		while (_reloadQueue.TryDequeue(out var shader))
+			shaders.Add(shader);
+		if (shaders.Count == 0)
+			return;
+
+		_vk.DeviceWaitIdle(_ctx.Device); // no pipeline in flight before we drop them
+		foreach (var shader in shaders)
+		{
+			if (!_techniquesByShader.TryGetValue(shader, out var techniques))
+				continue;
+			foreach (var name in techniques)
+				DefineTechnique(name, _descriptorsByName[name]); // re-resolve bytecode + reflection, rebuild the template
+			Console.WriteLine($"[loom] reloaded shader '{shader}' → {string.Join(", ", techniques)}");
+		}
+		_context.ClearBaked();   // drop per-(name,formats) cached pipelines
+		_techniques.Reset();     // dispose the stale VkPipelines; next Bake rebuilds from the new templates
 	}
 
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
@@ -380,6 +444,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
 			return; // Minimized — nothing to draw.
+
+		DrainShaderReloads(); // M13: pick up any hot-reloaded shaders before recording this frame
 
 		_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
 
@@ -1015,6 +1081,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 	public void Dispose()
 	{
+		_shaderWatcher?.Dispose(); // stop the hot-reload watcher before tearing the device down (M13)
 		_vk.DeviceWaitIdle(_ctx.Device);
 
 		DisposeGraphResources();    // transients + readback staging (graph-level)

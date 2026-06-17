@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
     <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
+    <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
   </ItemGroup>
 
 </Project>

@@ -54,10 +54,14 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 		return Convert.ToHexString(hash.GetHashAndReset());
 	}
 
-	public void Dispose()
+	/// <summary>Dispose every baked pipeline and empty the cache — used by shader hot-reload (M13) to force a fresh
+	/// bake from the reloaded bytecode. The caller must have drained the GPU first (no pipeline in flight).</summary>
+	public void Reset()
 	{
 		foreach (var technique in _cache.Values)
 			technique.Dispose();
 		_cache.Clear();
 	}
+
+	public void Dispose() => Reset();
 }

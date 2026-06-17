@@ -42,4 +42,13 @@ public class EngineSettings
 	/// <c>Engine.AvailableEngines.FirstOrDefault(e =&gt; e.Name == settings.PreferredBackend) ?? Engine.AvailableEngines.First()</c>.
 	/// </summary>
 	public string? PreferredBackend { get; set; }
+
+	/// <summary>
+	/// Watch the loose shader directory for rebuilt artifacts and hot-reload the affected pipelines (M13). Dev-only;
+	/// production apps leave this false (off by default). The engine does NOT compile shaders — an external process
+	/// (the MSBuild Slang compile, a <c>dotnet watch</c>, …) rewrites the <c>.spv</c>/<c>.json</c>/<c>.dxil</c>; the
+	/// engine just picks them up, invalidating the technique cache and rebuilding on the next frame. Only loose
+	/// (on-disk) shaders are watchable — embedded engine shaders can't change at runtime.
+	/// </summary>
+	public bool WatchShaderDirectory { get; set; }
 }

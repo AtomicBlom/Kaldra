@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Neutral asset-I/O layer (Planning Phase 2 §8): no graphics-API reference, sits beside Loom.Core as a
+       producer of neutral descriptions. M13 ships the file-watching half (shader hot-reload); M11 adds the
+       image/glTF loaders here. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

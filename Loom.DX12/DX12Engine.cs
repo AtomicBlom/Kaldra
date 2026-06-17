@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
+using Loom.Assets;
 using Loom.Core;
 using Loom.Graph;
 
@@ -87,6 +89,13 @@ public sealed unsafe class DX12Engine : IEngine
 	// M13 resource viewer: the active graph's colour/depth resources the host can preview. Rebuilt each SetGraph.
 	private readonly List<InspectableResource> _inspectable = [];
 
+	// Shader hot-reload (M13): shader name → techniques using it, each technique's descriptor, and a queue the
+	// background watcher posts to (drained on the render thread). Mirrors the Vulkan backend.
+	private readonly Dictionary<string, List<string>> _techniquesByShader = [];
+	private readonly Dictionary<string, TechniqueDescriptor> _descriptorsByName = [];
+	private readonly ConcurrentQueue<string> _reloadQueue = new();
+	private AssetWatcher? _shaderWatcher;
+
 	public DX12Engine(nint hwnd, int width, int height, DX12EngineSettings settings)
 	{
 		_settings = settings;
@@ -125,6 +134,52 @@ public sealed unsafe class DX12Engine : IEngine
 			_timestampFrequency = frequency;
 
 		Console.WriteLine($"[loom] DX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
+
+		// Shader hot-reload (M13), opt-in. Watch the loose DXIL/reflection artifacts; an external process rewrites
+		// them and this picks up the new bytecode + rebuilds affected PSOs. Off by default.
+		if (settings.WatchShaderDirectory)
+		{
+			var source = new LayeredAssetSource(settings.ShaderDirectory);
+			_shaderWatcher = new AssetWatcher(source, [".dxil", ".json"], debounceMs: 150);
+			_shaderWatcher.Changed += OnShaderArtifactChanged;
+			Console.WriteLine($"[loom] watching shaders for hot-reload: {settings.ShaderDirectory}");
+		}
+	}
+
+	// Background-thread watcher callback: map the changed artifact (e.g. "gbuffer.ps.dxil") back to its shader name
+	// and queue it if a technique uses it. No GPU work here.
+	private void OnShaderArtifactChanged(string leaf)
+	{
+		var name = Path.GetFileNameWithoutExtension(leaf); // "gbuffer.ps.dxil" → "gbuffer.ps"; "gbuffer.json" → "gbuffer"
+		if (name.EndsWith(".vs", StringComparison.Ordinal) || name.EndsWith(".ps", StringComparison.Ordinal) || name.EndsWith(".cs", StringComparison.Ordinal))
+			name = name[..^3];
+		if (_techniquesByShader.ContainsKey(name))
+			_reloadQueue.Enqueue(name);
+	}
+
+	// Drain queued shader reloads on the render thread (M13): drain the GPU once, rebuild affected templates, evict
+	// the baked PSOs — the next frame re-bakes from the new bytecode. Called at the top of the graph frame.
+	private void DrainShaderReloads()
+	{
+		if (_reloadQueue.IsEmpty)
+			return;
+
+		var shaders = new HashSet<string>();
+		while (_reloadQueue.TryDequeue(out var shader))
+			shaders.Add(shader);
+		if (shaders.Count == 0)
+			return;
+
+		WaitIdle(); // no PSO in flight before we drop them
+		foreach (var shader in shaders)
+		{
+			if (!_techniquesByShader.TryGetValue(shader, out var techniques))
+				continue;
+			foreach (var name in techniques)
+				DefineTechnique(name, _descriptorsByName[name]); // re-resolve DXIL + reflection, re-register the template
+			Console.WriteLine($"[loom] reloaded shader '{shader}' → {string.Join(", ", techniques)}");
+		}
+		_techniques.Reset(); // dispose stale PSOs; next GetOrBake rebuilds from the re-registered templates
 	}
 
 	public string BackendName => "DX12";
@@ -225,6 +280,8 @@ public sealed unsafe class DX12Engine : IEngine
 	// of VulkanEngine's per-frame RecordGraph.
 	private void RenderGraphFrame(FrameInputs inputs)
 	{
+		DrainShaderReloads(); // M13: pick up any hot-reloaded shaders before recording this frame
+
 		var index = _swapchain.CurrentIndex;
 		WaitForFrame(index);
 
@@ -735,6 +792,8 @@ public sealed unsafe class DX12Engine : IEngine
 			return;
 		_disposed = true;
 
+		_shaderWatcher?.Dispose(); // stop the hot-reload watcher before tearing the device down (M13)
+
 		try { WaitIdle(); }
 		catch { /* the device may already be lost; tear down regardless */ }
 
@@ -846,6 +905,13 @@ public sealed unsafe class DX12Engine : IEngine
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride));
+
+		// Hot-reload bookkeeping (M13): one shader → many techniques; remember the descriptor so a reload rebuilds it.
+		_descriptorsByName[name] = descriptor;
+		if (!_techniquesByShader.TryGetValue(descriptor.Shader, out var users))
+			_techniquesByShader[descriptor.Shader] = users = [];
+		if (!users.Contains(name))
+			users.Add(name);
 	}
 
 	/// <summary>

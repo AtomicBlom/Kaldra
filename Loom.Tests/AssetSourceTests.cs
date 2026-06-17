@@ -1,0 +1,58 @@
+using Loom.Assets;
+
+namespace Loom.Tests;
+
+/// <summary>M13 <see cref="LayeredAssetSource"/>: ordered-root resolution (the layering the shader hot-reload watcher
+/// resolves through). The debounced <see cref="AssetWatcher"/> is verified live (FileSystemWatcher timing is too
+/// flaky to unit-test reliably).</summary>
+public class AssetSourceTests : IDisposable
+{
+	private readonly string _baseRoot = Directory.CreateTempSubdirectory("loom-base-").FullName;
+	private readonly string _packRoot = Directory.CreateTempSubdirectory("loom-pack-").FullName;
+
+	[Fact]
+	public void TryResolve_finds_a_file_in_the_only_root()
+	{
+		File.WriteAllText(Path.Combine(_baseRoot, "shader.spv"), "base");
+		var source = new LayeredAssetSource(_baseRoot);
+
+		Assert.True(source.TryResolve("shader.spv", out var path));
+		Assert.Equal("base", File.ReadAllText(path));
+	}
+
+	[Fact]
+	public void TryResolve_prefers_the_higher_priority_root()
+	{
+		// pack (listed first = higher priority) overrides base — the layering a resource pack would use.
+		File.WriteAllText(Path.Combine(_baseRoot, "shader.spv"), "base");
+		File.WriteAllText(Path.Combine(_packRoot, "shader.spv"), "pack");
+		var source = new LayeredAssetSource(_packRoot, _baseRoot);
+
+		Assert.True(source.TryResolve("shader.spv", out var path));
+		Assert.Equal("pack", File.ReadAllText(path));
+	}
+
+	[Fact]
+	public void TryResolve_falls_through_to_a_lower_root_when_the_higher_one_lacks_the_file()
+	{
+		File.WriteAllText(Path.Combine(_baseRoot, "only-in-base.spv"), "base");
+		var source = new LayeredAssetSource(_packRoot, _baseRoot);
+
+		Assert.True(source.TryResolve("only-in-base.spv", out var path));
+		Assert.StartsWith(_baseRoot, path);
+	}
+
+	[Fact]
+	public void TryResolve_returns_false_for_a_missing_file()
+	{
+		var source = new LayeredAssetSource(_packRoot, _baseRoot);
+		Assert.False(source.TryResolve("nope.spv", out var path));
+		Assert.Equal(string.Empty, path);
+	}
+
+	public void Dispose()
+	{
+		try { Directory.Delete(_baseRoot, recursive: true); } catch { /* best effort */ }
+		try { Directory.Delete(_packRoot, recursive: true); } catch { /* best effort */ }
+	}
+}
