@@ -6,7 +6,7 @@
 >
 > **First Claude Code prompt for this phase:** *"Read Planning.md, then PlanningPhase2.md. We're starting M11 — the asset & material foundation. Expand it from the board and let's go."*
 
-**Status date:** 2026-06-17. Phase 1 (M0–M10) complete; M9 partial. Phase 2 (M11–M16) planned, not started.
+**Status date:** 2026-06-17. Phase 1 (M0–M10) complete; M9 partial. **Phase 2: M11 complete** (asset & material foundation — texture loading + CPU mips, `Material`/multi-texture binding, normal mapping, `Loom.Assets` with image + glTF loaders, normal-map + glTF reference demos at cross-backend parity); M12–M16 planned, not started.
 
 ---
 
@@ -107,8 +107,9 @@ The heaviest — effectively several milestones. It stresses scale, precision, d
 
 M10 (DX12) is the last shipped milestone. Build the **shared spine first** (M11→M12→M13), then branch by archetype (M14/M15/M16). Every milestone must land in **both** backends (or be `<Use…>`-gated), and instancing/indirect/GPU-culling must be authored as **neutral describe-layer intents** — no graphics-API type may enter Core/Graph. Each milestone's task cards live on the board; the checklists below are the deliverable definitions.
 
-### M11 — Asset & material foundation *(unblocks all 3)*
+### M11 — Asset & material foundation *(unblocks all 3)* ✅ **SHIPPED**
 Texture loading + mips · material / multi-texture technique inputs · **normal mapping** in the deferred lighting model · reference demo + cross-backend golden image.
+- *Shipped:* `Loom.Core` gains `TextureData` (CPU box-filter mip chain), `Texture`/`Material` handles, `SamplerAddress`, a tangent in `Vertex`, and `CreateTexture`/`CreateMaterial` + `Draw(mesh, material, technique)`. `Loom.Assets` (new neutral project) hosts the StbImageSharp image loader and the SharpGLTF model loader. Both backends gain a `TextureStore` (multi-mip upload) + `MaterialStore` + material-draw binding + sampler-address threading. `gbuffer_normalmap.slang` does tangent-space normal mapping into the existing deferred G-buffer. `NormalMappingDemo` (procedural + committed brick PNGs) and `GltfDemo` (committed `cube.gltf`) render at cross-backend parity (Vulkan↔DX12, within the established tolerance). Decisions taken: StbImageSharp; `Loom.Assets` project; glTF (SharpGLTF) **included now**. *(Also fixed a pre-existing DX12 break: `ssao_blur` used `Sampler2D.GetDimensions`, which Slang lowers to a form dxc rejects — switched to the `ddx`/`ddy` uv gradient.)*
 - *Tasks:* TextureStore (decode + GPU upload + mips, per backend) · Material / multi-texture binding (Core) · normal mapping in `gbuffer.slang`/`lighting.slang` · normal-map reference demo.
 - *Decision:* image-decode library (StbImageSharp vs ImageSharp) + whether glTF (SharpGLTF) lands now or in M15.
 - *Touches:* new `TextureStore` mirroring `MeshStore`; a `Material` abstraction in `Loom.Core`; the deferred shaders.

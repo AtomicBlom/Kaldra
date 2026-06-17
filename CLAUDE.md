@@ -10,18 +10,19 @@ Loom is a declarative, render-graph-driven rendering engine for .NET 10. You dec
 
 ## Current state
 
-**Milestones M0–M10 are complete; M9 (deferred generalization) is partial.** Loom runs a full reference frame on **two backends at pixel parity — Vulkan and DX12**. The next work is the **M11–M16** roadmap (the asset/scene/geometry layer plus three game-archetype tracks), tracked on the board.
+**Milestones M0–M11 are complete; M9 (deferred generalization) is partial.** Loom runs a full reference frame on **two backends at pixel parity — Vulkan and DX12**. **M11 (asset & material foundation) shipped:** texture loading + CPU-generated mips, a `Material` / multi-texture binding abstraction, tangent-space normal mapping in the deferred path, the neutral `Loom.Assets` project (StbImageSharp image + SharpGLTF model loaders), and normal-map + glTF reference demos at cross-backend parity. The next work is the **M12–M16** roadmap (geometry generalization + debug spine, then the three game-archetype tracks), tracked on the board.
 
 What's shipped:
-- **Projects:** `Loom.Core` (Describe, library) → `Loom.Graph` (Execute) → `Loom.Vulkan` + `Loom.DX12` (backends); `Loom.Shaders` (build step); `Loom.Tests` (xUnit, graph-layer tests); `Loom.Sandbox` (the only `Exe`, demos). All target `net10.0`; the solution is `Loom.slnx`.
+- **Projects:** `Loom.Core` (Describe, library) → `Loom.Graph` (Execute) → `Loom.Vulkan` + `Loom.DX12` (backends); `Loom.Assets` (neutral image/glTF loaders, beside Core); `Loom.Shaders` (build step); `Loom.Tests` (xUnit, graph-layer + mip tests); `Loom.Sandbox` (the only `Exe`, demos). All target `net10.0`; the solution is `Loom.slnx`.
 - **Host/windowing:** Silk.NET **2.23.0** (Vulkan + `Extensions.KHR`/`Extensions.EXT` + Maths in `Loom.Vulkan`; Windowing + Input in `Loom.Sandbox`). The host hands the backend the window's `IVkSurface`, so the backends carry **no** `Silk.NET.Windowing` reference.
 - **Describe layer:** `GraphBuilder`/`PassBuilder` with `.Writes`/`.Blends`/`.Samples`/`.ReadWrites`/`.WritesDepth`/`.ReadsDepth`/`.ReadsVertex`; typed handles (`ColorHandle`/`DepthHandle`/`BufferHandle`); fixed + backbuffer-relative `Domain`s; persistent + buffer resources; present/readback. Immutable + hashable (drives the bake cache).
 - **Execute layer:** topological scheduling, derived barriers/layout transitions, transient memory aliasing, lifetime analysis — all backend-neutral.
 - **Shipped effects (8):** deferred G-buffer + multi-light lighting, single shadow map, SSAO + blur, forward alpha-blend transparency, GPU particles (compute→vertex), JFA outlines + GPU→CPU picking readback, bloom pyramid, auto-exposure + tonemap. Plus HDR (scRGB) output, low-res world domain + upscale, ImGui HUD. `FullReferenceDemo` composes them all.
+- **Assets & materials (M11):** `Loom.Assets` decodes images (StbImageSharp) and glTF models (SharpGLTF) into neutral `Loom.Core` descriptions; `TextureData` builds the mip chain on the CPU (deterministic box filter → byte-identical across backends); each backend has a `TextureStore` (multi-mip upload) + `MaterialStore`; a `Material` fills a technique's reflected sampler slots via `ctx.Draw(mesh, material, technique)`; `Vertex` carries a tangent; `gbuffer_normalmap.slang` does tangent-space normal mapping into the existing deferred G-buffer. Demos: `NormalMappingDemo`, `GltfDemo`.
 - **Shaders:** offline Slang → SPIR-V (Vulkan) + signed DXIL (DX12); reflection-derived descriptor layouts.
 - **Backend baseline (both):** dynamic rendering / no renderpass objects, sync2-style barriers, 2 frames in flight, Vulkan 1.3 device features (dynamic rendering / synchronization2 / timeline semaphores); DX12 mirrors via fences + PSOs + placed-resource aliasing.
 
-**The gap (what M11+ adds):** Loom is a render-graph + *effects* engine, not yet an *asset/scene* engine — no texture/model loading, material system, normal mapping, instancing, culling, sprites/2D, or animation. That asset/scene/geometry half is exactly the M11–M16 roadmap.
+**The gap (what M12+ adds):** M11 delivered texture/model loading, materials, and normal mapping. Still missing — the rest of the asset/scene/geometry half: per-technique vertex layouts, instancing/indirect, a `Scene` draw-list + culling, the debug/profiling spine, and the per-track features (sprites/2D, skinning/CSM/sky, PBR/terrain/GPU-driven). That's the M12–M16 roadmap.
 
 Dev-environment notes:
 - This dev machine is **Windows-on-ARM (Snapdragon X / Adreno X1-85)** — don't assume x64.
