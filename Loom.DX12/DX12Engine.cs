@@ -99,7 +99,7 @@ public sealed unsafe class DX12Engine : IEngine
 		_techniques = new DX12TechniqueCache(_ctx);
 		_ring = new DX12DescriptorRing(_ctx, 256);
 		_meshes = new DX12MeshStore(_ctx);
-		_context = new DX12RenderContext(_ctx, _techniques, _ring, _meshes);
+		_context = new DX12RenderContext(_ctx, _techniques, _ring, _meshes, (int)BufferCount);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
@@ -660,6 +660,7 @@ public sealed unsafe class DX12Engine : IEngine
 		_imgui?.Dispose();
 #endif
 		_transients?.Dispose();
+		_context.Dispose();
 		_meshes.Dispose();
 		_ring.Dispose();
 		_techniques.Dispose();
@@ -744,10 +745,14 @@ public sealed unsafe class DX12Engine : IEngine
 		}
 
 		Console.WriteLine($"[loom] DX12 technique '{name}' ← {source}.");
+		// Resolve the per-vertex layout (explicit, else canonical pos/normal/uv for a mesh technique, else none),
+		// mirroring the Vulkan backend — a non-null Instance marks it instanced (M12 — per-technique layouts).
+		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
 		_techniques.Register(name, new DX12TechniqueTemplate(
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
-			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride));
+			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
+			layout, descriptor.Instance));
 	}
 
 	/// <summary>
@@ -802,6 +807,14 @@ public sealed unsafe class DX12Engine : IEngine
 	}
 
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+
+	public Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged
+	{
+		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
+		if (stride != layout.Stride)
+			throw new InvalidOperationException($"DX12: vertex element size ({stride} bytes) does not match the layout stride ({layout.Stride} bytes).");
+		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
+	}
 
 	/// <summary>
 	/// Stand up the backend's Dear ImGui renderer (the <c>imgui_impl_dx12</c> equivalent) and wire it to the

@@ -32,4 +32,6 @@ public readonly record struct TechniqueTemplate(
 	bool IsCompute = false,
 	int StorageCount = 0,
 	int StorageBufferCount = 0,
-	bool ParticleInput = false);
+	bool ParticleInput = false,
+	VertexLayout? Layout = null,
+	VertexLayout? Instance = null);

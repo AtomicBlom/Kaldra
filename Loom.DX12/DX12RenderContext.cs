@@ -18,7 +18,7 @@ namespace Loom.DX12;
 /// (vertex/index buffers + an MVP root constant). Compute and ImGui land in following slices.
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12RenderContext : IRenderContext
+internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 {
 	private const string NextSlice = "DX12: this render verb lands in a following executor slice.";
 	private const uint DefaultShader4ComponentMapping = 0x1688; // D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
@@ -27,6 +27,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 	private readonly DX12TechniqueCache _techniques;
 	private readonly DX12DescriptorRing _ring;
 	private readonly DX12MeshStore _meshes;
+	private readonly DX12InstanceUploadBuffer _instanceUpload;
 	private DX12Transients? _transients;
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled. The HUD pass's
@@ -53,12 +54,13 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 	public Camera Camera { get; private set; } = Camera.Identity;
 	public bool HdrOutput { get; private set; }
 
-	public DX12RenderContext(DX12Context ctx, DX12TechniqueCache techniques, DX12DescriptorRing ring, DX12MeshStore meshes)
+	public DX12RenderContext(DX12Context ctx, DX12TechniqueCache techniques, DX12DescriptorRing ring, DX12MeshStore meshes, int frameCount)
 	{
 		_ctx = ctx;
 		_techniques = techniques;
 		_ring = ring;
 		_meshes = meshes;
+		_instanceUpload = new DX12InstanceUploadBuffer(ctx, frameCount);
 	}
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
@@ -82,6 +84,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 		Camera = ClipSpace(inputs.Camera);
 		SunView = ClipSpace(inputs.SunView);
 		HdrOutput = hdrOutput;
+		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
 	}
 
 	// Adopt the Vulkan backend's clip-space convention (negate the projection's Y row), so the shared shaders need
@@ -300,6 +303,53 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 		_cmd.DrawInstanced(6, (uint)count, 0, 0);
 	}
 
+	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances) where T : unmanaged
+	{
+		if (instances.Length == 0)
+			return;
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = Camera.ViewProjection; // the per-instance world matrix rides in the instance stream
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances);
+		var gpuAddress = _instanceUpload.Upload(_slot, bytes);
+		var instanceView = new VertexBufferView
+		{
+			BufferLocation = gpuAddress,
+			SizeInBytes = (uint)bytes.Length,
+			StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>(),
+		};
+		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
+	}
+
+	public void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count)
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: instancing from a buffer requires an active graph (SetGraph).");
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = Camera.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		// The instance stream is a graph storage buffer a compute filled; the pass's .ReadsVertex derived the
+		// transition to VERTEX_AND_CONSTANT_BUFFER. The stride is the buffer divided across its instances.
+		var byteSize = _transients.ByteSize(instances.Id);
+		var instanceView = new VertexBufferView
+		{
+			BufferLocation = _transients.Resource(_slot, instances.Id).GetGPUVirtualAddress(),
+			SizeInBytes = byteSize,
+			StrideInBytes = count > 0 ? byteSize / (uint)count : byteSize,
+		};
+		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count);
+	}
+
 	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
 	// scope (the engine has bound the backbuffer RTV + negative-height viewport). No-op when ImGui isn't enabled
 	// or the host produced no draw data this frame — and a compiled-out no-op when built without ImGui.
@@ -309,4 +359,6 @@ internal sealed unsafe class DX12RenderContext : IRenderContext
 		_imgui?.Render(_cmd, _imguiDrawData, _fbWidth, _fbHeight, _slot);
 #endif
 	}
+
+	public void Dispose() => _instanceUpload.Dispose();
 }

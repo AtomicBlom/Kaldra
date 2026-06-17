@@ -18,7 +18,8 @@ internal readonly record struct DX12TechniqueTemplate(
 	byte[] VertexBytecode, byte[] FragmentBytecode, string VertexEntry, string FragmentEntry, int InputCount,
 	bool HasVertexInput, bool HasFragmentPush, bool LinearFilter,
 	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None,
-	int StorageImages = 0, int StorageBuffers = 0, int StorageBufferStride = 0);
+	int StorageImages = 0, int StorageBuffers = 0, int StorageBufferStride = 0,
+	Loom.Core.VertexLayout? Layout = null, Loom.Core.VertexLayout? Instance = null);
 
 /// <summary>
 /// Bakes and caches DX12 pipelines per technique — the counterpart of the Vulkan backend's
@@ -344,22 +345,56 @@ internal sealed unsafe class DX12Technique : IDisposable
 			// Vertex input: a mesh reads the canonical interleaved Loom.Core.Vertex (POSITION/NORMAL/TEXCOORD,
 			// mirroring lit.slang); a particle technique reads one float4 PER INSTANCE (the storage buffer the
 			// compute wrote, expanded into a billboard); a fullscreen technique fabricates its triangle and needs none.
-			if (template.HasVertexInput)
+			if (template.Layout is not null)
 			{
-				ReadOnlySpan<byte> position = "POSITION\0"u8;
-				ReadOnlySpan<byte> normal = "NORMAL\0"u8;
-				ReadOnlySpan<byte> texcoord = "TEXCOORD\0"u8;
-				fixed (byte* pPos = position)
-				fixed (byte* pNorm = normal)
-				fixed (byte* pTex = texcoord)
+				// Build the input layout from the technique's declared per-vertex (slot 0) and optional
+				// per-instance (slot 1, PerInstanceData) layouts (M12). Semantic names are packed null-terminated
+				// into one stack buffer; the HLSL semantic index is the count of earlier attributes sharing the
+				// name (so four "ITRANSFORM" rows become ITRANSFORM0..3). DXGI formats + byte offsets come straight
+				// from the Core layout — the same data the Vulkan attribute descriptions consume.
+				var vertexLayout = template.Layout;
+				var instanceLayout = template.Instance;
+				var total = vertexLayout.Attributes.Length + (instanceLayout?.Attributes.Length ?? 0);
+
+				var nameCapacity = 0;
+				for (var i = 0; i < vertexLayout.Attributes.Length; i++)
+					nameCapacity += vertexLayout.Attributes[i].Semantic.Length + 1;
+				if (instanceLayout is not null)
+					for (var i = 0; i < instanceLayout.Attributes.Length; i++)
+						nameCapacity += instanceLayout.Attributes[i].Semantic.Length + 1;
+
+				var names = stackalloc byte[nameCapacity];
+				var elements = stackalloc InputElementDesc[total];
+				var nameOffset = 0;
+				var e = 0;
+				var semanticCounter = new Dictionary<string, uint>();
+
+				for (var i = 0; i < vertexLayout.Attributes.Length; i++)
 				{
-					var elements = stackalloc InputElementDesc[3];
-					elements[0] = new InputElementDesc { SemanticName = pPos, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 0, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
-					elements[1] = new InputElementDesc { SemanticName = pNorm, SemanticIndex = 0, Format = Format.FormatR32G32B32Float, InputSlot = 0, AlignedByteOffset = 12, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
-					elements[2] = new InputElementDesc { SemanticName = pTex, SemanticIndex = 0, Format = Format.FormatR32G32Float, InputSlot = 0, AlignedByteOffset = 24, InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
-					pso.InputLayout = new InputLayoutDesc { NumElements = 3, PInputElementDescs = elements };
-					SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
+					var attribute = vertexLayout.Attributes[i];
+					var namePtr = names + nameOffset;
+					for (var c = 0; c < attribute.Semantic.Length; c++)
+						names[nameOffset++] = (byte)attribute.Semantic[c];
+					names[nameOffset++] = 0;
+					semanticCounter.TryGetValue(attribute.Semantic, out var index);
+					semanticCounter[attribute.Semantic] = index + 1;
+					elements[e++] = new InputElementDesc { SemanticName = namePtr, SemanticIndex = index, Format = ToDxgiFormat(attribute.Format), InputSlot = 0, AlignedByteOffset = (uint)vertexLayout.Offsets[i], InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
 				}
+				if (instanceLayout is not null)
+					for (var i = 0; i < instanceLayout.Attributes.Length; i++)
+					{
+						var attribute = instanceLayout.Attributes[i];
+						var namePtr = names + nameOffset;
+						for (var c = 0; c < attribute.Semantic.Length; c++)
+							names[nameOffset++] = (byte)attribute.Semantic[c];
+						names[nameOffset++] = 0;
+						semanticCounter.TryGetValue(attribute.Semantic, out var index);
+						semanticCounter[attribute.Semantic] = index + 1;
+						elements[e++] = new InputElementDesc { SemanticName = namePtr, SemanticIndex = index, Format = ToDxgiFormat(attribute.Format), InputSlot = 1, AlignedByteOffset = (uint)instanceLayout.Offsets[i], InputSlotClass = InputClassification.PerInstanceData, InstanceDataStepRate = 1 };
+					}
+
+				pso.InputLayout = new InputLayoutDesc { NumElements = (uint)total, PInputElementDescs = elements };
+				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
 			}
 			else if (template.ParticleInput)
 			{
@@ -378,6 +413,15 @@ internal sealed unsafe class DX12Technique : IDisposable
 			}
 		}
 	}
+
+	private static Format ToDxgiFormat(Loom.Core.VertexFormat format) => format switch
+	{
+		Loom.Core.VertexFormat.Float => Format.FormatR32Float,
+		Loom.Core.VertexFormat.Float2 => Format.FormatR32G32Float,
+		Loom.Core.VertexFormat.Float3 => Format.FormatR32G32B32Float,
+		Loom.Core.VertexFormat.Float4 => Format.FormatR32G32B32A32Float,
+		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
+	};
 
 	private void SerializeRootSignature(DX12Context ctx, RootSignatureDesc* rootDesc)
 	{

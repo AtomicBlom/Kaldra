@@ -121,7 +121,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_techniques = new TechniqueCache(_ctx);
 		_meshes = new MeshStore(_ctx, _allocator, _commandPool);
 		_descriptors = new DescriptorAllocator(_ctx, MaxFramesInFlight);
-		_context = new RenderContext(_ctx, _techniques, _registry, _descriptors, _meshes);
+		_context = new RenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _allocator, MaxFramesInFlight);
 
 		CreateCommandBuffers();
 		CreateSyncObjects();
@@ -136,6 +136,10 @@ internal sealed unsafe class VulkanEngine : IEngine
 		// only the pipeline intent (geometry/blend/filter/compute), and Slang's reflection says how many things
 		// the shader binds.
 		var reflection = ShaderReflection.FromBytes(ResolveShaderAsset(descriptor.Shader, ".json"));
+		// Resolve the per-vertex layout: an explicit one, else the canonical pos/normal/uv when the technique
+		// reads geometry, else none (a fullscreen/compute technique). A non-null Instance marks it instanced
+		// (a second per-instance stream at binding 1). (M12 — per-technique vertex layouts.)
+		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
 		_registry[name] = new TechniqueTemplate(
 			ResolveShaderAsset(descriptor.Shader, ".spv"),
 			descriptor.VertexEntry,
@@ -148,10 +152,20 @@ internal sealed unsafe class VulkanEngine : IEngine
 			descriptor.IsCompute,
 			reflection.StorageImageCount,
 			reflection.StorageBufferCount,
-			descriptor.ParticleInput);
+			descriptor.ParticleInput,
+			layout,
+			descriptor.Instance);
 	}
 
 	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+
+	public Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged
+	{
+		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
+		if (stride != layout.Stride)
+			throw new VulkanException($"Vertex element size ({stride} bytes) does not match the layout stride ({layout.Stride} bytes).");
+		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
+	}
 
 	public void SetGraph(RenderGraph graph)
 	{

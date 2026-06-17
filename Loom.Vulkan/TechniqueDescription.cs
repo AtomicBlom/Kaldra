@@ -34,4 +34,6 @@ public readonly record struct TechniqueDescription(
 	bool IsCompute = false,
 	int StorageCount = 0,
 	int StorageBufferCount = 0,
-	bool ParticleInput = false);
+	bool ParticleInput = false,
+	Loom.Core.VertexLayout? Layout = null,
+	Loom.Core.VertexLayout? Instance = null);
