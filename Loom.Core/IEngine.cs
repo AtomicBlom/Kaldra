@@ -62,6 +62,27 @@ public interface IEngine : IDisposable
 	/// <summary>Capture the next presented frame to a PNG at <paramref name="path"/> (debug/validation). Synchronous on that frame.</summary>
 	void RequestCapture(string path);
 
+	/// <summary>
+	/// Enable per-pass GPU timestamp collection (M13 profiling spine). Off by default; cheap to toggle live (an
+	/// ImGui HUD checkbox) — no graph rebuild. A backend that cannot time (e.g. a queue with no timestamp support)
+	/// keeps this false. When off, <see cref="LastFrameTimings"/> stays empty and the per-frame cost is nil.
+	/// </summary>
+	bool GpuTimingEnabled { get; set; }
+
+	/// <summary>
+	/// Per-pass GPU timings from the most recently <em>completed</em> frame (a frame or two stale, like
+	/// <see cref="SamplePick"/> — timestamps are read back after the slot's fence). In execution order; the entries
+	/// align with the active graph's leaf passes. Empty when timing is disabled or no timed frame has retired.
+	/// </summary>
+	IReadOnlyList<PassTiming> LastFrameTimings { get; }
+
+	/// <summary>
+	/// Total GPU time for the most recent completed frame, in milliseconds — the span from the first pass's begin
+	/// timestamp to the last pass's end timestamp (so it includes inter-pass gaps the per-pass sum misses). 0 when
+	/// timing is disabled or no timed frame has retired.
+	/// </summary>
+	double LastFrameGpuMilliseconds { get; }
+
 	/// <summary>Block until the GPU is idle — call before disposing host-owned resources the engine may still be using.</summary>
 	void WaitIdle();
 }

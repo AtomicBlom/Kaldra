@@ -72,6 +72,18 @@ public sealed unsafe class DX12Engine : IEngine
 	private readonly bool[] _pickValid = new bool[BufferCount];
 	private float[] _pickCpu = [];
 
+	// GPU per-pass timing (§12 M13 profiler): one TIMESTAMP query heap with 2 queries (begin/end) per pass and a
+	// per-slot sub-range, plus a per-slot READBACK buffer ResolveQueryData writes into. Decoded after the slot's
+	// fence (like the pick readback) — a frame or two stale. Runtime-toggled (off by default).
+	private bool _gpuTimingEnabled;
+	private ComPtr<ID3D12QueryHeap> _timingHeap;
+	private readonly ComPtr<ID3D12Resource>[] _timingReadback = new ComPtr<ID3D12Resource>[BufferCount];
+	private readonly bool[] _timingValid = new bool[BufferCount];
+	private int _timingPassCount;
+	private ulong _timestampFrequency; // ticks per second, from the graphics queue (0 ⇒ timing unavailable)
+	private PassTiming[] _timings = [];
+	private double _frameGpuMs;
+
 	public DX12Engine(nint hwnd, int width, int height, DX12EngineSettings settings)
 	{
 		_settings = settings;
@@ -103,11 +115,25 @@ public sealed unsafe class DX12Engine : IEngine
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
+		// GPU-timing clock (M13): the graphics (Direct) queue's timestamp frequency. A Direct queue always supports
+		// timestamps on D3D12; 0 only if the call fails, which disables the profiler (the GpuTimingEnabled setter guards it).
+		ulong frequency = 0;
+		if (_ctx.GraphicsQueue.GetTimestampFrequency(ref frequency) >= 0)
+			_timestampFrequency = frequency;
+
 		Console.WriteLine($"[loom] DX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
 	}
 
 	public string BackendName => "DX12";
 	public string DeviceName => _ctx.DeviceName;
+
+	public bool GpuTimingEnabled
+	{
+		get => _gpuTimingEnabled;
+		set => _gpuTimingEnabled = value && _timestampFrequency != 0;
+	}
+	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
+	public double LastFrameGpuMilliseconds => _frameGpuMs;
 
 	public void Render(FrameInputs inputs)
 	{
@@ -181,6 +207,8 @@ public sealed unsafe class DX12Engine : IEngine
 		// This slot's GPU work (a couple frames back) is now done, so its readback buffer is safe to map — decode
 		// the object-id copy it holds into _pickCpu for SamplePick (a few frames stale; invisible for hover).
 		DownloadPick(index);
+		// Same story for the timing queries the slot resolved.
+		DownloadTiming(index);
 
 		SilkMarshal.ThrowHResult(_allocators[index].Reset());
 		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
@@ -192,6 +220,12 @@ public sealed unsafe class DX12Engine : IEngine
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
 		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _swapchain.Width, _swapchain.Height);
 
+		// GPU timing (M13): bracket each pass's own work (after its pre-barriers) with a begin/end timestamp into this
+		// slot's sub-range of the heap. Timestamp queries use EndQuery only (no BeginQuery).
+		var timing = _gpuTimingEnabled && _timingHeap.Handle is not null;
+		var timingBase = (uint)(2 * _timingPassCount) * index;
+		var passIndex = 0;
+
 		foreach (var pass in _barrierPlan!.Passes)
 		{
 			// Wrap each pass in a debug-label scope, nested under groups derived from its dotted name, so a PIX
@@ -201,16 +235,28 @@ public sealed unsafe class DX12Engine : IEngine
 			foreach (var transition in pass.Transitions)
 				EmitGraphTransition(index, transition);
 
+			if (timing)
+				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex));
 			if (pass.Pass.Kind == PassKind.Compute)
 				RecordComputePass(pass);
 			else
 				RecordRasterPass(index, pass);
+			if (timing)
+				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex + 1));
 			_ctx.EndDebugLabel(_commandList); // close the leaf scope opened by BeginPassLabels
+			passIndex++;
 		}
 		CloseTrailingLabels(); // close any groups still open after the last pass
 
 		// Picking: copy this frame's object-id target into the slot's readback buffer (no-op if the graph has none).
 		RecordPick(index);
+
+		// Resolve this slot's timestamps into its readback buffer (read back after the slot's next fence).
+		if (timing)
+		{
+			_commandList.ResolveQueryData(_timingHeap, QueryType.Timestamp, timingBase, (uint)(2 * _timingPassCount), _timingReadback[index], 0);
+			_timingValid[index] = true;
+		}
 
 		// Optional capture: copy the present target before the final present transition (which then runs from
 		// COPY_SOURCE, since EmitGraphTransition tracks the real state).
@@ -547,6 +593,29 @@ public sealed unsafe class DX12Engine : IEngine
 		_pickReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 	}
 
+	// Decode this slot's resolved timestamps (begin/end per pass) into _timings + the frame total (M13). Called after
+	// the slot's fence, so the resolve is complete. The readback buffer is tightly-packed UINT64 (no row pitch).
+	// ticks / frequency = seconds; ×1000 = ms. Guard end>=begin against any non-monotonic driver oddity (Adreno).
+	private void DownloadTiming(uint index)
+	{
+		if (!_gpuTimingEnabled || _timingHeap.Handle is null || _timingPassCount == 0 || !_timingValid[index])
+			return;
+
+		void* mapped;
+		SilkMarshal.ThrowHResult(_timingReadback[index].Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
+		var t = new ReadOnlySpan<ulong>(mapped, 2 * _timingPassCount);
+		if (_timings.Length != _timingPassCount)
+			_timings = new PassTiming[_timingPassCount];
+		for (var i = 0; i < _timingPassCount; i++)
+		{
+			var ticks = t[2 * i + 1] >= t[2 * i] ? t[2 * i + 1] - t[2 * i] : 0UL;
+			_timings[i] = new PassTiming(_barrierPlan!.Passes[i].Pass.Name, ticks * 1000.0 / _timestampFrequency);
+		}
+		var span = t[^1] >= t[0] ? t[^1] - t[0] : 0UL;
+		_frameGpuMs = span * 1000.0 / _timestampFrequency;
+		_timingReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+	}
+
 	private ComPtr<ID3D12Resource> CreateReadbackBuffer(ulong size)
 	{
 		var heapProps = new HeapProperties { Type = HeapType.Readback, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
@@ -654,6 +723,11 @@ public sealed unsafe class DX12Engine : IEngine
 		if (_readback.Handle is not null)
 			_readback.Dispose();
 		foreach (ref var buffer in _pickReadback.AsSpan())
+			if (buffer.Handle is not null)
+				buffer.Dispose();
+		if (_timingHeap.Handle is not null)
+			_timingHeap.Dispose();
+		foreach (ref var buffer in _timingReadback.AsSpan())
 			if (buffer.Handle is not null)
 				buffer.Dispose();
 #if LOOM_IMGUI
@@ -778,6 +852,29 @@ public sealed unsafe class DX12Engine : IEngine
 		_transients = new DX12Transients(_ctx, graph, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
 		_context.SetTransients(_transients);
 		SetupPick(graph);
+		SetupTiming();
+	}
+
+	// Allocate the GPU-timing query heap + per-slot readback buffers for this graph (M13): 2 timestamps (begin/end)
+	// per pass, a sub-range per frame slot. Resized with the graph's pass count; mirrors SetupPick. WaitIdle()
+	// already drained the GPU in SetGraph before this, so disposing the old heap/buffers is safe.
+	private void SetupTiming()
+	{
+		if (_timingHeap.Handle is not null) { _timingHeap.Dispose(); _timingHeap = default; }
+		foreach (ref var buffer in _timingReadback.AsSpan())
+			if (buffer.Handle is not null) { buffer.Dispose(); buffer = default; }
+		Array.Clear(_timingValid);
+		_timings = [];
+		_frameGpuMs = 0;
+		_timingPassCount = _barrierPlan!.Passes.Length;
+		if (_timestampFrequency == 0 || _timingPassCount == 0)
+			return;
+
+		var perSlot = (uint)(2 * _timingPassCount);
+		var desc = new QueryHeapDesc { Type = QueryHeapType.Timestamp, Count = perSlot * BufferCount, NodeMask = 0 };
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateQueryHeap(&desc, out _timingHeap));
+		for (uint i = 0; i < BufferCount; i++)
+			_timingReadback[i] = CreateReadbackBuffer((ulong)perSlot * sizeof(ulong));
 	}
 
 	// Wire up GPU→CPU picking for this graph: its first readback target (the object-id buffer, §7.4) gets a per-slot

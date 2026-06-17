@@ -39,6 +39,14 @@ public sealed unsafe class VulkanContext : IDisposable
 	public uint PresentFamily { get; private set; }
 	public string DeviceName { get; private set; } = "<unknown>";
 
+	/// <summary>Nanoseconds per timestamp tick (<c>VkPhysicalDeviceLimits.timestampPeriod</c>) — converts query
+	/// ticks to wall time for the M13 GPU profiler.</summary>
+	public float TimestampPeriod { get; private set; }
+
+	/// <summary>Valid bits in a timestamp written on the graphics queue (0 ⇒ the queue cannot timestamp, so GPU
+	/// timing is unavailable). Used to mask query results and gate the profiler.</summary>
+	public uint GraphicsTimestampValidBits { get; private set; }
+
 	/// <summary>
 	/// True if <c>VK_EXT_swapchain_colorspace</c> was enabled at instance creation — without it the surface
 	/// only reports the SDR sRGB colour space, so HDR swapchain colour spaces are unavailable (M7-A7). The
@@ -268,6 +276,7 @@ public sealed unsafe class VulkanContext : IDisposable
 				GraphicsFamily = graphics;
 				PresentFamily = present;
 				DeviceName = SilkMarshal.PtrToString((nint)props.DeviceName) ?? "<unknown>";
+				TimestampPeriod = props.Limits.TimestampPeriod;
 				chosenIsDiscrete = discrete;
 				found = true;
 				if (discrete)
@@ -278,6 +287,14 @@ public sealed unsafe class VulkanContext : IDisposable
 		if (!found)
 			throw new VulkanException(
 				"No Vulkan 1.3 device with graphics+present queues, swapchain, and the required features was found.");
+
+		// The graphics family's timestamp support (M13 GPU profiler): 0 valid bits ⇒ no timing on this queue.
+		uint queueCount = 0;
+		Vk.GetPhysicalDeviceQueueFamilyProperties(PhysicalDevice, ref queueCount, null);
+		var queueFamilies = new QueueFamilyProperties[queueCount];
+		fixed (QueueFamilyProperties* pQueueFamilies = queueFamilies)
+			Vk.GetPhysicalDeviceQueueFamilyProperties(PhysicalDevice, ref queueCount, pQueueFamilies);
+		GraphicsTimestampValidBits = GraphicsFamily < queueCount ? queueFamilies[GraphicsFamily].TimestampValidBits : 0;
 	}
 
 	private bool IsSuitable(PhysicalDevice device, out uint graphicsFamily, out uint presentFamily) =>
