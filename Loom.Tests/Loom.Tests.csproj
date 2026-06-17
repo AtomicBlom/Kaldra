@@ -18,6 +18,12 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- M13 golden-image baselines: committed reference PNGs, copied beside the test assembly so GoldenImageTests
+       can read them at runtime (the matching fresh captures come from tools/golden.ps1 via LOOM_GOLDEN_DIR). -->
+  <ItemGroup>
+    <Content Include="Goldens\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Describe + Execute layers: both backend-neutral, never the Vulkan backend. -->
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
