@@ -13,7 +13,7 @@ Loom is a declarative, render-graph-driven rendering engine for .NET 10. You dec
 **Milestones M0–M11 are complete; M9 (deferred generalization) is partial.** Loom runs a full reference frame on **two backends at pixel parity — Vulkan and DX12**. **M11 (asset & material foundation) shipped:** texture loading + CPU-generated mips, a `Material` / multi-texture binding abstraction, tangent-space normal mapping in the deferred path, the neutral `Loom.Assets` project (StbImageSharp image + SharpGLTF model loaders), and normal-map + glTF reference demos at cross-backend parity. The next work is the **M12–M16** roadmap (geometry generalization + debug spine, then the three game-archetype tracks), tracked on the board.
 
 What's shipped:
-- **Projects:** `Loom.Core` (Describe, library) → `Loom.Graph` (Execute) → `Loom.Vulkan` + `Loom.DX12` (backends); `Loom.Assets` (neutral image/glTF loaders, beside Core); `Loom.Shaders` (build step); `Loom.Tests` (xUnit, graph-layer + mip tests); `Loom.Sandbox` (the only `Exe`, demos). All target `net10.0`; the solution is `Loom.slnx`.
+- **Projects:** `Loom.Core` (Describe, library) → `Loom.Graph` (Execute) → `Loom.Vulkan` + `Loom.DX12` (backends); `Loom.Assets` (neutral image/glTF loaders, beside Core); `Loom.Shaders` (build step); `Loom.Tests` (TUnit + Shouldly, graph-layer + mip tests); `Loom.Sandbox` (the only `Exe`, demos). All target `net10.0`; the solution is `Loom.slnx`; NuGet versions are centralized via Central Package Management (`Directory.Packages.props`).
 - **Host/windowing:** Silk.NET **2.23.0** (Vulkan + `Extensions.KHR`/`Extensions.EXT` + Maths in `Loom.Vulkan`; Windowing + Input in `Loom.Sandbox`). The host hands the backend the window's `IVkSurface`, so the backends carry **no** `Silk.NET.Windowing` reference.
 - **Describe layer:** `GraphBuilder`/`PassBuilder` with `.Writes`/`.Blends`/`.Samples`/`.ReadWrites`/`.WritesDepth`/`.ReadsDepth`/`.ReadsVertex`; typed handles (`ColorHandle`/`DepthHandle`/`BufferHandle`); fixed + backbuffer-relative `Domain`s; persistent + buffer resources; present/readback. Immutable + hashable (drives the bake cache).
 - **Execute layer:** topological scheduling, derived barriers/layout transitions, transient memory aliasing, lifetime analysis — all backend-neutral.
@@ -42,12 +42,15 @@ Milestone progress is tracked on the **GitHub Projects (v2) board "Loom – Rend
 
 ## Commands
 
-    dotnet build Loom.slnx                 # build the whole solution
-    dotnet run --project Loom.Sandbox      # run the sandbox (the runnable sample / demo)
-    dotnet build Loom.Core                 # build a single project
-    dotnet format Loom.slnx                # apply the .editorconfig conventions
+    dotnet build Loom.slnx                            # build the whole solution
+    dotnet run --project Loom.Sandbox                 # run the sandbox (the runnable sample / demo)
+    dotnet build Loom.Core                            # build a single project
+    dotnet test --project Loom.Tests/Loom.Tests.csproj # run the unit tests (TUnit on Microsoft.Testing.Platform)
+    dotnet format Loom.slnx                           # apply the .editorconfig conventions
 
-Tests live in `Loom.Tests` (xUnit) and cover the describe/execute layers — scheduling, barrier derivation, aliasing, lifetimes, graph hashing. Run a single test with `dotnet test --filter <FullyQualifiedName~Name>`. There are **no golden-image / rendered-output tests yet** — that harness is an M13 card (the manual loop today is `LOOM_CAPTURE` + frozen time + cross-backend pixel diff).
+**Packages:** versions are centralized via **Central Package Management** — `Directory.Packages.props` at the repo root holds every `<PackageVersion>`, and the project `.csproj` files carry version-less `<PackageReference>`s. The vendored `external/VMASharp` submodule opts out (its own `external/Directory.Packages.props` sets `ManagePackageVersionsCentrally=false`) and keeps its inline versions — don't add its packages to the root file.
+
+Tests live in `Loom.Tests` and cover the describe/execute layers — scheduling, barrier derivation, aliasing, lifetimes, graph hashing. They run on **TUnit** (Microsoft.Testing.Platform) with **Shouldly** assertions. The repo-root `global.json` opts `dotnet test` into MTP mode, so the project is passed with `--project` (the bare-path `dotnet test Loom.Tests/...` form is VSTest-only and was removed in the .NET 10 SDK). Run a single class/test with `dotnet test --project Loom.Tests/Loom.Tests.csproj --treenode-filter "/*/*/<ClassName>/<MethodName>"`, or run the MTP test app directly with `dotnet run --project Loom.Tests`. There are **no golden-image / rendered-output tests yet** — that harness is an M13 card (the manual loop today is `LOOM_CAPTURE` + frozen time + cross-backend pixel diff).
 
 ## Coding conventions
 

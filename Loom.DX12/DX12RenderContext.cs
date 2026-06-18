@@ -48,8 +48,8 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	private Vector4[] _debugLines = [];
 	private int _debugLineCount;
 	private const uint DebugLineColor = 0xFF00FFFFu; // IM_COL32 yellow
-	// This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
-	// DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
+													 // This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
+													 // DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
 	private nint _imguiDrawData;
 	private uint _fbWidth;
 	private uint _fbHeight;

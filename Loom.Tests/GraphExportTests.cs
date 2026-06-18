@@ -23,57 +23,57 @@ public class GraphExportTests
 		g.Present(screen);
 	});
 
-	[Fact]
+	[Test]
 	public void ToDot_is_deterministic_across_identical_builds() =>
-		Assert.Equal(Baseline().ToDot(), Baseline().ToDot());
+		Baseline().ToDot().ShouldBe(Baseline().ToDot());
 
-	[Fact]
+	[Test]
 	public void ToDot_is_a_digraph_with_pass_and_resource_nodes_and_edges()
 	{
 		var dot = Baseline().ToDot();
-		Assert.StartsWith("digraph RenderGraph {", dot);
-		Assert.EndsWith("}\n", dot.ReplaceLineEndings("\n"));
+		dot.ShouldStartWith("digraph RenderGraph {");
+		dot.ReplaceLineEndings("\n").ShouldEndWith("}\n");
 		// Bipartite nodes.
-		Assert.Contains("\"pass:lighting\"", dot);
-		Assert.Contains("\"res:albedo\"", dot);
+		dot.ShouldContain("\"pass:lighting\"");
+		dot.ShouldContain("\"res:albedo\"");
 		// Read edge points resource -> pass; write edge points pass -> resource.
-		Assert.Contains("\"res:albedo\" -> \"pass:lighting\"", dot);
-		Assert.Contains("\"pass:lighting\" -> \"res:lit\"", dot);
+		dot.ShouldContain("\"res:albedo\" -> \"pass:lighting\"");
+		dot.ShouldContain("\"pass:lighting\" -> \"res:lit\"");
 		// Blend is a dashed, bidirectional read-modify-write edge.
-		Assert.Contains("dir=both, style=dashed", dot);
+		dot.ShouldContain("dir=both, style=dashed");
 	}
 
-	[Fact]
+	[Test]
 	public void ToJson_is_deterministic_and_well_formed()
 	{
 		var json = Baseline().ToJson();
-		Assert.Equal(json, Baseline().ToJson());
+		Baseline().ToJson().ShouldBe(json);
 
 		using var doc = JsonDocument.Parse(json); // throws if malformed
 		var root = doc.RootElement;
-		Assert.Equal(Baseline().Hash(), root.GetProperty("Hash").GetString());
-		Assert.Equal(2, root.GetProperty("Domains").GetArrayLength());          // world + backbuffer
-		Assert.Equal(4, root.GetProperty("Passes").GetArrayLength());
-		Assert.Equal("<backbuffer>", root.GetProperty("Present").GetString());
+		root.GetProperty("Hash").GetString().ShouldBe(Baseline().Hash());
+		root.GetProperty("Domains").GetArrayLength().ShouldBe(2);          // world + backbuffer
+		root.GetProperty("Passes").GetArrayLength().ShouldBe(4);
+		root.GetProperty("Present").GetString().ShouldBe("<backbuffer>");
 
 		// The lighting pass records its Sample(albedo) and Write(lit) edges.
 		var lighting = root.GetProperty("Passes").EnumerateArray().Single(p => p.GetProperty("Name").GetString() == "lighting");
 		var kinds = lighting.GetProperty("Accesses").EnumerateArray().Select(a => a.GetProperty("Kind").GetString()).ToArray();
-		Assert.Contains("Sample", kinds);
-		Assert.Contains("Write", kinds);
+		kinds.ShouldContain("Sample");
+		kinds.ShouldContain("Write");
 	}
 
-	[Fact]
+	[Test]
 	public void Schedule_ToDot_is_deterministic_and_shows_the_derived_dag()
 	{
 		var schedule = GraphSchedule.Derive(Baseline());
-		Assert.Equal(schedule.ToDot(), GraphSchedule.Derive(Baseline()).ToDot());
+		GraphSchedule.Derive(Baseline()).ToDot().ShouldBe(schedule.ToDot());
 
 		var dot = schedule.ToDot();
-		Assert.StartsWith("digraph GraphSchedule {", dot);
+		dot.ShouldStartWith("digraph GraphSchedule {");
 		// lighting depends on gbuffer (reads albedo it wrote) -> a dependency edge between the passes.
-		Assert.Contains("\"gbuffer\" -> \"lighting\"", dot);
+		dot.ShouldContain("\"gbuffer\" -> \"lighting\"");
 		// Execution order is rendered in the node labels.
-		Assert.Contains("0: gbuffer", dot);
+		dot.ShouldContain("0: gbuffer");
 	}
 }

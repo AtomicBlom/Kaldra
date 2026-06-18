@@ -16,7 +16,7 @@ namespace Loom.DX12;
 /// </summary>
 public sealed class DX12Backend : IRenderBackend
 {
-    #pragma warning disable CA2255
+#pragma warning disable CA2255
 	/// <summary>
 	/// Register the DX12 backend as the Loom.DX12 assembly loads (Planning.md §5 backend registry) — but only if
 	/// <see cref="IsSupported"/> confirms D3D12 is actually available. On a box (or OS) without it the backend then
@@ -29,7 +29,7 @@ public sealed class DX12Backend : IRenderBackend
 		if (IsSupported())
 			Engine.Register(new DX12Backend());
 	}
-    #pragma warning restore CA2255
+#pragma warning restore CA2255
 
 	/// <summary>
 	/// Probe — without throwing — whether this machine can run the DX12 backend: D3D12 loads and a device can be

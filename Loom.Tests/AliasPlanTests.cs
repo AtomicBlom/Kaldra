@@ -9,7 +9,7 @@ public class AliasPlanTests
 	private static AliasPlan Derive(RenderGraph graph) =>
 		AliasPlan.Derive(LifetimePlan.Derive(GraphSchedule.Derive(graph)));
 
-	[Fact]
+	[Test]
 	public void Chain_folds_disjoint_transients_into_shared_buckets()
 	{
 		// a[0,1] b[1,2] c[2,3] d[3,4]: a dies before c, b dies before d -> two buckets {a,c}, {b,d}.
@@ -29,16 +29,16 @@ public class AliasPlanTests
 			g.Present(screen);
 		}));
 
-		Assert.Equal(4, plan.AliasableCount);
-		Assert.Equal(2, plan.Buckets.Length); // peak overlap is 2
+		plan.AliasableCount.ShouldBe(4);
+		plan.Buckets.Length.ShouldBe(2); // peak overlap is 2
 
 		// a and c share; b and d share; a and b do not.
 		var names = plan.Buckets.Select(bk => bk.Members.Select(m => m.Name).ToHashSet()).ToList();
-		Assert.Contains(names, s => s.SetEquals(["a", "c"]));
-		Assert.Contains(names, s => s.SetEquals(["b", "d"]));
+		names.ShouldContain(s => s.SetEquals(new[] { "a", "c" }));
+		names.ShouldContain(s => s.SetEquals(new[] { "b", "d" }));
 	}
 
-	[Fact]
+	[Test]
 	public void Members_of_a_bucket_have_non_overlapping_lifetimes()
 	{
 		var plan = Derive(RenderGraph.Define(g =>
@@ -61,11 +61,11 @@ public class AliasPlanTests
 				{
 					var x = plan.Lifetimes.Of(bucket.Members[i])!.Value;
 					var y = plan.Lifetimes.Of(bucket.Members[j])!.Value;
-					Assert.False(x.Overlaps(y)); // never co-resident
+					x.Overlaps(y).ShouldBeFalse(); // never co-resident
 				}
 	}
 
-	[Fact]
+	[Test]
 	public void All_simultaneously_live_targets_get_their_own_bucket()
 	{
 		// The reference frame's g-buffer targets are all live into lighting (order 1), so none can alias.
@@ -88,11 +88,11 @@ public class AliasPlanTests
 		}));
 
 		// albedo, normal, material, depth, lit all touch order 1 -> 5 buckets, no folding.
-		Assert.Equal(5, plan.AliasableCount);
-		Assert.Equal(5, plan.Buckets.Length);
+		plan.AliasableCount.ShouldBe(5);
+		plan.Buckets.Length.ShouldBe(5);
 	}
 
-	[Fact]
+	[Test]
 	public void Backbuffer_is_excluded_from_aliasing()
 	{
 		var plan = Derive(RenderGraph.Define(g =>
@@ -108,11 +108,11 @@ public class AliasPlanTests
 		var resources = plan.Lifetimes.Schedule.Graph.Resources;
 		var screen = resources.Single(r => r.IsBackbuffer);
 		var offscreen = resources.Single(r => r.Name == "offscreen");
-		Assert.Null(plan.BucketOf(screen));     // swapchain-owned, not aliased
-		Assert.NotNull(plan.BucketOf(offscreen));
+		plan.BucketOf(screen).ShouldBeNull();     // swapchain-owned, not aliased
+		plan.BucketOf(offscreen).ShouldNotBeNull();
 	}
 
-	[Fact]
+	[Test]
 	public void Single_transient_yields_one_bucket()
 	{
 		var plan = Derive(RenderGraph.Define(g =>
@@ -125,11 +125,11 @@ public class AliasPlanTests
 			g.Present(screen);
 		}));
 
-		Assert.Equal(1, plan.AliasableCount);
-		Assert.Single(plan.Buckets);
+		plan.AliasableCount.ShouldBe(1);
+		plan.Buckets.ShouldHaveSingleItem();
 	}
 
-	[Fact]
+	[Test]
 	public void Readback_target_is_not_aliased_by_a_later_transient()
 	{
 		// a[0,1] would normally fold with c[2,2] (disjoint lifetimes). But `a` is read back to the host after
@@ -148,7 +148,7 @@ public class AliasPlanTests
 		}));
 
 		var res = withReadback.Lifetimes.Schedule.Graph.Resources;
-		Assert.NotEqual(withReadback.BucketOf(res.Single(r => r.Name == "a")), withReadback.BucketOf(res.Single(r => r.Name == "c")));
+		withReadback.BucketOf(res.Single(r => r.Name == "c")).ShouldNotBe(withReadback.BucketOf(res.Single(r => r.Name == "a")));
 
 		// Pin the behaviour the fix changes: WITHOUT the readback, a and c DO fold into one shared bucket.
 		var noReadback = Derive(RenderGraph.Define(g =>
@@ -162,6 +162,6 @@ public class AliasPlanTests
 			g.Pass("p2").Samples(b).Writes(c);
 		}));
 		var bare = noReadback.Lifetimes.Schedule.Graph.Resources;
-		Assert.Equal(noReadback.BucketOf(bare.Single(r => r.Name == "a")), noReadback.BucketOf(bare.Single(r => r.Name == "c")));
+		noReadback.BucketOf(bare.Single(r => r.Name == "c")).ShouldBe(noReadback.BucketOf(bare.Single(r => r.Name == "a")));
 	}
 }

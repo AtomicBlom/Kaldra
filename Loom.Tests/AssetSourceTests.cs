@@ -10,17 +10,17 @@ public class AssetSourceTests : IDisposable
 	private readonly string _baseRoot = Directory.CreateTempSubdirectory("loom-base-").FullName;
 	private readonly string _packRoot = Directory.CreateTempSubdirectory("loom-pack-").FullName;
 
-	[Fact]
+	[Test]
 	public void TryResolve_finds_a_file_in_the_only_root()
 	{
 		File.WriteAllText(Path.Combine(_baseRoot, "shader.spv"), "base");
 		var source = new LayeredAssetSource(_baseRoot);
 
-		Assert.True(source.TryResolve("shader.spv", out var path));
-		Assert.Equal("base", File.ReadAllText(path));
+		source.TryResolve("shader.spv", out var path).ShouldBeTrue();
+		File.ReadAllText(path).ShouldBe("base");
 	}
 
-	[Fact]
+	[Test]
 	public void TryResolve_prefers_the_higher_priority_root()
 	{
 		// pack (listed first = higher priority) overrides base — the layering a resource pack would use.
@@ -28,26 +28,26 @@ public class AssetSourceTests : IDisposable
 		File.WriteAllText(Path.Combine(_packRoot, "shader.spv"), "pack");
 		var source = new LayeredAssetSource(_packRoot, _baseRoot);
 
-		Assert.True(source.TryResolve("shader.spv", out var path));
-		Assert.Equal("pack", File.ReadAllText(path));
+		source.TryResolve("shader.spv", out var path).ShouldBeTrue();
+		File.ReadAllText(path).ShouldBe("pack");
 	}
 
-	[Fact]
+	[Test]
 	public void TryResolve_falls_through_to_a_lower_root_when_the_higher_one_lacks_the_file()
 	{
 		File.WriteAllText(Path.Combine(_baseRoot, "only-in-base.spv"), "base");
 		var source = new LayeredAssetSource(_packRoot, _baseRoot);
 
-		Assert.True(source.TryResolve("only-in-base.spv", out var path));
-		Assert.StartsWith(_baseRoot, path);
+		source.TryResolve("only-in-base.spv", out var path).ShouldBeTrue();
+		path.ShouldStartWith(_baseRoot);
 	}
 
-	[Fact]
+	[Test]
 	public void TryResolve_returns_false_for_a_missing_file()
 	{
 		var source = new LayeredAssetSource(_packRoot, _baseRoot);
-		Assert.False(source.TryResolve("nope.spv", out var path));
-		Assert.Equal(string.Empty, path);
+		source.TryResolve("nope.spv", out var path).ShouldBeFalse();
+		path.ShouldBe(string.Empty);
 	}
 
 	public void Dispose()

@@ -16,7 +16,7 @@ public class GraphScheduleTests
 		return [.. pass.DependsOn.Select(d => s.Graph.Passes[d].Name).Order()];
 	}
 
-	[Fact]
+	[Test]
 	public void Read_after_write_creates_a_dependency()
 	{
 		var s = Schedule(g =>
@@ -28,11 +28,11 @@ public class GraphScheduleTests
 			g.Pass("consumer").Samples(a).Writes(b);
 		});
 
-		Assert.Empty(DepsOf(s, "producer"));
-		Assert.Equal(["producer"], DepsOf(s, "consumer"));
+		DepsOf(s, "producer").ShouldBeEmpty();
+		DepsOf(s, "consumer").ShouldBe(new[] { "producer" });
 	}
 
-	[Fact]
+	[Test]
 	public void Write_after_write_on_one_resource_depends_in_program_order()
 	{
 		// The two backbuffer writers from §6: ordered by program order via a WAW edge.
@@ -43,11 +43,11 @@ public class GraphScheduleTests
 			g.Pass("hud").Writes(screen);
 		});
 
-		Assert.Empty(DepsOf(s, "upscale"));
-		Assert.Equal(["upscale"], DepsOf(s, "hud"));
+		DepsOf(s, "upscale").ShouldBeEmpty();
+		DepsOf(s, "hud").ShouldBe(new[] { "upscale" });
 	}
 
-	[Fact]
+	[Test]
 	public void Write_after_read_creates_a_dependency()
 	{
 		var s = Schedule(g =>
@@ -60,10 +60,10 @@ public class GraphScheduleTests
 			g.Pass("rewriter").Writes(r);      // must wait for 'reader' (WAR)
 		});
 
-		Assert.Equal(["reader"], DepsOf(s, "rewriter"));
+		DepsOf(s, "rewriter").ShouldBe(new[] { "reader" });
 	}
 
-	[Fact]
+	[Test]
 	public void Two_readers_of_the_same_resource_do_not_depend_on_each_other()
 	{
 		var s = Schedule(g =>
@@ -78,11 +78,11 @@ public class GraphScheduleTests
 		});
 
 		// Both read the writer's output; neither reads the other's, so they're independent.
-		Assert.Equal(["writer"], DepsOf(s, "readerA"));
-		Assert.Equal(["writer"], DepsOf(s, "readerB"));
+		DepsOf(s, "readerA").ShouldBe(new[] { "writer" });
+		DepsOf(s, "readerB").ShouldBe(new[] { "writer" });
 	}
 
-	[Fact]
+	[Test]
 	public void A_rewrite_after_multiple_readers_waits_on_the_readers_not_the_first_writer()
 	{
 		var s = Schedule(g =>
@@ -98,10 +98,10 @@ public class GraphScheduleTests
 		});
 
 		// Minimal precise WAR edges: the readers (which already wait on write1), not write1 itself.
-		Assert.Equal(["readA", "readB"], DepsOf(s, "write2"));
+		DepsOf(s, "write2").ShouldBe(new[] { "readA", "readB" });
 	}
 
-	[Fact]
+	[Test]
 	public void Blend_depends_on_the_prior_writer_and_becomes_the_next_last_writer()
 	{
 		var s = Schedule(g =>
@@ -114,11 +114,11 @@ public class GraphScheduleTests
 			g.Pass("consume").Samples(lit).Writes(screen); // RAW on the blend (latest writer)
 		});
 
-		Assert.Equal(["produce"], DepsOf(s, "accumulate"));
-		Assert.Equal(["accumulate"], DepsOf(s, "consume"));
+		DepsOf(s, "accumulate").ShouldBe(new[] { "produce" });
+		DepsOf(s, "consume").ShouldBe(new[] { "accumulate" });
 	}
 
-	[Fact]
+	[Test]
 	public void Depth_write_then_read_creates_a_dependency()
 	{
 		var s = Schedule(g =>
@@ -130,13 +130,13 @@ public class GraphScheduleTests
 			g.Pass("transparent").ReadsDepth(depth).Writes(lit);
 		});
 
-		Assert.Equal(["gbuffer"], DepsOf(s, "transparent"));
+		DepsOf(s, "transparent").ShouldBe(new[] { "gbuffer" });
 	}
 
-	[Fact]
+	[Test]
 	public void Reading_a_transient_before_it_is_written_throws()
 	{
-		var ex = Assert.Throws<GraphValidationException>(() =>
+		var ex = Should.Throw<GraphValidationException>(() =>
 			Schedule(g =>
 			{
 				var world = g.Domain("world", 320, 180);
@@ -145,14 +145,14 @@ public class GraphScheduleTests
 				g.Pass("p").Samples(ghost).Writes(o);
 			}));
 
-		Assert.Contains("ghost", ex.Message);
+		ex.Message.ShouldContain("ghost");
 	}
 
-	[Fact]
+	[Test]
 	public void Presenting_a_target_no_pass_writes_throws()
 	{
 		// You cannot present a resource nothing produces — the screen would show undefined contents (M7-A4).
-		var ex = Assert.Throws<GraphValidationException>(() =>
+		var ex = Should.Throw<GraphValidationException>(() =>
 			Schedule(g =>
 			{
 				var world = g.Domain("world", 320, 180);
@@ -162,10 +162,10 @@ public class GraphScheduleTests
 				g.Present(screen);     // but presents the backbuffer, which nothing writes
 			}));
 
-		Assert.Contains("never written", ex.Message);
+		ex.Message.ShouldContain("never written");
 	}
 
-	[Fact]
+	[Test]
 	public void Reading_a_persistent_before_writing_is_allowed()
 	{
 		// Persistent resources carry cross-frame history, so read-before-write is legal (Planning.md §8).
@@ -176,29 +176,29 @@ public class GraphScheduleTests
 			g.Pass("adapt").Samples(history).Writes(o);
 		});
 
-		Assert.Empty(DepsOf(s, "adapt"));
+		DepsOf(s, "adapt").ShouldBeEmpty();
 	}
 
-	[Fact]
+	[Test]
 	public void Execution_order_places_every_pass_after_its_prerequisites()
 	{
 		var s = ReferenceFrame();
 		var orderOf = s.Passes.ToDictionary(p => p.ProgramIndex, p => p.Order);
 		foreach (var scheduled in s.Passes)
 			foreach (var dep in scheduled.DependsOn)
-				Assert.True(orderOf[dep] < scheduled.Order, $"'{s.Graph.Passes[dep].Name}' must precede '{scheduled.Pass.Name}'.");
+				(orderOf[dep] < scheduled.Order).ShouldBeTrue($"'{s.Graph.Passes[dep].Name}' must precede '{scheduled.Pass.Name}'.");
 	}
 
-	[Fact]
+	[Test]
 	public void Reference_frame_derives_the_dependencies_section_6_describes()
 	{
 		var s = ReferenceFrame();
 
-		Assert.Empty(DepsOf(s, "gbuffer"));
-		Assert.Equal(["gbuffer"], DepsOf(s, "lighting"));            // samples the G-buffer
-		Assert.Equal(["gbuffer", "lighting"], DepsOf(s, "transparent")); // RAW on lit, depth read on gbuffer
-		Assert.Equal(["transparent"], DepsOf(s, "upscale"));        // samples the accumulated lit
-		Assert.Equal(["upscale"], DepsOf(s, "hud"));                // WAW on the backbuffer, program order
+		DepsOf(s, "gbuffer").ShouldBeEmpty();
+		DepsOf(s, "lighting").ShouldBe(new[] { "gbuffer" });            // samples the G-buffer
+		DepsOf(s, "transparent").ShouldBe(new[] { "gbuffer", "lighting" }); // RAW on lit, depth read on gbuffer
+		DepsOf(s, "upscale").ShouldBe(new[] { "transparent" });        // samples the accumulated lit
+		DepsOf(s, "hud").ShouldBe(new[] { "upscale" });                // WAW on the backbuffer, program order
 	}
 
 	// The §6 reference-frame shape (minus the bloom sub-graph, which is M5).

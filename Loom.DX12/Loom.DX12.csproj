@@ -31,21 +31,21 @@
     <!-- Neutral asset layer: the M13 shader hot-reload watcher (no graphics types). -->
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <!-- Hermetic slangc for compiling the engine shaders to DXIL (bundled in the package; win-x64 / win-arm64). -->
-    <PackageReference Include="Slang.Sdk" Version="0.5.1" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 
   <!-- The DirectX 12 stack, quarantined here. D3DCompiler is the in-box FXC (d3dcompiler_47.dll) — slice 1
        compiles the hand-baked triangle's HLSL to DXBC at runtime, because the bundled slangc can't emit DXIL
        on win-arm64 (no dxc/dxil). The offline DXIL pipeline is a follow-up workstream. -->
   <ItemGroup>
-    <PackageReference Include="Silk.NET.Direct3D12" Version="2.23.0" />
-    <PackageReference Include="Silk.NET.DXGI" Version="2.23.0" />
-    <PackageReference Include="Silk.NET.Direct3D.Compilers" Version="2.23.0" />
-    <PackageReference Include="Silk.NET.Maths" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Direct3D12" />
+    <PackageReference Include="Silk.NET.DXGI" />
+    <PackageReference Include="Silk.NET.Direct3D.Compilers" />
+    <PackageReference Include="Silk.NET.Maths" />
     <!-- ImGui rendering is inherently backend-specific (like imgui_impl_dx12), so the DX12 ImGui renderer
          lives here. Only Loom.DX12 + the host see ImGui.NET; Loom.Core/Graph stay UI-agnostic. Gated on
          <UseImGui> (repo-wide, Directory.Build.props) — off drops the dependency and the renderer entirely. -->
-    <PackageReference Include="ImGui.NET" Version="1.91.6.1" Condition="'$(UseImGui)' == 'true'" />
+    <PackageReference Include="ImGui.NET" Condition="'$(UseImGui)' == 'true'" />
   </ItemGroup>
 
   <!-- Shared shader-compile targets (after the body, so LoomShaderSourceDir is set). -->

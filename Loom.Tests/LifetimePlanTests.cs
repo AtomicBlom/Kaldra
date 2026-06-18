@@ -30,40 +30,40 @@ public class LifetimePlanTests
 		g.Present(screen);
 	}));
 
-	[Fact]
+	[Test]
 	public void Span_runs_from_first_touch_to_last_touch()
 	{
 		var plan = ReferenceFrame();
 
 		// albedo: written by gbuffer (0), sampled by lighting (1).
-		Assert.Equal((0, 1), (Life(plan, "albedo").FirstUse, Life(plan, "albedo").LastUse));
+		(Life(plan, "albedo").FirstUse, Life(plan, "albedo").LastUse).ShouldBe((0, 1));
 		// depth: gbuffer (0) writes, lighting (1) samples, transparent (2) reads -> [0,2].
-		Assert.Equal((0, 2), (Life(plan, "depth").FirstUse, Life(plan, "depth").LastUse));
+		(Life(plan, "depth").FirstUse, Life(plan, "depth").LastUse).ShouldBe((0, 2));
 		// lit: lighting (1) writes, transparent (2) blends, upscale (3) samples -> [1,3].
-		Assert.Equal((1, 3), (Life(plan, "lit").FirstUse, Life(plan, "lit").LastUse));
+		(Life(plan, "lit").FirstUse, Life(plan, "lit").LastUse).ShouldBe((1, 3));
 		// backbuffer: upscale (3) and hud (4) -> [3,4].
-		Assert.Equal((3, 4), (Life(plan, "<backbuffer>").FirstUse, Life(plan, "<backbuffer>").LastUse));
+		(Life(plan, "<backbuffer>").FirstUse, Life(plan, "<backbuffer>").LastUse).ShouldBe((3, 4));
 	}
 
-	[Fact]
+	[Test]
 	public void Backbuffer_is_not_aliasable()
 	{
 		var plan = ReferenceFrame();
-		Assert.False(Life(plan, "<backbuffer>").Aliasable);
-		Assert.True(Life(plan, "albedo").Aliasable);
-		Assert.True(Life(plan, "depth").Aliasable);
+		Life(plan, "<backbuffer>").Aliasable.ShouldBeFalse();
+		Life(plan, "albedo").Aliasable.ShouldBeTrue();
+		Life(plan, "depth").Aliasable.ShouldBeTrue();
 	}
 
-	[Fact]
+	[Test]
 	public void Overlapping_lifetimes_cannot_alias()
 	{
 		var plan = ReferenceFrame();
 		// albedo [0,1] and lit [1,3] are both live at order 1.
-		Assert.True(Life(plan, "albedo").Overlaps(Life(plan, "lit")));
-		Assert.False(Life(plan, "albedo").CanAlias(Life(plan, "lit")));
+		Life(plan, "albedo").Overlaps(Life(plan, "lit")).ShouldBeTrue();
+		Life(plan, "albedo").CanAlias(Life(plan, "lit")).ShouldBeFalse();
 	}
 
-	[Fact]
+	[Test]
 	public void Disjoint_transient_lifetimes_can_alias()
 	{
 		// a [0,1], b [1,2], c [2,2]: a is dead before c is born, so c may reuse a's memory.
@@ -78,12 +78,12 @@ public class LifetimePlanTests
 			g.Pass("p2").Samples(b).Writes(c);
 		}));
 
-		Assert.True(Life(plan, "a").CanAlias(Life(plan, "c")));   // [0,1] vs [2,2] disjoint
-		Assert.False(Life(plan, "a").CanAlias(Life(plan, "b")));  // [0,1] vs [1,2] share order 1
-		Assert.False(Life(plan, "b").CanAlias(Life(plan, "c")));  // [1,2] vs [2,2] share order 2
+		Life(plan, "a").CanAlias(Life(plan, "c")).ShouldBeTrue();   // [0,1] vs [2,2] disjoint
+		Life(plan, "a").CanAlias(Life(plan, "b")).ShouldBeFalse();  // [0,1] vs [1,2] share order 1
+		Life(plan, "b").CanAlias(Life(plan, "c")).ShouldBeFalse();  // [1,2] vs [2,2] share order 2
 	}
 
-	[Fact]
+	[Test]
 	public void Single_pass_resource_has_a_point_lifetime()
 	{
 		var plan = Derive(RenderGraph.Define(g =>
@@ -94,10 +94,10 @@ public class LifetimePlanTests
 		}));
 
 		var life = Life(plan, "only");
-		Assert.Equal(life.FirstUse, life.LastUse);
+		life.LastUse.ShouldBe(life.FirstUse);
 	}
 
-	[Fact]
+	[Test]
 	public void Declared_but_unused_resource_gets_no_lifetime()
 	{
 		ResourceHandle? unused = null;
@@ -109,11 +109,11 @@ public class LifetimePlanTests
 			g.Pass("p").Writes(used);
 		}));
 
-		Assert.DoesNotContain(plan.Lifetimes, l => l.Resource.Name == "unused");
-		Assert.Null(plan.Of(unused!));
+		plan.Lifetimes.ShouldNotContain(l => l.Resource.Name == "unused");
+		plan.Of(unused!).ShouldBeNull();
 	}
 
-	[Fact]
+	[Test]
 	public void Persistent_resource_is_not_aliasable()
 	{
 		var plan = Derive(RenderGraph.Define(g =>
@@ -125,10 +125,10 @@ public class LifetimePlanTests
 			g.Pass("write").Writes(history).Samples(lit);
 		}));
 
-		Assert.False(Life(plan, "history").Aliasable);
+		Life(plan, "history").Aliasable.ShouldBeFalse();
 	}
 
-	[Fact]
+	[Test]
 	public void Readback_target_lifetime_extends_to_end_of_frame()
 	{
 		// `a` is read back to the host (g.Readback). That copy runs AFTER every pass, so `a` must stay live
@@ -148,8 +148,8 @@ public class LifetimePlanTests
 		}));
 
 		// 3 passes -> orders 0..2; the readback pushes `a`'s last use to 3, one past the final pass.
-		Assert.Equal(3, withReadback.Schedule.Passes.Length);
-		Assert.Equal((0, 3), (Life(withReadback, "a").FirstUse, Life(withReadback, "a").LastUse));
+		withReadback.Schedule.Passes.Length.ShouldBe(3);
+		(Life(withReadback, "a").FirstUse, Life(withReadback, "a").LastUse).ShouldBe((0, 3));
 
 		// Guard against over-extension: the SAME graph without the readback leaves `a` at its natural [0,1].
 		var noReadback = Derive(RenderGraph.Define(g =>
@@ -162,6 +162,6 @@ public class LifetimePlanTests
 			g.Pass("p1").Samples(a).Writes(b);
 			g.Pass("p2").Samples(b).Writes(c);
 		}));
-		Assert.Equal((0, 1), (Life(noReadback, "a").FirstUse, Life(noReadback, "a").LastUse));
+		(Life(noReadback, "a").FirstUse, Life(noReadback, "a").LastUse).ShouldBe((0, 1));
 	}
 }

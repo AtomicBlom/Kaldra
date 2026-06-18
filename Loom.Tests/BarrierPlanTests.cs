@@ -33,73 +33,73 @@ public class BarrierPlanTests
 		g.Present(screen);
 	})));
 
-	[Fact]
+	[Test]
 	public void First_write_of_a_fresh_target_clears_and_stores_when_read_later()
 	{
 		var gbuffer = Pass(ReferenceFrame(), "gbuffer");
 
-		Assert.True(HasTransition(gbuffer, "albedo", ResourceState.Undefined, ResourceState.ColorAttachment));
+		HasTransition(gbuffer, "albedo", ResourceState.Undefined, ResourceState.ColorAttachment).ShouldBeTrue();
 		var albedo = Attachment(gbuffer, "albedo");
-		Assert.Equal(LoadAction.Clear, albedo.Load);
-		Assert.Equal(StoreAction.Store, albedo.Store); // sampled by lighting
+		albedo.Load.ShouldBe(LoadAction.Clear);
+		albedo.Store.ShouldBe(StoreAction.Store); // sampled by lighting
 	}
 
-	[Fact]
+	[Test]
 	public void Gbuffer_targets_flip_to_shader_read_for_lighting()
 	{
 		var lighting = Pass(ReferenceFrame(), "lighting");
 
 		// "The G-buffer targets flip COLOR_ATTACHMENT -> SHADER_READ between gbuffer and lighting." (§6)
-		Assert.True(HasTransition(lighting, "albedo", ResourceState.ColorAttachment, ResourceState.ShaderRead));
-		Assert.True(HasTransition(lighting, "normal", ResourceState.ColorAttachment, ResourceState.ShaderRead));
-		Assert.True(HasTransition(lighting, "material", ResourceState.ColorAttachment, ResourceState.ShaderRead));
+		HasTransition(lighting, "albedo", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
+		HasTransition(lighting, "normal", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
+		HasTransition(lighting, "material", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
 	}
 
-	[Fact]
+	[Test]
 	public void Blend_loads_existing_contents_and_emits_a_same_layout_write_hazard_barrier()
 	{
 		var transparent = Pass(ReferenceFrame(), "transparent");
 
 		// LoadOp.Load to accumulate onto the lit result; the barrier is a same-layout memory hazard (RAW).
-		Assert.Equal(LoadAction.Load, Attachment(transparent, "lit").Load);
-		Assert.True(HasTransition(transparent, "lit", ResourceState.ColorAttachment, ResourceState.ColorAttachment));
+		Attachment(transparent, "lit").Load.ShouldBe(LoadAction.Load);
+		HasTransition(transparent, "lit", ResourceState.ColorAttachment, ResourceState.ColorAttachment).ShouldBeTrue();
 	}
 
-	[Fact]
+	[Test]
 	public void Depth_becomes_read_only_for_the_transparent_pass()
 	{
 		var transparent = Pass(ReferenceFrame(), "transparent");
 
-		Assert.True(HasTransition(transparent, "depth", ResourceState.ShaderRead, ResourceState.DepthReadOnly));
+		HasTransition(transparent, "depth", ResourceState.ShaderRead, ResourceState.DepthReadOnly).ShouldBeTrue();
 		var depth = Attachment(transparent, "depth");
-		Assert.Equal(ResourceState.DepthReadOnly, depth.State);
-		Assert.Equal(LoadAction.Load, depth.Load);      // the existing depth is the test input
-		Assert.Equal(StoreAction.DontCare, depth.Store); // read-only: nothing to store
+		depth.State.ShouldBe(ResourceState.DepthReadOnly);
+		depth.Load.ShouldBe(LoadAction.Load);      // the existing depth is the test input
+		depth.Store.ShouldBe(StoreAction.DontCare); // read-only: nothing to store
 	}
 
-	[Fact]
+	[Test]
 	public void First_backbuffer_write_clears_second_loads_over_it()
 	{
 		var plan = ReferenceFrame();
 
-		Assert.Equal(LoadAction.Clear, Attachment(Pass(plan, "upscale"), "<backbuffer>").Load);
+		Attachment(Pass(plan, "upscale"), "<backbuffer>").Load.ShouldBe(LoadAction.Clear);
 		// The HUD draws on top of the upscaled image, so it must preserve (load) existing contents.
-		Assert.Equal(LoadAction.Load, Attachment(Pass(plan, "hud"), "<backbuffer>").Load);
+		Attachment(Pass(plan, "hud"), "<backbuffer>").Load.ShouldBe(LoadAction.Load);
 		// Same-layout WAW barrier orders hud after upscale on the backbuffer.
-		Assert.True(HasTransition(Pass(plan, "hud"), "<backbuffer>", ResourceState.ColorAttachment, ResourceState.ColorAttachment));
+		HasTransition(Pass(plan, "hud"), "<backbuffer>", ResourceState.ColorAttachment, ResourceState.ColorAttachment).ShouldBeTrue();
 	}
 
-	[Fact]
+	[Test]
 	public void Present_target_gets_a_terminal_transition_to_present()
 	{
 		var plan = ReferenceFrame();
-		var terminal = Assert.Single(plan.FinalTransitions);
-		Assert.True(terminal.Resource.IsBackbuffer);
-		Assert.Equal(ResourceState.ColorAttachment, terminal.From);
-		Assert.Equal(ResourceState.Present, terminal.To);
+		var terminal = plan.FinalTransitions.ShouldHaveSingleItem();
+		terminal.Resource.IsBackbuffer.ShouldBeTrue();
+		terminal.From.ShouldBe(ResourceState.ColorAttachment);
+		terminal.To.ShouldBe(ResourceState.Present);
 	}
 
-	[Fact]
+	[Test]
 	public void Read_after_read_emits_no_barrier_for_the_shared_resource()
 	{
 		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
@@ -114,11 +114,11 @@ public class BarrierPlanTests
 		})));
 
 		// readerA transitions src ColorAttachment -> ShaderRead; readerB finds it already ShaderRead.
-		Assert.True(HasTransition(Pass(plan, "readerA"), "src", ResourceState.ColorAttachment, ResourceState.ShaderRead));
-		Assert.DoesNotContain(Pass(plan, "readerB").Transitions, t => t.Resource.Name == "src");
+		HasTransition(Pass(plan, "readerA"), "src", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
+		Pass(plan, "readerB").Transitions.ShouldNotContain(t => t.Resource.Name == "src");
 	}
 
-	[Fact]
+	[Test]
 	public void Dead_target_that_is_never_read_is_not_stored()
 	{
 		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
@@ -128,10 +128,10 @@ public class BarrierPlanTests
 			g.Pass("only").Writes(scratch); // written, never read, not presented
 		})));
 
-		Assert.Equal(StoreAction.DontCare, Attachment(Pass(plan, "only"), "scratch").Store);
+		Attachment(Pass(plan, "only"), "scratch").Store.ShouldBe(StoreAction.DontCare);
 	}
 
-	[Fact]
+	[Test]
 	public void Instance_buffer_filled_by_compute_transitions_storage_to_vertex_input_for_the_draw()
 	{
 		// M12 GPU-driven instancing reuses the GPU-particle edge: a compute .ReadWrites the instance buffer, the
@@ -146,6 +146,6 @@ public class BarrierPlanTests
 			g.Present(screen);
 		})));
 
-		Assert.True(HasTransition(Pass(plan, "foliage"), "instances", ResourceState.Storage, ResourceState.VertexInput));
+		HasTransition(Pass(plan, "foliage"), "instances", ResourceState.Storage, ResourceState.VertexInput).ShouldBeTrue();
 	}
 }

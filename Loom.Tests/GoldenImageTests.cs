@@ -15,11 +15,11 @@ public class GoldenImageTests
 	private const int PerChannelTolerance = 4;
 	private const double MaxFailedFraction = 0.005;
 
-	[Fact]
+	[Test]
 	public void Captures_match_committed_baselines_within_tolerance()
 	{
 		// Opt-in: the GPU-producing capture step runs locally (tools/golden.ps1) and sets LOOM_GOLDEN_DIR. Without
-		// it — e.g. the no-GPU CI run — this passes vacuously (xunit v2 has no dynamic Assert.Skip).
+		// it — e.g. the no-GPU CI run — this passes vacuously.
 		var captureDir = Environment.GetEnvironmentVariable("LOOM_GOLDEN_DIR");
 		if (string.IsNullOrEmpty(captureDir))
 			return;
@@ -50,6 +50,6 @@ public class GoldenImageTests
 				failures.Add($"{name}: {diff}");
 		}
 
-		Assert.True(failures.Count == 0, "Golden-image regressions detected:\n  " + string.Join("\n  ", failures));
+		failures.ShouldBeEmpty("Golden-image regressions detected:\n  " + string.Join("\n  ", failures));
 	}
 }
