@@ -55,13 +55,15 @@ Reference seam to mirror:
 
 | Project | TFM | Role | References |
 |---|---|---|---|
-| **`Loom.UI`** | `net10.0` | Backend-neutral UI runtime: dependency-object model, controls, layout/visual tree, routed events, focus, hit-testing (2D + 3D ray), `UiHost`, draw-list builder, animation, text layout. | **`Loom.Core` only** |
+| **`Loom.UI`** | `net10.0` | Backend-neutral UI runtime: dependency-object model, controls, layout/visual tree, routed events, focus, hit-testing (2D + 3D ray), `UiHost`, draw-list builder, animation, text layout. | **`Loom.Core` + `Loom.Assets`** (both neutral) |
 | **`Loom.UI.SourceGen`** | `netstandard2.0` | Roslyn `IIncrementalGenerator`: `.xaml` → typed control-tree builders + `x:Bind`/event/storyboard/visual-state glue. Ships as `<Analyzer>`. Build-time only. | `Microsoft.CodeAnalysis.CSharp` (host-pinned, `PrivateAssets=all`) |
 | **`Loom.UI.Text.Bake`** | `net10.0` | Build-time console tool (never shipped): font subset → MSDF atlas PNG + metrics JSON. Orchestrates `msdf-atlas-gen`. | — |
 | `build/Loom.Sdk/Loom.UI.{props,targets}` | — | Register `.xaml` as `AdditionalFiles` for the generator (+ `UpToDateCheck`); run the font bake + register atlas/JSON as Embedded/Content. Mirrors `Loom.Shaders.{props,targets}`. | — |
 
-`Loom.UI` depends on `Loom.Core` only and **must not** reference Graph/Vulkan/DX12 — it reaches the GPU
-solely through the neutral seams (`RenderGraph.Define`, `IEngine`, `IRenderContext`), exactly as an app does.
+`Loom.UI` depends on `Loom.Core` + `Loom.Assets` (both neutral, Core-only, no GPU types) and **must not**
+reference Graph/Vulkan/DX12 — it reaches the GPU solely through the neutral seams (`RenderGraph.Define`,
+`IEngine`, `IRenderContext`), exactly as an app does. The `Loom.Assets` reference is what lets the runtime
+`FontAtlas` decode baked MSDF pages via `ImageLoader.Decode` (shipped M11) rather than re-wrapping StbImageSharp.
 Naming follows existing repo casing (`Loom.Core`, `Loom.DX12`): the project is `Loom.UI`.
 
 ### Core surface additions (the only changes to Core — all neutral, no GPU types)
@@ -146,7 +148,8 @@ clearly on anything outside the grammar.
   `(text, font, size, width)`. Charset subset is driven by the localization string table; coverage gaps fall
   back through a `FontFallbackChain`, then a `.notdef`/tofu glyph; **the bake tool warns at build time** on any
   string-table codepoint with no covering font. (NAOT-purist escape hatch: bake-time shaping of fixed strings,
-  documented, not v1.) PNG decode reuses **StbImageSharp** (already planned for M11 assets).
+  documented, not v1.) PNG decode reuses **`ImageLoader.Decode`** ([`Loom.Assets`](Loom.Assets/ImageLoader.cs),
+shipped in M11; StbImageSharp-backed) → neutral `TextureData`; the UI makes no direct StbImageSharp call.
 - **Compositing:**
   - *Overlay* — after upscale, at native res, blends the backbuffer:
     `g.Pass("ui").Blends(screen).Draw(ctx => ctx.DrawUI(UiSurface.Hud))` (the
@@ -192,34 +195,51 @@ clearly on anything outside the grammar.
   `UIElement`/`FrameworkElement`, Grid/TextBlock/Button, trivial layout); `Loom.UI.SourceGen` compiles a tiny
   XAML subset → constructible tree + `x:Name` fields (no binds); SDK props/targets wire the generator +
   `UpToDateCheck`. **Exit:** a `.xaml` page compiles to a constructible tree; the no-op `DrawUI` seam runs clean
-  on both backends.
+  on both backends. **Tests:** stand up `Loom.UI.Tests` (TUnit + Shouldly) + the NAOT gate (MU0 plumbing), plus
+  DP precedence-ladder (incl. the animation rung), trivial-layout, and the first source-gen snapshot tests.
 - **MU1 — First pixels.** `ui.slang` (fill + MSDF) → SPIR-V + DXIL; bake one ASCII MSDF fontset; real `UiRenderer`
   (atlas upload + grown buffers + batched scissored draw); `UiRoot` + `Border` + hardcoded `TextBlock`;
   `g.Pass("ui").Blends(screen)`. **Exit:** a rounded rect + crisp MSDF text over the world, pixel-matched
-  Vulkan↔DX12 via `LOOM_CAPTURE`.
+  Vulkan↔DX12 via `LOOM_CAPTURE`. **Tests:** draw-list build (fill + glyph emit, state-run batching, `TextureId`)
+  + `FontAtlas`-from-fixture decode via `ImageLoader`.
 - **MU2 — Layout + x:Bind + clicks.** Full Grid/StackPanel/Canvas/Border/ContentPresenter + measure/arrange +
   invalidation/no-op; generator x:Bind OneTime/OneWay + event bindings + diagnostics; `UiHost`+pointer
   InputManager, 2D hit-test, bubble pointer events, `Button.Click`. **Exit:** a clickable, data-bound button/list.
+  **Tests:** Grid star/auto/pixel + measure/arrange; 2D hit-test; bubble routing order; x:Bind OneWay snapshot.
 - **MU3 — Interaction depth + styles.** Tunnel+Handled; keyboard focus + Tab; pointer capture + drag; multiple
   screen layers + popup focus scopes; generator TwoWay/functions/converters/fallback; Styles + StaticResource +
-  ResourceDictionary. **Exit:** focus-navigable, two-way-bound, styled form.
+  ResourceDictionary. **Exit:** focus-navigable, two-way-bound, styled form. **Tests:** tunnel + `Handled`
+  order; Tab order; pointer capture; TwoWay/converter/fallback snapshots; style precedence rung.
 - **MU4 — Templates + animation.** ControlTemplate/DataTemplate + TemplateBinding (nested scoped Bindings +
   generated factories); Storyboard/keyframe/easing on the animation layer; `VisualStateManager`;
   ItemsControl/ListView with data templates. **Exit:** templated, animated controls; templated item list.
+  **Tests:** storyboard interpolation/easing/`FillBehavior`; `VisualStateManager` transitions; template factory +
+  nested `Bindings` snapshot.
 - **MU5 — Full v1.** HarfBuzz shaping + fallback + line-break + rich runs + tofu/warn + bake charset config;
   in-world surface + camera-ray hit-testing; gamepad + XYFocus; touch; HDR-surface color correctness; IME seam
   (committed chars). **Exit:** the reference UI demo — screen-space HUD + interactive in-world panel, mouse +
-  keyboard + gamepad + touch, animated + data-bound, pixel-matched across backends.
+  keyboard + gamepad + touch, animated + data-bound, pixel-matched across backends. **Tests:** text
+  shape/break/wrap + fallback/tofu (fixture); ray→UV hit-test; XYFocus candidate selection; HDR linearization math.
 
 ## Verification
 
-- **Per milestone:** a focused `Loom.Sandbox` demo + a `LOOM_CAPTURE` deterministic frame (frozen time/delta) +
-  cross-backend pixel diff (the established loop; [CLAUDE.md](CLAUDE.md) §Agent Behaviour — use a subagent to
-  judge captures).
-- **Unit tests** in [Loom.Tests](Loom.Tests): Grid star-sizing & measure/arrange math; 2D + ray→UV hit-testing;
-  routed-event tunnel/bubble ordering + `Handled`; DP value precedence (animation > local); XYFocus candidate
-  selection. **Source-generator snapshot tests** (Roslyn testing harness) asserting the emitted C# for
-  representative `.xaml` (the `x:Bind` page, a styled/templated control, a storyboard).
+The strategy is **graphics-framework-free by design** — the headless-testable invariant (above) means almost the
+whole engine is exercised by fast, deterministic CPU tests; only the backend renderer's *pixels* need the GPU.
+D8 is the detailed design; the shape:
+
+- **Unit tests** in a new **`Loom.UI.Tests`** project (`net10.0`, **TUnit + Shouldly**; references `Loom.UI` +
+  `Loom.Core` + `Loom.Assets`, **no backend ref** — mirroring the [Loom.Tests](Loom.Tests/Loom.Tests.csproj)
+  no-Vulkan/DX12 rule). Coverage: DP value precedence (animation > local); Grid star-sizing & measure/arrange
+  math; the **draw-list seam** (assert the neutral `UiDrawData` vertex/command stream — the UI analog of asserting
+  `BarrierPlan`/`AliasPlan`); 2D + ray→UV hit-testing; routed-event tunnel/bubble ordering + `Handled`; XYFocus
+  candidate selection; storyboard interpolation; text shape/break/wrap against a committed font fixture.
+- **Source-generator snapshot tests** (Roslyn testing harness, in `Loom.UI.Tests`) asserting the emitted C# for
+  representative `.xaml` (the `x:Bind` page, a styled/templated control, a storyboard); diagnostics carry the XAML
+  `file:line`.
+- **Per milestone (GPU pixels only):** a focused `Loom.Sandbox` demo + a `LOOM_CAPTURE` deterministic frame
+  (frozen time/delta) + cross-backend pixel diff (the established loop; [CLAUDE.md](CLAUDE.md) §Agent Behaviour —
+  use a subagent to judge captures). This now covers *only* the backend `UiRenderer`/`DX12UiRenderer` — everything
+  above it is the deterministic CPU tests above.
 - **NativeAOT gate (new):** mark `Loom.UI` `IsAotCompatible`; add a CI `PublishAot` smoke-publish of
   `Loom.Sandbox` treating trim/AOT warnings as errors. No NAOT settings exist in any csproj today — establishing
   this gate is itself an MU0 deliverable.
@@ -246,7 +266,8 @@ clearly on anything outside the grammar.
 This is a new track comparable in size to the whole M11–M16 roadmap. When work starts, add a new **Stage** to
 the GitHub Projects board (#6, `AtomicBlom`) for the UI track (e.g. `MU0`…`MU5`, orange until shipped) and break
 each milestone into task cards, per the board conventions in [CLAUDE.md](CLAUDE.md). MU0 carries the SDK/generator
-plumbing + the NAOT gate; treat the XAML-subset grammar as a `Decision` card to resolve and publish before MU2.
+plumbing + the NAOT gate + the `Loom.UI.Tests` scaffold (TUnit + Shouldly) + the MSDF font fixture + the
+headless-testable invariant (D8); treat the XAML-subset grammar as a `Decision` card to resolve and publish before MU2.
 
 ---
 
@@ -263,7 +284,7 @@ signatures are *indicative* — they show shape and intent, not a frozen API. Al
 Loom.Core   (neutral, no GPU types)   UiVertex · UiPrimKind · UiDrawCommand · UiDrawData · UiSurfaceId
                                        + IEngine.EnableUI · IRenderContext.DrawUI · FrameInputs.UiSurfaces
    ▲
-Loom.UI     (neutral, refs Core only)  DependencyObject/Property · UIElement→FrameworkElement · controls ·
+Loom.UI     (neutral, refs Core+Assets) DependencyObject/Property · UIElement→FrameworkElement · controls ·
                                        layout · UiRoot · UiDrawList builder · routed events · focus/XYFocus ·
                                        hit-testing (2D + ray) · UiHost · animation · TextLayoutEngine · FontAtlas
    ▲  (build-time only — analyzer + content; NOT a runtime ref)
@@ -277,6 +298,13 @@ Loom.Sandbox  (host)                   Silk.NET input → neutral events → UiH
 
 Cardinal invariant restated: the only Core additions are **neutral managed data** (no `Vk*`/`D3D12*` types);
 `Loom.UI` reaches the GPU only through `RenderGraph.Define` / `IEngine` / `IRenderContext`, exactly as a demo does.
+
+Second invariant — **headless-testable by construction** (load-bearing; see D8): `UiHost.Tick(...)`,
+`UiRoot.LayoutPass(...)` and `UiRoot.Render()` must run to completion with **no `IEngine`, no backend, no
+window** — input crosses in as neutral events, the product is neutral `UiDrawData`, and the engine is touched
+only at the final `ctx.DrawUI` upload. Coupling layout / input / routing / animation / draw-list build to a
+live engine handle is a design violation; it is precisely what keeps nearly the whole engine unit-testable with
+no GPU, the way the Describe/Execute layers already are.
 
 ---
 
@@ -735,7 +763,7 @@ Mid-session per-monitor DPI changes set `LayoutScale` + invalidate the root.
 | Text **shaping** (runs → positioned glyphs) | runtime | **HarfBuzzSharp** (MIT) |
 | Font **fallback** chain | runtime | our `FontFallbackChain` |
 | Line breaking / wrapping / rich runs | runtime | our `TextLayoutEngine` (UAX-14-lite v1) |
-| Glyph → UV lookup, draw | runtime | our `FontAtlas` (loads baked JSON + PNG) |
+| Glyph → UV lookup, draw | runtime | our `FontAtlas` (loads baked JSON + PNG via `ImageLoader.Decode`) |
 
 ### D3.1 Build-time bake tool & `*.fontset.json`
 
@@ -809,7 +837,7 @@ color.a   *= cov;
 | MSDF generation (build) | **msdf-atlas-gen** | MIT | n/a (build only) | Canonical generator; emits atlas + JSON + packing. Bundled like `slangc`. |
 | Shaping (runtime) | **HarfBuzzSharp** | MIT binding | Yes — native lib + thin P/Invoke, no reflection | Industry-standard shaper; well-maintained on .NET; cross-platform. *Native ≠ reflection.* |
 | BiDi / line-break (runtime) | small in-repo UAX-14/UAX-9 | MIT | Yes (pure managed) | Table-driven; keeps v1 dep-light. |
-| Atlas PNG decode | **StbImageSharp** (shared with M11 assets) | MIT | Yes (pure managed) | Reuse the decode lib M11 adds; no new dep. |
+| Atlas PNG decode | **`ImageLoader.Decode`** (`Loom.Assets`; StbImageSharp-backed) | MIT | Yes (pure managed) | Shipped in M11 → neutral `TextureData`/`MipLevel`; already a demo/test dep, no new dep. |
 
 Native-shaper tension: the bar is *no reflection in hot paths*, not *no native code* (the engine already ships
 native Vulkan/DX12/cimgui + Slang/DXC at build). HarfBuzzSharp fits that mold. NAOT-purist / fixed-string-table
@@ -1107,4 +1135,70 @@ diff — the surface is deterministic given identical `UiDrawData`.
 4. **Cross-surface focus & gamepad ownership (D5.5)** — v1 contains focus per active surface; design the hop later.
 5. **IME (D5.6)** — committed-chars-only in v1 behind `ITextInputProvider`; full per-OS IME is post-v1.
 6. **HDR "above paper-white" UI brushes (D4.4)** — opt-in glow under HDR; default is paper-white-clamped.
+
+---
+
+## D8. Testability (graphics-framework-free)
+
+**Thesis.** The same layering that makes Loom's render graph testable applies to the UI engine *by
+construction*. The Describe/Execute layers are fully unit-tested with no GPU — build an immutable graph, derive
+a plan, assert on it (`RenderGraph.Define(…) → GraphSchedule/BarrierPlan/AliasPlan/LifetimePlan.Derive → assert`,
+with a `GraphValidationException` for malformed input and a shared §6 reference-frame helper; see
+[Loom.Tests](Loom.Tests/)). `Loom.UI` is shaped identically: it references **Core + Assets only**, takes **neutral
+input** (events) and produces **neutral output** (`UiDrawData`). So everything *except* the backend
+`UiRenderer`/`DX12UiRenderer` and the literal pixels is exercisable by fast, deterministic CPU tests — no window,
+no engine, no Vulkan/DX12. The **headless-testable invariant** (Architecture §) is what guarantees this; protect it.
+
+### D8.1 Inspection helpers as first-class API
+
+Mirror the graph layer's `Hash()` / `Dump()` / `ToDot()` (used pervasively in the existing tests) with UI
+equivalents, so tests assert on a stable text form rather than fiddly object graphs — and so each ships as the
+**debug overlay** the design already calls for (the XYFocus score overlay, etc.):
+
+- `UiDrawData.Dump()` — a deterministic text snapshot of the vertex/command stream (positions, colors, clip
+  rects, `TextureId`, kind, `Revision`). This is the **"golden draw-list"**: the UI analog of a golden image, but
+  CPU-only — deterministic, fast, diffable, and cross-platform. It is the primary way the whole 2D pipeline up to
+  GPU upload is tested.
+- `UiRoot.DumpLayout()` — the visual tree annotated with `DesiredSize` / `LayoutRect` after a layout pass.
+- A `UiHost` state dump (focused element, capture, over-chains, active storyboards) for input/focus tests.
+
+Malformed trees/bindings raise a **`UiValidationException`** (the analog of `GraphValidationException`); tests
+cover happy-path *and* error-path, exactly as the graph tests do (e.g. "reading a transient before it is written
+throws").
+
+### D8.2 What is headless-testable (and how)
+
+| Subsystem | Headless? | Assert on | Pattern |
+|---|---|---|---|
+| DP model + precedence ladder | ✅ | resolved value across rungs (animation > local > style > inherited > default); change thunk fires only on *resolved* change; `InvalidationFlags` propagate up the tree | set rungs → `GetValue` + dirty flags |
+| Layout (measure/arrange) | ✅ | `DesiredSize`/`LayoutRect`: Grid star/auto/pixel, StackPanel, Canvas, Border, Margin/Min/Max/alignment | build tree → `LayoutPass(avail)` → assert (mirrors derivation tests) |
+| Draw-list build | ✅ (neutral output) | `UiVertex` stream; `UiDrawCommand` batching (new cmd only on clip/texture/kind change); transform/clip/opacity fold; `TextureId = 0` white texel; `Revision`/no-op | render tree → `UiDrawData` → assert / `Dump()` snapshot |
+| Routed events | ✅ | tunnel→bubble order, `Handled` gating, `handledEventsToo`, pooled route chain | dispatch synthetic event → assert handler order |
+| Hit-test 2D | ✅ | element hit under a point; respects `IsHitTestVisible`/`Visibility`/clip/`RenderTransform` | build tree → `HitTest(point)` → assert |
+| Hit-test 3D ray | ✅ (pure geometry, neutral `Camera`) | `TryHitWorldQuad` ray→quad→UV→UI-local mapping | feed `Ray` + `UiWorldQuad` + `Camera.ViewProjection` → assert UV/local |
+| Focus + Tab | ✅ | order by `(TabIndex, doc order)`; wrap/contain at scope boundary | request Next/Prev → assert focused |
+| XYFocus | ✅ | direction candidate selection; explicit `XYFocus*` overrides win (this is also how the private WinUI weights get tuned) | place rects → request direction → assert winner |
+| Animation/storyboards | ✅ | eased/interpolated value over ticked time; push to animation rung; `FillBehavior` revert; `VSM.GoToState` | tick clock w/ synthetic delta → assert resolved DP |
+| Text layout | ✅ w/ committed font fixture | measured size, glyph positions, line breaks, `screenPxRange` math, fallback→tofu | load tiny baked fontset fixture → layout string → assert runs/metrics |
+| `UiHost.Tick` end-to-end | ✅ | focus moved / handler fired / capture set / `Render()` output | queue neutral events → `Tick` headless → assert |
+| Source generator | ✅ (Roslyn, build-time) | emitted C# for representative `.xaml` (x:Bind page, styled/templated control, storyboard); diagnostics carry `file:line` | Roslyn snapshot/verify tests |
+| NativeAOT cleanliness | ✅ (CI gate) | `PublishAot` smoke-publish; trim/AOT warnings as errors | CI job (also an MU0 deliverable) |
+| Backend `UiRenderer` + pixels | ❌ GPU | rendered pixels match across backends | `LOOM_CAPTURE` frozen-time cross-backend pixel diff (the established loop) |
+
+### D8.3 Test infrastructure
+
+- **New `Loom.UI.Tests`** project (`net10.0`, **TUnit + Shouldly**) referencing `Loom.UI` (+ `Loom.Core`,
+  `Loom.Assets`) and **no backend** — the same "neutral layers only, never Vulkan/DX12" rule that
+  [Loom.Tests](Loom.Tests/Loom.Tests.csproj) follows. New UI-track tests are authored here directly in TUnit
+  (`[Test]` / `[Arguments]` / data sources) with Shouldly assertions (`value.ShouldBe(…)`). *(The existing
+  `Loom.Tests` is xUnit today and is being migrated to TUnit separately; that migration is out of scope here.)*
+- **Source-gen snapshot tests** live in `Loom.UI.Tests` via the `Microsoft.CodeAnalysis.*` testing harness; split
+  into a sibling `Loom.UI.SourceGen.Tests` *only* if the Roslyn-harness dependencies prove awkward to host beside
+  the runtime tests (a fallback, not the default).
+- **Committed fixtures (hermetic — no bake-tool run at test time):** a tiny MSDF fontset fixture (a handful of
+  ASCII glyphs: atlas PNG + metrics JSON [+ subset `.ttf` for HarfBuzz]) for text-layout tests, plus a few small
+  reusable reference UI trees — the UI analog of the §6 reference frame reused across the graph tests.
+
+Net effect: the "Headless?" column is the acceptance contract. Every ✅ row must be reachable in `Loom.UI.Tests`
+with no backend referenced; only the final ❌ row depends on the GPU and rides the existing capture loop.
 
