@@ -106,6 +106,27 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		new VertexAttribute("ITRANSFORM", VertexFormat.Float4),
 		new VertexAttribute("ITRANSFORM", VertexFormat.Float4));
 
+	/// <summary>
+	/// The per-instance stream for 2D sprite/tile batching (M14) — one <see cref="SpriteInstance"/> per quad
+	/// (4 × float4, 64 bytes) at binding 1, advancing one per instance. The four rows carry the sprite's
+	/// world transform (position + depth + rotation), its world size + rotation pivot, its atlas uv-rect (the
+	/// sub-image, which doubles as the sprite-sheet animation frame), and an rgba tint. Paired with a unit-quad
+	/// per-vertex stream (<see cref="MeshStandard"/>): the vertex shader expands each corner into the quad the
+	/// instance describes and looks the atlas region up from the uv-rect.
+	/// <para>
+	/// The four rows share one repeated semantic (<c>ISPRITE0..3</c>), exactly like <see cref="Transform"/>'s
+	/// <c>ITRANSFORM</c> — DX12 binds per-instance attributes by semantic name + index, and four <em>distinct</em>
+	/// per-instance semantics bind as zero there (the quads collapse), so an indexed-row layout is required.
+	/// </para>
+	/// </summary>
+	public static VertexLayout Sprite { get; } = new(
+		VertexInputRate.PerInstance,
+		binding: 1,
+		new VertexAttribute("ISPRITE", VertexFormat.Float4), // position.xy, depth, rotation
+		new VertexAttribute("ISPRITE", VertexFormat.Float4), // size.xy, pivot.xy
+		new VertexAttribute("ISPRITE", VertexFormat.Float4), // atlas uv-rect: u0, v0, u1, v1
+		new VertexAttribute("ISPRITE", VertexFormat.Float4)); // rgba tint
+
 	public bool Equals(VertexLayout? other)
 	{
 		if (other is null)
