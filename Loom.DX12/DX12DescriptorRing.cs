@@ -5,23 +5,33 @@ namespace Loom.DX12;
 
 /// <summary>
 /// A shader-visible CBV/SRV/UAV descriptor heap with a per-frame bump allocator — the staging ground for the
-/// SRV descriptor tables a sampling pass binds. Each frame the engine <see cref="Reset"/>s it and binds it on
-/// the command list; <see cref="DX12RenderContext"/> bump-allocates a contiguous range per sampling draw,
-/// writes the input SRVs there, and binds the table at the range's GPU handle. (DX12 has no per-descriptor
-/// binding — you bind a heap once and index into it; this is the standard transient-descriptor pattern.)
+/// SRV descriptor tables a sampling pass binds. <see cref="DX12RenderContext"/> bump-allocates a contiguous range
+/// per sampling draw, writes the input SRVs there, and binds the table at the range's GPU handle. (DX12 has no
+/// per-descriptor binding — you bind a heap once and index into it; this is the standard transient-descriptor pattern.)
+/// <para>
+/// <b>Double-buffered per frame-in-flight.</b> The heap is partitioned into <c>frameCount</c> equal regions and a
+/// frame allocates only from its slot's region (<see cref="Reset"/> takes the slot). This is load-bearing with
+/// frames in flight: a single shared region reset to 0 every frame would let frame N+1's descriptor writes clobber
+/// the descriptors frame N's still-executing GPU work is reading — invisible when consecutive frames are identical,
+/// but a per-frame feedback corruption once content moves (it bit the bloom mip chain hardest, the most
+/// descriptor-heavy graph). Each slot's region is only rewritten once its prior frame has retired (the per-frame fence).
+/// </para>
 /// </summary>
 internal sealed unsafe class DX12DescriptorRing : IDisposable
 {
 	private ComPtr<ID3D12DescriptorHeap> _heap;
 	private readonly uint _capacity;
+	private readonly uint _regionSize; // descriptors per frame-in-flight slot
 	private readonly uint _increment;
 	private CpuDescriptorHandle _cpuStart;
 	private GpuDescriptorHandle _gpuStart;
-	private uint _next;
+	private uint _next;       // next free descriptor (absolute index into the heap)
+	private uint _regionEnd;  // end of the current slot's region
 
-	public DX12DescriptorRing(DX12Context ctx, uint capacity)
+	public DX12DescriptorRing(DX12Context ctx, uint capacity, uint frameCount)
 	{
 		_capacity = capacity;
+		_regionSize = capacity / frameCount;
 		var desc = new DescriptorHeapDesc
 		{
 			Type = DescriptorHeapType.CbvSrvUav,
@@ -37,13 +47,19 @@ internal sealed unsafe class DX12DescriptorRing : IDisposable
 
 	public ComPtr<ID3D12DescriptorHeap> Heap => _heap;
 
-	public void Reset() => _next = 0;
+	/// <summary>Begin a frame: bump-allocate from <paramref name="slot"/>'s own region, so this frame's descriptor
+	/// writes never touch the descriptors another in-flight frame is still reading.</summary>
+	public void Reset(uint slot)
+	{
+		_next = slot * _regionSize;
+		_regionEnd = _next + _regionSize;
+	}
 
 	/// <summary>Reserve <paramref name="count"/> contiguous descriptors; returns the CPU handle (to write into) and GPU handle (to bind).</summary>
 	public (CpuDescriptorHandle Cpu, GpuDescriptorHandle Gpu) Allocate(uint count)
 	{
-		if (_next + count > _capacity)
-			_next = 0; // wrap — our per-frame counts are tiny, so a frame never overruns a live range
+		if (_next + count > _regionEnd)
+			_next = _regionEnd - _regionSize; // wrap within this slot's region — per-frame counts are tiny, so this never overruns a live range
 		var cpu = new CpuDescriptorHandle { Ptr = _cpuStart.Ptr + (nuint)(_next * _increment) };
 		var gpu = new GpuDescriptorHandle { Ptr = _gpuStart.Ptr + (ulong)(_next * _increment) };
 		_next += count;
