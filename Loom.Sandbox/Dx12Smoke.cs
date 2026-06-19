@@ -173,6 +173,13 @@ internal static class Dx12Smoke
 			var projection = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3f, aspect, 0.1f, 100f);
 			var camera = new Camera(view, projection);
 
+			// A demo may supply its own camera (the 2D demos' orthographic view) — honour it exactly as the Vulkan
+			// host does (Program.cs). Without this the DX12 gallery renders the 2D sprite demos through the default
+			// perspective orbit camera, so only the sprites near the world origin land in the frustum (the rest get a
+			// negative clip.w and are culled) — the "DX12 renders almost nothing" symptom. Not a matrix bug.
+			if (activeDemo?.GetCamera(aspect, camTime) is { } demoCamera)
+				camera = demoCamera;
+
 			// Per-frame CPU work for the active demo (the instancing demo's frustum cull) before Render.
 			activeDemo?.Update(camera);
 
