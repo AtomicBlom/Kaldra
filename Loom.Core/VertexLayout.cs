@@ -127,6 +127,21 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		new VertexAttribute("ISPRITE", VertexFormat.Float4), // atlas uv-rect: u0, v0, u1, v1
 		new VertexAttribute("ISPRITE", VertexFormat.Float4)); // rgba tint
 
+	/// <summary>
+	/// The per-instance stream for 2D point lights (M14-3) — one <see cref="Light2DInstance"/> per light
+	/// (2 × float4, 32 bytes) at binding 1, advancing one per instance. Paired with the same unit-quad
+	/// per-vertex stream (<see cref="MeshStandard"/>) the sprites use: the light shader expands the quad to the
+	/// light's bounding box, then samples the 2D G-buffer normal per covered pixel and accumulates the light
+	/// additively. The two rows carry the light's world position + radius + intensity, and its colour + height
+	/// off the plane. As with <see cref="Sprite"/>/<see cref="Transform"/>, the rows share one repeated semantic
+	/// (<c>ILIGHT0..1</c>) so DX12's semantic-name-plus-index binding picks them up.
+	/// </summary>
+	public static VertexLayout Light2D { get; } = new(
+		VertexInputRate.PerInstance,
+		binding: 1,
+		new VertexAttribute("ILIGHT", VertexFormat.Float4),  // position.xy, radius, intensity
+		new VertexAttribute("ILIGHT", VertexFormat.Float4)); // colour.rgb, height
+
 	public bool Equals(VertexLayout? other)
 	{
 		if (other is null)
