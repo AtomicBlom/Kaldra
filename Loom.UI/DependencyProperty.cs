@@ -2,16 +2,6 @@ using System.Threading;
 
 namespace Loom.UI;
 
-/// <summary>Which layout/render stages a property change invalidates — ORed up the tree on a resolved-value change
-/// (PlanningUI.md §D1.1). A pure-render change (a brush colour) sets only <see cref="Render"/>; a sizing change
-/// sets <see cref="Measure"/>.</summary>
-[Flags]
-public enum InvalidationFlags { None = 0, Measure = 1, Arrange = 2, Render = 4 }
-
-/// <summary>Whether a property is declared on its owner (<see cref="Normal"/>) or attached to arbitrary targets
-/// (<see cref="Attached"/>, e.g. <c>Grid.Row</c>). Both share the one dense index space (PlanningUI.md §D1.3).</summary>
-public enum DependencyPropertyKind { Normal, Attached }
-
 /// <summary>
 /// A reflection-free dependency property — the WinUI semantics (typed metadata, change/coerce callbacks, value
 /// precedence) with the <see cref="Type"/>-keyed, string-dispatched mechanism replaced by a dense integer slot
@@ -62,20 +52,6 @@ public abstract class DependencyProperty
 	internal abstract object? CoerceBoxed(DependencyObject owner, object? value);
 
 	public override string ToString() => $"{Name}#{GlobalIndex}";
-}
-
-/// <summary>
-/// The typed metadata for a <see cref="DependencyProperty{TOwner, TValue}"/>: default value, a typed
-/// change callback (old, new — no boxing on the typed path), an optional coerce, and what it invalidates.
-/// Callbacks are <c>static</c> by convention (captured once at registration — no per-instance delegate, no
-/// reflection; PlanningUI.md §D1.1).
-/// </summary>
-public sealed class PropertyMetadata<TOwner, TValue> where TOwner : DependencyObject
-{
-	public TValue DefaultValue { get; init; } = default!;
-	public Action<TOwner, TValue, TValue>? PropertyChanged { get; init; }
-	public Func<TOwner, TValue, TValue>? Coerce { get; init; }
-	public InvalidationFlags Invalidates { get; init; }
 }
 
 /// <summary>The concrete, typed dependency property (PlanningUI.md §D1.1).</summary>

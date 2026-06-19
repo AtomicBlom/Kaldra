@@ -8,37 +8,6 @@ using GltfMaterial = SharpGLTF.Schema2.Material;
 
 namespace Loom.Assets;
 
-/// <summary>A material referenced by a loaded primitive — its decoded textures, ready for <c>IEngine.CreateTexture</c>.</summary>
-public sealed class ModelMaterial
-{
-	/// <summary>Base-colour / albedo texture (sRGB), or null if the material has none.</summary>
-	public TextureData? BaseColor { get; init; }
-
-	/// <summary>Tangent-space normal map (linear), or null if the material has none.</summary>
-	public TextureData? Normal { get; init; }
-}
-
-/// <summary>One drawable primitive of a loaded model: geometry in Loom's canonical <see cref="Vertex"/> layout plus its material.</summary>
-public sealed class ModelPrimitive
-{
-	/// <summary>Vertices in Loom's interleaved layout (position/normal/uv/tangent); tangents are taken from the
-	/// glTF <c>TANGENT</c> accessor or computed when absent.</summary>
-	public required Vertex[] Vertices { get; init; }
-
-	/// <summary>Triangle-list indices.</summary>
-	public required uint[] Indices { get; init; }
-
-	/// <summary>The primitive's material (decoded textures), or null if it has none.</summary>
-	public ModelMaterial? Material { get; init; }
-}
-
-/// <summary>A model flattened to drawable primitives — what an app turns into engine meshes/materials.</summary>
-public sealed class LoadedModel
-{
-	/// <summary>The model's primitives, each ready to become a <c>Mesh</c> + <c>Material</c>.</summary>
-	public required IReadOnlyList<ModelPrimitive> Primitives { get; init; }
-}
-
 /// <summary>
 /// Loads a glTF / GLB model into Loom's neutral description via SharpGLTF (managed, MIT). M11 scope: static
 /// triangle geometry + base-colour and normal textures — no skinning/animation (M15) or PBR channels (M16).

@@ -5,11 +5,6 @@ using Loom.Core;
 
 namespace Loom.Graph;
 
-/// <summary>A set of transients that may share one physical allocation: no two are ever live at once.</summary>
-/// <param name="Index">The bucket's index (also the order it was opened).</param>
-/// <param name="Members">The resources assigned to this bucket, in lifetime order.</param>
-public readonly record struct AliasBucket(int Index, ImmutableArray<ResourceHandle> Members);
-
 /// <summary>
 /// The transient-aliasing plan derived from a <see cref="LifetimePlan"/>: a partition of the aliasable
 /// transients into <see cref="AliasBucket"/>s such that the resources in any one bucket have pairwise

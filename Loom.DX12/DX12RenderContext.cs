@@ -56,7 +56,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 													 // DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
 	private nint _imguiDrawData;
 	// This frame's composited UI surfaces, pulled from FrameInputs.UiSurfaces; ctx.DrawUI looks one up by id.
-	private IReadOnlyList<(UiSurfaceId Id, UiDrawData Draw)> _uiSurfaces = [];
+	private IReadOnlyList<(UiSurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
 	private uint _fbWidth;
 	private uint _fbHeight;
 	private DxgiFormat[] _colorFormats = [];
@@ -483,7 +483,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 			return;
 
 		// Indexed loop, not foreach/LINQ: avoids an enumerator allocation on the per-frame render path (§8: 0 GC).
-		UiDrawData? draw = null;
+		UIDrawData? draw = null;
 		for (var i = 0; i < _uiSurfaces.Count; i++)
 		{
 			if (_uiSurfaces[i].Id == surface)

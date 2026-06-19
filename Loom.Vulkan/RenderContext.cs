@@ -59,9 +59,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// The host's game-UI renderer (the twin of _imgui), set by the engine when the host calls EnableUI. The "ui"
 	// pass's ctx.DrawUI(surface) forwards that surface's draw data to it. Null until UI is enabled; MU0 Phase A's
 	// renderer is a no-op (PlanningUI.md MU0). Ungated — the neutral seam exists unconditionally (no native dep).
-	private UiRenderer? _ui;
+	private UIRenderer? _ui;
 	// This frame's composited UI surfaces, pulled from FrameInputs.UiSurfaces; ctx.DrawUI looks one up by id.
-	private IReadOnlyList<(UiSurfaceId Id, UiDrawData Draw)> _uiSurfaces = [];
+	private IReadOnlyList<(UiSurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
 
 	private Extent2D _fbExtent;
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off TechniqueCache's
@@ -151,10 +151,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 #endif
 
 	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
-	public void SetUi(UiRenderer renderer) => _ui = renderer;
+	public void SetUi(UIRenderer renderer) => _ui = renderer;
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, HDR-output state, and composited UI surfaces before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, IReadOnlyList<(UiSurfaceId Id, UiDrawData Draw)> uiSurfaces, Extent2D fbExtent, bool hdrOutput)
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, IReadOnlyList<(UiSurfaceId Id, UIDrawData Draw)> uiSurfaces, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
@@ -448,7 +448,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			return;
 
 		// Indexed loop, not foreach/LINQ: avoids an enumerator allocation on the per-frame render path (§8: 0 GC).
-		UiDrawData? draw = null;
+		UIDrawData? draw = null;
 		for (var i = 0; i < _uiSurfaces.Count; i++)
 		{
 			if (_uiSurfaces[i].Id == surface)

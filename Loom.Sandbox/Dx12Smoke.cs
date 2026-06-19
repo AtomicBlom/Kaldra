@@ -76,7 +76,7 @@ internal static class Dx12Smoke
 		// MU0 Phase A: stand up the game-UI seam (no-op renderer) so the gallery's "ui" pass + ctx.DrawUI() run clean
 		// on DX12 too — the cross-backend half of the MU0 exit. Mirrors the Vulkan path in Program.cs.
 		engine.EnableUI();
-		var uiSurfaces = new (UiSurfaceId Id, UiDrawData Draw)[] { (UiSurface.Hud, UiDrawData.Empty) };
+		var uiSurfaces = new (UiSurfaceId Id, UIDrawData Draw)[] { (UiSurface.Hud, UIDrawData.Empty) };
 
 		string mode;
 		IDemo? activeDemo = null; // the gallery's selected demo, so the loop can run its per-frame Update (M12 cull)

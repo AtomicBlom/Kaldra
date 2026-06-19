@@ -1,29 +1,6 @@
 namespace Loom.Core;
 
 /// <summary>
-/// The pixel encoding a <see cref="TextureData"/> carries — what the texels <em>mean</em>, which the backend
-/// maps to a sampled image format (Vulkan <c>R8G8B8A8_*</c>, DXGI <c>R8G8B8A8_*</c>). Backend-neutral; the two
-/// encodings M11 needs are an sRGB colour map (albedo) and a linear data map (tangent-space normals).
-/// </summary>
-public enum TextureFormat
-{
-	/// <summary>RGBA8 in sRGB — colour data (albedo/base colour); the GPU linearises on sample.</summary>
-	Rgba8Srgb,
-
-	/// <summary>RGBA8 linear (unorm) — data, not colour (normal maps, masks); sampled verbatim.</summary>
-	Rgba8Unorm,
-}
-
-/// <summary>
-/// One level of a texture's mip chain: tightly packed RGBA8 (row pitch = <c>Width*4</c>, no padding). The
-/// backend re-pads to its own row-pitch rules on upload.
-/// </summary>
-/// <param name="Width">Level width in texels.</param>
-/// <param name="Height">Level height in texels.</param>
-/// <param name="Pixels">RGBA8 texels, row-major, tightly packed (length == <c>Width*Height*4</c>).</param>
-public readonly record struct MipLevel(int Width, int Height, byte[] Pixels);
-
-/// <summary>
 /// A neutral, GPU-API-free description of a texture and its mip chain — the engine-boundary type
 /// <see cref="IEngine.CreateTexture"/> consumes. Produced by an asset loader (<c>Loom.Assets</c>) or built
 /// directly from raw pixels via <see cref="FromRgba8"/>; the backend's texture store turns it into a sampled

@@ -5,7 +5,7 @@ namespace Loom.UI.Tests;
 
 /// <summary>
 /// MU0 Phase B composition coverage (PlanningUI.md §D2.5 / §D8): the element tree drives a <see cref="Visual"/>
-/// tree, and the default <see cref="DrawListCompositor"/> flattens it to neutral <see cref="UiDrawData"/>. Both
+/// tree, and the default <see cref="DrawListCompositor"/> flattens it to neutral <see cref="UIDrawData"/>. Both
 /// stages are asserted on CPU via their <c>Dump()</c> forms (the two pure test seams) — no backend.
 /// </summary>
 public sealed class CompositionTests

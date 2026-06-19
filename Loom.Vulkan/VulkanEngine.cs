@@ -68,7 +68,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 #if LOOM_IMGUI
 	private ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
-	private UiRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
+	private UIRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
 
 	// Engine-owned shaders (tonemap/blit/fullscreen/exposure/imgui/debugview) ship embedded in THIS assembly
 	// under the manifest prefix "<assembly>.Shaders." (the Loom SDK's Embed mode sets the same prefix from
@@ -123,7 +123,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private float _frameTime;
 	private uint _frameHover;
 	private nint _frameImGui;
-	private IReadOnlyList<(UiSurfaceId Id, UiDrawData Draw)> _frameUiSurfaces = [];
+	private IReadOnlyList<(UiSurfaceId Id, UIDrawData Draw)> _frameUiSurfaces = [];
 
 	private int _currentFrame;
 	private bool _framebufferResized;
@@ -407,7 +407,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		// MU0 Phase A: stand up the no-op UI renderer and wire it to the context, so the ctx.DrawUI() seam is live
 		// on both backends. No shader resolve yet — the ui.slang pipeline + atlas upload arrive in MU1.
-		_ui = new UiRenderer();
+		_ui = new UIRenderer();
 		_context.SetUi(_ui);
 	}
 

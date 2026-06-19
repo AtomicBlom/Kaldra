@@ -15,8 +15,8 @@ public sealed class StackPanel : Panel
 	{
 		var vertical = Orientation == Orientation.Vertical;
 		var childAvail = vertical
-			? new Size(available.Width, float.PositiveInfinity)
-			: new Size(float.PositiveInfinity, available.Height);
+			? available with { Height = float.PositiveInfinity }
+			: available with { Width = float.PositiveInfinity };
 
 		float main = 0f, cross = 0f;
 		foreach (var child in Children.Items)

@@ -5,7 +5,7 @@ using Loom.Core;
 namespace Loom.UI.Tests;
 
 /// <summary>
-/// MU0 Phase A coverage for the neutral UI draw-data contract (PlanningUI.md §D8.1). <see cref="UiDrawData.Dump"/>
+/// MU0 Phase A coverage for the neutral UI draw-data contract (PlanningUI.md §D8.1). <see cref="UIDrawData.Dump"/>
 /// is the "golden draw-list" — the UI analog of asserting <c>BarrierPlan</c>/<c>AliasPlan</c>: a deterministic,
 /// CPU-only text snapshot of the whole vertex/command stream, so the compositor pipeline up to GPU upload is
 /// tested with no backend. These tests pin its format + determinism and the premultiplied-colour contract; the
@@ -23,9 +23,9 @@ public sealed class UiDrawDataTests
 			"  Indices (0):" + nl +
 			"  Commands (0):" + nl;
 
-		UiDrawData.Empty.Dump().ReplaceLineEndings("\n").ShouldBe(expected);
+		UIDrawData.Empty.Dump().ReplaceLineEndings("\n").ShouldBe(expected);
 		// Deterministic: the same instance dumps identically every call (feeds the no-op/Revision diffing).
-		UiDrawData.Empty.Dump().ShouldBe(UiDrawData.Empty.Dump());
+		UIDrawData.Empty.Dump().ShouldBe(UIDrawData.Empty.Dump());
 	}
 
 	[Test]
@@ -68,7 +68,7 @@ public sealed class UiDrawDataTests
 	}
 
 	// A unit quad as one Fill draw: 4 verts, 6 indices, 1 command — the minimal non-empty draw stream.
-	private static UiDrawData BuildQuad(uint revision)
+	private static UIDrawData BuildQuad(uint revision)
 	{
 		var red = Half4.FromStraight(1f, 0f, 0f, 1f);
 		var verts = new UiVertex[]
@@ -80,7 +80,7 @@ public sealed class UiDrawDataTests
 		};
 		var indices = new ushort[] { 0, 1, 2, 0, 2, 3 };
 		var commands = new UiDrawCommand[] { new(UiPrimKind.Fill, 0, new Rect(0, 0, 10, 20), 0, 6, 0) };
-		return new UiDrawData
+		return new UIDrawData
 		{
 			Vertices = verts,
 			Indices = indices,

@@ -2,28 +2,6 @@ using System.Collections.Immutable;
 
 namespace Loom.Core;
 
-/// <summary>How the input assembler advances through a <see cref="VertexLayout"/>'s buffer.</summary>
-public enum VertexInputRate
-{
-	/// <summary>One element per vertex — the mesh's geometry stream (binding 0).</summary>
-	PerVertex,
-
-	/// <summary>One element per instance — the per-instance stream a <c>DrawInstanced</c> reads (binding 1).</summary>
-	PerInstance,
-}
-
-/// <summary>
-/// One attribute in a <see cref="VertexLayout"/>: a semantic name plus its element format. The semantic is the
-/// neutral link between the data and the shader — Vulkan binds by <c>[[vk::location]]</c> (assigned in order),
-/// DX12 binds by HLSL semantic name + index (the index derived from how many earlier attributes share the
-/// name, so four <c>"ITRANSFORM"</c> rows become <c>ITRANSFORM0..3</c>). Semantic names map 1:1 onto glTF
-/// attribute names (POSITION, NORMAL, TEXCOORD, TANGENT, …), which is what makes an importer's output drop
-/// straight into a layout (PlanningPhase2 — M15 glTF).
-/// </summary>
-/// <param name="Semantic">The attribute's semantic name (uppercase by convention — POSITION, NORMAL, TEXCOORD, …).</param>
-/// <param name="Format">The attribute's element format.</param>
-public readonly record struct VertexAttribute(string Semantic, VertexFormat Format);
-
 /// <summary>
 /// A backend-neutral description of one vertex stream: an ordered attribute set, the byte offset of each
 /// attribute (tight-packed in declaration order), the resulting stride, and whether the input assembler

@@ -8,15 +8,15 @@ namespace Loom.UI;
 
 /// <summary>
 /// One UI surface (PlanningUI.md §D2.4): owns the element <see cref="Content"/> tree and the composition
-/// <see cref="Visual"/> tree it composites through a pluggable <see cref="IUiCompositor"/>. Holds <b>no</b> engine
+/// <see cref="Visual"/> tree it composites through a pluggable <see cref="IUICompositor"/>. Holds <b>no</b> engine
 /// or backend handle, so <see cref="LayoutPass"/> + <see cref="Render"/> run to completion headless — input crosses
 /// in as a size, the product is neutral <see cref="UiDrawData"/> (the headless-testable invariant, §D0/§D8).
 /// </summary>
 public sealed class UIRoot
 {
-	private readonly IUiCompositor _compositor;
+	private readonly IUICompositor _compositor;
 
-	public UIRoot(UiSurfaceId surface, IUiCompositor? compositor = null)
+	public UIRoot(UiSurfaceId surface, IUICompositor? compositor = null)
 	{
 		Surface = surface;
 		_compositor = compositor ?? new DrawListCompositor();
@@ -55,12 +55,12 @@ public sealed class UIRoot
 		Visual.Add(Content.Visual);
 	}
 
-	/// <summary>Composite the current visual tree to neutral <see cref="UiDrawData"/> (default-path convenience —
-	/// returns <see cref="UiDrawData.Empty"/> when a foreign compositor is in use).</summary>
-	public UiDrawData Render()
+	/// <summary>Composite the current visual tree to neutral <see cref="UIDrawData"/> (default-path convenience —
+	/// returns <see cref="UIDrawData.Empty"/> when a foreign compositor is in use).</summary>
+	public UIDrawData Render()
 	{
 		_compositor.Composite(Visual, Surface);
-		return _compositor is DrawListCompositor d ? d.LastDraw(Surface) : UiDrawData.Empty;
+		return _compositor is DrawListCompositor d ? d.LastDraw(Surface) : UIDrawData.Empty;
 	}
 
 	/// <summary>The element tree annotated with <c>DesiredSize</c>/<c>LayoutRect</c> after a layout pass — the

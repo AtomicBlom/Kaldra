@@ -5,30 +5,30 @@ using Loom.Core;
 namespace Loom.UI;
 
 /// <summary>
-/// Loom's default <see cref="IUiCompositor"/> (PlanningUI.md §D2.5): walks a surface's composition tree, folds
+/// Loom's default <see cref="IUICompositor"/> (PlanningUI.md §D2.5): walks a surface's composition tree, folds
 /// transform/clip/opacity into a pre-transformed vertex/command stream, and exposes it as neutral
 /// <see cref="UiDrawData"/> for the backend's UI renderer. Phase B emits the rectangle family (fills + borders);
 /// glyphs/images arrive with MSDF text + images (MU1). Output is asserted on CPU via <see cref="UiDrawData.Dump"/>
 /// — the primary test seam, no backend needed.
 /// </summary>
-public sealed class DrawListCompositor : IUiCompositor
+public sealed class DrawListCompositor : IUICompositor
 {
-	private readonly Dictionary<int, UiDrawData> _surfaces = [];
+	private readonly Dictionary<int, UIDrawData> _surfaces = [];
 	private readonly Dictionary<int, uint> _revisions = [];
 
 	public void Composite(RootVisual root, UiSurfaceId surface)
 	{
-		var list = new UiDrawList(root.SurfaceSize);
+		var list = new UIDrawList(root.SurfaceSize);
 		Walk(list, root, Matrix3x2.Identity, 1f, new Rect(0, 0, root.SurfaceSize.X, root.SurfaceSize.Y));
 		var rev = _revisions.TryGetValue(surface.Value, out var r) ? r + 1 : 1u;
 		_revisions[surface.Value] = rev;
 		_surfaces[surface.Value] = list.Build(root.IsHdrSurface, rev);
 	}
 
-	/// <summary>The last <see cref="UiDrawData"/> produced for <paramref name="surface"/> (handed to FrameInputs.UiSurfaces).</summary>
-	public UiDrawData LastDraw(UiSurfaceId surface) => _surfaces.TryGetValue(surface.Value, out var d) ? d : UiDrawData.Empty;
+	/// <summary>The last <see cref="UIDrawData"/> produced for <paramref name="surface"/> (handed to FrameInputs.UiSurfaces).</summary>
+	public UIDrawData LastDraw(UiSurfaceId surface) => _surfaces.TryGetValue(surface.Value, out var d) ? d : UIDrawData.Empty;
 
-	private static void Walk(UiDrawList list, Visual v, Matrix3x2 parent, float opacity, Rect clip)
+	private static void Walk(UIDrawList list, Visual v, Matrix3x2 parent, float opacity, Rect clip)
 	{
 		var matrix = v.Transform * parent;
 		var alpha = opacity * v.Opacity;
@@ -70,83 +70,5 @@ public sealed class DrawListCompositor : IUiCompositor
 			maxX = MathF.Max(maxX, p[i].X); maxY = MathF.Max(maxY, p[i].Y);
 		}
 		return new Rect(minX, minY, maxX - minX, maxY - minY);
-	}
-}
-
-/// <summary>
-/// A pooled builder for the neutral draw stream — the analog of ImGui's <c>ImDrawList</c> (PlanningUI.md §D2.5).
-/// Bakes the composed transform into vertex positions and merges consecutive primitives that share
-/// <c>(kind, textureId, clip)</c> into one indexed draw command (atlas-everything + state-run batching, §D2.6).
-/// </summary>
-public sealed class UiDrawList
-{
-	private readonly List<UiVertex> _verts = [];
-	private readonly List<ushort> _indices = [];
-	private readonly List<UiDrawCommand> _commands = [];
-	private readonly Vector2 _surfaceSize;
-
-	// Open run state — extended while (kind, tex, clip) match; flushed into a command otherwise.
-	private bool _open;
-	private UiPrimKind _runKind;
-	private int _runTex;
-	private Rect _runClip;
-	private int _runIdxStart;
-	private int _runIdxCount;
-
-	public UiDrawList(Vector2 surfaceSize) => _surfaceSize = surfaceSize;
-
-	/// <summary>Append a transformed quad (the corners are baked through <paramref name="matrix"/>).</summary>
-	public void AddRect(in Rect local, in Matrix3x2 matrix, Half4 color, UiPrimKind kind, Vector4 @params, in Rect clip, int textureId = 0)
-	{
-		if (clip.IsEmpty)
-			return;
-		EnsureRun(kind, textureId, clip);
-
-		var baseV = (ushort)_verts.Count;
-		AddVertex(new Vector2(local.X, local.Y), new Vector2(0, 0), matrix, color, @params);
-		AddVertex(new Vector2(local.Right, local.Y), new Vector2(1, 0), matrix, color, @params);
-		AddVertex(new Vector2(local.Right, local.Bottom), new Vector2(1, 1), matrix, color, @params);
-		AddVertex(new Vector2(local.X, local.Bottom), new Vector2(0, 1), matrix, color, @params);
-
-		_indices.Add(baseV); _indices.Add((ushort)(baseV + 1)); _indices.Add((ushort)(baseV + 2));
-		_indices.Add(baseV); _indices.Add((ushort)(baseV + 2)); _indices.Add((ushort)(baseV + 3));
-		_runIdxCount += 6;
-	}
-
-	private void AddVertex(Vector2 local, Vector2 uv, in Matrix3x2 matrix, Half4 color, Vector4 @params) =>
-		_verts.Add(new UiVertex(Vector2.Transform(local, matrix), uv, color, @params));
-
-	private void EnsureRun(UiPrimKind kind, int tex, in Rect clip)
-	{
-		if (_open && _runKind == kind && _runTex == tex && _runClip.Equals(clip))
-			return;
-		Flush();
-		_open = true;
-		_runKind = kind;
-		_runTex = tex;
-		_runClip = clip;
-		_runIdxStart = _indices.Count;
-		_runIdxCount = 0;
-	}
-
-	private void Flush()
-	{
-		if (_open && _runIdxCount > 0)
-			_commands.Add(new UiDrawCommand(_runKind, _runTex, _runClip, _runIdxStart, _runIdxCount, 0));
-		_open = false;
-	}
-
-	public UiDrawData Build(bool hdr, uint revision)
-	{
-		Flush();
-		return new UiDrawData
-		{
-			Vertices = _verts.ToArray(),
-			Indices = _indices.ToArray(),
-			Commands = _commands.ToArray(),
-			SurfaceSize = _surfaceSize,
-			IsHdrSurface = hdr,
-			Revision = revision,
-		};
 	}
 }
