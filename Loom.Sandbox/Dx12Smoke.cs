@@ -319,6 +319,7 @@ internal static class Dx12Smoke
 			new Lighting2DDemo(),
 			new SpriteAnimationDemo(),
 			new TilemapDemo(),
+			new ParallaxDemo(),
 			new FullReferenceDemo(),
 			new NormalMappingDemo(),
 			new GltfDemo(),
