@@ -55,6 +55,14 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// The native ImDrawData* the host produced this frame; stays a plain nint so the field (and the neutral
 	// ctx.DrawImGui() seam) exist even when the engine is built without ImGui (UseImGui=false).
 	private nint _imguiDrawData;
+
+	// The host's game-UI renderer (the twin of _imgui), set by the engine when the host calls EnableUI. The "ui"
+	// pass's ctx.DrawUI(surface) forwards that surface's draw data to it. Null until UI is enabled; MU0 Phase A's
+	// renderer is a no-op (PlanningUI.md MU0). Ungated — the neutral seam exists unconditionally (no native dep).
+	private UiRenderer? _ui;
+	// This frame's composited UI surfaces, pulled from FrameInputs.UiSurfaces; ctx.DrawUI looks one up by id.
+	private IReadOnlyList<(UiSurfaceId Id, UiDrawData Draw)> _uiSurfaces = [];
+
 	private Extent2D _fbExtent;
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off TechniqueCache's
 	// per-call SPIR-V file read. Misses fall through to TechniqueCache (which bakes + content-hashes once).
@@ -142,8 +150,11 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	public void SetImGui(ImGuiRenderer renderer) => _imgui = renderer;
 #endif
 
-	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, and HDR-output state before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, Extent2D fbExtent, bool hdrOutput)
+	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
+	public void SetUi(UiRenderer renderer) => _ui = renderer;
+
+	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, HDR-output state, and composited UI surfaces before any pass records.</summary>
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, IReadOnlyList<(UiSurfaceId Id, UiDrawData Draw)> uiSurfaces, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
@@ -153,6 +164,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_sunView = sunView;
 		_hoverId = hoverId;
 		_imguiDrawData = imguiDrawData;
+		_uiSurfaces = uiSurfaces;
 		_fbExtent = fbExtent;
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(frameSlot); // reset this slot's per-frame instance staging
@@ -425,6 +437,31 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		if (_debugLineCount > 0)
 			_imgui.DrawLines(_cmd, _debugLines.AsSpan(0, _debugLineCount), DebugLineColor, 2f, _fbExtent, _frameSlot);
 #endif
+	}
+
+	// Forward this frame's composited UI surface to the backend renderer, recording into the (already-open) pass
+	// rendering scope — the twin of DrawImGui for the XAML UI engine. No-op when UI isn't enabled, the host
+	// supplied no draw data for this surface, or the surface is empty. MU0 Phase A: the renderer itself no-ops.
+	public void DrawUI(UiSurfaceId surface)
+	{
+		if (_ui is null)
+			return;
+
+		// Indexed loop, not foreach/LINQ: avoids an enumerator allocation on the per-frame render path (§8: 0 GC).
+		UiDrawData? draw = null;
+		for (var i = 0; i < _uiSurfaces.Count; i++)
+		{
+			if (_uiSurfaces[i].Id == surface)
+			{
+				draw = _uiSurfaces[i].Draw;
+				break;
+			}
+		}
+
+		if (draw is null || draw.Commands.IsEmpty)
+			return;
+
+		_ui.Render(_cmd, draw, _fbExtent, _frameSlot);
 	}
 
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;

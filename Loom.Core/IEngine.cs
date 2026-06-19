@@ -70,6 +70,15 @@ public interface IEngine : IDisposable
 	/// </summary>
 	void EnableImGui();
 
+	/// <summary>
+	/// Stand up the backend's game-UI renderer (PlanningUI.md §Core surface additions) — the counterpart to
+	/// <see cref="EnableImGui"/> for the XAML UI engine. Call once after creation; thereafter a pass can call
+	/// <c>ctx.DrawUI(surface)</c> and the host feeds composited surfaces via <see cref="FrameInputs.UiSurfaces"/>
+	/// each frame. A no-op until the backend renderer ships its pixels (MU1); the seam is wired now so the
+	/// describe/execute layers and both backends carry the verb from MU0 (PlanningUI.md MU0).
+	/// </summary>
+	void EnableUI();
+
 	/// <summary>Render one frame of the active graph from <paramref name="inputs"/> (Planning.md §5 <c>graph.Render</c>).</summary>
 	void Render(FrameInputs inputs);
 

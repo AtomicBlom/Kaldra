@@ -73,6 +73,11 @@ internal static class Dx12Smoke
 		var graphMode = Environment.GetEnvironmentVariable("LOOM_DX12_GRAPH") is "1" or "true";
 		var aliasMode = Environment.GetEnvironmentVariable("LOOM_DX12_ALIAS") is "1" or "true";
 
+		// MU0 Phase A: stand up the game-UI seam (no-op renderer) so the gallery's "ui" pass + ctx.DrawUI() run clean
+		// on DX12 too — the cross-backend half of the MU0 exit. Mirrors the Vulkan path in Program.cs.
+		engine.EnableUI();
+		var uiSurfaces = new (UiSurfaceId Id, UiDrawData Draw)[] { (UiSurface.Hud, UiDrawData.Empty) };
+
 		string mode;
 		IDemo? activeDemo = null; // the gallery's selected demo, so the loop can run its per-frame Update (M12 cull)
 		if (aliasMode)
@@ -256,6 +261,7 @@ internal static class Dx12Smoke
 				SunView = sunCamera,
 				HoverId = hoverId,
 				ImGuiDrawData = imguiDrawData,
+				UiSurfaces = uiSurfaces,
 			});
 
 			if (capturePath is not null && frame >= 62)

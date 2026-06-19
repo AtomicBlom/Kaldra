@@ -68,6 +68,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 #if LOOM_IMGUI
 	private ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
+	private UiRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
 
 	// Engine-owned shaders (tonemap/blit/fullscreen/exposure/imgui/debugview) ship embedded in THIS assembly
 	// under the manifest prefix "<assembly>.Shaders." (the Loom SDK's Embed mode sets the same prefix from
@@ -122,6 +123,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private float _frameTime;
 	private uint _frameHover;
 	private nint _frameImGui;
+	private IReadOnlyList<(UiSurfaceId Id, UiDrawData Draw)> _frameUiSurfaces = [];
 
 	private int _currentFrame;
 	private bool _framebufferResized;
@@ -398,6 +400,17 @@ internal sealed unsafe class VulkanEngine : IEngine
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
 	}
 
+	public void EnableUI()
+	{
+		if (_ui is not null)
+			return; // idempotent — enabling twice keeps the existing renderer
+
+		// MU0 Phase A: stand up the no-op UI renderer and wire it to the context, so the ctx.DrawUI() seam is live
+		// on both backends. No shader resolve yet — the ui.slang pipeline + atlas upload arrive in MU1.
+		_ui = new UiRenderer();
+		_context.SetUi(_ui);
+	}
+
 	public float SamplePick(int x, int y)
 	{
 		if (_readbackId < 0 || (uint)x >= (uint)_readbackWidth || (uint)y >= (uint)_readbackHeight)
@@ -460,6 +473,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_frameTime = inputs.Time;
 		_frameHover = inputs.HoverId;
 		_frameImGui = inputs.ImGuiDrawData;
+		_frameUiSurfaces = inputs.UiSurfaces;
 		DrawFrame((float)inputs.DeltaSeconds);
 	}
 
@@ -586,7 +600,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _frameUiSurfaces, _swapchain.Extent, _swapchain.HdrActive);
 
 		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- NativeAOT gate (PlanningUI.md §Verification / MU0): turns on the trim + AOT Roslyn analyzers so any
+         reflection or AOT-unsafe pattern surfaces as a build warning from MU0 onward. The UI runtime is
+         NAOT-clean by design (compiled x:Bind, typed DP delegates, no Activator/MethodInfo). -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <!-- Neutral UI runtime: references Loom.Core + Loom.Assets only (both Core-only, no graphics-API types). It
+       must NOT reference Loom.Graph / Loom.Vulkan / Loom.DX12 — it reaches the GPU solely through the neutral
+       seams (RenderGraph.Define / IEngine / IRenderContext), exactly as a demo does (PlanningUI.md §Architecture). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
+    <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
+  </ItemGroup>
+
+</Project>

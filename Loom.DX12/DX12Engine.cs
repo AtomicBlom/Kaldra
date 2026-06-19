@@ -42,6 +42,7 @@ public sealed unsafe class DX12Engine : IEngine
 #if LOOM_IMGUI
 	private DX12ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
+	private DX12UiRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -1048,6 +1049,17 @@ public sealed unsafe class DX12Engine : IEngine
 		_context.SetImGui(_imgui);
 #endif
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
+	}
+
+	public void EnableUI()
+	{
+		if (_ui is not null)
+			return; // idempotent — enabling twice keeps the existing renderer
+
+		// MU0 Phase A: stand up the no-op UI renderer and wire it to the context, so the ctx.DrawUI() seam is live
+		// on both backends. No shader resolve yet — the ui.slang PSO + atlas upload arrive in MU1.
+		_ui = new DX12UiRenderer();
+		_context.SetUi(_ui);
 	}
 
 	/// <summary>

@@ -151,4 +151,15 @@ public interface IRenderContext
 	/// <c>.Blends</c> the backbuffer (the "hud" pass). A no-op if the host hasn't enabled ImGui.
 	/// </summary>
 	void DrawImGui();
+
+	/// <summary>
+	/// Render the host's game UI surface <paramref name="surface"/> into the current pass's target — the
+	/// counterpart to <see cref="DrawImGui"/> for the XAML UI engine (PlanningUI.md §Core surface additions). The
+	/// host composites each surface to a neutral <see cref="UiDrawData"/> off the render graph and hands the set in
+	/// via <see cref="FrameInputs.UiSurfaces"/>; this verb is the neutral hand-off so <c>Loom.Core</c> stays
+	/// UI-agnostic — the backend's UI renderer translates it into GPU work. Used from the screen-space overlay pass
+	/// that <c>.Blends</c> the backbuffer (the "ui" pass) or an in-world pass that <c>.Writes</c> a quad target. A
+	/// no-op if the host hasn't enabled UI or supplied that surface this frame.
+	/// </summary>
+	void DrawUI(UiSurfaceId surface);
 }

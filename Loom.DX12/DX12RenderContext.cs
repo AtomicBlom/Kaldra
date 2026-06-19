@@ -38,6 +38,10 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	// ctx.DrawImGui() forwards this frame's draw data to it. Null when EnableImGui hasn't been called.
 	private DX12ImGuiRenderer? _imgui;
 #endif
+	// The host's game-UI renderer (the twin of _imgui), wired in by the engine when the host calls EnableUI. The
+	// "ui" pass's ctx.DrawUI(surface) forwards that surface's composited draw data to it. Null until UI is enabled;
+	// MU0 Phase A's renderer is a no-op. Ungated — the neutral seam exists unconditionally (no native dep).
+	private DX12UiRenderer? _ui;
 
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
@@ -51,6 +55,8 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 													 // This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
 													 // DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
 	private nint _imguiDrawData;
+	// This frame's composited UI surfaces, pulled from FrameInputs.UiSurfaces; ctx.DrawUI looks one up by id.
+	private IReadOnlyList<(UiSurfaceId Id, UiDrawData Draw)> _uiSurfaces = [];
 	private uint _fbWidth;
 	private uint _fbHeight;
 	private DxgiFormat[] _colorFormats = [];
@@ -102,11 +108,15 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void SetImGui(DX12ImGuiRenderer renderer) => _imgui = renderer;
 #endif
 
+	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
+	public void SetUi(DX12UiRenderer renderer) => _ui = renderer;
+
 	public void BeginFrame(ComPtr<ID3D12GraphicsCommandList> cmd, FrameInputs inputs, bool hdrOutput, uint slot, uint fbWidth, uint fbHeight)
 	{
 		_cmd = cmd;
 		_slot = slot;
 		_imguiDrawData = inputs.ImGuiDrawData;
+		_uiSurfaces = inputs.UiSurfaces;
 		_fbWidth = fbWidth;
 		_fbHeight = fbHeight;
 		DeltaTime = (float)inputs.DeltaSeconds;
@@ -462,6 +472,31 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		if (_debugLineCount > 0)
 			_imgui.DrawLines(_cmd, _debugLines.AsSpan(0, _debugLineCount), DebugLineColor, 2f, _fbWidth, _fbHeight, _slot);
 #endif
+	}
+
+	// Forward this frame's composited UI surface to the backend renderer, recording into the already-bound render
+	// target — the twin of DrawImGui for the XAML UI engine. No-op when UI isn't enabled, the host supplied no
+	// draw data for this surface, or the surface is empty. MU0 Phase A: the renderer itself no-ops.
+	public void DrawUI(UiSurfaceId surface)
+	{
+		if (_ui is null)
+			return;
+
+		// Indexed loop, not foreach/LINQ: avoids an enumerator allocation on the per-frame render path (§8: 0 GC).
+		UiDrawData? draw = null;
+		for (var i = 0; i < _uiSurfaces.Count; i++)
+		{
+			if (_uiSurfaces[i].Id == surface)
+			{
+				draw = _uiSurfaces[i].Draw;
+				break;
+			}
+		}
+
+		if (draw is null || draw.Commands.IsEmpty)
+			return;
+
+		_ui.Render(_cmd, draw, _fbWidth, _fbHeight, _slot);
 	}
 
 	// M13 resource viewer: GetDebugTextureId returns (resourceId + DebugTextureBase) — a non-zero id the host uses to
