@@ -1,0 +1,45 @@
+<Project>
+
+  <!--
+    Loom XAML build machinery (PlanningUI.md MU0 Phase C) — targets.
+
+    Imported AFTER the project body (so $(LoomXamlSourceDir) is already set). Does two things:
+      1. Registers every *.xaml under the project as <AdditionalFiles> so the Loom.UI.SourceGen incremental
+         generator's AdditionalTextsProvider can see them, and as <UpToDateCheckInput> so the IDE
+         fast-up-to-date check never serves a stale generated tree after a .xaml edit (the same rationale as
+         the shader UpToDateCheckInput in Loom.Shaders.targets).
+      2. References Loom.UI.SourceGen as a build-time ANALYZER (OutputItemType=Analyzer,
+         ReferenceOutputAssembly=false) — it emits the partial x:Class with typed x:Name fields and
+         InitializeComponent(); it is never a runtime dependency.
+
+    The .xaml glob lives in a top-level ItemGroup (evaluated before any target runs), so it is populated even
+    though this file is imported at the bottom of the consuming project.
+  -->
+
+  <PropertyGroup>
+    <_LoomUISourceGen>$(LoomUIRepoRoot)Loom.UI.SourceGen\Loom.UI.SourceGen.csproj</_LoomUISourceGen>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(LoomXamlEnable)' == 'true'">
+    <!-- Recurse the source dir, excluding the build output trees. The .xaml sources exist at evaluation, so a
+         static glob is correct here (unlike the shaders' generated .spv, which must be registered in a target). -->
+    <LoomXaml Include="$(LoomXamlSourceDir)\**\*.xaml"
+              Exclude="$(MSBuildProjectDirectory)\obj\**\*.xaml;$(MSBuildProjectDirectory)\bin\**\*.xaml" />
+    <AdditionalFiles Include="@(LoomXaml)" />
+    <UpToDateCheckInput Include="@(LoomXaml)" />
+  </ItemGroup>
+
+  <!-- The generator is inert until the analyzer project exists (mirrors the _LoomWarnInertDX12 pattern in
+       Sdk.targets): reference it only when the file is present, so the flag can be on without breaking a build
+       that lacks the generator. -->
+  <ItemGroup Condition="'$(LoomXamlEnable)' == 'true' And Exists('$(_LoomUISourceGen)')">
+    <ProjectReference Include="$(_LoomUISourceGen)" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <Target Name="_LoomWarnMissingXamlGen"
+          BeforeTargets="ResolveProjectReferences"
+          Condition="'$(LoomXamlEnable)' == 'true' And !Exists('$(_LoomUISourceGen)')">
+    <Warning Text="LoomXamlEnable=true but Loom.UI.SourceGen does not exist at '$(_LoomUISourceGen)'; .xaml views will not be code-generated." />
+  </Target>
+
+</Project>

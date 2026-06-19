@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- XAML -> typed control-tree generator wiring (registers *.xaml as AdditionalFiles + the analyzer ref). -->
+  <Import Project="..\build\Loom.Sdk\Loom.UI.props" />
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -17,5 +20,7 @@
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
   </ItemGroup>
+
+  <Import Project="..\build\Loom.Sdk\Loom.UI.targets" />
 
 </Project>
