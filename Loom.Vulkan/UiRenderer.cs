@@ -9,7 +9,7 @@ namespace Loom.Vulkan;
 /// <see cref="UIDrawData"/> here, recording into the already-open rendering scope.
 /// <para>
 /// MU0 Phase A ships this as a <b>no-op</b>: standing up the seam (the Core neutral types +
-/// <c>EnableUI</c>/<c>DrawUI</c>/<c>UiSurfaces</c>) and proving it runs clean on both backends is the milestone.
+/// <c>EnableUI</c>/<c>DrawUI</c>/<c>UISurfaces</c>) and proving it runs clean on both backends is the milestone.
 /// MU1 fills in the real path — a <c>ui.slang</c> pipeline, MSDF atlas upload, per-frame grown vertex/index
 /// buffers, and a scissored <c>vkCmdDrawIndexed</c> — cloning <see cref="ImGuiRenderer"/> verbatim.
 /// </para>

@@ -10,20 +10,20 @@ namespace Loom.UI;
 /// One UI surface (PlanningUI.md §D2.4): owns the element <see cref="Content"/> tree and the composition
 /// <see cref="Visual"/> tree it composites through a pluggable <see cref="IUICompositor"/>. Holds <b>no</b> engine
 /// or backend handle, so <see cref="LayoutPass"/> + <see cref="Render"/> run to completion headless — input crosses
-/// in as a size, the product is neutral <see cref="UiDrawData"/> (the headless-testable invariant, §D0/§D8).
+/// in as a size, the product is neutral <see cref="UIDrawData"/> (the headless-testable invariant, §D0/§D8).
 /// </summary>
 public sealed class UIRoot
 {
 	private readonly IUICompositor _compositor;
 
-	public UIRoot(UiSurfaceId surface, IUICompositor? compositor = null)
+	public UIRoot(UISurfaceId surface, IUICompositor? compositor = null)
 	{
 		Surface = surface;
 		_compositor = compositor ?? new DrawListCompositor();
 	}
 
 	/// <summary>The surface this root composites into.</summary>
-	public UiSurfaceId Surface { get; }
+	public UISurfaceId Surface { get; }
 
 	/// <summary>The authoring (element) tree.</summary>
 	public UIElement? Content { get; set; }

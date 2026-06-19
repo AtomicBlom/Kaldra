@@ -7,7 +7,7 @@ namespace Loom.DX12;
 
 /// <summary>
 /// The DX12 backend's game-UI renderer — the twin of <see cref="DX12ImGuiRenderer"/> for the XAML UI engine
-/// (PlanningUI.md §D6), and the DX12 counterpart of <c>Loom.Vulkan/UiRenderer</c>. The "ui" pass's
+/// (PlanningUI.md §D6), and the DX12 counterpart of <c>Loom.Vulkan/UIRenderer</c>. The "ui" pass's
 /// <c>ctx.DrawUI(surface)</c> forwards that surface's composited, neutral <see cref="UIDrawData"/> here,
 /// recording into the already-bound render target.
 /// <para>
@@ -17,7 +17,7 @@ namespace Loom.DX12;
 /// <see cref="DX12ImGuiRenderer"/> verbatim.
 /// </para>
 /// </summary>
-internal sealed class DX12UiRenderer
+internal sealed class DX12UIRenderer
 {
 	/// <summary>
 	/// Record one surface's draw data into the open render target. MU0 Phase A: a no-op (the seam is what this

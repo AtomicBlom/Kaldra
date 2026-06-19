@@ -11,14 +11,14 @@ namespace Loom.UI.Tests;
 /// tested with no backend. These tests pin its format + determinism and the premultiplied-colour contract; the
 /// DP-precedence, layout, and compositor tests arrive with MU0 Phase B.
 /// </summary>
-public sealed class UiDrawDataTests
+public sealed class UIDrawDataTests
 {
 	[Test]
 	public void Empty_draw_data_dumps_a_stable_deterministic_snapshot()
 	{
 		const string nl = "\n";
 		var expected =
-			"UiDrawData (rev 0, surface 0x0, hdr=False)" + nl +
+			"UIDrawData (rev 0, surface 0x0, hdr=False)" + nl +
 			"  Vertices (0):" + nl +
 			"  Indices (0):" + nl +
 			"  Commands (0):" + nl;
@@ -34,7 +34,7 @@ public sealed class UiDrawDataTests
 		var draw = BuildQuad(revision: 7);
 		var dump = draw.Dump().ReplaceLineEndings("\n");
 
-		dump.ShouldContain("UiDrawData (rev 7, surface 1920x1080, hdr=False)");
+		dump.ShouldContain("UIDrawData (rev 7, surface 1920x1080, hdr=False)");
 		dump.ShouldContain("Vertices (4):");
 		// State-run batching collapses the quad to one index run; the index stream dumps in submission order.
 		dump.ShouldContain("Indices (6): 0 1 2 0 2 3");
@@ -71,7 +71,7 @@ public sealed class UiDrawDataTests
 	private static UIDrawData BuildQuad(uint revision)
 	{
 		var red = Half4.FromStraight(1f, 0f, 0f, 1f);
-		var verts = new UiVertex[]
+		var verts = new UIVertex[]
 		{
 			new(new Vector2(0, 0), new Vector2(0, 0), red, Vector4.Zero),
 			new(new Vector2(10, 0), new Vector2(1, 0), red, Vector4.Zero),
@@ -79,7 +79,7 @@ public sealed class UiDrawDataTests
 			new(new Vector2(0, 20), new Vector2(0, 1), red, Vector4.Zero),
 		};
 		var indices = new ushort[] { 0, 1, 2, 0, 2, 3 };
-		var commands = new UiDrawCommand[] { new(UiPrimKind.Fill, 0, new Rect(0, 0, 10, 20), 0, 6, 0) };
+		var commands = new UIDrawCommand[] { new(UIPrimKind.Fill, 0, new Rect(0, 0, 10, 20), 0, 6, 0) };
 		return new UIDrawData
 		{
 			Vertices = verts,

@@ -8,16 +8,16 @@ namespace Loom.UI;
 /// Bakes the composed transform into vertex positions and merges consecutive primitives that share
 /// <c>(kind, textureId, clip)</c> into one indexed draw command (atlas-everything + state-run batching, §D2.6).
 /// </summary>
-public sealed class UIDrawList
+internal sealed class UIDrawList
 {
-	private readonly List<UiVertex> _verts = [];
+	private readonly List<UIVertex> _verts = [];
 	private readonly List<ushort> _indices = [];
-	private readonly List<UiDrawCommand> _commands = [];
+	private readonly List<UIDrawCommand> _commands = [];
 	private readonly Vector2 _surfaceSize;
 
 	// Open run state — extended while (kind, tex, clip) match; flushed into a command otherwise.
 	private bool _open;
-	private UiPrimKind _runKind;
+	private UIPrimKind _runKind;
 	private int _runTex;
 	private Rect _runClip;
 	private int _runIdxStart;
@@ -26,7 +26,7 @@ public sealed class UIDrawList
 	public UIDrawList(Vector2 surfaceSize) => _surfaceSize = surfaceSize;
 
 	/// <summary>Append a transformed quad (the corners are baked through <paramref name="matrix"/>).</summary>
-	public void AddRect(in Rect local, in Matrix3x2 matrix, Half4 color, UiPrimKind kind, Vector4 @params, in Rect clip, int textureId = 0)
+	public void AddRect(in Rect local, in Matrix3x2 matrix, Half4 color, UIPrimKind kind, Vector4 @params, in Rect clip, int textureId = 0)
 	{
 		if (clip.IsEmpty)
 			return;
@@ -44,9 +44,9 @@ public sealed class UIDrawList
 	}
 
 	private void AddVertex(Vector2 local, Vector2 uv, in Matrix3x2 matrix, Half4 color, Vector4 @params) =>
-		_verts.Add(new UiVertex(Vector2.Transform(local, matrix), uv, color, @params));
+		_verts.Add(new UIVertex(Vector2.Transform(local, matrix), uv, color, @params));
 
-	private void EnsureRun(UiPrimKind kind, int tex, in Rect clip)
+	private void EnsureRun(UIPrimKind kind, int tex, in Rect clip)
 	{
 		if (_open && _runKind == kind && _runTex == tex && _runClip.Equals(clip))
 			return;
@@ -62,7 +62,7 @@ public sealed class UIDrawList
 	private void Flush()
 	{
 		if (_open && _runIdxCount > 0)
-			_commands.Add(new UiDrawCommand(_runKind, _runTex, _runClip, _runIdxStart, _runIdxCount, 0));
+			_commands.Add(new UIDrawCommand(_runKind, _runTex, _runClip, _runIdxStart, _runIdxCount, 0));
 		_open = false;
 	}
 

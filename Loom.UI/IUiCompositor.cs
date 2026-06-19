@@ -7,5 +7,5 @@ namespace Loom.UI;
 public interface IUICompositor
 {
 	/// <summary>Turn one surface's composition tree into rendering.</summary>
-	void Composite(RootVisual root, UiSurfaceId surface);
+	void Composite(RootVisual root, UISurfaceId surface);
 }

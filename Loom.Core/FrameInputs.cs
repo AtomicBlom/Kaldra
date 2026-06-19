@@ -37,11 +37,11 @@ public sealed record FrameInputs
 	public nint ImGuiDrawData { get; init; }
 
 	/// <summary>
-	/// This frame's composited game-UI surfaces — each <see cref="UiSurfaceId"/> paired with the neutral
+	/// This frame's composited game-UI surfaces — each <see cref="UISurfaceId"/> paired with the neutral
 	/// <see cref="UIDrawData"/> the host's compositor produced for it (PlanningUI.md §Core surface additions). A
 	/// pass names one with <c>ctx.DrawUI(id)</c>; the backend looks it up here and records it. Empty (the default)
 	/// draws no UI. Meaningful only after <see cref="IEngine.EnableUI"/>. Pulled in the pass closure, never
 	/// captured, so the graph stays frame-independent (Planning.md §8).
 	/// </summary>
-	public IReadOnlyList<(UiSurfaceId Id, UIDrawData Draw)> UiSurfaces { get; init; } = [];
+	public IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> UISurfaces { get; init; } = [];
 }

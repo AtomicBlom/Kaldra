@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace Loom.Core;
 
 /// <summary>
-/// A four-component 16-bit-float colour (RGBA16F), the neutral storage for a <see cref="UiVertex"/>'s
+/// A four-component 16-bit-float colour (RGBA16F), the neutral storage for a <see cref="UIVertex"/>'s
 /// <em>premultiplied</em> colour. Half precision is what lets the composited UI carry values above paper white
 /// (HDR) and a wide gamut without banding, while staying half the size of full floats in the vertex stream
 /// (PlanningUI.md §Color/HDR, §D2.5). Backend-neutral (<c>System.Half</c>, no graphics-API types); the backend's

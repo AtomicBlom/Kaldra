@@ -18,13 +18,13 @@ public sealed class UIDrawData
 	public static UIDrawData Empty { get; } = new();
 
 	/// <summary>The vertex stream (surface-pixel positions; premultiplied RGBA16F colour).</summary>
-	public ReadOnlyMemory<UiVertex> Vertices { get; init; }
+	public ReadOnlyMemory<UIVertex> Vertices { get; init; }
 
-	/// <summary>The index stream (16-bit + <see cref="UiDrawCommand.VertexOffset"/> for &gt;64k vertices).</summary>
+	/// <summary>The index stream (16-bit + <see cref="UIDrawCommand.VertexOffset"/> for &gt;64k vertices).</summary>
 	public ReadOnlyMemory<ushort> Indices { get; init; }
 
 	/// <summary>The batched draw commands, in submission order.</summary>
-	public ReadOnlyMemory<UiDrawCommand> Commands { get; init; }
+	public ReadOnlyMemory<UIDrawCommand> Commands { get; init; }
 
 	/// <summary>The surface's pixel size, for the backend's pixel→clip push.</summary>
 	public Vector2 SurfaceSize { get; init; }
@@ -48,7 +48,7 @@ public sealed class UIDrawData
 		var commands = Commands.Span;
 
 		var sb = new StringBuilder();
-		sb.Append(c, $"UiDrawData (rev {Revision}, surface {SurfaceSize.X:0.###}x{SurfaceSize.Y:0.###}, hdr={IsHdrSurface})\n");
+		sb.Append(c, $"UIDrawData (rev {Revision}, surface {SurfaceSize.X:0.###}x{SurfaceSize.Y:0.###}, hdr={IsHdrSurface})\n");
 
 		sb.Append(c, $"  Vertices ({vertices.Length}):\n");
 		for (var i = 0; i < vertices.Length; i++)

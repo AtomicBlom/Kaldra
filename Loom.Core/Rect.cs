@@ -4,7 +4,7 @@ namespace Loom.Core;
 
 /// <summary>
 /// An axis-aligned rectangle in surface pixels — neutral geometry (no graphics-API types), used by the UI seam
-/// for a draw command's scissor (<see cref="UiDrawCommand.ClipRect"/>) and reused by the <c>Loom.UI</c> layout/
+/// for a draw command's scissor (<see cref="UIDrawCommand.ClipRect"/>) and reused by the <c>Loom.UI</c> layout/
 /// hit-test code. Stored as origin + size so a zero-size rect is unambiguous; <see cref="Right"/>/<see cref="Bottom"/>
 /// are derived. Lives in <c>Loom.Core</c> beside <see cref="Vertex"/> as managed value data (PlanningUI.md §D0).
 /// </summary>

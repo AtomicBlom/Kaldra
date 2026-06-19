@@ -12,6 +12,6 @@ namespace Loom.Core;
 /// <param name="IndexOffset">First index of the run (into <see cref="UIDrawData.Indices"/>).</param>
 /// <param name="IndexCount">Number of indices in the run.</param>
 /// <param name="VertexOffset">Value added to each index before fetching a vertex (the ImGui <c>VtxOffset</c> trick for &gt;64k vertices).</param>
-public readonly record struct UiDrawCommand(
-	UiPrimKind Kind, int TextureId, Rect ClipRect,
+public readonly record struct UIDrawCommand(
+	UIPrimKind Kind, int TextureId, Rect ClipRect,
 	int IndexOffset, int IndexCount, int VertexOffset);

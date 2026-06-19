@@ -41,7 +41,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	// The host's game-UI renderer (the twin of _imgui), wired in by the engine when the host calls EnableUI. The
 	// "ui" pass's ctx.DrawUI(surface) forwards that surface's composited draw data to it. Null until UI is enabled;
 	// MU0 Phase A's renderer is a no-op. Ungated — the neutral seam exists unconditionally (no native dep).
-	private DX12UiRenderer? _ui;
+	private DX12UIRenderer? _ui;
 
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
@@ -55,8 +55,8 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 													 // This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
 													 // DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
 	private nint _imguiDrawData;
-	// This frame's composited UI surfaces, pulled from FrameInputs.UiSurfaces; ctx.DrawUI looks one up by id.
-	private IReadOnlyList<(UiSurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
+	// This frame's composited UI surfaces, pulled from FrameInputs.UISurfaces; ctx.DrawUI looks one up by id.
+	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
 	private uint _fbWidth;
 	private uint _fbHeight;
 	private DxgiFormat[] _colorFormats = [];
@@ -109,14 +109,14 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 #endif
 
 	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
-	public void SetUi(DX12UiRenderer renderer) => _ui = renderer;
+	public void SetUI(DX12UIRenderer renderer) => _ui = renderer;
 
 	public void BeginFrame(ComPtr<ID3D12GraphicsCommandList> cmd, FrameInputs inputs, bool hdrOutput, uint slot, uint fbWidth, uint fbHeight)
 	{
 		_cmd = cmd;
 		_slot = slot;
 		_imguiDrawData = inputs.ImGuiDrawData;
-		_uiSurfaces = inputs.UiSurfaces;
+		_uiSurfaces = inputs.UISurfaces;
 		_fbWidth = fbWidth;
 		_fbHeight = fbHeight;
 		DeltaTime = (float)inputs.DeltaSeconds;
@@ -477,7 +477,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	// Forward this frame's composited UI surface to the backend renderer, recording into the already-bound render
 	// target — the twin of DrawImGui for the XAML UI engine. No-op when UI isn't enabled, the host supplied no
 	// draw data for this surface, or the surface is empty. MU0 Phase A: the renderer itself no-ops.
-	public void DrawUI(UiSurfaceId surface)
+	public void DrawUI(UISurfaceId surface)
 	{
 		if (_ui is null)
 			return;

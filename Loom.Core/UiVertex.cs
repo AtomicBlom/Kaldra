@@ -14,4 +14,4 @@ namespace Loom.Core;
 /// <param name="Color">Premultiplied RGBA16F colour (carries above-paper-white HDR + wide gamut).</param>
 /// <param name="Params">Per-primitive scratch: rounded-rect radii / border half-width / SDF range (kind-dependent).</param>
 [StructLayout(LayoutKind.Sequential)]
-public readonly record struct UiVertex(Vector2 Position, Vector2 Uv, Half4 Color, Vector4 Params);
+public readonly record struct UIVertex(Vector2 Position, Vector2 Uv, Half4 Color, Vector4 Params);

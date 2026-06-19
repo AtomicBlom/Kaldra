@@ -7,8 +7,8 @@ namespace Loom.UI;
 /// <summary>
 /// Loom's default <see cref="IUICompositor"/> (PlanningUI.md §D2.5): walks a surface's composition tree, folds
 /// transform/clip/opacity into a pre-transformed vertex/command stream, and exposes it as neutral
-/// <see cref="UiDrawData"/> for the backend's UI renderer. Phase B emits the rectangle family (fills + borders);
-/// glyphs/images arrive with MSDF text + images (MU1). Output is asserted on CPU via <see cref="UiDrawData.Dump"/>
+/// <see cref="UIDrawData"/> for the backend's UI renderer. Phase B emits the rectangle family (fills + borders);
+/// glyphs/images arrive with MSDF text + images (MU1). Output is asserted on CPU via <see cref="UIDrawData.Dump"/>
 /// — the primary test seam, no backend needed.
 /// </summary>
 public sealed class DrawListCompositor : IUICompositor
@@ -16,7 +16,7 @@ public sealed class DrawListCompositor : IUICompositor
 	private readonly Dictionary<int, UIDrawData> _surfaces = [];
 	private readonly Dictionary<int, uint> _revisions = [];
 
-	public void Composite(RootVisual root, UiSurfaceId surface)
+	public void Composite(RootVisual root, UISurfaceId surface)
 	{
 		var list = new UIDrawList(root.SurfaceSize);
 		Walk(list, root, Matrix3x2.Identity, 1f, new Rect(0, 0, root.SurfaceSize.X, root.SurfaceSize.Y));
@@ -25,8 +25,8 @@ public sealed class DrawListCompositor : IUICompositor
 		_surfaces[surface.Value] = list.Build(root.IsHdrSurface, rev);
 	}
 
-	/// <summary>The last <see cref="UIDrawData"/> produced for <paramref name="surface"/> (handed to FrameInputs.UiSurfaces).</summary>
-	public UIDrawData LastDraw(UiSurfaceId surface) => _surfaces.TryGetValue(surface.Value, out var d) ? d : UIDrawData.Empty;
+	/// <summary>The last <see cref="UIDrawData"/> produced for <paramref name="surface"/> (handed to FrameInputs.UISurfaces).</summary>
+	public UIDrawData LastDraw(UISurfaceId surface) => _surfaces.TryGetValue(surface.Value, out var d) ? d : UIDrawData.Empty;
 
 	private static void Walk(UIDrawList list, Visual v, Matrix3x2 parent, float opacity, Rect clip)
 	{
@@ -41,11 +41,11 @@ public sealed class DrawListCompositor : IUICompositor
 			var rect = new Rect(0, 0, rc.Size.X, rc.Size.Y);
 			if (rc.Fill is { } fill)
 			{
-				var kind = rc.CornerRadius > 0 ? UiPrimKind.RoundedRect : UiPrimKind.Fill;
+				var kind = rc.CornerRadius > 0 ? UIPrimKind.RoundedRect : UIPrimKind.Fill;
 				list.AddRect(rect, matrix, fill.ToPremultiplied(alpha), kind, new Vector4(rc.CornerRadius, 0, 0, 0), localClip);
 			}
 			if (rc.BorderBrush is { } bb && rc.BorderThickness > 0)
-				list.AddRect(rect, matrix, bb.ToPremultiplied(alpha), UiPrimKind.Border, new Vector4(rc.BorderThickness, rc.CornerRadius, 0, 0), localClip);
+				list.AddRect(rect, matrix, bb.ToPremultiplied(alpha), UIPrimKind.Border, new Vector4(rc.BorderThickness, rc.CornerRadius, 0, 0), localClip);
 		}
 
 		foreach (var child in v.Children)

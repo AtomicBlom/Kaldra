@@ -60,8 +60,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// pass's ctx.DrawUI(surface) forwards that surface's draw data to it. Null until UI is enabled; MU0 Phase A's
 	// renderer is a no-op (PlanningUI.md MU0). Ungated — the neutral seam exists unconditionally (no native dep).
 	private UIRenderer? _ui;
-	// This frame's composited UI surfaces, pulled from FrameInputs.UiSurfaces; ctx.DrawUI looks one up by id.
-	private IReadOnlyList<(UiSurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
+	// This frame's composited UI surfaces, pulled from FrameInputs.UISurfaces; ctx.DrawUI looks one up by id.
+	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
 
 	private Extent2D _fbExtent;
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off TechniqueCache's
@@ -151,10 +151,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 #endif
 
 	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
-	public void SetUi(UIRenderer renderer) => _ui = renderer;
+	public void SetUI(UIRenderer renderer) => _ui = renderer;
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, HDR-output state, and composited UI surfaces before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, IReadOnlyList<(UiSurfaceId Id, UIDrawData Draw)> uiSurfaces, Extent2D fbExtent, bool hdrOutput)
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> uiSurfaces, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
@@ -442,7 +442,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// Forward this frame's composited UI surface to the backend renderer, recording into the (already-open) pass
 	// rendering scope — the twin of DrawImGui for the XAML UI engine. No-op when UI isn't enabled, the host
 	// supplied no draw data for this surface, or the surface is empty. MU0 Phase A: the renderer itself no-ops.
-	public void DrawUI(UiSurfaceId surface)
+	public void DrawUI(UISurfaceId surface)
 	{
 		if (_ui is null)
 			return;

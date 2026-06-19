@@ -123,7 +123,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private float _frameTime;
 	private uint _frameHover;
 	private nint _frameImGui;
-	private IReadOnlyList<(UiSurfaceId Id, UIDrawData Draw)> _frameUiSurfaces = [];
+	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _frameUISurfaces = [];
 
 	private int _currentFrame;
 	private bool _framebufferResized;
@@ -408,7 +408,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		// MU0 Phase A: stand up the no-op UI renderer and wire it to the context, so the ctx.DrawUI() seam is live
 		// on both backends. No shader resolve yet — the ui.slang pipeline + atlas upload arrive in MU1.
 		_ui = new UIRenderer();
-		_context.SetUi(_ui);
+		_context.SetUI(_ui);
 	}
 
 	public float SamplePick(int x, int y)
@@ -473,7 +473,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_frameTime = inputs.Time;
 		_frameHover = inputs.HoverId;
 		_frameImGui = inputs.ImGuiDrawData;
-		_frameUiSurfaces = inputs.UiSurfaces;
+		_frameUISurfaces = inputs.UISurfaces;
 		DrawFrame((float)inputs.DeltaSeconds);
 	}
 
@@ -600,7 +600,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _frameUiSurfaces, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _frameUISurfaces, _swapchain.Extent, _swapchain.HdrActive);
 
 		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).
