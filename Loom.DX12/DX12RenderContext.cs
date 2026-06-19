@@ -372,13 +372,14 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
-		// The buffer IS the per-instance vertex stream (one float4 per particle); the graph put it in
-		// VERTEX_AND_CONSTANT_BUFFER before this pass. 6 fabricated quad verts × one instance per particle.
+		// The buffer IS the per-instance vertex stream (one particle per element); the graph put it in
+		// VERTEX_AND_CONSTANT_BUFFER before this pass. Stride is the technique's particle stride (16 for the
+		// legacy float4, the layout's stride for a generalized particle). 6 fabricated quad verts × one instance.
 		var vbv = new VertexBufferView
 		{
 			BufferLocation = _transients.Resource(_slot, buffer.Id).GetGPUVirtualAddress(),
 			SizeInBytes = _transients.ByteSize(buffer.Id),
-			StrideInBytes = 16,
+			StrideInBytes = (uint)baked.ParticleStride,
 		};
 		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.IASetVertexBuffers(0, 1, &vbv);
@@ -509,7 +510,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		{
 			BufferLocation = _transients.Resource(_slot, buffer.Id).GetGPUVirtualAddress(),
 			SizeInBytes = _transients.ByteSize(buffer.Id),
-			StrideInBytes = 16,
+			StrideInBytes = (uint)baked.ParticleStride,
 		};
 		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.IASetVertexBuffers(0, 1, &vbv);

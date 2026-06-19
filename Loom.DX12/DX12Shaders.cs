@@ -165,8 +165,25 @@ internal static unsafe class DX12Shaders
 				var rows = type.TryGetProperty("rowCount", out var r) ? r.GetInt32() : 0;
 				var cols = type.TryGetProperty("columnCount", out var c) ? c.GetInt32() : 0;
 				return rows * cols * (type.TryGetProperty("elementType", out var met) ? TypeByteSize(met) : 4);
+			case "struct":
+				// A user struct element (e.g. the generalized particle's two-float4 Particle, M14-4): the element
+				// stride is the extent of its last field, max(field.offset + field.size) over the laid-out fields.
+				// Without this a structured buffer of a struct sizes to 0 and falls back to the root-UAV path, where
+				// GetDimensions returns 0 and the compute writes nothing — the trap that left DX12 particles blank.
+				var size = 0;
+				if (type.TryGetProperty("fields", out var fields) && fields.ValueKind == JsonValueKind.Array)
+				{
+					foreach (var field in fields.EnumerateArray())
+					{
+						if (field.TryGetProperty("binding", out var fb) && fb.TryGetProperty("offset", out var fo) && fb.TryGetProperty("size", out var fs))
+							size = Math.Max(size, fo.GetInt32() + fs.GetInt32());
+						else if (field.TryGetProperty("type", out var ft))
+							size += TypeByteSize(ft); // no per-field layout: tight-pack as a fallback
+					}
+				}
+				return size;
 			default:
-				return 0; // struct/unknown — can't size generically (would need field walking)
+				return 0; // unknown — can't size generically
 		}
 	}
 

@@ -142,6 +142,23 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		new VertexAttribute("ILIGHT", VertexFormat.Float4),  // position.xy, radius, intensity
 		new VertexAttribute("ILIGHT", VertexFormat.Float4)); // colour.rgb, height
 
+	/// <summary>
+	/// The per-instance stream for the generalized GPU particle system (M14-4) — one particle per instance
+	/// (2 × float4, 32 bytes) at <em>binding 0</em>, advancing one per instance. Unlike <see cref="Sprite"/>/
+	/// <see cref="Light2D"/>, particles have <em>no</em> paired per-vertex mesh: a compute pass writes this stream
+	/// into a storage buffer (`RWStructuredBuffer` of the matching 32-byte struct) and the render shader fabricates
+	/// a billboard quad per instance from <c>SV_VertexID</c> — so the stream owns binding 0 outright. This widens
+	/// the engine's old hard-coded single-<c>float4</c> particle vertex input into a layout-driven one (a technique
+	/// declares it via <c>TechniqueDescriptor.Instance</c> with <c>ParticleInput</c>); a technique that leaves it
+	/// null keeps the legacy single-<c>float4</c> path. The two rows carry position + remaining-life and
+	/// velocity + per-particle seed; the repeated <c>IPARTICLE0..1</c> semantic matches DX12's name-plus-index binding.
+	/// </summary>
+	public static VertexLayout Particle { get; } = new(
+		VertexInputRate.PerInstance,
+		binding: 0,
+		new VertexAttribute("IPARTICLE", VertexFormat.Float4),  // position.xyz, life (1 at spawn → 0 at death)
+		new VertexAttribute("IPARTICLE", VertexFormat.Float4)); // velocity.xyz, seed (per-particle random)
+
 	public bool Equals(VertexLayout? other)
 	{
 		if (other is null)
