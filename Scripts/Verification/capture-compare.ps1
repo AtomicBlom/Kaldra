@@ -4,11 +4,10 @@
 # Requires the default UseVulkan + UseDX12 build. This is a dev-box convenience (it spawns the windowed sandbox);
 # CI uses the xUnit golden harness (Loom.Tests) instead.
 param(
-  # The EXACT demo name (the robust cross-host key — both hosts match it case-insensitively), e.g.
-  # "Sprites + Atlas". An index also works but the two hosts may number demos differently, so prefer the name.
-  # An unknown value silently falls back to demo 0 on both backends (the warning is surfaced below).
+  # The demo to capture: a 0-based index, an exact (case-insensitive) name, or a unique case-insensitive
+  # substring, e.g. "Sprites + Atlas" or just "sprites" (an ambiguous/unmatched value makes the sandbox exit
+  # without rendering, so the capture would be missing — the run's output is surfaced below).
   [Parameter(Mandatory=$true)][string]$Demo,
-  [int]$Frames = 70,
   [string]$OutDir = "$env:TEMP/loom-verify",
   [int]$Threshold = 16,
   [switch]$NoBuild
@@ -28,18 +27,16 @@ if (-not $NoBuild) {
 }
 
 function Capture($backend, $out) {
-  $env:LOOM_DEMO = $Demo
-  $env:LOOM_CAPTURE = $out
-  $env:LOOM_SMOKE_FRAMES = "$Frames"
-  if ($backend -eq 'DX12') { $env:LOOM_BACKEND = 'DX12' }
-  else { Remove-Item Env:\LOOM_BACKEND -ErrorAction SilentlyContinue }
-  & dotnet run --project $proj --no-build 2>&1 |
+  # The sandbox is configured entirely by command-line options now (no LOOM_* env vars). --capture grabs one
+  # frame with frozen time + a fixed delta and exits; --backend selects Vulkan (the default) or DX12.
+  $runArgs = @('run', '--project', $proj, '--no-build', '--', '--demo', $Demo, '--capture', $out)
+  if ($backend -eq 'DX12') { $runArgs += @('--backend', 'dx12') }
+  & dotnet @runArgs 2>&1 |
     Select-String -Pattern 'captured|debug layer|error|exception|not a known' |
     ForEach-Object { "  [$backend] $($_.Line.Trim())" }
-  Remove-Item Env:\LOOM_DEMO, Env:\LOOM_CAPTURE, Env:\LOOM_SMOKE_FRAMES, Env:\LOOM_BACKEND -ErrorAction SilentlyContinue
 }
 
-"Capturing '$Demo' ($Frames frames) on both backends -> $OutDir"
+"Capturing '$Demo' on both backends -> $OutDir"
 Capture 'Vulkan' $vk
 Capture 'DX12'   $dx
 ""

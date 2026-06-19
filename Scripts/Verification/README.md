@@ -5,10 +5,10 @@ quantitative signal over a captured frame without opening it in a viewer (and, f
 without pulling the image bytes into context). They use `System.Drawing` (`LockBits`), so they
 run anywhere .NET is present.
 
-The capture half of the loop is the sandbox itself: `Loom.Sandbox` honours `LOOM_CAPTURE=path`
-(grab one frame to a PNG with frozen time + a fixed delta) and `LOOM_SMOKE_FRAMES=N` (render N
-frames, then exit). With `LOOM_BACKEND=DX12` and `LOOM_DEMO=<name|index>` you can capture any
-demo on either backend deterministically — the inputs for a cross-backend pixel diff.
+The capture half of the loop is the sandbox itself, configured by command-line options (no `LOOM_*`
+env vars — run `dotnet run --project Loom.Sandbox -- --help` for the full list): `--capture <path>`
+grabs one frame to a PNG with frozen time + a fixed delta then exits, `--backend <vulkan|dx12>`
+selects the backend, and `--demo <name|index>` picks the demo — the inputs for a cross-backend diff.
 
 ## colorcount.ps1
 
@@ -56,9 +56,9 @@ pwsh Scripts/Verification/coverage.ps1 -Path capture.png
 ## capture-compare.ps1
 
 The whole loop in one command: capture a demo on **both** backends (headless, frozen time), then
-`colorcount` + `coverage` + `diff` each. Pass the **exact demo name** (the cross-host-safe key).
-Builds `Loom.Sandbox` once unless `-NoBuild`. A dev-box convenience (it spawns the windowed sandbox);
-CI uses the xUnit golden harness instead.
+`colorcount` + `coverage` + `diff` each. Pass the **exact demo name**. Builds `Loom.Sandbox` once
+unless `-NoBuild`. A dev-box convenience (it spawns the windowed sandbox); CI uses the xUnit golden
+harness instead.
 
 ```powershell
 pwsh Scripts/Verification/capture-compare.ps1 -Demo "Sprites + Atlas"
@@ -69,14 +69,14 @@ pwsh Scripts/Verification/capture-compare.ps1 -Demo "Sprites + Atlas"
 
 ```powershell
 $S = "$env:TEMP/loom-caps"; mkdir $S -Force | Out-Null
-$env:LOOM_DEMO = "Sprites + Atlas"; $env:LOOM_SMOKE_FRAMES = 70
-$env:LOOM_CAPTURE = "$S/vk.png";   Remove-Item Env:\LOOM_BACKEND -EA SilentlyContinue; dotnet run --project Loom.Sandbox
-$env:LOOM_CAPTURE = "$S/dx12.png"; $env:LOOM_BACKEND = "DX12";                          dotnet run --project Loom.Sandbox
+dotnet run --project Loom.Sandbox -- --demo "Sprites + Atlas" --capture "$S/vk.png"
+dotnet run --project Loom.Sandbox -- --demo "Sprites + Atlas" --capture "$S/dx12.png" --backend dx12
 pwsh Scripts/Verification/diff.ps1 -A "$S/vk.png" -B "$S/dx12.png" -Out "$S/diff.png"
 ```
 
-> Demo selection (`LOOM_DEMO`) matches the **exact** demo name case-insensitively, then an index — an
-> unknown value (e.g. `Sprites` instead of `Sprites + Atlas`) silently falls back to demo 0.
+> Demo selection (`--demo`) takes a 0-based index, an exact (case-insensitive) name, or a **unique
+> case-insensitive substring** (e.g. `bloom`). An ambiguous substring lists its matches and a non-match
+> lists every demo — either way the sandbox exits rather than guessing, so a typo fails loudly.
 
 > For an **"is it rendered correctly"** judgment (vs the objective counts above), hand the PNG to a
 > subagent with a detailed description of the expected image and have it report pass/fail — images
