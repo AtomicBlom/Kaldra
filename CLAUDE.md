@@ -56,10 +56,23 @@ Tests live in `Loom.Tests` and cover the describe/execute layers — scheduling,
 
 Enforced by `.editorconfig` at the repo root; the essentials:
 - **File-scoped namespaces** (`namespace Loom.Core;`), never block-scoped.
-- **Tabs, not spaces** for `.cs` indentation (width 4). Markup/config (`.csproj`, `.slnx`, `.json`) uses 2-space indent.
+- **Tabs, not spaces** for `.cs`, `.csproj`, `.slnx`, `.json`
 - **Braces where appropriate** — required around multi-line blocks; a single-line `if (cond) return;` may omit them.
-- **Modern .NET / C#** — reach for the current idiom when it reads cleaner: `var` when the type is apparent, target-typed `new`, collection expressions, pattern matching / switch expressions, primary constructors, expression-bodied members, `using` declarations, null-propagation and coalescing. Nullable reference types and implicit usings are on.
+- **Single class per file** - Inner classes are permissible where appropriate
+- **Modern .NET / C#** 
+  - `var` when the type is apparent
+  - target-typed `new`
+  - collection expressions
+  - pattern matching / switch expressions
+  - primary constructors
+  - expression-bodied members
+  - `using` declarations
+  - null-propagation and coalescing.
+  - Nullable reference types and implicit usings are on. 
+  - `field` in properties instead of `_customField`s
+  - `with` to copy records with changes
 - Allman braces; `System.*` usings sorted first; usings outside the namespace.
+- **UI-track naming.** The two-letter acronym `UI` is always uppercase in identifiers — matching WinUI's own `UIElement` and the .NET two-letter-acronym guideline: `UIElement`, `UIRoot`, `UIVertex`, `UIDrawData`, `UISurfaceId`, `UIPrimKind`, `IUICompositor`, `UIRenderer`, `IRenderContext.DrawUI`, `IEngine.EnableUI`. (In camelCase a leading `ui` stays lowercase, e.g. the `uiSurfaces` local.) `Loom.sln.DotSettings` registers `UI` as a known abbreviation so Rider/ReSharper accepts it — keep that file.
 
 ## Goals & constraints
 
