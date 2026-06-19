@@ -86,4 +86,12 @@ Load-bearing; violating them silently breaks the design:
 
 ## Agent Behaviour
 A note on using image captures to determine whether something has worked or not, images take up a LOT of context
-When verifying whether an image is correct or not, use a subagent and tell it what you're expecting the image to contain in as much detail as possible, the sub-agent should return whether it met your expectations or not.
+When verifying whether an image is **correct** or not, use a subagent and tell it what you're expecting the image to contain in as much detail as possible, the sub-agent should return whether it met your expectations or not.
+
+For **objective, quantitative** checks that need no correctness judgment — "did anything render?", "are the two backends at pixel parity?" — prefer the checked-in `Scripts/Verification/` helpers over ad-hoc `System.Drawing` snippets; they keep image bytes out of context entirely:
+- `pwsh Scripts/Verification/colorcount.ps1 -Path <png>` — distinct-RGB count (a black/empty frame is ~1 colour; a real scene is thousands).
+- `pwsh Scripts/Verification/diff.ps1 -A <png> -B <png> -Out <heatmap.png>` — mean/max per-channel abs diff + the fraction of pixels over `-Threshold`, plus a heatmap. Cross-backend parity bar: 4/255 per channel, <0.5% of pixels.
+
+Capture the frames headlessly with `LOOM_CAPTURE=path` + `LOOM_SMOKE_FRAMES=N` (frozen time), picking demo/backend via `LOOM_DEMO=<name|index>` / `LOOM_BACKEND=DX12`. See `Scripts/Verification/README.md`.
+
+When a demo renders on one backend but not the other, suspect the **host harness** first (the two sandbox hosts — `Loom.Sandbox/Program.cs` for Vulkan and `Loom.Sandbox/Dx12Smoke.cs` for DX12 — must stay in sync; e.g. both must honour `IDemo.GetCamera`), not the shaders. A divergence there once cost a long hunt for a non-existent SPIR-V↔DXIL matrix-layout bug.
