@@ -10,11 +10,11 @@ namespace Loom.Vulkan;
 /// <summary>
 /// A baked graphics pipeline (the fluent describe-layer <c>TechniqueBuilder</c> arrives in M5). This is
 /// the Bake layer in miniature: the whole <see cref="GraphicsPipelineCreateInfo"/> struct graph is
-/// flattened transiently into a <see cref="NativeArena"/>, the pipeline is created (vkCreate* copies
+/// flattened transiently into a <see cref="VulkanNativeArena"/>, the pipeline is created (vkCreate* copies
 /// everything), and the arena + shader module are freed immediately. Uses dynamic rendering — no
 /// VkRenderPass.
 /// </summary>
-public sealed unsafe class Technique : IDisposable
+public sealed unsafe class VulkanTechnique : IDisposable
 {
 	private readonly Vk _vk;
 	private readonly Device _device;
@@ -23,19 +23,19 @@ public sealed unsafe class Technique : IDisposable
 	public PipelineLayout Layout { get; }
 
 	/// <summary>
-	/// The descriptor set layout for a sampling technique (<see cref="TechniqueDescription.SampleCount"/>
+	/// The descriptor set layout for a sampling technique (<see cref="VulkanTechniqueDescription.SampleCount"/>
 	/// combined image samplers at set 0, bindings 0..N-1), or the null handle for a technique that samples nothing.
 	/// </summary>
 	public DescriptorSetLayout DescriptorSetLayout { get; }
 
-	public Technique(VulkanContext ctx, in TechniqueDescription description, byte[] spirv, string name)
+	public VulkanTechnique(VulkanContext ctx, in VulkanTechniqueDescription description, byte[] spirv, string name)
 	{
 		_vk = ctx.Vk;
 		_device = ctx.Device;
 
 		var module = CreateShaderModule(spirv);
 		// Name the module for GPU debuggers before it's destroyed below ([Conditional] — stripped without
-		// UseNamedGPUObjects). The pipeline gets its own "pipeline:…" name once it's baked (RenderContext).
+		// UseNamedGPUObjects). The pipeline gets its own "pipeline:…" name once it's baked (VulkanRenderContext).
 		ctx.SetObjectName(ObjectType.ShaderModule, module.Handle, $"shader:{name}");
 		try
 		{
@@ -80,7 +80,7 @@ public sealed unsafe class Technique : IDisposable
 	// then <paramref name="storageImages"/> storage images (a compute's .ReadWrites of an image), then
 	// <paramref name="storageBuffers"/> storage buffers (a compute's .ReadWrites of a buffer — GPU particles),
 	// then <paramref name="uniformBuffers"/> uniform buffers (M15-0 — the per-frame uniform seam, fed from the
-	// uniform ring), visible to the given stage. The reflection (ShaderReflection) derives these counts; the
+	// uniform ring), visible to the given stage. The reflection (VulkanShaderReflection) derives these counts; the
 	// shaders declare the matching [[vk::binding(n,0)]] in the same category order.
 	private DescriptorSetLayout CreateSetLayout(int sampleCount, int storageImages, int storageBuffers, int uniformBuffers, ShaderStageFlags stage)
 	{
@@ -144,9 +144,9 @@ public sealed unsafe class Technique : IDisposable
 	// A compute pipeline is just the one compute stage + the layout — no fixed-function state, no render
 	// target, no dynamic rendering. The entry point name rides in FragmentEntry (a compute technique has the
 	// single entry there). This is the Bake layer's compute half: the auto-exposure reduction dispatches it.
-	private Pipeline CreateComputePipeline(ShaderModule module, in TechniqueDescription description)
+	private Pipeline CreateComputePipeline(ShaderModule module, in VulkanTechniqueDescription description)
 	{
-		using var arena = new NativeArena();
+		using var arena = new VulkanNativeArena();
 		ComputePipelineCreateInfo createInfo = new()
 		{
 			SType = StructureType.ComputePipelineCreateInfo,
@@ -170,7 +170,7 @@ public sealed unsafe class Technique : IDisposable
 	// matrix — instanced drawing). Vulkan vertex-input locations are one flat namespace across bindings, so
 	// locations are assigned in order: per-vertex attributes get 0..k-1, per-instance attributes continue at
 	// k.. — the instanced shader's [[vk::location]]s must match.
-	private static PipelineVertexInputStateCreateInfo* VertexInput(NativeArena arena, VertexLayout vertexLayout, VertexLayout? instanceLayout)
+	private static PipelineVertexInputStateCreateInfo* VertexInput(VulkanNativeArena arena, VertexLayout vertexLayout, VertexLayout? instanceLayout)
 	{
 		var bindingCount = instanceLayout is null ? 1 : 2;
 		var attributeCount = vertexLayout.Attributes.Length + (instanceLayout?.Attributes.Length ?? 0);
@@ -215,7 +215,7 @@ public sealed unsafe class Technique : IDisposable
 	// (§7.6 GPU particles). With a layout (M14-4 generalized particles) the stream's attributes/stride come from
 	// it (e.g. VertexLayout.Particle: two IPARTICLE float4 rows, 32 bytes); without one, the legacy single float4
 	// (xyz position + w life, stride 16) — so the original ParticlesDemo path is unchanged.
-	private static PipelineVertexInputStateCreateInfo* VertexInputForParticles(NativeArena arena, VertexLayout? layout)
+	private static PipelineVertexInputStateCreateInfo* VertexInputForParticles(VulkanNativeArena arena, VertexLayout? layout)
 	{
 		if (layout is null)
 		{
@@ -245,9 +245,9 @@ public sealed unsafe class Technique : IDisposable
 		});
 	}
 
-	private Pipeline CreatePipeline(ShaderModule module, in TechniqueDescription description)
+	private Pipeline CreatePipeline(ShaderModule module, in VulkanTechniqueDescription description)
 	{
-		using var arena = new NativeArena();
+		using var arena = new VulkanNativeArena();
 
 		var stages = arena.Alloc<PipelineShaderStageCreateInfo>(2);
 		stages[0] = new PipelineShaderStageCreateInfo

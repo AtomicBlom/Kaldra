@@ -7,7 +7,7 @@ namespace Loom.Vulkan;
 
 /// <summary>
 /// A named, format-agnostic technique the host registers for the graph to draw with (Planning.md §5's
-/// <c>Technique.X</c>, addressed by string until the describe-layer <c>Technique</c> builder lands in M5).
+/// <c>VulkanTechnique.X</c>, addressed by string until the describe-layer <c>VulkanTechnique</c> builder lands in M5).
 /// It carries everything that identifies the shader, but <em>not</em> the colour format — that is supplied
 /// per pass at record time (from the target the pass writes), so one template baked against two targets
 /// yields two cached pipelines.
@@ -24,7 +24,7 @@ namespace Loom.Vulkan;
 /// <param name="IsCompute">True for a compute technique: one compute entry point (in <see cref="FragmentEntry"/>), dispatched rather than drawn (Planning.md §5 <c>.Dispatch</c>).</param>
 /// <param name="StorageCount">Number of storage images the (compute) shader read-writes, bound after the sampled inputs (bindings SampleCount..SampleCount+StorageCount-1).</param>
 /// <param name="UniformBufferCount">Number of descriptor-bound constant buffers the shader reads (M15-0 — the per-frame uniform seam), bound after the storage slots; 0 or 1 in practice. Fed from the per-frame uniform ring; carries data too large for the 16-float push (CSM matrices, lighting params, wind).</param>
-public readonly record struct TechniqueTemplate(
+public readonly record struct VulkanTechniqueTemplate(
 	byte[] Spirv,
 	string VertexEntry,
 	string FragmentEntry,

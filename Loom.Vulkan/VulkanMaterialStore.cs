@@ -5,10 +5,10 @@ namespace Loom.Vulkan;
 /// <summary>
 /// Owns the texture-id list behind each <see cref="Material"/> handle. A material is just an ordered bundle of
 /// textures (PlanningPhase2.md M11); the store records that order at <see cref="Create"/> and the draw path
-/// resolves a material id to its texture ids, then to image views in the <see cref="TextureStore"/>. Kept
+/// resolves a material id to its texture ids, then to image views in the <see cref="VulkanTextureStore"/>. Kept
 /// separate from the GPU resources so the material draw path binds with zero per-draw allocation.
 /// </summary>
-internal sealed class MaterialStore
+internal sealed class VulkanMaterialStore
 {
 	private readonly List<int[]> _materials = [];
 

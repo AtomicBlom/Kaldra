@@ -8,7 +8,7 @@ namespace Loom.Vulkan;
 /// built-in <see cref="ZLibStream"/> for the IDAT zlib stream and a hand-rolled CRC-32 — no image
 /// library needed. Not optimized (filter type 0 on every scanline); fine for validation grabs.
 /// </summary>
-internal static class PngWriter
+internal static class VulkanPngWriter
 {
 	private static readonly byte[] Signature = [137, 80, 78, 71, 13, 10, 26, 10];
 	private static readonly uint[] CrcTable = BuildCrcTable();

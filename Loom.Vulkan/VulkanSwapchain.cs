@@ -6,7 +6,7 @@ namespace Loom.Vulkan;
 /// The swapchain plus its images and image views, sized to the window. Recreatable on resize
 /// (e.g. <see cref="Result.ErrorOutOfDateKhr"/>). M0 plumbing — no graph involvement yet.
 /// </summary>
-public sealed unsafe class Swapchain : IDisposable
+public sealed unsafe class VulkanSwapchain : IDisposable
 {
 	private readonly VulkanContext _ctx;
 	private readonly bool _vsync;
@@ -27,7 +27,7 @@ public sealed unsafe class Swapchain : IDisposable
 	/// </summary>
 	public bool HdrActive { get; private set; }
 
-	public Swapchain(VulkanContext ctx, Extent2D windowExtent, bool vsync, bool hdrOutput = false)
+	public VulkanSwapchain(VulkanContext ctx, Extent2D windowExtent, bool vsync, bool hdrOutput = false)
 	{
 		_ctx = ctx;
 		_vsync = vsync;

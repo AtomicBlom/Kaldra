@@ -13,7 +13,7 @@ namespace Loom.Vulkan;
 /// scope. This table is exactly the layout/stage/access knowledge Planning.md §8 keeps out of Loom.Graph
 /// so a second backend can map the same states its own way.
 /// </summary>
-internal static class StateMapping
+internal static class VulkanStateMapping
 {
 	/// <summary>The Vulkan layout/stage/access a resource state corresponds to.</summary>
 	public readonly record struct Scope(ImageLayout Layout, PipelineStageFlags2 Stage, AccessFlags2 Access);

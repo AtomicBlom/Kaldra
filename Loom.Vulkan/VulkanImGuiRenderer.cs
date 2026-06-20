@@ -27,7 +27,7 @@ namespace Loom.Vulkan;
 /// fence has been waited before the executor records it again, so reusing the buffer is hazard-free).
 /// </para>
 /// </summary>
-internal sealed unsafe class ImGuiRenderer : IDisposable
+internal sealed unsafe class VulkanImGuiRenderer : IDisposable
 {
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
@@ -86,7 +86,7 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 	/// <summary>A textured quad the resource viewer draws (M13): a graph texture's view + a pixel-space rect.</summary>
 	internal readonly record struct Thumbnail(ImageView View, float X, float Y, float W, float H);
 
-	public ImGuiRenderer(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool, VkFormat colorFormat, byte[] spirv, int framesInFlight)
+	public VulkanImGuiRenderer(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool, VkFormat colorFormat, byte[] spirv, int framesInFlight)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
@@ -368,7 +368,7 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 	}
 
 	// The ImGui pipeline: ImDrawVert layout, alpha-over blend, no depth, dynamic viewport/scissor, baked
-	// against the swapchain colour format via dynamic rendering. Mirrors Technique's bake, bespoke for ImGui.
+	// against the swapchain colour format via dynamic rendering. Mirrors VulkanTechnique's bake, bespoke for ImGui.
 	private void CreatePipeline(VkFormat colorFormat, byte[] spirv)
 	{
 		var module = CreateShaderModule(spirv);
@@ -387,7 +387,7 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 			};
 			_vk.CreatePipelineLayout(_ctx.Device, in layoutInfo, null, out _layout).Check("vkCreatePipelineLayout");
 
-			using var arena = new NativeArena();
+			using var arena = new VulkanNativeArena();
 
 			var stages = arena.Alloc<PipelineShaderStageCreateInfo>(2);
 			stages[0] = new PipelineShaderStageCreateInfo
@@ -527,7 +527,7 @@ internal sealed unsafe class ImGuiRenderer : IDisposable
 	}
 
 	// Build ImGui's font atlas, upload it to a device-local image via a host-visible staging copy (the
-	// MeshStore pattern), and point the persistent font descriptor at it.
+	// VulkanMeshStore pattern), and point the persistent font descriptor at it.
 	private void UploadFontAtlas(CommandPool commandPool)
 	{
 		var io = ImGui.GetIO();

@@ -17,7 +17,7 @@ namespace Loom.Vulkan;
 /// indexed draw. Buffers are allocated through the shared VMA allocator. No per-frame churn — meshes are
 /// long-lived resources, freed only on teardown.
 /// </summary>
-internal sealed unsafe class MeshStore : IDisposable
+internal sealed unsafe class VulkanMeshStore : IDisposable
 {
 	private struct StoredMesh
 	{
@@ -35,7 +35,7 @@ internal sealed unsafe class MeshStore : IDisposable
 	private readonly CommandPool _commandPool;
 	private readonly List<StoredMesh> _meshes = [];
 
-	public MeshStore(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool)
+	public VulkanMeshStore(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;

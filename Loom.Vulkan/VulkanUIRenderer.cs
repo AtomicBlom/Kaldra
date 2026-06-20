@@ -12,7 +12,7 @@ using VkFormat = Silk.NET.Vulkan.Format;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// The backend's game-UI renderer (PlanningUI.md §D6) — the twin of <see cref="ImGuiRenderer"/> for the XAML UI
+/// The backend's game-UI renderer (PlanningUI.md §D6) — the twin of <see cref="VulkanImGuiRenderer"/> for the XAML UI
 /// engine, cloned from it. The "ui" pass's <c>ctx.DrawUI(surface)</c> forwards that surface's composited, neutral
 /// <see cref="UIDrawData"/> here; this records it into the already-open dynamic-rendering scope (the pass
 /// <c>.Blends</c> the backbuffer at native resolution). It never begins/ends rendering itself.
@@ -24,7 +24,7 @@ namespace Loom.Vulkan;
 /// font atlas at 1) is bound per command. Vertex/index buffers are host-visible and grown per frame-in-flight slot.
 /// </para>
 /// </summary>
-internal sealed unsafe class UIRenderer : IDisposable
+internal sealed unsafe class VulkanUIRenderer : IDisposable
 {
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
@@ -59,7 +59,7 @@ internal sealed unsafe class UIRenderer : IDisposable
 	// Paper-white luminance reference for an HDR surface: UIPaperWhiteNits / 80 (§D4.4). SDR surfaces pass 1.0.
 	private const float HdrPaperWhiteScale = 200f / 80f;
 
-	public UIRenderer(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool, VkFormat colorFormat, byte[] spirv, int framesInFlight, TextureData? fontAtlas)
+	public VulkanUIRenderer(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool, VkFormat colorFormat, byte[] spirv, int framesInFlight, TextureData? fontAtlas)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
@@ -153,7 +153,7 @@ internal sealed unsafe class UIRenderer : IDisposable
 	}
 
 	// The ui.slang pipeline: UIVertex layout, PREMULTIPLIED alpha-over blend, no depth, dynamic viewport/scissor,
-	// baked against the target colour format via dynamic rendering. Mirrors ImGuiRenderer.CreatePipeline.
+	// baked against the target colour format via dynamic rendering. Mirrors VulkanImGuiRenderer.CreatePipeline.
 	private void CreatePipeline(VkFormat colorFormat, byte[] spirv)
 	{
 		var module = CreateShaderModule(spirv);
@@ -172,7 +172,7 @@ internal sealed unsafe class UIRenderer : IDisposable
 			};
 			_vk.CreatePipelineLayout(_ctx.Device, in layoutInfo, null, out _layout).Check("vkCreatePipelineLayout");
 
-			using var arena = new NativeArena();
+			using var arena = new VulkanNativeArena();
 
 			var stages = arena.Alloc<PipelineShaderStageCreateInfo>(2);
 			stages[0] = new PipelineShaderStageCreateInfo
@@ -314,7 +314,7 @@ internal sealed unsafe class UIRenderer : IDisposable
 	}
 
 	// Upload tightly packed RGBA8 pixels into texture-table slot <paramref name="index"/> (device-local image via a
-	// host-visible staging copy, the MeshStore/ImGui pattern) and point that slot's descriptor at it. Linear/UNORM
+	// host-visible staging copy, the VulkanMeshStore/ImGui pattern) and point that slot's descriptor at it. Linear/UNORM
 	// format — the atlas carries SDF distances, never sRGB colour.
 	private void UploadTexture(int index, int width, int height, ReadOnlySpan<byte> rgba, CommandPool commandPool)
 	{

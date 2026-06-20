@@ -10,7 +10,7 @@ namespace Loom.Vulkan;
 /// so the app no longer hand-counts them on a <see cref="TechniqueDescriptor"/> —
 /// <see cref="VulkanEngine.DefineTechnique"/> derives them here and the bake builds the descriptor-set layout.
 /// </summary>
-internal readonly record struct ShaderReflection(int SampleCount, int StorageImageCount, int StorageBufferCount, int UniformBufferCount)
+internal readonly record struct VulkanShaderReflection(int SampleCount, int StorageImageCount, int StorageBufferCount, int UniformBufferCount)
 {
 	/// <summary>
 	/// Parse a slangc reflection-JSON file. Only the top-level <c>parameters</c> array is counted — each entry
@@ -21,13 +21,13 @@ internal readonly record struct ShaderReflection(int SampleCount, int StorageIma
 	/// other sampled texture is a combined image sampler. Push constants (kind <c>pushConstantBuffer</c>),
 	/// varyings, and per-field uniforms are ignored.
 	/// </summary>
-	public static ShaderReflection FromFile(string jsonPath) => FromBytes(File.ReadAllBytes(jsonPath));
+	public static VulkanShaderReflection FromFile(string jsonPath) => FromBytes(File.ReadAllBytes(jsonPath));
 
 	/// <summary>
 	/// Parse slangc reflection JSON held in memory — the engine resolves a shader's reflection either from an
 	/// embedded resource (engine shaders) or from disk (app shaders), so the parse takes bytes, not a path.
 	/// </summary>
-	public static ShaderReflection FromBytes(byte[] json)
+	public static VulkanShaderReflection FromBytes(byte[] json)
 	{
 		using var doc = JsonDocument.Parse(json);
 		int samplers = 0, storageImages = 0, storageBuffers = 0, uniformBuffers = 0;
@@ -67,6 +67,6 @@ internal readonly record struct ShaderReflection(int SampleCount, int StorageIma
 			}
 		}
 
-		return new ShaderReflection(samplers, storageImages, storageBuffers, uniformBuffers);
+		return new VulkanShaderReflection(samplers, storageImages, storageBuffers, uniformBuffers);
 	}
 }

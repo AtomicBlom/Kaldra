@@ -5,9 +5,9 @@ using Format = Silk.NET.Vulkan.Format;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// The bake inputs that uniquely identify a graphics <see cref="Technique"/> — the cache key (M1).
+/// The bake inputs that uniquely identify a graphics <see cref="VulkanTechnique"/> — the cache key (M1).
 /// As real pipeline state (blend, depth, cull, topology, vertex/instance layout) becomes
-/// configurable, it joins this record and the hash in <see cref="TechniqueCache"/>.
+/// configurable, it joins this record and the hash in <see cref="VulkanTechniqueCache"/>.
 /// <para>
 /// <see cref="ColorFormats"/> are filled in at record time from the formats of the targets the pass writes,
 /// in attachment order (dynamic rendering requires the pipeline's attachment formats to match; a g-buffer
@@ -17,11 +17,11 @@ namespace Loom.Vulkan;
 /// this automatically arrives later.
 /// </para>
 /// <para>
-/// The <see cref="TechniqueCache"/> keys on a content hash (which folds in every field here), not this
+/// The <see cref="VulkanTechniqueCache"/> keys on a content hash (which folds in every field here), not this
 /// record's value equality — so the <see cref="ColorFormats"/> array reference is never compared directly.
 /// </para>
 /// </summary>
-public readonly record struct TechniqueDescription(
+public readonly record struct VulkanTechniqueDescription(
 	byte[] Spirv,
 	string VertexEntry,
 	string FragmentEntry,

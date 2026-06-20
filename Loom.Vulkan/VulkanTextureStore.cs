@@ -10,13 +10,13 @@ namespace Loom.Vulkan;
 
 /// <summary>
 /// Owns GPU-resident textures: device-local sampled images with a full mip chain, uploaded once via a
-/// host-visible staging copy (the texture counterpart of <see cref="MeshStore"/>, PlanningPhase2.md M11). The
+/// host-visible staging copy (the texture counterpart of <see cref="VulkanMeshStore"/>, PlanningPhase2.md M11). The
 /// app builds textures up front through the engine and gets back an opaque <see cref="Texture"/> handle; a
 /// material draw resolves the handle to its image view and binds it as a combined image sampler. Mip levels
 /// arrive pre-built on the CPU in <see cref="TextureData"/>, so the store just uploads each level — no GPU
 /// blit/mip-gen, and byte-identical mips across backends. Images are long-lived; freed only on teardown.
 /// </summary>
-internal sealed unsafe class TextureStore : IDisposable
+internal sealed unsafe class VulkanTextureStore : IDisposable
 {
 	private struct StoredTexture
 	{
@@ -31,7 +31,7 @@ internal sealed unsafe class TextureStore : IDisposable
 	private readonly CommandPool _commandPool;
 	private readonly List<StoredTexture> _textures = [];
 
-	public TextureStore(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool)
+	public VulkanTextureStore(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;

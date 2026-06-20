@@ -10,13 +10,13 @@ namespace Loom.Vulkan;
 /// and share a VkPipeline, while an edited shader (new bytes) produces a new key and a fresh bake.
 /// In-memory for now; the same hashing scheme will key a persistent VkPipelineCache later.
 /// </summary>
-public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
+public sealed class VulkanTechniqueCache(VulkanContext ctx) : IDisposable
 {
-	private readonly Dictionary<string, Technique> _cache = [];
+	private readonly Dictionary<string, VulkanTechnique> _cache = [];
 
 	public int Count => _cache.Count;
 
-	public Technique GetOrBake(in TechniqueDescription description, string name)
+	public VulkanTechnique GetOrBake(in VulkanTechniqueDescription description, string name)
 	{
 		var spirv = description.Spirv;
 		var key = ComputeKey(spirv, description);
@@ -24,14 +24,14 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 			return cached;
 
 		// `name` is diagnostic-only (the shader-module label) — deliberately not part of the content-hash key.
-		var technique = new Technique(ctx, description, spirv, name);
+		var technique = new VulkanTechnique(ctx, description, spirv, name);
 		_cache[key] = technique;
 		return technique;
 	}
 
 	// SHA-256 over the SPIR-V bytes plus every input that affects the baked pipeline. SHA-256 is
 	// stable across runs/machines and collision-resistant; the hex digest is the cache key.
-	private static string ComputeKey(ReadOnlySpan<byte> spirv, in TechniqueDescription description)
+	private static string ComputeKey(ReadOnlySpan<byte> spirv, in VulkanTechniqueDescription description)
 	{
 		using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 		hash.AppendData(spirv);

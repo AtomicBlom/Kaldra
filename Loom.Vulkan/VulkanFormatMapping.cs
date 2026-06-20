@@ -8,7 +8,7 @@ namespace Loom.Vulkan;
 /// Vulkan formats. This is the only place the abstract formats become Vulkan-specific — keeping it out
 /// of Core/Graph is what lets a DX12 backend supply its own mapping later.
 /// </summary>
-internal static class FormatMapping
+internal static class VulkanFormatMapping
 {
 	/// <summary>Map an abstract resource format to its Vulkan format.</summary>
 	public static VkFormat ToVulkan(Format format) => format switch

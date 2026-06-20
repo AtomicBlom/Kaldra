@@ -13,7 +13,7 @@ namespace Loom.Vulkan;
 /// GC-safe by construction: it allocates unmanaged memory, so nothing the GPU/driver sees is a
 /// movable managed reference. Build inside a <c>using</c> scope around the create call.
 /// </summary>
-public sealed unsafe class NativeArena : IDisposable
+public sealed unsafe class VulkanNativeArena : IDisposable
 {
 	private readonly List<nint> _blocks = [];
 

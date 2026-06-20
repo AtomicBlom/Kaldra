@@ -30,10 +30,10 @@ namespace Loom.Vulkan;
 /// of the members' memory-type bits (a bucket with no common type would split — not yet hit by render-target
 /// transients, which share a type). The hand-off needs an <em>aliasing barrier</em>: that is the executor's
 /// job (it makes each non-first member's <c>Undefined→…</c> birth transition wait on all prior work to the
-/// shared memory). Swapchain-sized resources are rebuilt on resize, bucket-wise; fixed-domain images keep size.
+/// shared memory). VulkanSwapchain-sized resources are rebuilt on resize, bucket-wise; fixed-domain images keep size.
 /// </para>
 /// </summary>
-internal sealed unsafe class TransientResources : IDisposable
+internal sealed unsafe class VulkanTransientResources : IDisposable
 {
 	internal struct ResourceImage
 	{
@@ -69,7 +69,7 @@ internal sealed unsafe class TransientResources : IDisposable
 	private readonly List<Allocation> _bufferAllocations = [];
 	private Extent2D _swapExtent;
 
-	public TransientResources(VulkanContext ctx, RenderGraph graph, AliasPlan aliasPlan, VkFormat backbufferFormat, Extent2D swapExtent, int framesInFlight, VulkanMemoryAllocator allocator)
+	public VulkanTransientResources(VulkanContext ctx, RenderGraph graph, AliasPlan aliasPlan, VkFormat backbufferFormat, Extent2D swapExtent, int framesInFlight, VulkanMemoryAllocator allocator)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
@@ -126,7 +126,7 @@ internal sealed unsafe class TransientResources : IDisposable
 		if (readback.Contains(resource.Id))
 			usage |= ImageUsageFlags.TransferSrcBit; // copied to host-visible memory for g.Readback (picking)
 
-		image.Format = FormatMapping.ToVulkan(resource.Format);
+		image.Format = VulkanFormatMapping.ToVulkan(resource.Format);
 		image.Usage = usage;
 		// Backbuffer-domain and backbuffer-relative resources track the swapchain extent, so they're rebuilt on resize.
 		image.SwapchainSized = resource.Domain.IsBackbuffer || resource.Domain.RelativeScale > 0f;

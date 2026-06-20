@@ -9,14 +9,14 @@ namespace Loom.Vulkan;
 /// image sampler set per invocation; the per-frame reset keeps that allocation-free of leaks without
 /// tracking individual sets. A proper cached/bindless scheme is a later optimisation.
 /// </summary>
-internal sealed unsafe class DescriptorAllocator : IDisposable
+internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 {
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly DescriptorPool[] _pools;
 	private int _current;
 
-	public DescriptorAllocator(VulkanContext ctx, int framesInFlight, uint maxSetsPerFrame = 64)
+	public VulkanDescriptorAllocator(VulkanContext ctx, int framesInFlight, uint maxSetsPerFrame = 64)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;

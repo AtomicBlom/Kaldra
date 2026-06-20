@@ -21,27 +21,27 @@ namespace Loom.Vulkan;
 /// pushed in by the <see cref="VulkanEngine"/> via <see cref="BeginFrame"/>/<see cref="BeginPass"/> so the
 /// callbacks stay the pure, capture-free closures the design wants (Planning.md §8).
 /// </summary>
-internal sealed unsafe class RenderContext : IRenderContext, IDisposable
+internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 {
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
-	private readonly TechniqueCache _techniques;
-	private readonly IReadOnlyDictionary<string, TechniqueTemplate> _registry;
+	private readonly VulkanTechniqueCache _techniques;
+	private readonly IReadOnlyDictionary<string, VulkanTechniqueTemplate> _registry;
 	// Set per active graph by the engine (SetTransients): a graph swap rebinds this to the new graph's transients
 	// while the rest of the context (samplers, technique cache, the registry) is reused.
-	private TransientResources _resources = null!;
-	private readonly DescriptorAllocator _descriptors;
-	private readonly MeshStore _meshes;
-	private readonly TextureStore _textures;
-	private readonly MaterialStore _materials;
-	private readonly InstanceUploadBuffer _instanceUpload;
+	private VulkanTransientResources _resources = null!;
+	private readonly VulkanDescriptorAllocator _descriptors;
+	private readonly VulkanMeshStore _meshes;
+	private readonly VulkanTextureStore _textures;
+	private readonly VulkanMaterialStore _materials;
+	private readonly VulkanInstanceUploadBuffer _instanceUpload;
 	// M15-0: per-frame host-visible ring for the uniform seam (CSM matrices, lighting params, wind) — the same
 	// retire-not-free ring as the instance stream, but created UniformBufferBit and aligned to 256 (≥ any
 	// device's minUniformBufferOffsetAlignment). Bound as the last descriptor of a technique that reflects a UBO.
-	private readonly InstanceUploadBuffer _uniformUpload;
+	private readonly VulkanInstanceUploadBuffer _uniformUpload;
 	// M15-2: per-frame host-visible ring for the bone palette the compute pre-skin pass reads as a structured
 	// buffer — StorageBufferBit, 256-aligned (≥ minStorageBufferOffsetAlignment).
-	private readonly InstanceUploadBuffer _storageUpload;
+	private readonly VulkanInstanceUploadBuffer _storageUpload;
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
 	// Repeat-addressing, mip-sampling samplers for material textures (tiled across geometry) — a linear and a
@@ -52,7 +52,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), set by the executor when the host enables ImGui. The HUD
 	// pass's ctx.DrawImGui() forwards this frame's draw data to it. Null when ImGui is not in use.
-	private ImGuiRenderer? _imgui;
+	private VulkanImGuiRenderer? _imgui;
 #endif
 	// M13 resource viewer: GetDebugTextureId returns (resourceId + DebugTextureBase) — a non-zero id the host uses to
 	// gate "inspectable?" — and records the resource for this frame's thumbnail grid (the engine draws the images;
@@ -71,16 +71,16 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// The host's game-UI renderer (the twin of _imgui), set by the engine when the host calls EnableUI. The "ui"
 	// pass's ctx.DrawUI(surface) forwards that surface's draw data to it. Null until UI is enabled; MU0 Phase A's
 	// renderer is a no-op (PlanningUI.md MU0). Ungated — the neutral seam exists unconditionally (no native dep).
-	private UIRenderer? _ui;
+	private VulkanUIRenderer? _ui;
 	// This frame's composited UI surfaces, pulled from FrameInputs.UISurfaces; ctx.DrawUI looks one up by id.
 	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
 
 	private Extent2D _fbExtent;
-	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off TechniqueCache's
-	// per-call SPIR-V file read. Misses fall through to TechniqueCache (which bakes + content-hashes once).
+	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off VulkanTechniqueCache's
+	// per-call SPIR-V file read. Misses fall through to VulkanTechniqueCache (which bakes + content-hashes once).
 	// The key is a value type (PipelineKey) so the per-draw lookup allocates nothing (Planning.md §8: 0 GC
 	// in the render loop) — the old interpolated-string key heap-allocated on every draw.
-	private readonly Dictionary<PipelineKey, Technique> _baked = [];
+	private readonly Dictionary<PipelineKey, VulkanTechnique> _baked = [];
 
 	private CommandBuffer _cmd;
 	// The current pass's color formats, stored inline (not a heap array) so BeginPass copies into them per
@@ -112,14 +112,14 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 	public bool HdrOutput { get; private set; }
 
-	public RenderContext(
+	public VulkanRenderContext(
 		VulkanContext ctx,
-		TechniqueCache techniques,
-		IReadOnlyDictionary<string, TechniqueTemplate> registry,
-		DescriptorAllocator descriptors,
-		MeshStore meshes,
-		TextureStore textures,
-		MaterialStore materials,
+		VulkanTechniqueCache techniques,
+		IReadOnlyDictionary<string, VulkanTechniqueTemplate> registry,
+		VulkanDescriptorAllocator descriptors,
+		VulkanMeshStore meshes,
+		VulkanTextureStore textures,
+		VulkanMaterialStore materials,
 		VMASharp.VulkanMemoryAllocator allocator,
 		int framesInFlight)
 	{
@@ -131,9 +131,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_meshes = meshes;
 		_textures = textures;
 		_materials = materials;
-		_instanceUpload = new InstanceUploadBuffer(ctx, allocator, framesInFlight);
-		_uniformUpload = new InstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.UniformBufferBit, alignment: 256);
-		_storageUpload = new InstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.StorageBufferBit, alignment: 256);
+		_instanceUpload = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight);
+		_uniformUpload = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.UniformBufferBit, alignment: 256);
+		_storageUpload = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.StorageBufferBit, alignment: 256);
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
 		_repeatLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.Repeat);
@@ -141,10 +141,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	}
 
 	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
-	public void SetTransients(TransientResources resources) => _resources = resources;
+	public void SetTransients(VulkanTransientResources resources) => _resources = resources;
 
 	/// <summary>Drop the per-(name,formats) baked-pipeline cache so the next draw re-bakes (shader hot-reload, M13).
-	/// The Technique objects are owned by the TechniqueCache; the engine resets that separately after draining.</summary>
+	/// The VulkanTechnique objects are owned by the VulkanTechniqueCache; the engine resets that separately after draining.</summary>
 	public void ClearBaked() => _baked.Clear();
 
 	/// <summary>Request that <paramref name="resourceId"/> be shown as a thumbnail in this frame's resource-viewer
@@ -167,11 +167,11 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 #if LOOM_IMGUI
 	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
-	public void SetImGui(ImGuiRenderer renderer) => _imgui = renderer;
+	public void SetImGui(VulkanImGuiRenderer renderer) => _imgui = renderer;
 #endif
 
 	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
-	public void SetUI(UIRenderer renderer) => _ui = renderer;
+	public void SetUI(VulkanUIRenderer renderer) => _ui = renderer;
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, HDR-output state, and composited UI surfaces before any pass records.</summary>
 	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, IReadOnlyList<Camera> cascades, IReadOnlyList<float> cascadeSplits, uint hoverId, nint imguiDrawData, IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> uiSurfaces, Extent2D fbExtent, bool hdrOutput)
@@ -237,7 +237,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 				var block = stackalloc float[16];
 				for (var i = 0; i < push.Length && i < 16; i++)
 					block[i] = push[i];
-				_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.FragmentBit, 0, (uint)Technique.FragmentPushSize, block);
+				_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.FragmentPushSize, block);
 			}
 		}
 
@@ -269,7 +269,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 
 		// Bind the material's textures into the technique's reflected sampler slots 0..N-1 — the same
-		// combined-image-sampler mechanism FullScreen uses, but the views come from the TextureStore (loaded
+		// combined-image-sampler mechanism FullScreen uses, but the views come from the VulkanTextureStore (loaded
 		// textures), not the transients. A technique that reflects nothing (depth-only/shadow) skips this and the
 		// material is ignored. Material textures sample with Repeat addressing when the technique asks for it.
 		if (template.SampleCount > 0)
@@ -288,7 +288,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			var block = stackalloc float[16];
 			for (var i = 0; i < push.Length && i < 16; i++)
 				block[i] = push[i];
-			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)Technique.FragmentPushSize, block);
+			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)VulkanTechnique.FragmentPushSize, block);
 		}
 
 		var total = sampled.Length + storage.Length;
@@ -391,7 +391,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// vertexCount rides the compute scalar push (as a float — exact for any realistic count).
 		var block = stackalloc float[16];
 		block[0] = vertexCount;
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)Technique.FragmentPushSize, block);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)VulkanTechnique.FragmentPushSize, block);
 
 		// Three storage buffers at bindings 0,1,2: bind-pose (mesh, long-lived) · palette (per-frame ring) · output
 		// (the transient the pass .ReadWrites). None but the output is a graph resource, so DispatchSkin writes its
@@ -522,7 +522,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// FullScreen and the instanced light volumes share. The graph put each in ShaderReadOnly before this pass.
 	// A present uniform buffer (M15-0) is written as the last binding (index inputs.Length), matching the set
 	// layout's category order (samplers, then the UBO).
-	private void BindSampledInputs(Technique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear, in UniformBinding ubo = default)
+	private void BindSampledInputs(VulkanTechnique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear, in UniformBinding ubo = default)
 	{
 		var sampler = linear ? _linearSampler : _nearestSampler;
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
@@ -563,11 +563,11 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
 	}
 
-	// Bind a material's loaded textures (TextureStore views) into the technique's reflected sampler slots 0..N-1,
+	// Bind a material's loaded textures (VulkanTextureStore views) into the technique's reflected sampler slots 0..N-1,
 	// with the technique's address mode + filter. Shared by Draw(mesh, material), textured instancing, and
 	// textured particles. The caller checks SampleCount > 0 (or a present UBO). A present uniform buffer (M15-0)
 	// is written as the last binding (index SampleCount) — e.g. foliage's wind, read in the vertex stage.
-	private void BindMaterialTextures(Technique baked, TechniqueTemplate template, Material material, string technique, in UniformBinding ubo = default)
+	private void BindMaterialTextures(VulkanTechnique baked, VulkanTechniqueTemplate template, Material material, string technique, in UniformBinding ubo = default)
 	{
 		var textures = _materials.TexturesOf(material.Id);
 		if (textures.Length < template.SampleCount)
@@ -658,13 +658,13 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		{
 			const float x0 = 300f, y0 = 30f, w = 200f, h = 112f, gap = 10f;
 			var cols = Math.Max(1, (int)((_fbExtent.Width - x0 - 10f) / (w + gap)));
-			var thumbs = new ImGuiRenderer.Thumbnail[_thumbRequests.Count];
+			var thumbs = new VulkanImGuiRenderer.Thumbnail[_thumbRequests.Count];
 			for (var i = 0; i < _thumbRequests.Count; i++)
 			{
 				ref var image = ref _resources.Get(_frameSlot, _thumbRequests[i]);
 				var gx = x0 + i % cols * (w + gap);
 				var gy = y0 + i / cols * (h + gap);
-				thumbs[i] = new ImGuiRenderer.Thumbnail(image.View, gx, gy, w, h);
+				thumbs[i] = new VulkanImGuiRenderer.Thumbnail(image.View, gx, gy, w, h);
 			}
 			_imgui.DrawThumbnails(_cmd, thumbs, _fbExtent, _frameSlot);
 			_thumbRequests.Clear();
@@ -704,8 +704,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;
 	// the attachment formats are the current pass's. So one template used in passes with different targets
 	// caches distinct pipelines, and the call site only needs the name. The local cache keeps the per-draw
-	// path off TechniqueCache's file read.
-	private Technique Bake(string technique)
+	// path off VulkanTechniqueCache's file read.
+	private VulkanTechnique Bake(string technique)
 	{
 		if (!_registry.TryGetValue(technique, out var template))
 			throw new VulkanException($"No technique registered under the name '{technique}'.");
@@ -718,14 +718,14 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// A pass that reads depth read-only (.ReadsDepth) bakes with depth writes off; one that writes it
 		// (.WritesDepth, or no depth at all) keeps writes on. Materializing the Format[] here (cache miss only)
 		// is a one-time warmup allocation per unique pipeline, not per-frame churn.
-		var baked = _techniques.GetOrBake(new TechniqueDescription(
+		var baked = _techniques.GetOrBake(new VulkanTechniqueDescription(
 			template.Spirv, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
 			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput,
 			Layout: template.Layout, Instance: template.Instance, UniformBufferCount: template.UniformBufferCount), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
-		// HasFragmentPush are folded into the TechniqueDescription hash, and LinearFilter only affects the
+		// HasFragmentPush are folded into the VulkanTechniqueDescription hash, and LinearFilter only affects the
 		// descriptor's sampler, not the pipeline.
 		_baked[key] = baked;
 		// Name the baked pipeline for GPU debuggers (once per unique pipeline; [Conditional] — stripped without
