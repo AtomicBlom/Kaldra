@@ -821,6 +821,7 @@ public sealed unsafe class DX12Engine : IEngine
 #if LOOM_IMGUI
 		_imgui?.Dispose();
 #endif
+		_ui?.Dispose();
 		_transients?.Dispose();
 		_context.Dispose();
 		_meshes.Dispose();
@@ -1051,14 +1052,17 @@ public sealed unsafe class DX12Engine : IEngine
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
 	}
 
-	public void EnableUI()
+	public void EnableUI(TextureData? fontAtlas = null)
 	{
 		if (_ui is not null)
-			return; // idempotent — enabling twice keeps the existing renderer
+			return; // idempotent — enabling twice keeps the existing renderer (pass the atlas on the first call)
 
-		// MU0 Phase A: stand up the no-op UI renderer and wire it to the context, so the ctx.DrawUI() seam is live
-		// on both backends. No shader resolve yet — the ui.slang PSO + atlas upload arrive in MU1.
-		_ui = new DX12UIRenderer();
+		// MU1: stand up the real ui.slang renderer (white-texel + optional MTSDF atlas) and wire it to the context.
+		var vs = DX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "ui", "vs")
+			?? throw new NotSupportedException("DX12: the UI shader DXIL (ui.vs.dxil) was not found — was ui.slang built + embedded?");
+		var ps = DX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "ui", "ps")
+			?? throw new NotSupportedException("DX12: the UI shader DXIL (ui.ps.dxil) was not found — was ui.slang built + embedded?");
+		_ui = new DX12UIRenderer(_ctx, _ring, vs, ps, _swapchain.RenderTargetFormat, (int)BufferCount, fontAtlas);
 		_context.SetUI(_ui);
 	}
 

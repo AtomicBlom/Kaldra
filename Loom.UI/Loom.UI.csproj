@@ -21,6 +21,16 @@
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
   </ItemGroup>
 
+  <!-- The engine's default baked font: the MTSDF atlas page + its JSON layout, embedded so FontAtlas.LoadEmbeddedDefault
+       resolves them with no loose files (PlanningUI.md §D3). Explicit LogicalName because the filenames carry dots.
+       The source CascadiaCode.ttf + its SIL OFL licence sit beside them for provenance / MUx re-baking (not embedded). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\Fonts\ui-default.font.json" LogicalName="ui-default.font.json" />
+    <EmbeddedResource Include="Assets\Fonts\ui-default.0.png" LogicalName="ui-default.0.png" />
+    <None Include="Assets\Fonts\CascadiaCode.ttf" />
+    <None Include="Assets\Fonts\CascadiaCode-LICENSE.txt" />
+  </ItemGroup>
+
   <Import Project="..\build\Loom.Sdk\Loom.UI.targets" />
 
 </Project>

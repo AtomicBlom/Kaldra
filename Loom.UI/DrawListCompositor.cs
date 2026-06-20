@@ -15,6 +15,13 @@ public sealed class DrawListCompositor : IUICompositor
 {
 	private readonly Dictionary<int, UIDrawData> _surfaces = [];
 	private readonly Dictionary<int, uint> _revisions = [];
+	private readonly FontAtlas _font;
+
+	/// <param name="font">
+	/// The atlas glyph runs lay out against; defaults to <see cref="FontAtlas.Default"/> (the embedded MU1 font).
+	/// Must be the same atlas the renderer uploaded via <c>EnableUI(font.Texture)</c> so UVs line up.
+	/// </param>
+	public DrawListCompositor(FontAtlas? font = null) => _font = font ?? FontAtlas.Default;
 
 	public void Composite(RootVisual root, UISurfaceId surface)
 	{
@@ -28,7 +35,7 @@ public sealed class DrawListCompositor : IUICompositor
 	/// <summary>The last <see cref="UIDrawData"/> produced for <paramref name="surface"/> (handed to FrameInputs.UISurfaces).</summary>
 	public UIDrawData LastDraw(UISurfaceId surface) => _surfaces.TryGetValue(surface.Value, out var d) ? d : UIDrawData.Empty;
 
-	private static void Walk(UIDrawList list, Visual v, Matrix3x2 parent, float opacity, Rect clip)
+	private void Walk(UIDrawList list, Visual v, Matrix3x2 parent, float opacity, Rect clip)
 	{
 		var matrix = v.Transform * parent;
 		var alpha = opacity * v.Opacity;
@@ -36,16 +43,28 @@ public sealed class DrawListCompositor : IUICompositor
 		if (v.Clip is { } c)
 			localClip = clip.Intersect(TransformRect(c, matrix));
 
-		if (v is SpriteVisual { Content: RectContent rc })
+		if (v is SpriteVisual sprite)
 		{
-			var rect = new Rect(0, 0, rc.Size.X, rc.Size.Y);
-			if (rc.Fill is { } fill)
+			switch (sprite.Content)
 			{
-				var kind = rc.CornerRadius > 0 ? UIPrimKind.RoundedRect : UIPrimKind.Fill;
-				list.AddRect(rect, matrix, fill.ToPremultiplied(alpha), kind, new Vector4(rc.CornerRadius, 0, 0, 0), localClip);
+				case RectContent rc:
+					{
+						var rect = new Rect(0, 0, rc.Size.X, rc.Size.Y);
+						if (rc.Fill is { } fill)
+						{
+							var kind = rc.CornerRadius > 0 ? UIPrimKind.RoundedRect : UIPrimKind.Fill;
+							// params = (cornerRadius, borderThickness, sizeX, sizeY) — the layout ui.slang's analytic rounded-box
+							// SDF reads (uv is 0..1 across the rect; the shader scales by params.zw to local pixels). Fill ignores it.
+							list.AddRect(rect, matrix, fill.ToPremultiplied(alpha), kind, new Vector4(rc.CornerRadius, 0f, rc.Size.X, rc.Size.Y), localClip);
+						}
+						if (rc.BorderBrush is { } bb && rc.BorderThickness > 0)
+							list.AddRect(rect, matrix, bb.ToPremultiplied(alpha), UIPrimKind.Border, new Vector4(rc.CornerRadius, rc.BorderThickness, rc.Size.X, rc.Size.Y), localClip);
+						break;
+					}
+				case GlyphRunContent gr:
+					list.AddGlyphRun(gr.Text, gr.FontSizePx, gr.Color.ToPremultiplied(alpha), _font, matrix, localClip);
+					break;
 			}
-			if (rc.BorderBrush is { } bb && rc.BorderThickness > 0)
-				list.AddRect(rect, matrix, bb.ToPremultiplied(alpha), UIPrimKind.Border, new Vector4(rc.BorderThickness, rc.CornerRadius, 0, 0), localClip);
 		}
 
 		foreach (var child in v.Children)

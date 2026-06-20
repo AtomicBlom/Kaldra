@@ -1,10 +1,9 @@
 namespace Loom.UI.Controls;
 
 /// <summary>
-/// A run of text (PlanningUI.md §D2.1 / §D3). Phase B participates in two-pass layout with a <b>placeholder</b>
-/// metric (no shaping yet): width ≈ <c>Text.Length · FontSize · 0.5</c>, height ≈ <c>FontSize · 1.2</c>. Real MSDF
-/// shaping (HarfBuzz) + glyph-run composition land in MU1/MU5; until then the element measures and lays out but
-/// emits no glyph content, so the draw stream stays empty for text.
+/// A run of text (PlanningUI.md §D2.1 / §D3). MU1 measures + emits glyphs against the engine's default MTSDF font
+/// (<see cref="FontAtlas.Default"/>): an advance-based width (no HarfBuzz shaping — that is MU5) and a
+/// <see cref="GlyphRunContent"/> the compositor lays out into <see cref="UIPrimKind.Glyph"/> draws.
 /// </summary>
 public sealed class TextBlock : FrameworkElement
 {
@@ -22,19 +21,20 @@ public sealed class TextBlock : FrameworkElement
 	/// <summary>Font size in DIPs.</summary>
 	public float FontSize { get => GetValue(FontSizeProperty); set => SetValue(FontSizeProperty, value); }
 
-	/// <summary>Glyph colour (consumed once glyph composition lands in MU1).</summary>
+	/// <summary>Glyph colour.</summary>
 	public HdrColor Foreground { get; set; } = HdrColor.FromRgb(255, 255, 255);
-
-	// Placeholder metric: a fixed average-advance estimate so layout is exercised before real shaping (MU1).
-	private const float AvgAdvanceFactor = 0.5f;
-	private const float LineHeightFactor = 1.2f;
 
 	protected override Size MeasureOverride(Size available)
 	{
+		var font = FontAtlas.Default;
+		var height = font.LineHeight * FontSize;
 		var text = Text;
 		if (string.IsNullOrEmpty(text))
-			return new Size(0f, FontSize * LineHeightFactor);
-		var width = MathF.Min(text.Length * FontSize * AvgAdvanceFactor, available.Width);
-		return new Size(width, FontSize * LineHeightFactor);
+			return new Size(0f, height);
+		var width = MathF.Min(font.MeasureWidth(text) * FontSize, available.Width);
+		return new Size(width, height);
 	}
+
+	private protected override VisualContent? BuildContent() =>
+		string.IsNullOrEmpty(Text) ? null : new GlyphRunContent(Text, FontSize, Foreground);
 }
