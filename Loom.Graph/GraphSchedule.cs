@@ -50,6 +50,18 @@ public sealed class GraphSchedule
 		var passes = graph.Passes;
 		var n = passes.Length;
 
+		// Async compute / multi-queue is not yet derived or backed: the scheduler below builds one linear timeline
+		// with a single ResourceState per resource, and both backends create one queue. Fail loud rather than
+		// silently running an AsyncCompute pass on the graphics queue and implying an overlap that never happens.
+		foreach (var pass in passes)
+		{
+			if (pass.Queue == Queue.AsyncCompute)
+			{
+				throw new GraphValidationException(
+					$"Pass '{pass.Name}' requests Queue.AsyncCompute, but Loom does not yet derive cross-queue scheduling and both backends are single-queue. Drop the .Queue(...) assignment until multi-queue lands.");
+			}
+		}
+
 		var state = new Dictionary<int, ResourceState>(); // keyed by ResourceHandle.Id
 		var dependsOn = new SortedSet<int>[n];
 		var errors = new List<string>();

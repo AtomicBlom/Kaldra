@@ -166,7 +166,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
 	{
-		_ctx = new VulkanContext(surface, settings.EnableValidation);
+		_ctx = new VulkanContext(surface, settings.EnableValidation, settings.PreferDiscreteGpu);
 		_vk = _ctx.Vk;
 		_shaderDir = settings.ShaderDirectory;
 

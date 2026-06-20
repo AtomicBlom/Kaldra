@@ -199,14 +199,20 @@ public class DomainAndResourceTests
 	}
 
 	[Test]
-	public void Persistent_carries_ring_depth()
+	public void Persistent_is_single_buffered()
 	{
 		ResourceHandle? history = null;
-		RenderGraph.Define(g => history = g.Persistent("exposure", Format.R16F, size: 2));
+		RenderGraph.Define(g => history = g.Persistent("exposure", Format.R16F));
 
 		history!.Kind.ShouldBe(ResourceKind.Persistent);
-		history.Count.ShouldBe(2);
+		history.Count.ShouldBe(1);
 	}
+
+	[Test]
+	public void Persistent_rejects_an_unimplemented_history_ring() =>
+		// size > 1 over-promises a cross-frame ring the backends don't allocate yet — reject it (WS-2 honesty).
+		Should.Throw<NotSupportedException>(() =>
+			RenderGraph.Define(g => g.Persistent("exposure", Format.R16F, size: 2)));
 
 	[Test]
 	public void Persistent_rejects_zero_ring_depth() =>

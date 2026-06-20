@@ -54,9 +54,12 @@ public sealed unsafe class VulkanContext : IDisposable
 	/// </summary>
 	public bool HdrColorSpaceAvailable { get; private set; }
 
-	public VulkanContext(IVkSurface surface, bool enableValidation = true)
+	private readonly bool _preferDiscreteGpu;
+
+	public VulkanContext(IVkSurface surface, bool enableValidation = true, bool preferDiscreteGpu = true)
 	{
 		Vk = Vk.GetApi();
+		_preferDiscreteGpu = preferDiscreteGpu;
 
 		// Validation layers live in the Vulkan SDK, which may not be installed. Degrade gracefully.
 		_validation = enableValidation && CheckValidationLayerSupport();
@@ -290,9 +293,13 @@ public sealed unsafe class VulkanContext : IDisposable
 				TimestampPeriod = props.Limits.TimestampPeriod;
 				chosenIsDiscrete = discrete;
 				found = true;
-				if (discrete)
-					break; // Prefer the first discrete GPU.
 			}
+
+			// Stop early once the choice won't improve: a discrete GPU, or — when the host doesn't prefer discrete
+			// (PreferDiscreteGpu=false, e.g. to match the integrated adapter for cross-backend diffing) — the first
+			// suitable device of any type.
+			if (found && (chosenIsDiscrete || !_preferDiscreteGpu))
+				break;
 		}
 
 		if (!found)

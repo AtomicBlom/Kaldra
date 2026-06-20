@@ -116,16 +116,26 @@ public sealed class GraphBuilder
 	}
 
 	/// <summary>
-	/// Declare a resource whose lifetime is forever — the transient aliaser never recycles its memory
-	/// (Planning.md §8). For cross-frame history (e.g. auto-exposure). <paramref name="size"/> is the
-	/// history ring depth.
+	/// Declare a resource whose lifetime is forever — the transient aliaser never recycles its memory. For
+	/// cross-frame history that tolerates one-frame-stale self-feedback (e.g. auto-exposure), where a single
+	/// pass reads and writes the same physical image.
+	/// <para>
+	/// <paramref name="size"/> is reserved as the history-ring depth for true read-previous / write-current
+	/// temporal buffers (TAA, temporal GI). That ring is not implemented yet — both backends allocate a single
+	/// physical image — so only <c>size == 1</c> is accepted; a larger value would silently alias to one image
+	/// and hazard. Declaring <c>size &gt; 1</c> therefore fails here rather than misleading.
+	/// </para>
 	/// </summary>
 	public ColorHandle Persistent(string name, Format format, int size = 1)
 	{
 		if (size < 1)
 			throw new ArgumentOutOfRangeException(nameof(size), "Persistent ring depth must be at least 1.");
-		// Persistent resources aren't resolution-bound; anchor them to the backbuffer domain for now.
-		// (A dedicated buffer/non-spatial resource model arrives with auto-exposure in M5.)
+		if (size > 1)
+		{
+			throw new NotSupportedException(
+				$"Persistent '{name}' requests a history-ring depth of {size}, but multi-slot history rings are not implemented yet (both backends allocate a single image). Use size == 1 (single-buffered self-feedback) until cross-frame ping-pong lands.");
+		}
+		// Persistent resources aren't resolution-bound; anchor them to the backbuffer domain.
 		return (ColorHandle)AddResource(name, format, ResourceKind.Persistent, BackbufferDomainForPersistent(), scale: 1f, count: size);
 	}
 

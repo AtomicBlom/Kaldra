@@ -53,6 +53,14 @@ internal sealed unsafe class DX12Context : IDisposable
 				debug.EnableDebugLayer();
 				_debug = debug;
 				factoryFlags = 0x1; // DXGI_CREATE_FACTORY_DEBUG — surfaces DXGI-side messages too
+
+				// GPU-based validation (validates descriptor/resource state on the GPU timeline; far slower) when
+				// the host opts in. ID3D12Debug1 carries the toggle; absent it, the basic debug layer still applies.
+				if (settings.GpuBasedValidation && debug.QueryInterface(out ComPtr<ID3D12Debug1> debug1) >= 0 && debug1.Handle is not null)
+				{
+					debug1.SetEnableGPUBasedValidation(true);
+					debug1.Dispose();
+				}
 			}
 		}
 

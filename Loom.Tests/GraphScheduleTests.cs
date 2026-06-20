@@ -166,6 +166,21 @@ public class GraphScheduleTests
 	}
 
 	[Test]
+	public void Async_compute_is_rejected_until_multi_queue_lands()
+	{
+		// Queue.AsyncCompute is reserved but not yet derived or backed — declaring it must fail loud rather than
+		// silently scheduling the pass on the graphics queue and implying overlap (WS-2 honesty).
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var buffer = g.Buffer("particles", 1024);
+				g.Compute("sim").ReadWrites(buffer).Queue(Queue.AsyncCompute);
+			}));
+
+		ex.Message.ShouldContain("AsyncCompute");
+	}
+
+	[Test]
 	public void Reading_a_persistent_before_writing_is_allowed()
 	{
 		// Persistent resources carry cross-frame history, so read-before-write is legal (Planning.md §8).
