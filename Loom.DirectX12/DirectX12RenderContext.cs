@@ -54,6 +54,10 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	// "ui" pass's ctx.DrawUI(surface) forwards that surface's composited draw data to it. Null until UI is enabled;
 	// MU0 Phase A's renderer is a no-op. Ungated — the neutral seam exists unconditionally (no native dep).
 	private DirectX12UIRenderer? _ui;
+	// The engine-created UI textures the "ui" draw-list technique samples (white texel at index 0, optional font
+	// atlas at index 1) — set on EnableUI, used by DrawUI to feed DrawList.
+	private Texture _uiWhite;
+	private Texture? _uiFont;
 
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
@@ -129,6 +133,14 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 
 	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
 	public void SetUI(DirectX12UIRenderer renderer) => _ui = renderer;
+
+	/// <summary>The engine-created UI textures (1×1 white texel + optional font atlas) the "ui" draw-list technique
+	/// samples — a command's <c>TextureIndex</c> selects between them. Wired in by the engine on EnableUI.</summary>
+	public void SetUITextures(Texture white, Texture? font)
+	{
+		_uiWhite = white;
+		_uiFont = font;
+	}
 
 	public void BeginFrame(ComPtr<ID3D12GraphicsCommandList> cmd, FrameInputs inputs, bool hdrOutput, uint slot, uint fbWidth, uint fbHeight)
 	{

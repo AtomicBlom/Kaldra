@@ -77,6 +77,10 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	// pass's ctx.DrawUI(surface) forwards that surface's draw data to it. Null until UI is enabled; MU0 Phase A's
 	// renderer is a no-op (PlanningUI.md MU0). Ungated — the neutral seam exists unconditionally (no native dep).
 	private VulkanUIRenderer? _ui;
+	// The engine-created UI textures the "ui" draw-list technique samples (white texel at index 0, optional font
+	// atlas at index 1) — set on EnableUI, used by DrawUI to feed DrawList.
+	private Texture _uiWhite;
+	private Texture? _uiFont;
 	// This frame's composited UI surfaces, pulled from FrameInputs.UISurfaces; ctx.DrawUI looks one up by id.
 	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
 
@@ -179,6 +183,14 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 
 	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
 	public void SetUI(VulkanUIRenderer renderer) => _ui = renderer;
+
+	/// <summary>The engine-created UI textures (1×1 white texel + optional font atlas) the "ui" draw-list technique
+	/// samples — a command's <c>TextureIndex</c> selects between them. Wired in by the engine on EnableUI.</summary>
+	public void SetUITextures(Texture white, Texture? font)
+	{
+		_uiWhite = white;
+		_uiFont = font;
+	}
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, HDR-output state, and composited UI surfaces before any pass records.</summary>
 	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, IReadOnlyList<Camera> cascades, IReadOnlyList<float> cascadeSplits, uint hoverId, nint imguiDrawData, IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> uiSurfaces, Extent2D fbExtent, bool hdrOutput)

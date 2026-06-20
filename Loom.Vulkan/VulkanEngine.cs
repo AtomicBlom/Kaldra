@@ -417,7 +417,16 @@ internal sealed unsafe class VulkanEngine : IEngine
 		if (_ui is not null)
 			return; // idempotent — enabling twice keeps the existing renderer (pass the atlas on the first call)
 
-		// MU1: stand up the real ui.slang renderer (white-texel + optional MTSDF atlas) and wire it to the context.
+		// The game UI renders through the public draw-list path: a "ui" technique baked from ui.slang like any
+		// other, plus engine-owned textures (a 1×1 white texel for fills/borders, the optional MTSDF atlas for
+		// glyphs — both linear/UNORM, never sRGB-decoded). DrawUI feeds these into ctx.DrawList.
+		DefineTechnique("ui", new TechniqueDescriptor("ui", HasVertexInput: true, Blend: BlendMode.PremultipliedAlpha,
+			LinearFilter: true, Layout: VertexLayout.UI, HasListPush: true));
+		var white = CreateTexture(TextureData.FromRgba8(1, 1, [255, 255, 255, 255], TextureFormat.Rgba8Unorm, generateMips: false));
+		var font = fontAtlas is not null ? CreateTexture(fontAtlas) : (Texture?)null;
+		_context.SetUITextures(white, font);
+
+		// Stand up the bespoke ui.slang renderer too, still the one DrawUI forwards to.
 		var spirv = ResolveShaderAsset("ui", ".spv");
 		_ui = new VulkanUIRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight, fontAtlas);
 		_context.SetUI(_ui);
