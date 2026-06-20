@@ -30,6 +30,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private readonly TextureStore _textures;
 	private readonly MaterialStore _materials;
 	private readonly InstanceUploadBuffer _instanceUpload;
+	// M15-0: per-frame host-visible ring for the uniform seam (CSM matrices, lighting params, wind) — the same
+	// retire-not-free ring as the instance stream, but created UniformBufferBit and aligned to 256 (≥ any
+	// device's minUniformBufferOffsetAlignment). Bound as the last descriptor of a technique that reflects a UBO.
+	private readonly InstanceUploadBuffer _uniformUpload;
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
 	// Repeat-addressing, mip-sampling samplers for material textures (tiled across geometry) — a linear and a
@@ -114,6 +118,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_textures = textures;
 		_materials = materials;
 		_instanceUpload = new InstanceUploadBuffer(ctx, allocator, framesInFlight);
+		_uniformUpload = new InstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.UniformBufferBit, alignment: 256);
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
 		_repeatLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.Repeat);
@@ -168,6 +173,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_fbExtent = fbExtent;
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(frameSlot); // reset this slot's per-frame instance staging
+		_uniformUpload.BeginFrame(frameSlot);  // and its per-frame uniform staging (M15-0)
 	}
 
 	/// <summary>
@@ -194,20 +200,31 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	public void FullScreen(string technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs)
 	{
 		var baked = Bake(technique);
+		var template = _registry[technique];
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 
+		// The per-pass data channel: a technique that reflects a uniform buffer (M15-0) routes the float block
+		// there (no 16-float cap — CSM matrices, lighting params); otherwise it rides the fixed scalar push range.
+		var ubo = default(UniformBinding);
 		if (push.Length > 0)
 		{
-			// The fragment scalar channel: pad to the layout's fixed range so the shader always reads defined
-			// memory, then push to the fragment stage at offset 0.
-			var block = stackalloc float[16];
-			for (var i = 0; i < push.Length && i < 16; i++)
-				block[i] = push[i];
-			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.FragmentBit, 0, (uint)Technique.FragmentPushSize, block);
+			if (template.UniformBufferCount > 0)
+			{
+				ubo = UploadUniforms(push);
+			}
+			else
+			{
+				// The fragment scalar channel: pad to the layout's fixed range so the shader always reads defined
+				// memory, then push to the fragment stage at offset 0.
+				var block = stackalloc float[16];
+				for (var i = 0; i < push.Length && i < 16; i++)
+					block[i] = push[i];
+				_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.FragmentBit, 0, (uint)Technique.FragmentPushSize, block);
+			}
 		}
 
-		if (inputs.Length > 0)
-			BindSampledInputs(baked, inputs, _registry[technique].LinearFilter);
+		if (inputs.Length > 0 || ubo.Present)
+			BindSampledInputs(baked, inputs, template.LinearFilter, ubo);
 
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
@@ -360,6 +377,24 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, offset, (uint)instances.Length);
 	}
 
+	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<float> uniforms) where T : unmanaged
+	{
+		if (instances.Length == 0)
+			return;
+		var baked = Bake(technique);
+		var template = _registry[technique];
+		var mvp = _camera.ViewProjection;
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+		// The per-frame uniform block (M15-0) — e.g. foliage wind, read in the vertex stage; bound alongside the
+		// material's alpha texture into the technique's reflected slots. The MVP still rides the vertex push.
+		var ubo = uniforms.Length > 0 ? UploadUniforms(uniforms) : default;
+		if (template.SampleCount > 0 || ubo.Present)
+			BindMaterialTextures(baked, template, material, technique, ubo);
+		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
+		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, offset, (uint)instances.Length);
+	}
+
 	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<ResourceHandle> sampled) where T : unmanaged
 	{
 		if (instances.Length == 0)
@@ -394,12 +429,16 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 
 	// Bind sampled graph resources (transients) as combined image samplers at bindings 0..N-1 — the path
 	// FullScreen and the instanced light volumes share. The graph put each in ShaderReadOnly before this pass.
-	private void BindSampledInputs(Technique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear)
+	// A present uniform buffer (M15-0) is written as the last binding (index inputs.Length), matching the set
+	// layout's category order (samplers, then the UBO).
+	private void BindSampledInputs(Technique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear, in UniformBinding ubo = default)
 	{
 		var sampler = linear ? _linearSampler : _nearestSampler;
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+		var count = inputs.Length + (ubo.Present ? 1 : 0);
 		var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
-		var writes = stackalloc WriteDescriptorSet[inputs.Length];
+		var bufferInfo = ubo.Info;
+		var writes = stackalloc WriteDescriptorSet[count];
 		for (var i = 0; i < inputs.Length; i++)
 		{
 			ref var image = ref _resources.Get(_frameSlot, inputs[i].Id);
@@ -419,14 +458,25 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 				PImageInfo = &imageInfos[i],
 			};
 		}
-		_vk.UpdateDescriptorSets(_ctx.Device, (uint)inputs.Length, writes, 0, null);
+		if (ubo.Present)
+			writes[inputs.Length] = new WriteDescriptorSet
+			{
+				SType = StructureType.WriteDescriptorSet,
+				DstSet = set,
+				DstBinding = (uint)inputs.Length,
+				DescriptorCount = 1,
+				DescriptorType = DescriptorType.UniformBuffer,
+				PBufferInfo = &bufferInfo,
+			};
+		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
 		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
 	}
 
 	// Bind a material's loaded textures (TextureStore views) into the technique's reflected sampler slots 0..N-1,
 	// with the technique's address mode + filter. Shared by Draw(mesh, material), textured instancing, and
-	// textured particles. The caller checks SampleCount > 0.
-	private void BindMaterialTextures(Technique baked, TechniqueTemplate template, Material material, string technique)
+	// textured particles. The caller checks SampleCount > 0 (or a present UBO). A present uniform buffer (M15-0)
+	// is written as the last binding (index SampleCount) — e.g. foliage's wind, read in the vertex stage.
+	private void BindMaterialTextures(Technique baked, TechniqueTemplate template, Material material, string technique, in UniformBinding ubo = default)
 	{
 		var textures = _materials.TexturesOf(material.Id);
 		if (textures.Length < template.SampleCount)
@@ -436,8 +486,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			? (template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler)
 			: (template.LinearFilter ? _linearSampler : _nearestSampler);
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+		var count = template.SampleCount + (ubo.Present ? 1 : 0);
 		var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];
-		var writes = stackalloc WriteDescriptorSet[template.SampleCount];
+		var bufferInfo = ubo.Info;
+		var writes = stackalloc WriteDescriptorSet[count];
 		for (var i = 0; i < template.SampleCount; i++)
 		{
 			imageInfos[i] = new DescriptorImageInfo
@@ -456,8 +508,41 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 				PImageInfo = &imageInfos[i],
 			};
 		}
-		_vk.UpdateDescriptorSets(_ctx.Device, (uint)template.SampleCount, writes, 0, null);
+		if (ubo.Present)
+			writes[template.SampleCount] = new WriteDescriptorSet
+			{
+				SType = StructureType.WriteDescriptorSet,
+				DstSet = set,
+				DstBinding = (uint)template.SampleCount,
+				DescriptorCount = 1,
+				DescriptorType = DescriptorType.UniformBuffer,
+				PBufferInfo = &bufferInfo,
+			};
+		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
 		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+	}
+
+	// M15-0: a present per-frame uniform buffer to bind as a technique's last descriptor — the resolved
+	// DescriptorBufferInfo plus a presence flag (default => absent). Copying Info to a local before taking its
+	// address keeps the pointer valid through vkUpdateDescriptorSets.
+	private readonly struct UniformBinding
+	{
+		public readonly DescriptorBufferInfo Info;
+		public readonly bool Present;
+
+		public UniformBinding(Silk.NET.Vulkan.Buffer buffer, ulong offset, ulong range)
+		{
+			Info = new DescriptorBufferInfo { Buffer = buffer, Offset = offset, Range = range };
+			Present = true;
+		}
+	}
+
+	// Stage a per-frame uniform block into the uniform ring and resolve it to a bindable descriptor (M15-0).
+	private UniformBinding UploadUniforms(ReadOnlySpan<float> data)
+	{
+		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(data);
+		var (buffer, offset) = _uniformUpload.Upload(_frameSlot, bytes);
+		return new UniformBinding(buffer, offset, (ulong)bytes.Length);
 	}
 
 	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
@@ -544,7 +629,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
 			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput,
-			Layout: template.Layout, Instance: template.Instance), technique);
+			Layout: template.Layout, Instance: template.Instance, UniformBufferCount: template.UniformBufferCount), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
 		// HasFragmentPush are folded into the TechniqueDescription hash, and LinearFilter only affects the
 		// descriptor's sampler, not the pipeline.
@@ -643,6 +728,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	public void Dispose()
 	{
 		_instanceUpload.Dispose();
+		_uniformUpload.Dispose();
 		if (_nearestSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _nearestSampler, null);
 		if (_linearSampler.Handle != 0)

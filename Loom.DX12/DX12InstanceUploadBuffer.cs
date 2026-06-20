@@ -20,14 +20,18 @@ namespace Loom.DX12;
 internal sealed unsafe class DX12InstanceUploadBuffer : IDisposable
 {
 	private readonly DX12Context _ctx;
+	private readonly ulong _alignment;
 	private readonly ComPtr<ID3D12Resource>[] _buffers;
 	private readonly ulong[] _sizes;
 	private readonly ulong[] _cursors;
 	private readonly List<ComPtr<ID3D12Resource>>[] _retired;
 
-	public DX12InstanceUploadBuffer(DX12Context ctx, int frameCount)
+	/// <param name="alignment">Per-append offset alignment — 16 for the instance stream (the default), or 256 for
+	/// the M15-0 uniform ring (D3D12 requires constant-buffer views 256-byte aligned).</param>
+	public DX12InstanceUploadBuffer(DX12Context ctx, int frameCount, ulong alignment = 16)
 	{
 		_ctx = ctx;
+		_alignment = alignment;
 		_buffers = new ComPtr<ID3D12Resource>[frameCount];
 		_sizes = new ulong[frameCount];
 		_cursors = new ulong[frameCount];
@@ -48,7 +52,7 @@ internal sealed unsafe class DX12InstanceUploadBuffer : IDisposable
 	/// <summary>Append <paramref name="data"/> to <paramref name="slot"/>'s buffer; return the GPU virtual address to bind the instance stream at.</summary>
 	public ulong Upload(uint slot, ReadOnlySpan<byte> data)
 	{
-		var offset = Align(_cursors[slot], 16);
+		var offset = Align(_cursors[slot], _alignment);
 		var needed = offset + (ulong)data.Length;
 		EnsureCapacity(slot, needed);
 

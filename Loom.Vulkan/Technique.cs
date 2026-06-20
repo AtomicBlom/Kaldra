@@ -37,9 +37,12 @@ public sealed unsafe class Technique : IDisposable
 		ctx.SetObjectName(ObjectType.ShaderModule, module.Handle, $"shader:{name}");
 		try
 		{
-			var stage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.FragmentBit;
-			DescriptorSetLayout = description.SampleCount + description.StorageCount + description.StorageBufferCount > 0
-				? CreateSetLayout(description.SampleCount, description.StorageCount, description.StorageBufferCount, stage)
+			// A graphics technique's descriptors are visible to BOTH vertex and fragment: most are sampled only in
+			// the fragment stage, but a vertex-stage UBO (M15-0: foliage wind) needs vertex visibility, and the
+			// broader flag is harmless for the samplers. Compute techniques bind to the compute stage.
+			var stage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit;
+			DescriptorSetLayout = description.SampleCount + description.StorageCount + description.StorageBufferCount + description.UniformBufferCount > 0
+				? CreateSetLayout(description.SampleCount, description.StorageCount, description.StorageBufferCount, description.UniformBufferCount, stage)
 				: default;
 			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput || description.ParticleInput, description.HasFragmentPush, stage);
 			Pipeline = description.IsCompute
@@ -71,10 +74,12 @@ public sealed unsafe class Technique : IDisposable
 	// Set 0, in binding order: <paramref name="sampleCount"/> combined image samplers (the .Samples inputs),
 	// then <paramref name="storageImages"/> storage images (a compute's .ReadWrites of an image), then
 	// <paramref name="storageBuffers"/> storage buffers (a compute's .ReadWrites of a buffer — GPU particles),
-	// visible to the given stage. Hardcoded shape; SPIR-V reflection derives this later.
-	private DescriptorSetLayout CreateSetLayout(int sampleCount, int storageImages, int storageBuffers, ShaderStageFlags stage)
+	// then <paramref name="uniformBuffers"/> uniform buffers (M15-0 — the per-frame uniform seam, fed from the
+	// uniform ring), visible to the given stage. The reflection (ShaderReflection) derives these counts; the
+	// shaders declare the matching [[vk::binding(n,0)]] in the same category order.
+	private DescriptorSetLayout CreateSetLayout(int sampleCount, int storageImages, int storageBuffers, int uniformBuffers, ShaderStageFlags stage)
 	{
-		var total = sampleCount + storageImages + storageBuffers;
+		var total = sampleCount + storageImages + storageBuffers + uniformBuffers;
 		var bindings = stackalloc DescriptorSetLayoutBinding[total];
 		for (var i = 0; i < total; i++)
 			bindings[i] = new DescriptorSetLayoutBinding
@@ -82,7 +87,8 @@ public sealed unsafe class Technique : IDisposable
 				Binding = (uint)i,
 				DescriptorType = i < sampleCount ? DescriptorType.CombinedImageSampler
 					: i < sampleCount + storageImages ? DescriptorType.StorageImage
-					: DescriptorType.StorageBuffer,
+					: i < sampleCount + storageImages + storageBuffers ? DescriptorType.StorageBuffer
+					: DescriptorType.UniformBuffer,
 				DescriptorCount = 1,
 				StageFlags = stage,
 			};

@@ -30,6 +30,9 @@ internal sealed unsafe class DX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the storage-image / structured-buffer UAV descriptor table (a compute's <c>.ReadWrites</c> of a texture or structured buffer), or -1 if none.</summary>
 	public int UavTableParam { get; private set; } = -1;
 
+	/// <summary>Root-parameter slot for the per-frame uniform buffer's root CBV at register b1 (M15-0 — the uniform seam: CSM matrices, lighting params, wind), or -1 if the technique reads no constant buffer.</summary>
+	public int CbvRootParam { get; private set; } = -1;
+
 	/// <summary>Element stride (bytes) of a structured-buffer storage resource, for building its UAV descriptor's <c>StructureByteStride</c>/<c>NumElements</c>; 0 for a texture or raw buffer.</summary>
 	public int StorageBufferStride { get; private set; }
 
@@ -159,7 +162,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 		// Vulkan layout), and optionally one SRV descriptor table (t0..tN-1) + a static sampler (s0).
 		var hasMvpPush = template.HasVertexInput || template.ParticleInput;
 		var hasRootConstants = hasMvpPush || template.HasFragmentPush;
-		var parameters = stackalloc RootParameter[2];
+		var parameters = stackalloc RootParameter[3];
 		var paramCount = 0;
 		var range = new DescriptorRange
 		{
@@ -178,6 +181,20 @@ internal sealed unsafe class DX12Technique : IDisposable
 				ParameterType = RootParameterType.Type32BitConstants,
 				ShaderVisibility = hasMvpPush ? ShaderVisibility.Vertex : ShaderVisibility.Pixel,
 				Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = 16 } },
+			};
+		}
+		// M15-0: the per-frame uniform buffer as a root CBV at b1 (the root constants own b0). Bound from the
+		// uniform ring's UPLOAD-heap GPU address each frame. ShaderVisibility.All so it serves both a fullscreen
+		// pixel reader (CSM/lighting params) and a vertex reader (foliage wind). Register b1 matches the shaders'
+		// explicit `: register(b1)`, which Slang honours for DXIL while [[vk::binding]] drives SPIR-V.
+		if (template.UniformBufferCount > 0)
+		{
+			CbvRootParam = paramCount;
+			parameters[paramCount++] = new RootParameter
+			{
+				ParameterType = RootParameterType.TypeCbv,
+				ShaderVisibility = ShaderVisibility.All,
+				Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = 1, RegisterSpace = 0 } },
 			};
 		}
 		if (template.InputCount > 0)

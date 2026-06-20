@@ -155,6 +155,16 @@ public interface IRenderContext
 	void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged;
 
 	/// <summary>
+	/// As <see cref="DrawInstanced{T}(Mesh, Material, string, ReadOnlySpan{T})"/>, but also hands the technique a
+	/// per-frame <paramref name="uniforms"/> block (M15-0 — the uniform seam): the engine stages it into a
+	/// per-frame uniform buffer and binds it as the technique's constant buffer, visible to the vertex stage. The
+	/// foliage path uses it for wind (time + direction + strength) read in the vertex shader to sway each blade,
+	/// while <paramref name="material"/> supplies the alpha-test cutout texture. The per-instance MVP still comes
+	/// from <see cref="Camera"/>. Per-frame inputs are pulled from the context, not captured (§8).
+	/// </summary>
+	void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<float> uniforms) where T : unmanaged;
+
+	/// <summary>
 	/// As <see cref="DrawInstanced{T}(Mesh, string, ReadOnlySpan{T})"/>, but the technique also samples the graph
 	/// resources in <paramref name="sampled"/> (each bound in order as sampled input 0..N-1, exactly as
 	/// <see cref="FullScreen(string, ReadOnlySpan{ResourceHandle})"/> binds them) — the instanced-draw-that-reads-

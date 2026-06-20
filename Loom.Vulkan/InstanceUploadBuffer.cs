@@ -22,17 +22,26 @@ internal sealed unsafe class InstanceUploadBuffer : IDisposable
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly VulkanMemoryAllocator _allocator;
+	private readonly BufferUsageFlags _usage;
+	private readonly ulong _alignment;
 	private readonly Buffer[] _buffers;
 	private readonly Allocation?[] _allocations;
 	private readonly ulong[] _sizes;
 	private readonly ulong[] _cursors;
 	private readonly List<(Buffer Buffer, Allocation Allocation)>[] _retired;
 
-	public InstanceUploadBuffer(VulkanContext ctx, VulkanMemoryAllocator allocator, int framesInFlight)
+	/// <param name="usage">Buffer usage the ring's mappable buffers are created with — <see cref="BufferUsageFlags.VertexBufferBit"/>
+	/// for the instance stream (the default), or <see cref="BufferUsageFlags.UniformBufferBit"/> for the M15-0 uniform ring.</param>
+	/// <param name="alignment">Per-append offset alignment — 16 for vertex streams; 256 for uniform buffers
+	/// (≥ any device's <c>minUniformBufferOffsetAlignment</c>, which is a power of two ≤ 256, so 256 is always valid).</param>
+	public InstanceUploadBuffer(VulkanContext ctx, VulkanMemoryAllocator allocator, int framesInFlight,
+		BufferUsageFlags usage = BufferUsageFlags.VertexBufferBit, ulong alignment = 16)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
 		_allocator = allocator;
+		_usage = usage;
+		_alignment = alignment;
 		_buffers = new Buffer[framesInFlight];
 		_allocations = new Allocation?[framesInFlight];
 		_sizes = new ulong[framesInFlight];
@@ -57,7 +66,7 @@ internal sealed unsafe class InstanceUploadBuffer : IDisposable
 	/// <summary>Append <paramref name="data"/> to <paramref name="slot"/>'s buffer; return the buffer plus the byte offset to bind the instance stream at.</summary>
 	public (Buffer Buffer, ulong Offset) Upload(int slot, ReadOnlySpan<byte> data)
 	{
-		var offset = Align(_cursors[slot], 16);
+		var offset = Align(_cursors[slot], _alignment);
 		var needed = offset + (ulong)data.Length;
 		EnsureCapacity(slot, needed);
 		var mapped = (byte*)_allocations[slot]!.Map();
@@ -77,7 +86,7 @@ internal sealed unsafe class InstanceUploadBuffer : IDisposable
 		{
 			SType = StructureType.BufferCreateInfo,
 			Size = grown,
-			Usage = BufferUsageFlags.VertexBufferBit,
+			Usage = _usage,
 			SharingMode = SharingMode.Exclusive,
 		};
 		var newBuffer = _allocator.CreateBuffer(in info, new AllocationCreateInfo { Usage = MemoryUsage.CPU_Only }, out var newAllocation);

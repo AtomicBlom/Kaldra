@@ -858,6 +858,9 @@ public sealed unsafe class DX12Engine : IEngine
 		var storageImages = 0;
 		var storageBuffers = 0;
 		var storageBufferStride = 0;
+		// M15-0: descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
+		// as a root CBV at b1 (0 for a built-in stand-in, which has no UBO).
+		var uniformBuffers = DX12Shaders.ResolveUniformBufferCount(dir, shader);
 		string source;
 
 		if (descriptor.IsCompute)
@@ -915,7 +918,7 @@ public sealed unsafe class DX12Engine : IEngine
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
-			descriptor.Address, layout, descriptor.Instance));
+			descriptor.Address, layout, descriptor.Instance, uniformBuffers));
 
 		// Hot-reload bookkeeping (M13): one shader → many techniques; remember the descriptor so a reload rebuilds it.
 		_descriptorsByName[name] = descriptor;

@@ -32,6 +32,9 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	private readonly DX12TextureStore _textures;
 	private readonly DX12MaterialStore _materials;
 	private readonly DX12InstanceUploadBuffer _instanceUpload;
+	// M15-0: per-frame UPLOAD-heap ring for the uniform seam (CSM matrices, lighting params, wind), 256-aligned
+	// so each block is a valid CBV base. Bound as a root CBV at b1 on a technique that reflects a constant buffer.
+	private readonly DX12InstanceUploadBuffer _uniformUpload;
 	private DX12Transients? _transients;
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled. The HUD pass's
@@ -80,6 +83,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		_textures = textures;
 		_materials = materials;
 		_instanceUpload = new DX12InstanceUploadBuffer(ctx, frameCount);
+		_uniformUpload = new DX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
 	}
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
@@ -126,6 +130,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		SunView = ClipSpace(inputs.SunView);
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
+		_uniformUpload.BeginFrame(slot);  // and its per-frame uniform staging (M15-0)
 	}
 
 	// Adopt the Vulkan backend's clip-space convention (negate the projection's Y row), so the shared shaders need
@@ -166,8 +171,15 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
+		// The per-pass data channel: a technique that reflects a uniform buffer (M15-0) routes the float block to
+		// its root CBV (no 16-float cap); otherwise it rides the fixed 16-DWORD root-constant block.
 		if (push.Length > 0)
-			SetPush(baked, push);
+		{
+			if (baked.CbvRootParam >= 0)
+				BindUniforms(baked, push);
+			else
+				SetPush(baked, push);
+		}
 		if (inputs.Length > 0)
 			BindInputs(baked, inputs);
 
@@ -254,6 +266,15 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		for (var i = 0; i < push.Length && i < 16; i++)
 			block[i] = push[i];
 		_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
+	}
+
+	// M15-0: stage a per-frame uniform block into the uniform ring and bind it as the technique's root CBV (b1).
+	// The UPLOAD-heap GPU address is bound directly — no descriptor heap entry needed for a root CBV.
+	private void BindUniforms(DX12Technique baked, ReadOnlySpan<float> data)
+	{
+		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(data);
+		var gpuAddress = _uniformUpload.Upload(_slot, bytes);
+		_cmd.SetGraphicsRootConstantBufferView((uint)baked.CbvRootParam, gpuAddress);
 	}
 
 	// Write the sampled inputs' SRVs into a fresh descriptor-ring range and bind it as the technique's SRV table.
@@ -471,6 +492,36 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
 	}
 
+	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<float> uniforms) where T : unmanaged
+	{
+		if (instances.Length == 0)
+			return;
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = Camera.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		// The per-frame uniform block (M15-0) — e.g. foliage wind, read in the vertex stage — bound as the root
+		// CBV (b1), alongside the material's alpha-test texture. The MVP still rides the b0 root constants.
+		if (uniforms.Length > 0 && baked.CbvRootParam >= 0)
+			BindUniforms(baked, uniforms);
+		if (baked.TableParam >= 0 && baked.InputCount > 0)
+			BindMaterialTable(baked, material, technique);
+
+		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances);
+		var gpuAddress = _instanceUpload.Upload(_slot, bytes);
+		var instanceView = new VertexBufferView
+		{
+			BufferLocation = gpuAddress,
+			SizeInBytes = (uint)bytes.Length,
+			StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>(),
+		};
+		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
+	}
+
 	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<ResourceHandle> sampled) where T : unmanaged
 	{
 		if (instances.Length == 0)
@@ -593,5 +644,9 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	// gate "inspectable?". The engine draws the matching thumbnail grid in the HUD pass.
 	internal const int DebugTextureBase = 0x10000;
 
-	public void Dispose() => _instanceUpload.Dispose();
+	public void Dispose()
+	{
+		_instanceUpload.Dispose();
+		_uniformUpload.Dispose();
+	}
 }

@@ -15,4 +15,5 @@ internal readonly record struct DX12TechniqueTemplate(
 	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None,
 	int StorageImages = 0, int StorageBuffers = 0, int StorageBufferStride = 0,
 	SamplerAddress Address = SamplerAddress.Clamp,
-	Loom.Core.VertexLayout? Layout = null, Loom.Core.VertexLayout? Instance = null);
+	Loom.Core.VertexLayout? Layout = null, Loom.Core.VertexLayout? Instance = null,
+	int UniformBufferCount = 0);
