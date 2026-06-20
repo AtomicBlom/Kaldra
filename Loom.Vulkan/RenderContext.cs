@@ -195,35 +195,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		}
 
 		if (inputs.Length > 0)
-		{
-			// Bind each sampled input as a combined image sampler at bindings 0..N-1 (the graph put them in
-			// ShaderReadOnly before this pass). One transient descriptor set, recycled with the frame slot.
-			var sampler = _registry[technique].LinearFilter ? _linearSampler : _nearestSampler;
-			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-			var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
-			var writes = stackalloc WriteDescriptorSet[inputs.Length];
-			for (var i = 0; i < inputs.Length; i++)
-			{
-				ref var image = ref _resources.Get(_frameSlot, inputs[i].Id);
-				imageInfos[i] = new DescriptorImageInfo
-				{
-					Sampler = sampler,
-					ImageView = image.View,
-					ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
-				};
-				writes[i] = new WriteDescriptorSet
-				{
-					SType = StructureType.WriteDescriptorSet,
-					DstSet = set,
-					DstBinding = (uint)i,
-					DescriptorCount = 1,
-					DescriptorType = DescriptorType.CombinedImageSampler,
-					PImageInfo = &imageInfos[i],
-				};
-			}
-			_vk.UpdateDescriptorSets(_ctx.Device, (uint)inputs.Length, writes, 0, null);
-			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
-		}
+			BindSampledInputs(baked, inputs, _registry[technique].LinearFilter);
 
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
@@ -254,38 +226,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// textures), not the transients. A technique that reflects nothing (depth-only/shadow) skips this and the
 		// material is ignored. Material textures sample with Repeat addressing when the technique asks for it.
 		if (template.SampleCount > 0)
-		{
-			var textures = _materials.TexturesOf(material.Id);
-			if (textures.Length < template.SampleCount)
-				throw new VulkanException($"Material supplies {textures.Length} textures but technique '{technique}' samples {template.SampleCount}.");
-
-			var sampler = template.Address == SamplerAddress.Repeat
-				? (template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler)
-				: (template.LinearFilter ? _linearSampler : _nearestSampler);
-			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-			var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];
-			var writes = stackalloc WriteDescriptorSet[template.SampleCount];
-			for (var i = 0; i < template.SampleCount; i++)
-			{
-				imageInfos[i] = new DescriptorImageInfo
-				{
-					Sampler = sampler,
-					ImageView = _textures.View(textures[i]),
-					ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
-				};
-				writes[i] = new WriteDescriptorSet
-				{
-					SType = StructureType.WriteDescriptorSet,
-					DstSet = set,
-					DstBinding = (uint)i,
-					DescriptorCount = 1,
-					DescriptorType = DescriptorType.CombinedImageSampler,
-					PImageInfo = &imageInfos[i],
-				};
-			}
-			_vk.UpdateDescriptorSets(_ctx.Device, (uint)template.SampleCount, writes, 0, null);
-			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
-		}
+			BindMaterialTextures(baked, template, material, technique);
 
 		_meshes.Draw(_cmd, mesh.Id);
 	}
@@ -388,6 +329,123 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// The instance stream is a graph storage buffer a compute filled; the pass's .ReadsVertex derived the barrier.
 		var buffer = _resources.GetBuffer(_frameSlot, instances.Id);
 		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, 0ul, (uint)count);
+	}
+
+	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged
+	{
+		if (instances.Length == 0)
+			return;
+		var baked = Bake(technique);
+		var template = _registry[technique];
+		var mvp = _camera.ViewProjection; // the per-instance world data rides in the instance stream
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+		// Material atlas → the technique's reflected sampler slots, identical to Draw(mesh, material): every
+		// instance samples the shared atlas; the per-instance uv-rect (in the stream) picks each quad's region.
+		if (template.SampleCount > 0)
+			BindMaterialTextures(baked, template, material, technique);
+		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
+		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, offset, (uint)instances.Length);
+	}
+
+	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<ResourceHandle> sampled) where T : unmanaged
+	{
+		if (instances.Length == 0)
+			return;
+		var baked = Bake(technique);
+		var mvp = _camera.ViewProjection;
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+		// Sampled graph resources (the G-buffer) → sampled slots 0..N-1, identical to FullScreen: each instanced
+		// light volume samples the normal/albedo at its covered pixel. The graph put them in ShaderReadOnly.
+		if (sampled.Length > 0)
+			BindSampledInputs(baked, sampled, _registry[technique].LinearFilter);
+		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
+		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, offset, (uint)instances.Length);
+	}
+
+	public void DrawParticles(ResourceHandle buffer, int count, Material material, string technique)
+	{
+		var baked = Bake(technique);
+		var template = _registry[technique];
+		var mvp = _camera.ViewProjection;
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+		// The sprite-sheet atlas → reflected sampler slots, so the render shader can sub-UV sample per frame.
+		if (template.SampleCount > 0)
+			BindMaterialTextures(baked, template, material, technique);
+		var vertexBuffer = _resources.GetBuffer(_frameSlot, buffer.Id);
+		ulong offset = 0;
+		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vertexBuffer, in offset);
+		_vk.CmdDraw(_cmd, 6, (uint)count, 0, 0); // 6 fabricated quad verts × one instance per particle
+	}
+
+	// Bind sampled graph resources (transients) as combined image samplers at bindings 0..N-1 — the path
+	// FullScreen and the instanced light volumes share. The graph put each in ShaderReadOnly before this pass.
+	private void BindSampledInputs(Technique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear)
+	{
+		var sampler = linear ? _linearSampler : _nearestSampler;
+		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+		var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
+		var writes = stackalloc WriteDescriptorSet[inputs.Length];
+		for (var i = 0; i < inputs.Length; i++)
+		{
+			ref var image = ref _resources.Get(_frameSlot, inputs[i].Id);
+			imageInfos[i] = new DescriptorImageInfo
+			{
+				Sampler = sampler,
+				ImageView = image.View,
+				ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
+			};
+			writes[i] = new WriteDescriptorSet
+			{
+				SType = StructureType.WriteDescriptorSet,
+				DstSet = set,
+				DstBinding = (uint)i,
+				DescriptorCount = 1,
+				DescriptorType = DescriptorType.CombinedImageSampler,
+				PImageInfo = &imageInfos[i],
+			};
+		}
+		_vk.UpdateDescriptorSets(_ctx.Device, (uint)inputs.Length, writes, 0, null);
+		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+	}
+
+	// Bind a material's loaded textures (TextureStore views) into the technique's reflected sampler slots 0..N-1,
+	// with the technique's address mode + filter. Shared by Draw(mesh, material), textured instancing, and
+	// textured particles. The caller checks SampleCount > 0.
+	private void BindMaterialTextures(Technique baked, TechniqueTemplate template, Material material, string technique)
+	{
+		var textures = _materials.TexturesOf(material.Id);
+		if (textures.Length < template.SampleCount)
+			throw new VulkanException($"Material supplies {textures.Length} textures but technique '{technique}' samples {template.SampleCount}.");
+
+		var sampler = template.Address == SamplerAddress.Repeat
+			? (template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler)
+			: (template.LinearFilter ? _linearSampler : _nearestSampler);
+		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+		var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];
+		var writes = stackalloc WriteDescriptorSet[template.SampleCount];
+		for (var i = 0; i < template.SampleCount; i++)
+		{
+			imageInfos[i] = new DescriptorImageInfo
+			{
+				Sampler = sampler,
+				ImageView = _textures.View(textures[i]),
+				ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
+			};
+			writes[i] = new WriteDescriptorSet
+			{
+				SType = StructureType.WriteDescriptorSet,
+				DstSet = set,
+				DstBinding = (uint)i,
+				DescriptorCount = 1,
+				DescriptorType = DescriptorType.CombinedImageSampler,
+				PImageInfo = &imageInfos[i],
+			};
+		}
+		_vk.UpdateDescriptorSets(_ctx.Device, (uint)template.SampleCount, writes, 0, null);
+		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
 	}
 
 	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass

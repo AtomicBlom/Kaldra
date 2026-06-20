@@ -198,25 +198,38 @@ public sealed unsafe class Technique : IDisposable
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 
-	// Particle vertex input: one float4 PER INSTANCE (xyz position + w life), stride 16, read straight from
-	// the storage buffer a compute wrote. Each particle is one instance of a fabricated 6-vertex quad
-	// (billboard), so the shader expands it without point sprites (§7.6 GPU particles).
-	private static PipelineVertexInputStateCreateInfo* VertexInputForParticles(NativeArena arena)
+	// Particle vertex input: the storage buffer a compute wrote, read PER INSTANCE at binding 0. Each particle is
+	// one instance of a fabricated 6-vertex quad (billboard), so the shader expands it without point sprites
+	// (§7.6 GPU particles). With a layout (M14-4 generalized particles) the stream's attributes/stride come from
+	// it (e.g. VertexLayout.Particle: two IPARTICLE float4 rows, 32 bytes); without one, the legacy single float4
+	// (xyz position + w life, stride 16) — so the original ParticlesDemo path is unchanged.
+	private static PipelineVertexInputStateCreateInfo* VertexInputForParticles(NativeArena arena, Loom.Core.VertexLayout? layout)
 	{
-		var binding = arena.Write(new VertexInputBindingDescription
+		if (layout is null)
 		{
-			Binding = 0,
-			Stride = 4 * sizeof(float),
-			InputRate = VertexInputRate.Instance,
-		});
-		var attribute = arena.Write(new VertexInputAttributeDescription { Location = 0, Binding = 0, Format = Format.R32G32B32A32Sfloat, Offset = 0 });
+			var legacyBinding = arena.Write(new VertexInputBindingDescription { Binding = 0, Stride = 4 * sizeof(float), InputRate = VertexInputRate.Instance });
+			var legacyAttribute = arena.Write(new VertexInputAttributeDescription { Location = 0, Binding = 0, Format = Format.R32G32B32A32Sfloat, Offset = 0 });
+			return arena.Write(new PipelineVertexInputStateCreateInfo
+			{
+				SType = StructureType.PipelineVertexInputStateCreateInfo,
+				VertexBindingDescriptionCount = 1,
+				PVertexBindingDescriptions = legacyBinding,
+				VertexAttributeDescriptionCount = 1,
+				PVertexAttributeDescriptions = legacyAttribute,
+			});
+		}
+
+		var binding = arena.Write(new VertexInputBindingDescription { Binding = 0, Stride = (uint)layout.Stride, InputRate = VertexInputRate.Instance });
+		var attributes = arena.Alloc<VertexInputAttributeDescription>(layout.Attributes.Length);
+		for (var i = 0; i < layout.Attributes.Length; i++)
+			attributes[i] = new VertexInputAttributeDescription { Location = (uint)i, Binding = 0, Format = ToVkFormat(layout.Attributes[i].Format), Offset = (uint)layout.Offsets[i] };
 		return arena.Write(new PipelineVertexInputStateCreateInfo
 		{
 			SType = StructureType.PipelineVertexInputStateCreateInfo,
 			VertexBindingDescriptionCount = 1,
 			PVertexBindingDescriptions = binding,
-			VertexAttributeDescriptionCount = 1,
-			PVertexAttributeDescriptions = attribute,
+			VertexAttributeDescriptionCount = (uint)layout.Attributes.Length,
+			PVertexAttributeDescriptions = attributes,
 		});
 	}
 
@@ -240,7 +253,7 @@ public sealed unsafe class Technique : IDisposable
 			PName = arena.String(description.FragmentEntry),
 		};
 
-		var vertexInput = description.ParticleInput ? VertexInputForParticles(arena)
+		var vertexInput = description.ParticleInput ? VertexInputForParticles(arena, description.Instance)
 			: description.Layout is not null ? VertexInput(arena, description.Layout, description.Instance)
 			// No vertex buffers: the fullscreen triangle is fabricated from SV_VertexID.
 			: arena.Write(new PipelineVertexInputStateCreateInfo { SType = StructureType.PipelineVertexInputStateCreateInfo });
