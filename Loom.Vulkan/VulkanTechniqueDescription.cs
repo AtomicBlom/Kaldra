@@ -38,4 +38,5 @@ public readonly record struct VulkanTechniqueDescription(
 	bool ParticleInput = false,
 	VertexLayout? Layout = null,
 	VertexLayout? Instance = null,
-	int UniformBufferCount = 0);
+	int UniformBufferCount = 0,
+	bool HasListPush = false);

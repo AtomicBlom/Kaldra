@@ -18,4 +18,4 @@ internal readonly record struct DirectX12TechniqueTemplate(
 	int StorageImages = 0, int StorageBuffers = 0, int StorageBufferStride = 0,
 	SamplerAddress Address = SamplerAddress.Clamp,
 	VertexLayout? Layout = null, VertexLayout? Instance = null,
-	int UniformBufferCount = 0, int InputBufferCount = 0);
+	int UniformBufferCount = 0, int InputBufferCount = 0, bool HasListPush = false);

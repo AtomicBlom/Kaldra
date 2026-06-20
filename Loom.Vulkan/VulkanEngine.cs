@@ -250,7 +250,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 			descriptor.Address,
 			layout,
 			descriptor.Instance,
-			reflection.UniformBufferCount);
+			reflection.UniformBufferCount,
+			descriptor.HasListPush);
 
 		// Hot-reload bookkeeping (M13): remember which techniques a shader backs (one shader → many techniques, e.g.
 		// bloom_sample → bloom.down + bloom.up) and each technique's descriptor, so a reload can rebuild the template.

@@ -82,6 +82,7 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 		hash.AppendData(BitConverter.GetBytes((int)t.Address));
 		hash.AppendData(BitConverter.GetBytes(t.UniformBufferCount));
 		hash.AppendData(BitConverter.GetBytes(t.InputBufferCount));
+		hash.AppendData(BitConverter.GetBytes(t.HasListPush));
 		AppendLayout(hash, t.Layout);
 		AppendLayout(hash, t.Instance);
 		return Convert.ToHexString(hash.GetHashAndReset());

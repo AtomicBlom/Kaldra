@@ -11,6 +11,10 @@ namespace Loom.DirectX12;
 /// <summary>One baked pipeline + its root signature, with the root-parameter slots the context binds against.</summary>
 internal sealed unsafe class DirectX12Technique : IDisposable
 {
+	// 32-bit root-constant count for a draw-list technique's all-stage push block — the per-list scalars plus the
+	// per-command tag slot the context rewrites each draw (the UI block: scale, translate, paper-white, hdr, kind).
+	private const uint ListPushDwords = 8;
+
 	public ComPtr<ID3D12RootSignature> RootSignature;
 	public ComPtr<ID3D12PipelineState> Pipeline;
 
@@ -188,8 +192,11 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		// Root signature: optionally a 32-bit root-constants block (the MVP at b0/vertex for a mesh or particle
 		// technique, or a 16-float scalar block at b0/pixel for a post pass — one or the other, mirroring the
 		// Vulkan layout), and optionally one SRV descriptor table (t0..tN-1) + a static sampler (s0).
-		var hasMvpPush = template.HasVertexInput || template.ParticleInput;
-		var hasRootConstants = hasMvpPush || template.HasFragmentPush;
+		// A draw-list technique (HasListPush) wants an all-stage root-constants block (vertex reads scale/translate,
+		// pixel reads the tag/paper-white/hdr flag), so it pre-empts the vertex-only MVP push even though it also
+		// reads a vertex stream.
+		var hasMvpPush = (template.HasVertexInput || template.ParticleInput) && !template.HasListPush;
+		var hasRootConstants = hasMvpPush || template.HasFragmentPush || template.HasListPush;
 		var parameters = stackalloc RootParameter[3];
 		var paramCount = 0;
 		var range = new DescriptorRange
@@ -207,8 +214,8 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			parameters[paramCount++] = new RootParameter
 			{
 				ParameterType = RootParameterType.Type32BitConstants,
-				ShaderVisibility = hasMvpPush ? ShaderVisibility.Vertex : ShaderVisibility.Pixel,
-				Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = 16 } },
+				ShaderVisibility = template.HasListPush ? ShaderVisibility.All : hasMvpPush ? ShaderVisibility.Vertex : ShaderVisibility.Pixel,
+				Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = template.HasListPush ? ListPushDwords : 16u } },
 			};
 		}
 		// M15-0: the per-frame uniform buffer as a root CBV at b1 (the root constants own b0). Bound from the
@@ -276,6 +283,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		{
 			BlendMode.Additive => (Blend.One, Blend.One),
 			BlendMode.AlphaOver => (Blend.SrcAlpha, Blend.InvSrcAlpha),
+			BlendMode.PremultipliedAlpha => (Blend.One, Blend.InvSrcAlpha),
 			BlendMode.None => (Blend.One, Blend.Zero),
 			_ => throw new NotSupportedException($"DirectX12: BlendMode '{template.Blend}' is not mapped to blend factors."),
 		};
@@ -440,6 +448,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		VertexFormat.Float3 => Format.FormatR32G32B32Float,
 		VertexFormat.Float4 => Format.FormatR32G32B32A32Float,
 		VertexFormat.UInt4 => Format.FormatR32G32B32A32Uint,
+		VertexFormat.Half4 => Format.FormatR16G16B16A16Float,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 

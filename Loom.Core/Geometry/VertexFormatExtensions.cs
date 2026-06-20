@@ -11,6 +11,7 @@ public static class VertexFormatExtensions
 		VertexFormat.Float3 => 3 * sizeof(float),
 		VertexFormat.Float4 => 4 * sizeof(float),
 		VertexFormat.UInt4 => 4 * sizeof(uint),
+		VertexFormat.Half4 => 4 * sizeof(ushort),
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 
@@ -22,6 +23,7 @@ public static class VertexFormatExtensions
 		VertexFormat.Float3 => 3,
 		VertexFormat.Float4 => 4,
 		VertexFormat.UInt4 => 4,
+		VertexFormat.Half4 => 4,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 }

@@ -26,4 +26,7 @@ public enum VertexFormat
 
 	/// <summary>Four 32-bit unsigned integers — the four bone indices of a skinned vertex's <c>JOINTS</c> attribute (M15).</summary>
 	UInt4,
+
+	/// <summary>Four 16-bit floats (8 bytes) — a half-precision colour or other packed four-channel attribute (the UI vertex's premultiplied RGBA16F).</summary>
+	Half4,
 }

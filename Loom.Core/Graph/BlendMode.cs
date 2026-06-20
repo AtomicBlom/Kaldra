@@ -17,4 +17,11 @@ public enum BlendMode
 
 	/// <summary>Additive: <c>src + dst</c>. Bloom upsample accumulation and composite.</summary>
 	Additive,
+
+	/// <summary>
+	/// Premultiplied alpha-over: <c>src + (1−src.a)·dst</c> — the source colour is already multiplied by its
+	/// own alpha, so it is added rather than scaled again. The UI compositor folds element opacity into the
+	/// vertex colour, so its draw list blends this way.
+	/// </summary>
+	PremultipliedAlpha,
 }

@@ -49,7 +49,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			DescriptorSetLayout = description.SampleCount + description.StorageCount + description.StorageBufferCount + description.UniformBufferCount > 0
 				? CreateSetLayout(description.SampleCount, description.StorageCount, description.StorageBufferCount, description.UniformBufferCount, descriptorStage)
 				: default;
-			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput || description.ParticleInput, description.HasFragmentPush, scalarPushStage);
+			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput || description.ParticleInput, description.HasFragmentPush, scalarPushStage, description.HasListPush);
 			Pipeline = description.IsCompute
 				? CreateComputePipeline(module, in description)
 				: CreatePipeline(module, in description);
@@ -114,20 +114,30 @@ public sealed unsafe class VulkanTechnique : IDisposable
 	/// </summary>
 	public const int FragmentPushSize = 16 * sizeof(float);
 
+	/// <summary>
+	/// Size of a draw-list technique's all-stage push block (<see cref="VulkanTechniqueDescription.HasListPush"/>):
+	/// the per-list scalars plus the per-command tag slot the backend rewrites each draw. Eight 32-bit words covers
+	/// the UI block (scale, translate, paper-white, hdr flag, kind) with headroom; well within the 128-byte minimum.
+	/// </summary>
+	public const int ListPushSize = 8 * sizeof(float);
+
 	// Zero or one descriptor set (whether the technique binds resources), plus at most one push-constant
-	// range: mesh techniques get a 64-byte VERTEX range for the MVP (small + per-draw, so push constants beat
-	// a uniform buffer); post/compute techniques get a 16-byte range for per-pass scalars (JFA step, hover id,
-	// exposure rate) in <paramref name="scalarStage"/> (fragment for a draw, compute for a dispatch). A
-	// technique uses one kind or the other, never both, so a single-element range array suffices.
-	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout, bool hasMvpPushConstant, bool hasScalarPush, ShaderStageFlags scalarStage)
+	// range: a draw-list technique gets an all-stage range for its scale/translate/tag block; mesh techniques
+	// get a 64-byte VERTEX range for the MVP (small + per-draw, so push constants beat a uniform buffer);
+	// post/compute techniques get a 16-byte range for per-pass scalars (JFA step, hover id, exposure rate) in
+	// <paramref name="scalarStage"/> (fragment for a draw, compute for a dispatch). A technique uses exactly one
+	// of these, so a single-element range array suffices.
+	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout, bool hasMvpPushConstant, bool hasScalarPush, ShaderStageFlags scalarStage, bool hasListPush)
 	{
 		var hasSet = setLayout.Handle != 0;
 		var range = new PushConstantRange();
-		if (hasMvpPushConstant)
+		if (hasListPush)
+			range = new PushConstantRange { StageFlags = ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, Offset = 0, Size = ListPushSize };
+		else if (hasMvpPushConstant)
 			range = new PushConstantRange { StageFlags = ShaderStageFlags.VertexBit, Offset = 0, Size = (uint)sizeof(Matrix4x4) };
 		else if (hasScalarPush)
 			range = new PushConstantRange { StageFlags = scalarStage, Offset = 0, Size = FragmentPushSize };
-		var hasRange = hasMvpPushConstant || hasScalarPush;
+		var hasRange = hasMvpPushConstant || hasScalarPush || hasListPush;
 
 		PipelineLayoutCreateInfo info = new()
 		{
@@ -207,6 +217,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		VertexFormat.Float3 => Format.R32G32B32Sfloat,
 		VertexFormat.Float4 => Format.R32G32B32A32Sfloat,
 		VertexFormat.UInt4 => Format.R32G32B32A32Uint,
+		VertexFormat.Half4 => Format.R16G16B16A16Sfloat,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 
@@ -300,6 +311,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		var (srcFactor, dstFactor) = description.Blend switch
 		{
 			BlendMode.AlphaOver => (BlendFactor.SrcAlpha, BlendFactor.OneMinusSrcAlpha),
+			BlendMode.PremultipliedAlpha => (BlendFactor.One, BlendFactor.OneMinusSrcAlpha),
 			BlendMode.Additive => (BlendFactor.One, BlendFactor.One),
 			BlendMode.None => (BlendFactor.One, BlendFactor.Zero),
 			_ => throw new NotSupportedException($"Vulkan: BlendMode '{description.Blend}' is not mapped to blend factors."),

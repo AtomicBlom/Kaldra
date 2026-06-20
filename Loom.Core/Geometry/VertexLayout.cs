@@ -89,6 +89,19 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		new VertexAttribute("WEIGHTS", VertexFormat.Float4));
 
 	/// <summary>
+	/// The game-UI per-vertex layout — <c>Position</c> (float2, surface pixels) + <c>Uv</c> (float2) +
+	/// <c>Color</c> (<see cref="VertexFormat.Half4"/>, premultiplied RGBA16F) + <c>Params</c> (float4, per-primitive
+	/// SDF/corner/border data), 40 bytes, mirroring the UI vertex. The two <c>TEXCOORD</c> attributes share one
+	/// repeated semantic (so they bind as <c>TEXCOORD0</c>/<c>TEXCOORD1</c>) exactly like the instanced layouts'
+	/// repeated rows — DirectX12 binds by semantic name + index. A draw-list technique declares this layout.
+	/// </summary>
+	public static VertexLayout UI { get; } = new(
+		new VertexAttribute("POSITION", VertexFormat.Float2),
+		new VertexAttribute("TEXCOORD", VertexFormat.Float2),
+		new VertexAttribute("COLOR", VertexFormat.Half4),
+		new VertexAttribute("TEXCOORD", VertexFormat.Float4));
+
+	/// <summary>
 	/// The standard per-instance stream for instanced drawing — a 4×4 world matrix as four <c>ITRANSFORM</c>
 	/// rows (4 × float4, 64 bytes), advancing one per instance at binding 1. A CPU-uploaded
 	/// <see cref="System.Numerics.Matrix4x4"/> per instance lands here directly; the shader rebuilds the matrix

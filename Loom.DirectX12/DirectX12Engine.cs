@@ -929,7 +929,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
-			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers));
+			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush));
 
 		// Hot-reload bookkeeping (M13): one shader → many techniques; remember the descriptor so a reload rebuilds it.
 		_descriptorsByName[name] = descriptor;
