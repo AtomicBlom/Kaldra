@@ -23,9 +23,10 @@ struct PushConstants
 {
 	float2 scale;          // surface-pixel -> clip scale (2/w, -2/h style; the backend supplies the sign)
 	float2 translate;      // surface-pixel -> clip translate
-	uint   kind;           // UIPrimKind for this draw command (set per command, like ImGui's per-cmd texture)
 	float  paperWhite;     // HDR: linear scale = UIPaperWhiteNits / 80 (§D4.4); 1.0 on SDR
 	uint   isHdr;          // 1 when the target is scRGB-HDR (apply paperWhite), else 0
+	uint   kind;           // UIPrimKind for this draw command. Last in the block: the draw-list verb rewrites the
+	                       // final push slot per command with the command's tag, so the per-command field sits here.
 };
 
 [[vk::push_constant]] PushConstants pc;
