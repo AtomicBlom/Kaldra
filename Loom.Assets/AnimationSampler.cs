@@ -68,6 +68,42 @@ public static class AnimationSampler
 			palette[j] = skeleton.InverseBindMatrices[j] * world[j];
 	}
 
+	/// <summary>
+	/// Sample <paramref name="clip"/> at <paramref name="timeSeconds"/> and write each joint's WORLD matrix into
+	/// <paramref name="world"/> (length ≥ <see cref="Skeleton.JointCount"/>) — the joint origins/axes the skeleton
+	/// debug viewer draws (M15-7), as opposed to the inverse-bind-folded palette <see cref="Evaluate"/> produces.
+	/// </summary>
+	public static void EvaluateJointWorld(Skeleton skeleton, AnimationClip clip, float timeSeconds, Span<Matrix4x4> world)
+	{
+		var count = skeleton.JointCount;
+		if (world.Length < count)
+			throw new ArgumentException($"World span holds {world.Length} matrices but the skeleton has {count} joints.", nameof(world));
+
+		Span<Matrix4x4> local = count <= 128 ? stackalloc Matrix4x4[count] : new Matrix4x4[count];
+		for (var j = 0; j < count; j++)
+			local[j] = skeleton.LocalBindTransforms[j];
+		foreach (var channel in clip.Channels)
+		{
+			var j = channel.JointIndex;
+			if ((uint)j >= (uint)count)
+				continue;
+			if (!Matrix4x4.Decompose(skeleton.LocalBindTransforms[j], out var bindScale, out var bindRotation, out var bindTranslation))
+			{
+				bindScale = Vector3.One;
+				bindRotation = Quaternion.Identity;
+				bindTranslation = Vector3.Zero;
+			}
+			var translation = channel.Translation is { } t ? SampleVector3(t, timeSeconds) : bindTranslation;
+			var rotation = channel.Rotation is { } r ? SampleQuaternion(r, timeSeconds) : bindRotation;
+			var scale = channel.Scale is { } s ? SampleVector3(s, timeSeconds) : bindScale;
+			local[j] = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation);
+		}
+
+		Span<bool> resolved = count <= 128 ? stackalloc bool[count] : new bool[count];
+		for (var j = 0; j < count; j++)
+			world[j] = ResolveWorld(j, skeleton.ParentIndices.AsSpan(), local, world, resolved);
+	}
+
 	private static Matrix4x4 ResolveWorld(int j, ReadOnlySpan<int> parents, ReadOnlySpan<Matrix4x4> local, Span<Matrix4x4> world, Span<bool> resolved)
 	{
 		if (resolved[j])
