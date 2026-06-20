@@ -861,6 +861,8 @@ public sealed unsafe class DX12Engine : IEngine
 		// M15-0: descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
 		// as a root CBV at b1 (0 for a built-in stand-in, which has no UBO).
 		var uniformBuffers = DX12Shaders.ResolveUniformBufferCount(dir, shader);
+		// M15-2: read-only structured-buffer compute inputs (skin's bind-pose verts + bone palette) — root SRVs.
+		var inputBuffers = descriptor.IsCompute ? DX12Shaders.ResolveComputeInputBuffers(dir, shader) : 0;
 		string source;
 
 		if (descriptor.IsCompute)
@@ -918,7 +920,7 @@ public sealed unsafe class DX12Engine : IEngine
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
-			descriptor.Address, layout, descriptor.Instance, uniformBuffers));
+			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers));
 
 		// Hot-reload bookkeeping (M13): one shader → many techniques; remember the descriptor so a reload rebuilds it.
 		_descriptorsByName[name] = descriptor;
@@ -1029,6 +1031,8 @@ public sealed unsafe class DX12Engine : IEngine
 			throw new InvalidOperationException($"DX12: vertex element size ({stride} bytes) does not match the layout stride ({layout.Stride} bytes).");
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
+
+	public Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
 	public Texture CreateTexture(TextureData data) => _textures.Create(data);
 

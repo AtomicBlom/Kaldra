@@ -29,6 +29,7 @@ internal sealed unsafe class DX12MeshStore : IDisposable
 		public VertexBufferView VertexView;
 		public IndexBufferView IndexView;
 		public uint IndexCount;
+		public uint VertexCount; // M15: skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
 	}
 
 	private readonly DX12Context _ctx;
@@ -74,6 +75,42 @@ internal sealed unsafe class DX12MeshStore : IDisposable
 			IndexCount = (uint)indices.Length,
 		});
 		return new Mesh(id, indices.Length);
+	}
+
+	/// <summary>
+	/// Upload a skinned mesh's bind-pose vertices (M15). The UPLOAD-heap buffer is already GPU-readable in
+	/// GENERIC_READ, so its GPU address binds directly as a structured-buffer root SRV for the compute pre-skin
+	/// pass (<see cref="BindPoseAddress"/>) — no extra usage flag is needed (unlike Vulkan). The vertex count is
+	/// recorded for the dispatch's thread count; the index buffer is what <see cref="DrawSkinned"/> draws.
+	/// </summary>
+	public Mesh CreateSkinned(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices)
+	{
+		var mesh = Create(MemoryMarshal.AsBytes(vertices), System.Runtime.CompilerServices.Unsafe.SizeOf<SkinnedVertex>(), indices);
+		var stored = _meshes[mesh.Id];
+		stored.VertexCount = (uint)vertices.Length;
+		_meshes[mesh.Id] = stored;
+		return mesh;
+	}
+
+	/// <summary>The skinned mesh's bind-pose buffer GPU address, bound as a structured-buffer root SRV for the compute pre-skin pass (M15).</summary>
+	public ulong BindPoseAddress(int meshId) => _meshes[meshId].VertexBuffer.GetGPUVirtualAddress();
+
+	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count (M15).</summary>
+	public uint VertexCount(int meshId) => _meshes[meshId].VertexCount;
+
+	/// <summary>
+	/// Draw a mesh's index buffer with its per-vertex stream sourced from <paramref name="vertexView"/> instead of
+	/// the mesh's own vertex buffer (M15 — the skinned draw, reading the compute pre-skin pass's MeshStandard-shaped
+	/// output). The mesh contributes only its index buffer + count.
+	/// </summary>
+	public void DrawSkinned(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, VertexBufferView vertexView)
+	{
+		var mesh = _meshes[meshId];
+		var ibv = mesh.IndexView;
+		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		cmd.IASetVertexBuffers(0, 1, &vertexView);
+		cmd.IASetIndexBuffer(&ibv);
+		cmd.DrawIndexedInstanced(mesh.IndexCount, 1, 0, 0, 0);
 	}
 
 	/// <summary>Bind a mesh's vertex + index buffers and record an indexed draw into the command list.</summary>

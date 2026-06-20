@@ -34,6 +34,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	// retire-not-free ring as the instance stream, but created UniformBufferBit and aligned to 256 (≥ any
 	// device's minUniformBufferOffsetAlignment). Bound as the last descriptor of a technique that reflects a UBO.
 	private readonly InstanceUploadBuffer _uniformUpload;
+	// M15-2: per-frame host-visible ring for the bone palette the compute pre-skin pass reads as a structured
+	// buffer — StorageBufferBit, 256-aligned (≥ minStorageBufferOffsetAlignment).
+	private readonly InstanceUploadBuffer _storageUpload;
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
 	// Repeat-addressing, mip-sampling samplers for material textures (tiled across geometry) — a linear and a
@@ -119,6 +122,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_materials = materials;
 		_instanceUpload = new InstanceUploadBuffer(ctx, allocator, framesInFlight);
 		_uniformUpload = new InstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.UniformBufferBit, alignment: 256);
+		_storageUpload = new InstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.StorageBufferBit, alignment: 256);
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
 		_repeatLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.Repeat);
@@ -174,6 +178,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(frameSlot); // reset this slot's per-frame instance staging
 		_uniformUpload.BeginFrame(frameSlot);  // and its per-frame uniform staging (M15-0)
+		_storageUpload.BeginFrame(frameSlot);  // and the bone-palette staging (M15-2)
 	}
 
 	/// <summary>
@@ -358,6 +363,76 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		// The instance stream is a graph storage buffer a compute filled; the pass's .ReadsVertex derived the barrier.
 		var buffer = _resources.GetBuffer(_frameSlot, instances.Id);
 		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, 0ul, (uint)count);
+	}
+
+	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)
+	{
+		if (vertexCount <= 0 || palette.Length == 0)
+			return;
+		var baked = Bake(technique);
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Compute, baked.Pipeline);
+
+		// vertexCount rides the compute scalar push (as a float — exact for any realistic count).
+		var block = stackalloc float[16];
+		block[0] = vertexCount;
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)Technique.FragmentPushSize, block);
+
+		// Three storage buffers at bindings 0,1,2: bind-pose (mesh, long-lived) · palette (per-frame ring) · output
+		// (the transient the pass .ReadWrites). None but the output is a graph resource, so DispatchSkin writes its
+		// own set rather than going through the generic Dispatch storage path.
+		var paletteBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(palette);
+		var (paletteBuffer, paletteOffset) = _storageUpload.Upload(_frameSlot, paletteBytes);
+		var inBuffer = _meshes.BindPoseBuffer(skinnedMesh.Id);
+		var outBuffer = _resources.GetBuffer(_frameSlot, output.Id);
+
+		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+		var bufferInfos = stackalloc DescriptorBufferInfo[3];
+		bufferInfos[0] = new DescriptorBufferInfo { Buffer = inBuffer, Offset = 0, Range = Vk.WholeSize };
+		bufferInfos[1] = new DescriptorBufferInfo { Buffer = paletteBuffer, Offset = paletteOffset, Range = (ulong)paletteBytes.Length };
+		bufferInfos[2] = new DescriptorBufferInfo { Buffer = outBuffer, Offset = 0, Range = Vk.WholeSize };
+		var writes = stackalloc WriteDescriptorSet[3];
+		for (var i = 0; i < 3; i++)
+			writes[i] = new WriteDescriptorSet
+			{
+				SType = StructureType.WriteDescriptorSet,
+				DstSet = set,
+				DstBinding = (uint)i,
+				DescriptorCount = 1,
+				DescriptorType = DescriptorType.StorageBuffer,
+				PBufferInfo = &bufferInfos[i],
+			};
+		_vk.UpdateDescriptorSets(_ctx.Device, 3, writes, 0, null);
+		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Compute, baked.Layout, 0, 1, in set, 0, null);
+
+		_vk.CmdDispatch(_cmd, (uint)((vertexCount + 63) / 64), 1, 1);
+	}
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique) => DrawSkinned(mesh, skinnedVertices, technique, _camera);
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view)
+	{
+		var baked = Bake(technique);
+		var mvp = view.ViewProjection;
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+		// The per-vertex stream is the compute's skinned output (MeshStandard-shaped); the mesh contributes its index buffer.
+		var vertexBuffer = _resources.GetBuffer(_frameSlot, skinnedVertices.Id);
+		_meshes.DrawSkinned(_cmd, mesh.Id, vertexBuffer);
+	}
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique) => DrawSkinned(mesh, skinnedVertices, material, technique, _camera);
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view)
+	{
+		var baked = Bake(technique);
+		var template = _registry[technique];
+		var mvp = view.ViewProjection;
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
+		if (template.SampleCount > 0)
+			BindMaterialTextures(baked, template, material, technique);
+		var vertexBuffer = _resources.GetBuffer(_frameSlot, skinnedVertices.Id);
+		_meshes.DrawSkinned(_cmd, mesh.Id, vertexBuffer);
 	}
 
 	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged
@@ -729,6 +804,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	{
 		_instanceUpload.Dispose();
 		_uniformUpload.Dispose();
+		_storageUpload.Dispose();
 		if (_nearestSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _nearestSampler, null);
 		if (_linearSampler.Handle != 0)

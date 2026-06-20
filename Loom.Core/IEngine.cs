@@ -39,6 +39,16 @@ public interface IEngine : IDisposable
 	Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged;
 
 	/// <summary>
+	/// Upload a skinned mesh's bind-pose vertices (the <see cref="VertexLayout.MeshSkinned"/> layout) once and get
+	/// a <see cref="Mesh"/> handle (M15). Unlike <see cref="CreateMesh{T}"/>, the bind-pose vertex buffer is made
+	/// readable by a compute shader (the pre-skin pass reads it as a structured buffer), and the returned mesh's
+	/// index buffer is what <see cref="IRenderContext.DrawSkinned(Mesh, BufferHandle, string)"/> draws — its
+	/// vertex stream comes from the compute's skinned output, not this buffer. The vertices' bone indices
+	/// reference the model's skeleton (the palette <see cref="IRenderContext.DispatchSkin"/> applies).
+	/// </summary>
+	Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices);
+
+	/// <summary>
 	/// Upload a texture (and its mip chain) once and get a stable <see cref="Texture"/> handle to bundle into a
 	/// <see cref="Material"/>. Takes neutral <see cref="TextureData"/> — no graphics-API type crosses the
 	/// boundary; the backend's texture store decodes nothing and just uploads the levels. Call after creation,

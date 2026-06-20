@@ -290,6 +290,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
+	public Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
+
 	public Texture CreateTexture(TextureData data) => _textures.Create(data);
 
 	public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);

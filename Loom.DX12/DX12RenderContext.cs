@@ -35,6 +35,9 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	// M15-0: per-frame UPLOAD-heap ring for the uniform seam (CSM matrices, lighting params, wind), 256-aligned
 	// so each block is a valid CBV base. Bound as a root CBV at b1 on a technique that reflects a constant buffer.
 	private readonly DX12InstanceUploadBuffer _uniformUpload;
+	// M15-2: per-frame UPLOAD ring for the bone palette the compute pre-skin pass reads as a structured-buffer
+	// root SRV; 256-aligned (a multiple of the 64-byte matrix stride, so each block is element-aligned).
+	private readonly DX12InstanceUploadBuffer _storageUpload;
 	private DX12Transients? _transients;
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled. The HUD pass's
@@ -84,6 +87,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		_materials = materials;
 		_instanceUpload = new DX12InstanceUploadBuffer(ctx, frameCount);
 		_uniformUpload = new DX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
+		_storageUpload = new DX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
 	}
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
@@ -131,6 +135,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
 		_uniformUpload.BeginFrame(slot);  // and its per-frame uniform staging (M15-0)
+		_storageUpload.BeginFrame(slot);  // and the bone-palette staging (M15-2)
 	}
 
 	// Adopt the Vulkan backend's clip-space convention (negate the projection's Y row), so the shared shaders need
@@ -464,6 +469,81 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count);
 	}
 
+	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: skinning requires an active graph (SetGraph).");
+		if (vertexCount <= 0 || palette.Length == 0)
+			return;
+
+		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
+		_cmd.SetComputeRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		// vertexCount rides the compute root constant (as a float — exact for any realistic count).
+		if (baked.RootConstantParam >= 0)
+		{
+			var count = (float)vertexCount;
+			_cmd.SetComputeRoot32BitConstants((uint)baked.RootConstantParam, 1, &count, 0);
+		}
+
+		// All three buffers bind as root descriptors by GPU address — no descriptor heap. They are raw
+		// ByteAddressBuffers (the skin shader Loads/Stores at explicit byte offsets), so the output is a root UAV
+		// (stride 0): t0 = bind-pose verts, t1 = bone palette, u0 = output.
+		var paletteBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(palette);
+		var paletteAddress = _storageUpload.Upload(_slot, paletteBytes);
+		_cmd.SetComputeRootShaderResourceView((uint)baked.InputBufferBaseParam, _meshes.BindPoseAddress(skinnedMesh.Id));
+		_cmd.SetComputeRootShaderResourceView((uint)(baked.InputBufferBaseParam + 1), paletteAddress);
+		_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, output.Id).GetGPUVirtualAddress());
+
+		_cmd.Dispatch((uint)((vertexCount + 63) / 64), 1, 1);
+	}
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique) => DrawSkinned(mesh, skinnedVertices, technique, Camera);
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view)
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: skinned draw requires an active graph (SetGraph).");
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = view.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		_meshes.DrawSkinned(_cmd, mesh.Id, SkinnedView(skinnedVertices));
+	}
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique) => DrawSkinned(mesh, skinnedVertices, material, technique, Camera);
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view)
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: skinned draw requires an active graph (SetGraph).");
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = view.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		if (baked.TableParam >= 0 && baked.InputCount > 0)
+			BindMaterialTable(baked, material, technique);
+
+		_meshes.DrawSkinned(_cmd, mesh.Id, SkinnedView(skinnedVertices));
+	}
+
+	// The compute pre-skin output as a per-vertex stream: a MeshStandard-strided view over the transient buffer.
+	private VertexBufferView SkinnedView(BufferHandle skinnedVertices) => new()
+	{
+		BufferLocation = _transients!.Resource(_slot, skinnedVertices.Id).GetGPUVirtualAddress(),
+		SizeInBytes = _transients.ByteSize(skinnedVertices.Id),
+		StrideInBytes = (uint)VertexLayout.MeshStandard.Stride,
+	};
+
 	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged
 	{
 		if (instances.Length == 0)
@@ -648,5 +728,6 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	{
 		_instanceUpload.Dispose();
 		_uniformUpload.Dispose();
+		_storageUpload.Dispose();
 	}
 }

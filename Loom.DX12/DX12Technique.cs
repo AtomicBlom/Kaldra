@@ -27,6 +27,12 @@ internal sealed unsafe class DX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the storage-buffer root UAV (a compute's <c>.ReadWrites</c> of a buffer), or -1 if none.</summary>
 	public int UavRootParam { get; private set; } = -1;
 
+	/// <summary>Root-parameter slot of the FIRST read-only structured-buffer input root SRV (M15-2 skin: bind-pose verts at t0, bone palette at t1); the i-th input SRV is this + i. -1 if the compute reads no input buffers.</summary>
+	public int InputBufferBaseParam { get; private set; } = -1;
+
+	/// <summary>Number of read-only structured-buffer input root SRVs the compute binds (M15-2).</summary>
+	public int InputBufferCount { get; }
+
 	/// <summary>Root-parameter slot for the storage-image / structured-buffer UAV descriptor table (a compute's <c>.ReadWrites</c> of a texture or structured buffer), or -1 if none.</summary>
 	public int UavTableParam { get; private set; } = -1;
 
@@ -45,6 +51,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 		IsCompute = template.IsCompute;
 		StorageBufferStride = template.StorageBufferStride;
 		InputCount = template.InputCount;
+		InputBufferCount = template.InputBufferCount;
 		ParticleStride = template.ParticleInput ? template.Instance?.Stride ?? 4 * sizeof(float) : 0;
 
 		if (template.IsCompute)
@@ -66,7 +73,8 @@ internal sealed unsafe class DX12Technique : IDisposable
 	// (compute isn't covered by the per-stage VERTEX/PIXEL visibilities). Static samplers s0.. pair with the SRV table.
 	private void BakeCompute(DX12Context ctx, DX12TechniqueTemplate template)
 	{
-		var parameters = stackalloc RootParameter[3];
+		// root constants (b0) + N read-only structured-buffer root SRVs (t0..) + optional SRV table + storage.
+		var parameters = stackalloc RootParameter[3 + template.InputBufferCount];
 		var paramCount = 0;
 		var uavTableCount = template.StorageImages > 0 ? template.StorageImages : template.StorageBuffers;
 		var srvRange = new DescriptorRange { RangeType = DescriptorRangeType.Srv, NumDescriptors = (uint)template.InputCount, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
@@ -82,6 +90,19 @@ internal sealed unsafe class DX12Technique : IDisposable
 			ShaderVisibility = ShaderVisibility.All,
 			Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = 16 } },
 		};
+		// M15-2: read-only structured-buffer inputs (skin: bind-pose verts t0, bone palette t1) as root SRVs by
+		// GPU address — no descriptor heap. The shader's StructuredBuffer<T>s land at t0..t(N-1) in declaration order.
+		if (template.InputBufferCount > 0)
+		{
+			InputBufferBaseParam = paramCount;
+			for (var b = 0; b < template.InputBufferCount; b++)
+				parameters[paramCount++] = new RootParameter
+				{
+					ParameterType = RootParameterType.TypeSrv,
+					ShaderVisibility = ShaderVisibility.All,
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)b, RegisterSpace = 0 } },
+				};
+		}
 		if (template.InputCount > 0)
 		{
 			TableParam = paramCount;
