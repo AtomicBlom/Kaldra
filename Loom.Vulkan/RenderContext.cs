@@ -568,9 +568,12 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		if (textures.Length < template.SampleCount)
 			throw new VulkanException($"Material supplies {textures.Length} textures but technique '{technique}' samples {template.SampleCount}.");
 
-		var sampler = template.Address == SamplerAddress.Repeat
-			? (template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler)
-			: (template.LinearFilter ? _linearSampler : _nearestSampler);
+		var sampler = template.Address switch
+		{
+			SamplerAddress.Repeat => template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler,
+			SamplerAddress.Clamp => template.LinearFilter ? _linearSampler : _nearestSampler,
+			_ => throw new VulkanException($"SamplerAddress '{template.Address}' is not mapped to a sampler."),
+		};
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 		var count = template.SampleCount + (ubo.Present ? 1 : 0);
 		var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];

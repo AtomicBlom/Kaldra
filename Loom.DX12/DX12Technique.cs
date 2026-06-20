@@ -144,9 +144,9 @@ internal sealed unsafe class DX12Technique : IDisposable
 			samplers[i] = new StaticSamplerDesc
 			{
 				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-				AddressU = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
-				AddressV = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
-				AddressW = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
+				AddressU = ToTextureAddress(template.Address),
+				AddressV = ToTextureAddress(template.Address),
+				AddressW = ToTextureAddress(template.Address),
 				ComparisonFunc = ComparisonFunc.Never,
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
@@ -245,9 +245,9 @@ internal sealed unsafe class DX12Technique : IDisposable
 			samplers[i] = new StaticSamplerDesc
 			{
 				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-				AddressU = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
-				AddressV = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
-				AddressW = template.Address == SamplerAddress.Repeat ? TextureAddressMode.Wrap : TextureAddressMode.Clamp,
+				AddressU = ToTextureAddress(template.Address),
+				AddressV = ToTextureAddress(template.Address),
+				AddressW = ToTextureAddress(template.Address),
 				ComparisonFunc = ComparisonFunc.Never,
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
@@ -274,7 +274,8 @@ internal sealed unsafe class DX12Technique : IDisposable
 		{
 			BlendMode.Additive => (Blend.One, Blend.One),
 			BlendMode.AlphaOver => (Blend.SrcAlpha, Blend.InvSrcAlpha),
-			_ => (Blend.One, Blend.Zero),
+			BlendMode.None => (Blend.One, Blend.Zero),
+			_ => throw new NotSupportedException($"DX12: BlendMode '{template.Blend}' is not mapped to blend factors."),
 		};
 		var blend = new BlendDesc { AlphaToCoverageEnable = false, IndependentBlendEnable = false };
 		blend.RenderTarget[0] = new RenderTargetBlendDesc
@@ -421,6 +422,14 @@ internal sealed unsafe class DX12Technique : IDisposable
 			}
 		}
 	}
+
+	// Exhaustive so a new SamplerAddress member fails loud here instead of silently mapping to Clamp.
+	private static TextureAddressMode ToTextureAddress(SamplerAddress address) => address switch
+	{
+		SamplerAddress.Clamp => TextureAddressMode.Clamp,
+		SamplerAddress.Repeat => TextureAddressMode.Wrap,
+		_ => throw new NotSupportedException($"DX12: SamplerAddress '{address}' is not mapped to a TextureAddressMode."),
+	};
 
 	private static Format ToDxgiFormat(Loom.Core.VertexFormat format) => format switch
 	{

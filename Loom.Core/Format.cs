@@ -1,10 +1,14 @@
 namespace Loom.Core;
 
 /// <summary>
-/// Backend-neutral pixel formats. These are an <em>abstract</em> vocabulary — the backend maps each
-/// to a concrete API format (e.g. <c>Rgba8Srgb</c> → <c>VK_FORMAT_R8G8B8A8_SRGB</c>). Keep this list
-/// free of any graphics-API type so <c>Loom.Core</c> stays portable (CLAUDE.md cardinal invariant).
-/// The set is the one Planning.md §5 commits to "so far"; grow it deliberately as effects need more.
+/// Backend-neutral render-graph <b>attachment / target</b> pixel formats — an <em>abstract</em> vocabulary the
+/// backend maps to a concrete API format (e.g. <c>Rgba8Srgb</c> → <c>VK_FORMAT_R8G8B8A8_SRGB</c>). Keep this list
+/// free of any graphics-API type so <c>Loom.Core</c> stays portable. Grow it deliberately as effects need more.
+/// <para>
+/// Deliberately distinct from <see cref="TextureFormat"/> (the source-image / sampled-encoding vocabulary): the
+/// two overlap on the plain RGBA8 encodings on purpose, but diverge as render targets gain HDR/packed/depth
+/// formats while source textures gain block-compressed ones. Keep them separate rather than unifying.
+/// </para>
 /// </summary>
 public enum Format
 {

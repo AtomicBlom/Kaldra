@@ -299,7 +299,8 @@ public sealed unsafe class Technique : IDisposable
 		{
 			BlendMode.AlphaOver => (BlendFactor.SrcAlpha, BlendFactor.OneMinusSrcAlpha),
 			BlendMode.Additive => (BlendFactor.One, BlendFactor.One),
-			_ => (BlendFactor.One, BlendFactor.Zero),
+			BlendMode.None => (BlendFactor.One, BlendFactor.Zero),
+			_ => throw new NotSupportedException($"Vulkan: BlendMode '{description.Blend}' is not mapped to blend factors."),
 		};
 		var colorCount = description.ColorFormats.Length;
 		var blendAttachments = arena.Alloc<PipelineColorBlendAttachmentState>(colorCount);
