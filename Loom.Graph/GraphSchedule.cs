@@ -9,13 +9,13 @@ namespace Loom.Graph;
 /// The execution plan derived from a <see cref="RenderGraph"/>'s read/write edges: the passes in a valid
 /// execution order, each annotated with the prerequisites it depends on. This is the first half of the
 /// Execute layer — pure scheduling, no GPU types — so it stays in <c>Loom.Graph</c> and is fully
-/// unit-testable. Barrier and layout-transition derivation (M3b) builds on the same per-resource timeline.
+/// unit-testable. Barrier and layout-transition derivation builds on the same per-resource timeline.
 /// <para>
 /// Dependencies are derived from same-resource access conflicts: read-after-write, write-after-read, and
 /// write-after-write. Pure read-after-read needs no edge. Every edge points forward in program order, so
 /// the dependency graph is a DAG and program order is always a valid topological order — the derivation's
-/// product is the precise dependency/validation structure, not a reshuffle (that pays off later for async
-/// queues, aliasing and culling).
+/// product is the precise dependency/validation structure, not a reshuffle — the structure a future
+/// multi-queue scheduler, the transient aliaser, and culling all build on.
 /// </para>
 /// </summary>
 public sealed class GraphSchedule
@@ -199,7 +199,7 @@ public sealed class GraphSchedule
 
 	/// <summary>
 	/// Surface passes whose writes nobody reads downstream and which aren't the presented or read-back output —
-	/// wasted GPU work worth flagging (Planning.md §8). A <em>warning</em>, not an error: a dead pass is
+	/// wasted GPU work worth flagging. A <em>warning</em>, not an error: a dead pass is
 	/// suboptimal, not incorrect, so we don't fail the build over it.
 	/// </summary>
 	private static void WarnDeadPasses(RenderGraph graph, SortedSet<int>[] dependsOn)
@@ -248,7 +248,7 @@ public sealed class GraphSchedule
 	}
 
 	/// <summary>
-	/// A GraphViz DOT rendering of the <em>derived</em> execution DAG (M13 viz export): one node per pass in
+	/// A GraphViz DOT rendering of the <em>derived</em> execution DAG: one node per pass in
 	/// execution order (ranked top→bottom), with an edge from each prerequisite to the pass that depends on it.
 	/// This is the scheduling story — what <see cref="RenderGraph.ToDot"/>'s data-flow view derives into. Pairs
 	/// with it; render with <c>dot -Tpng</c>. Deterministic (execution order).

@@ -8,8 +8,7 @@ namespace Loom.Graph;
 /// <summary>
 /// The transient-aliasing plan derived from a <see cref="LifetimePlan"/>: a partition of the aliasable
 /// transients into <see cref="AliasBucket"/>s such that the resources in any one bucket have pairwise
-/// non-overlapping lifetimes, so they can be backed by the <em>same</em> physical memory (Planning.md §8,
-/// §12 M4 — "the G-buffer's memory is reused by the bloom mips once the G-buffer is consumed"). The number
+/// non-overlapping lifetimes, so they can be backed by the <em>same</em> physical memory (e.g. the G-buffer's memory is reused by the bloom mips once the G-buffer is consumed). The number
 /// of buckets equals the peak number of simultaneously-live transients — the minimum any aliasing scheme
 /// can achieve.
 /// <para>

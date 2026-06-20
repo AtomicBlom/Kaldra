@@ -7,7 +7,7 @@ namespace Loom.Graph;
 /// Execute-layer semantics, deliberately kept out of <c>Loom.Core</c> (which only <em>declares</em> intent).
 /// The load-bearing case is <see cref="AccessKind.Blend"/> / <see cref="AccessKind.ReadWrite"/>: both read
 /// <em>and</em> write, so an accumulation pass depends on the prior writer (RAW) and blocks later writers
-/// (WAR) at once (Planning.md §8).
+/// (WAR) at once.
 /// </summary>
 internal static class AccessKindExtensions
 {

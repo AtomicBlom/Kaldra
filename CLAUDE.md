@@ -74,6 +74,7 @@ Enforced by `.editorconfig` at the repo root; the essentials:
   - `with` to copy records with changes
 - Allman braces; `System.*` usings sorted first; usings outside the namespace.
 - **UI-track naming.** The two-letter acronym `UI` is always uppercase in identifiers — matching WinUI's own `UIElement` and the .NET two-letter-acronym guideline: `UIElement`, `UIRoot`, `UIVertex`, `UIDrawData`, `UISurfaceId`, `UIPrimKind`, `IUICompositor`, `UIRenderer`, `IRenderContext.DrawUI`, `IEngine.EnableUI`. (In camelCase a leading `ui` stays lowercase, e.g. the `uiSurfaces` local.) `Loom.sln.DotSettings` registers `UI` as a known abbreviation so Rider/ReSharper accepts it — keep that file.
+- **Comments are self-contained.** A comment describes what the code does or *why* — never the context in which it was written. Do **not** reference a milestone, phase, or planning-doc section (`M13`, `MU1`, `Phase B`, `M7-B4`, `Planning.md §8`, `§D2.1`), and do **not** narrate project history or schedule (`for now`, `previously`, `no longer`, `lands in MU2`, `arrives later`) — that belongs in commit messages and the board, not the source, because it goes stale and forces the reader to look something up. **Do** keep XML docs on public APIs, and explanations of a non-obvious algorithm, gotcha, or "why this and not that". When a real explanation carries a milestone tag, strip the tag and keep the explanation.
 
 ## Goals & constraints
 

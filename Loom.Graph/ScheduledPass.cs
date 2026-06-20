@@ -7,7 +7,7 @@ namespace Loom.Graph;
 /// <summary>
 /// A pass placed in execution order, carrying the prerequisite passes derived from its read/write edges.
 /// <see cref="DependsOn"/> holds <em>immediate</em> prerequisites (the last writer for a read; the last
-/// writer plus all readers-since for a write) — exactly what barrier derivation (M3b) will turn into
+/// writer plus all readers-since for a write) — exactly what barrier derivation turns into
 /// <c>vkCmdPipelineBarrier2</c> waits. Transitive ordering is handled by the schedule's sort.
 /// </summary>
 public sealed class ScheduledPass
