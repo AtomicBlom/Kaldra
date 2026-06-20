@@ -42,17 +42,39 @@ public sealed class UIRoot
 	/// Layout happens in DIPs (<c>pixels / LayoutScale</c>); the root visual carries the DIP→pixel scale.</summary>
 	public void LayoutPass(Size availablePixels)
 	{
-		Visual.SurfaceSize = new Vector2(availablePixels.Width, availablePixels.Height);
-		Visual.Transform = Matrix3x2.CreateScale(LayoutScale);
-		Visual.Clear();
+		// Update the root visual's surface size + DIP→pixel scale, marking dirty only on a real change so a fully
+		// static frame produces no damage (and the compositor's frame-level no-op kicks in — §D2.4/§D2.5).
+		var size = new Vector2(availablePixels.Width, availablePixels.Height);
+		if (Visual.SurfaceSize != size)
+		{
+			Visual.SurfaceSize = size;
+			Visual.MarkDirty();
+		}
+		var transform = Matrix3x2.CreateScale(LayoutScale);
+		if (Visual.Transform != transform)
+		{
+			Visual.Transform = transform;
+			Visual.MarkDirty();
+		}
 
 		if (Content is null)
+		{
+			if (Visual.Children.Count != 0)
+				Visual.Clear();
 			return;
+		}
 
 		var availDip = new Size(availablePixels.Width / LayoutScale, availablePixels.Height / LayoutScale);
 		Content.Measure(availDip);
 		Content.Arrange(new Rect(0f, 0f, availDip.Width, availDip.Height));
-		Visual.Add(Content.Visual);
+
+		// Link the content's visual as the root's single child — only when it actually changed (re-linking every
+		// frame would dirty the root and defeat the no-op).
+		if (Visual.Children.Count != 1 || !ReferenceEquals(Visual.Children[0], Content.Visual))
+		{
+			Visual.Clear();
+			Visual.Add(Content.Visual);
+		}
 	}
 
 	/// <summary>Composite the current visual tree to neutral <see cref="UIDrawData"/> (default-path convenience —

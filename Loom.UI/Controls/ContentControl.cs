@@ -20,13 +20,7 @@ public class ContentControl : Control
 			field = value;
 			if (_hosted is not null)
 				DropChild(_hosted);
-			_hosted = value switch
-			{
-				null => null,
-				UIElement e => e,
-				string s => new TextBlock { Text = s },
-				_ => new TextBlock { Text = value.ToString() ?? string.Empty },
-			};
+			_hosted = ContentHelper.Wrap(value);
 			if (_hosted is not null)
 				AdoptChild(_hosted);
 			InvalidateMeasure();
