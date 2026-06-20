@@ -405,14 +405,14 @@ internal sealed unsafe class VulkanEngine : IEngine
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
 	}
 
-	public void EnableUI()
+	public void EnableUI(TextureData? fontAtlas = null)
 	{
 		if (_ui is not null)
-			return; // idempotent — enabling twice keeps the existing renderer
+			return; // idempotent — enabling twice keeps the existing renderer (pass the atlas on the first call)
 
-		// MU0 Phase A: stand up the no-op UI renderer and wire it to the context, so the ctx.DrawUI() seam is live
-		// on both backends. No shader resolve yet — the ui.slang pipeline + atlas upload arrive in MU1.
-		_ui = new UIRenderer();
+		// MU1: stand up the real ui.slang renderer (white-texel + optional MTSDF atlas) and wire it to the context.
+		var spirv = ResolveShaderAsset("ui", ".spv");
+		_ui = new UIRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight, fontAtlas);
 		_context.SetUI(_ui);
 	}
 
@@ -1137,6 +1137,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 #if LOOM_IMGUI
 		_imgui?.Dispose(); // before the allocator — it holds VMA font/vertex/index allocations
 #endif
+		_ui?.Dispose(); // likewise before the allocator — the UI renderer holds VMA atlas/vertex/index allocations
 		_descriptors.Dispose();
 		_meshes.Dispose();
 		_textures.Dispose(); // before the allocator — it holds VMA image allocations

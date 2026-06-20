@@ -282,6 +282,11 @@ shipped in M11; StbImageSharp-backed) → neutral `TextureData`; the UI makes no
   in-world panel + a billboarded non-interactive nameplate, mouse + keyboard + gamepad + touch, animated +
   data-bound, pixel-matched across backends. **Tests:** text shape/break/wrap + fallback/tofu (fixture); ray→UV
   hit-test; XYFocus candidate selection; billboard transform math; HDR linearization math.
+- **MUx — Native cross-platform MSDF font generation.** A Loom-native MTSDF atlas generator (GPU-compute by
+  default, multi-threaded-software fallback) that replaces the external `msdf-atlas-gen` dependency MU1 leans on:
+  a `dotnet tool` for build-time baking + an MSBuild `RegisterFonts` target + an optional runtime bake-on-miss.
+  Runs on win-ARM64/Linux/macOS with no external binary. An **independent track** (a parallel agent owns it); it
+  couples to MU1 only through the FontAtlas page+JSON format contract. **Full design: §D10.**
 
 ## Verification
 
@@ -1035,10 +1040,13 @@ both are explicit design defaults here:
   (a warning glow, a reticle) — these and only these go above paper white, clamped/rolled off to the display peak.
   Default content stays at/below paper white.
 
-Mechanics: `ui.slang` takes the `IsHdrSurface` flag (from `UiDrawData.IsHdrSurface` ← `ctx.HdrOutput`) and the
-paper-white scale (D2.7). When set, it linearizes the `HdrColor` to scRGB, applies the paper-white scale, and
-premultiplies so alpha-over against the extended-range scRGB backbuffer is correct (mirrors how tonemap takes the
-HDR flag). Carrying the composited color as premultiplied **RGBA16F** (not RGBA8) is what lets above-paper-white
+Mechanics: the **compositor** linearizes each `HdrColor` (sRGB EOTF) and premultiplies **in linear space** —
+premultiplied alpha-over is only correct there, and an sRGB backbuffer blends in linear too — folding the result
+into the `Half4` vertex color. `ui.slang` then takes the `IsHdrSurface` flag (from `UiDrawData.IsHdrSurface` ←
+`ctx.HdrOutput`) and the paper-white scale (D2.7): when set it scales the (already-linear, premultiplied) color by
+the paper-white reference for the extended-range scRGB backbuffer (mirrors how tonemap takes the HDR flag); on SDR
+it is a no-op and the linear value round-trips back to the authored sRGB byte when the sRGB target re-encodes on
+store. Carrying the composited color as premultiplied **RGBA16F** (not RGBA8) is what lets above-paper-white
 survive to the blend. In-world panels render into their own target (`Rgba8Srgb` for SDR panels, or an FP16 target
 when a panel itself needs HDR) and sample correctly regardless.
 
@@ -1491,4 +1499,89 @@ Doc/policy-only for now: this section is the contract, review is the gate. A
 `Microsoft.CodeAnalysis.PublicApiAnalyzers` baseline (`PublicAPI.{Shipped,Unshipped}.txt` on `Loom.UI` +
 `Loom.Core`) is the clean mechanical drop-in for when the repo nears going public or boundary churn warrants it —
 this enumeration is its ready-made baseline source.
+
+---
+
+## D10. MUx — Native cross-platform MSDF font generation
+
+The **MUx** milestone (roadmap above). An **independent track** — a parallel agent owns delivery — that replaces
+the external `msdf-atlas-gen` dependency MU1 leans on. MU1 ships a committed prebaked atlas (baked once with the
+external tool); MUx makes Loom able to generate that atlas itself, cross-platform, with no external binary. The two
+couple **only** through the format contract in §D10.2 — MU1 owns the schema, MUx must match it byte-for-meaning so
+its output is a drop-in for the MU1 `FontAtlas`.
+
+### D10.1 Goal & shape
+
+A Loom-native generator that:
+- Ships as a **`dotnet tool`** (`loom-msdf`) for build-time baking — the `Loom.UI.Text.Bake` deferred from MU1,
+  reborn — taking a `*.fontset.json` (§D3.1 schema) → MTSDF atlas page(s) + metrics JSON.
+- Defaults to **GPU-compute generation** via the first available Loom backend (`Engine.AvailableEngines` /
+  `IRenderBackend.Create`, the headless smoke-harness path — no window; naturally **Vulkan on Linux**, Vulkan/DX12
+  on Windows), with a **multi-threaded software (CPU) fallback** (`--cpu`, and auto-fallback when no device is
+  available). The software path doubles as the **correctness oracle**.
+- Adds the MSBuild **`RegisterFonts`** target (mirror of `LoomCompileShaders`/`LoomRegisterShaders` in
+  `build/Loom.Sdk/Loom.Shaders.targets`): inputs = fontset + font files; outputs = atlas PNG + JSON; registered
+  `EmbeddedResource` (engine default) / `Content` (app fonts). Replaces MU1's committed prebaked atlas with a
+  build-time-generated one.
+- *(Optional, off by default — §D3.3 tier 3)* a **runtime bake-on-miss**: a missing glyph triggers a
+  background-thread GPU bake + incremental atlas-page upload, behind a `Use*` flag (re-introduces in-loop GPU work,
+  so not the default).
+
+Runs on win-ARM64 / Linux / macOS with **no external binary** — GPU compute is just a dispatch on the existing
+backends, inherently cross-architecture.
+
+### D10.2 Format contract (the only coupling to MU1 — locked)
+
+Emit exactly what MU1's `FontAtlas` (`Loom.UI/FontAtlas.cs`) loads:
+- `<name>.N.png` — **RGBA 8-bit MTSDF** page(s): **RGB** = the multi-channel SDF (`median(rgb)` reconstructs the
+  signed distance; corners preserved), **A** = a true single-channel SDF (for outline/shadow/glow/variable
+  weight). `pxRange`-encoded. **Sampled linear/UNORM, never sRGB** (the values are linear distances).
+- `<name>.font.json` — per-glyph: page index, atlas UV rect (px), plane bounds (EM quad relative to the pen),
+  advance, bearings; font-level metrics (ascent/descent/line gap, units-per-EM); `pxRange`; `glyphSize` (baked EM
+  px); codepoint↔glyph-id subset cmap.
+
+**MU1 owns this schema** (it materialises in `FontAtlas` + the committed `ui-default.font.json`); MUx consumes it,
+so a regenerated atlas swaps in with zero `FontAtlas` changes.
+
+### D10.3 Pipeline (build-time tool path)
+
+1. **Parse font → outlines.** A *managed* (no-native) TTF/OTF reader yielding, per glyph, contours of line +
+   quadratic/cubic Bézier segments in EM space, plus metrics + cmap. **None exists in-repo today** (confirmed).
+   Sub-decision: adopt a permissive managed parser (Typography/MIT; *SixLabors.Fonts* is Apache code under the Six
+   Labors **Split License** — commercial caveat) **vs.** hand-roll a `glyf`/`loca`/`cmap` reader (no license risk;
+   defer CFF/PostScript outlines to v2). Recommend evaluating a managed parser first; hand-roll `glyf` (quadratic)
+   for v1 if licensing bites.
+2. **Edge-color** each glyph's contours (CPU, cheap) — port msdfgen's `edgeColoringSimple` (by-angle threshold) so
+   adjacent edges at a sharp corner differ in ≥1 channel and `median()` preserves the corner. Deterministic.
+3. **Pack** glyphs into page(s) (shelf/skyline bin-pack) given `glyphSize` + `pxRange` + page size → per-glyph UV
+   rects + plane bounds.
+4. **Generate the SDF (default: GPU compute).** Upload per-glyph colored edge segments (an SSBO: each segment =
+   type + control points + channel mask); dispatch `msdf_gen.slang` over each glyph's texel rect computing the
+   signed **pseudo-distance per channel** (msdfgen endpoint/orthogonality correction) into **RGB** plus the **true
+   signed distance into A** (MTSDF). Reuses the engine's compute plumbing (cf. `particle_update`/`exposure`). The
+   **software path** computes the same with `System.Threading.Tasks.Parallel` over glyphs/texels.
+5. **Read back → PNG + JSON** (the §D10.2 format).
+
+### D10.4 Deliverables (task cards)
+
+managed outline reader (or vetted dep) · edge-coloring port · atlas packer + plane/UV math · `msdf_gen.slang`
+compute kernel + headless dispatch harness (GPU default) · multi-threaded software path (fallback + oracle) ·
+PNG/JSON emitter matching §D10.2 · `loom-msdf` dotnet-tool packaging · MSBuild `RegisterFonts` + switch the engine
+default font to build-time generation (retire MU1's committed atlas) · *(optional)* runtime bake-on-miss.
+
+### D10.5 Acceptance
+
+Regenerates `ui-default` (+ a CJK subset) on win-ARM64 with **no external binary**, crisp at HUD and in-world
+sizes, visually indistinguishable from the msdf-atlas-gen baseline; output is a **drop-in** for MU1's `FontAtlas`
+(no `FontAtlas` change); the GPU and software paths agree within tolerance; deterministic enough to commit/diff;
+runs both as a `dotnet tool` and via the MSBuild target.
+
+### D10.6 Risks
+
+- **Outline-parser licensing** — the main external-dependency decision; hand-rolling `glyf` avoids it but costs
+  effort and skips CFF/PostScript fonts in v1.
+- **GPU float determinism** for committed atlases (driver-dependent ordering) — mitigate by committing the
+  software-path output, or tolerance-diffing.
+- **Pseudo-distance correctness** (msdfgen's subtle endpoint/corner handling) — the software path is the oracle.
+- **Headless GPU in CI** — the software fallback covers GPU-less environments.
 
