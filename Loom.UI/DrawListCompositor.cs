@@ -23,13 +23,34 @@ public sealed class DrawListCompositor : IUICompositor
 	/// </param>
 	public DrawListCompositor(FontAtlas? font = null) => _font = font ?? FontAtlas.Default;
 
+	/// <summary>How many full recomposites have run (a clean frame's no-op does not increment it) — instrumentation
+	/// for the incremental-recomposition tests (PlanningUI.md §D8.2).</summary>
+	public int CompositeCount { get; private set; }
+
 	public void Composite(RootVisual root, UISurfaceId surface)
 	{
+		// Frame-level no-op (PlanningUI.md §D2.4/§D2.5): once a surface has been composited, a fully-clean visual
+		// tree re-submits the cached draw data with the same Revision — a static frame does zero compositing work
+		// (and the backend can skip re-upload). A visual-only change marks its subtree dirty and forces a rebuild.
+		if (_surfaces.ContainsKey(surface.Value) && !AnyDirty(root))
+			return;
+
 		var list = new UIDrawList(root.SurfaceSize);
 		Walk(list, root, Matrix3x2.Identity, 1f, new Rect(0, 0, root.SurfaceSize.X, root.SurfaceSize.Y));
 		var rev = _revisions.TryGetValue(surface.Value, out var r) ? r + 1 : 1u;
 		_revisions[surface.Value] = rev;
 		_surfaces[surface.Value] = list.Build(root.IsHdrSurface, rev);
+		CompositeCount++;
+	}
+
+	private static bool AnyDirty(Visual v)
+	{
+		if (v.IsDirty)
+			return true;
+		foreach (var c in v.Children)
+			if (AnyDirty(c))
+				return true;
+		return false;
 	}
 
 	/// <summary>The last <see cref="UIDrawData"/> produced for <paramref name="surface"/> (handed to FrameInputs.UISurfaces).</summary>
@@ -37,6 +58,7 @@ public sealed class DrawListCompositor : IUICompositor
 
 	private void Walk(UIDrawList list, Visual v, Matrix3x2 parent, float opacity, Rect clip)
 	{
+		v.IsDirty = false; // composited this frame — clean until the next visual-only change marks it again
 		var matrix = v.Transform * parent;
 		var alpha = opacity * v.Opacity;
 		var localClip = clip;
