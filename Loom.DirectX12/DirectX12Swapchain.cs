@@ -2,18 +2,18 @@ using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// The DX12 flip-model swapchain — the counterpart of <c>Swapchain</c> in the Vulkan backend. Owns the
+/// The DirectX12 flip-model swapchain — the counterpart of <c>Swapchain</c> in the Vulkan backend. Owns the
 /// <c>IDXGISwapChain1</c>, an RTV descriptor heap, and one render-target view per backbuffer, and recreates
 /// them on resize. The current backbuffer index is tracked manually (it advances by one each present under the
 /// flip model), which keeps the type at <c>IDXGISwapChain1</c> — <c>GetCurrentBackBufferIndex</c> is an
 /// <c>IDXGISwapChain3</c>-only method we don't need.
 /// </summary>
-internal sealed unsafe class DX12Swapchain : IDisposable
+internal sealed unsafe class DirectX12Swapchain : IDisposable
 {
-	private readonly DX12Context _ctx;
+	private readonly DirectX12Context _ctx;
 	private readonly nint _hwnd;
 	private readonly uint _bufferCount;
 
@@ -40,7 +40,7 @@ internal sealed unsafe class DX12Swapchain : IDisposable
 	/// <summary>The backbuffer to render into this frame (the flip model's current index).</summary>
 	public uint CurrentIndex => _index;
 
-	public DX12Swapchain(DX12Context ctx, nint hwnd, int width, int height, uint bufferCount)
+	public DirectX12Swapchain(DirectX12Context ctx, nint hwnd, int width, int height, uint bufferCount)
 	{
 		_ctx = ctx;
 		_hwnd = hwnd;

@@ -7,7 +7,7 @@ namespace Loom.Graph;
 /// <summary>
 /// The second half of the Execute layer: from a <see cref="GraphSchedule"/>, derive the image-layout
 /// transitions and attachment load/store actions for every pass — the barriers the user never writes
-/// Backend-neutral, so the same plan drives both the Vulkan and DX12 backends.
+/// Backend-neutral, so the same plan drives both the Vulkan and DirectX12 backends.
 /// <para>
 /// It walks each resource's <see cref="ResourceState"/> timeline in execution order. A transition is
 /// emitted before a pass whenever the required state differs from the resource's current state (a layout

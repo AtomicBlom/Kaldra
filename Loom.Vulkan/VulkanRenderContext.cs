@@ -45,7 +45,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
 	// Repeat-addressing, mip-sampling samplers for material textures (tiled across geometry) — a linear and a
-	// nearest variant, selected by the technique's LinearFilter flag exactly as the DX12 static sampler is
+	// nearest variant, selected by the technique's LinearFilter flag exactly as the DirectX12 static sampler is
 	// (Wrap + MinMagMip{Linear,Point}). The existing nearest/linear samplers above clamp (post passes never tile).
 	private readonly Sampler _repeatLinearSampler;
 	private readonly Sampler _repeatNearestSampler;
@@ -294,8 +294,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		var total = sampled.Length + storage.Length;
 		if (total > 0)
 		{
-			// Sampled inputs use the technique's declared filter (matching the Draw/FullScreen path and DX12's
-			// static sampler) — not a hardcoded nearest, which silently diverged from DX12 for a LinearFilter pass.
+			// Sampled inputs use the technique's declared filter (matching the Draw/FullScreen path and DirectX12's
+			// static sampler) — not a hardcoded nearest, which silently diverged from DirectX12 for a LinearFilter pass.
 			var sampler = _registry[technique].LinearFilter ? _linearSampler : _nearestSampler;
 			// Binding order matches the layout: sampled inputs (combined image samplers, ShaderReadOnly), then
 			// storage resources — a storage IMAGE (GENERAL) or, for a Buffer-kind resource, a storage BUFFER.

@@ -5,27 +5,27 @@ using System.Text.Json;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D.Compilers;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// Runtime HLSL compilation (via the in-box FXC, <c>D3DCompile</c>) plus shader resolution for the DX12 backend.
+/// Runtime HLSL compilation (via the in-box FXC, <c>D3DCompile</c>) plus shader resolution for the DirectX12 backend.
 /// The engine's real techniques are authored in Slang; the Loom build emits a cross-target <c>&lt;name&gt;.hlsl</c>
 /// (one combined multi-entry module) + a <c>&lt;name&gt;.json</c> reflection sidecar beside the SPIR-V, and the
-/// backend resolves the HLSL here by logical name (the DX12 counterpart of resolving embedded SPIR-V). A small
+/// backend resolves the HLSL here by logical name (the DirectX12 counterpart of resolving embedded SPIR-V). A small
 /// set of <see cref="Builtins"/> remains as a fallback for shaders that have no resolvable HLSL yet (e.g. the
 /// engine-owned blit/gradient, or a shader not yet cross-targeted). Signed-DXIL via runtime DXC is the follow-up.
 /// </summary>
-internal static unsafe class DX12Shaders
+internal static unsafe class DirectX12Shaders
 {
 	// Engine shaders are embedded in this backend assembly under "<assembly>.Shaders." (the SDK's Embed prefix
 	// matches $(AssemblyName)); app shaders are loose under the shader directory. Mirrors Vulkan's resolution.
-	private static readonly string EmbeddedPrefix = typeof(DX12Shaders).Assembly.GetName().Name + ".Shaders.";
+	private static readonly string EmbeddedPrefix = typeof(DirectX12Shaders).Assembly.GetName().Name + ".Shaders.";
 
 	/// <summary>
 	/// Resolve a logical shader name + stage to its build-emitted <em>signed DXIL</em> blob
 	/// (<c>&lt;name&gt;.&lt;stage&gt;.dxil</c>, stage = <c>vs</c>/<c>ps</c>/<c>cs</c>), or null if absent. Tries the
 	/// engine shaders embedded in this backend assembly first, then the app shaders loose under
-	/// <paramref name="shaderDir"/> — the DX12 counterpart of Vulkan's embedded-then-disk SPIR-V resolution. The
+	/// <paramref name="shaderDir"/> — the DirectX12 counterpart of Vulkan's embedded-then-disk SPIR-V resolution. The
 	/// blob is the offline-built signed DXIL the backend loads straight into the PSO (no runtime compiler shipped).
 	/// </summary>
 	public static byte[]? TryResolveStageDxil(string shaderDir, string name, string stage)
@@ -39,7 +39,7 @@ internal static unsafe class DX12Shaders
 
 	private static byte[]? TryReadEmbedded(string suffix)
 	{
-		var asm = typeof(DX12Shaders).Assembly;
+		var asm = typeof(DirectX12Shaders).Assembly;
 		using var stream = asm.GetManifestResourceStream(EmbeddedPrefix + suffix);
 		if (stream is null)
 			return null;
@@ -62,7 +62,7 @@ internal static unsafe class DX12Shaders
 
 	/// <summary>
 	/// The number of sampled inputs (combined image samplers) a shader binds, read from its
-	/// <c>slangc -reflection-json</c> sidecar — the DX12 counterpart of <c>Loom.Vulkan.ShaderReflection</c>. Drives
+	/// <c>slangc -reflection-json</c> sidecar — the DirectX12 counterpart of <c>Loom.Vulkan.ShaderReflection</c>. Drives
 	/// the SRV-table size in the root signature so the app states only pipeline intent (M7-B4). 0 if no sidecar.
 	/// </summary>
 	public static int ResolveSampledInputCount(string shaderDir, string name)
@@ -88,7 +88,7 @@ internal static unsafe class DX12Shaders
 				var baseShape = type.TryGetProperty("baseShape", out var shape) ? shape.GetString() : null;
 				var readWrite = type.TryGetProperty("access", out var access) && access.GetString() == "readWrite";
 				// Count only sampled textures (combined image samplers); structured/byte buffers and RW textures
-				// are storage, not SRV-table entries (they ride a root UAV / a later slice on DX12).
+				// are storage, not SRV-table entries (they ride a root UAV / a later slice on DirectX12).
 				if (baseShape is not ("structuredBuffer" or "byteAddressBuffer") && !readWrite)
 					count++;
 			}
@@ -157,7 +157,7 @@ internal static unsafe class DX12Shaders
 
 	/// <summary>
 	/// The compute storage resources a shader binds, from its reflection sidecar: how many read-write TEXTURES
-	/// (storage images — bound via a UAV descriptor table on DX12, e.g. the auto-exposure 1×1 image), how many
+	/// (storage images — bound via a UAV descriptor table on DirectX12, e.g. the auto-exposure 1×1 image), how many
 	/// read-write BUFFERS (e.g. the GPU-particle buffer), and a structured buffer's element STRIDE in bytes.
 	/// <para>
 	/// The stride matters: Slang lowers <c>RWStructuredBuffer&lt;T&gt;</c> to a <c>descriptorTableSlot</c> UAV, and
@@ -229,7 +229,7 @@ internal static unsafe class DX12Shaders
 				// A user struct element (e.g. the generalized particle's two-float4 Particle, M14-4): the element
 				// stride is the extent of its last field, max(field.offset + field.size) over the laid-out fields.
 				// Without this a structured buffer of a struct sizes to 0 and falls back to the root-UAV path, where
-				// GetDimensions returns 0 and the compute writes nothing — the trap that left DX12 particles blank.
+				// GetDimensions returns 0 and the compute writes nothing — the trap that left DirectX12 particles blank.
 				var size = 0;
 				if (type.TryGetProperty("fields", out var fields) && fields.ValueKind == JsonValueKind.Array)
 				{
@@ -285,7 +285,7 @@ internal static unsafe class DX12Shaders
 
 		// Forward directional lighting — the HLSL twin of the sandbox's lit.slang. Reads the canonical
 		// Loom.Core.Vertex stream (POSITION/NORMAL/TEXCOORD), transforms by the camera MVP (a 64-byte root
-		// constant at b0, the DX12 counterpart of Vulkan's vertex push constant), and shades each fragment with
+		// constant at b0, the DirectX12 counterpart of Vulkan's vertex push constant), and shades each fragment with
 		// one directional key light + flat ambient, colouring albedo by normal so each cube face reads distinctly.
 		// Proves the mesh-draw path: vertex buffers + index buffer + depth test + the MVP root constant. The
 		// matrix math mirrors lit.slang exactly: mul(mvp, position) with the raw row-major Camera.ViewProjection
@@ -316,7 +316,7 @@ internal static unsafe class DX12Shaders
 
 		// GPU particle update — the HLSL twin of particle_update.slang. A COMPUTE shader that writes a storage
 		// buffer (one float4 per particle: xyz position + w life). The buffer is a RWByteAddressBuffer bound as a
-		// root UAV at u0 (DX12 root descriptors bind a raw buffer by GPU address — no descriptor heap entry), and
+		// root UAV at u0 (DirectX12 root descriptors bind a raw buffer by GPU address — no descriptor heap entry), and
 		// the per-pass scalars ride a root constant at b0 (p.x = time, p.y = particle count). Positions are a pure
 		// function of (index, time) — a looping fountain — so no cross-frame state. Proves Dispatch + the UAV.
 		["particle_update"] = ("""

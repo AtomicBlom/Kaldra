@@ -6,10 +6,10 @@ using Silk.NET.Direct3D12;
 
 using DxgiFormat = Silk.NET.DXGI.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// Owns GPU-resident geometry — the DX12 counterpart of the Vulkan backend's <see cref="MeshStore"/>. The app
+/// Owns GPU-resident geometry — the DirectX12 counterpart of the Vulkan backend's <see cref="MeshStore"/>. The app
 /// builds meshes up front through the engine and gets back an opaque <see cref="Mesh"/> handle; recording
 /// resolves the handle to its vertex/index buffer views and emits the indexed draw.
 /// <para>
@@ -19,7 +19,7 @@ namespace Loom.DX12;
 /// upload (the Vulkan store's staging path) is a later optimisation, not a correctness need.
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12MeshStore : IDisposable
+internal sealed unsafe class DirectX12MeshStore : IDisposable
 {
 	private struct StoredMesh
 	{
@@ -31,10 +31,10 @@ internal sealed unsafe class DX12MeshStore : IDisposable
 		public uint VertexCount; // M15: skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
 	}
 
-	private readonly DX12Context _ctx;
+	private readonly DirectX12Context _ctx;
 	private readonly List<StoredMesh> _meshes = [];
 
-	public DX12MeshStore(DX12Context ctx) => _ctx = ctx;
+	public DirectX12MeshStore(DirectX12Context ctx) => _ctx = ctx;
 
 	/// <summary>Upload canonical <see cref="Vertex"/> geometry (the <see cref="VertexLayout.MeshStandard"/> layout) and return a handle.</summary>
 	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
@@ -42,7 +42,7 @@ internal sealed unsafe class DX12MeshStore : IDisposable
 
 	/// <summary>
 	/// Upload raw vertex bytes laid out at <paramref name="vertexStride"/> (M12 — arbitrary
-	/// <see cref="VertexLayout"/>s). The stride rides in the vertex-buffer view (DX12 binds with a per-bind
+	/// <see cref="VertexLayout"/>s). The stride rides in the vertex-buffer view (DirectX12 binds with a per-bind
 	/// stride), so the technique's per-vertex layout must match the data the app uploaded here.
 	/// </summary>
 	public Mesh Create(ReadOnlySpan<byte> vertexData, int vertexStride, ReadOnlySpan<uint> indices)

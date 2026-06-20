@@ -25,7 +25,7 @@
   </ItemGroup>
 
   <!-- The neutral UI runtime + the neutral layers it builds on; NO backend reference (the headless-testable
-       invariant — PlanningUI.md §D8.3, mirroring Loom.Tests' no-Vulkan/DX12 rule). -->
+       invariant — PlanningUI.md §D8.3, mirroring Loom.Tests' no-Vulkan/DirectX12 rule). -->
   <ItemGroup>
     <ProjectReference Include="..\Loom.UI\Loom.UI.csproj" />
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />

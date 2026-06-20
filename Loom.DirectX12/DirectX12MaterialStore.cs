@@ -1,13 +1,13 @@
 using Loom.Core.Materials;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// Owns the texture-id list behind each <see cref="Material"/> handle — the DX12 counterpart of the Vulkan
+/// Owns the texture-id list behind each <see cref="Material"/> handle — the DirectX12 counterpart of the Vulkan
 /// backend's <see cref="MaterialStore"/>. A material is an ordered bundle of textures (PlanningPhase2.md M11);
-/// the draw path resolves a material id to its texture ids, then to SRVs over the <see cref="DX12TextureStore"/>.
+/// the draw path resolves a material id to its texture ids, then to SRVs over the <see cref="DirectX12TextureStore"/>.
 /// </summary>
-internal sealed class DX12MaterialStore
+internal sealed class DirectX12MaterialStore
 {
 	private readonly List<int[]> _materials = [];
 

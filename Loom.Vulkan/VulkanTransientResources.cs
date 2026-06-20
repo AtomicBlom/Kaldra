@@ -268,7 +268,7 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 	// target (scale 1) stays native. Backbuffer-relative domains follow a fraction of it; fixed domains use their
 	// declared size. (This branch previously returned _swapExtent unconditionally, dropping resource.Scale — so
 	// the bloom mips were created FULL-resolution and the "downsample" chain became a no-op 1:1 copy with no glow
-	// spread, i.e. no bloom halo. DX12's DX12Transients had this right via Scale(swap, resource.Scale).)
+	// spread, i.e. no bloom halo. DirectX12's DirectX12Transients had this right via Scale(swap, resource.Scale).)
 	private Extent2D ExtentOf(ResourceHandle resource)
 	{
 		if (resource.Domain.IsBackbuffer)

@@ -7,10 +7,10 @@ using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 using Silk.NET.Maths;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// The hand-baked triangle — the DX12 backend's M1 equivalent. A from-scratch pipeline (empty root signature,
+/// The hand-baked triangle — the DirectX12 backend's M1 equivalent. A from-scratch pipeline (empty root signature,
 /// no vertex buffer: the three positions/colours are fabricated in the vertex shader from <c>SV_VertexID</c>,
 /// mirroring the Vulkan backend's fullscreen-triangle trick). It proves the bake path end to end: HLSL → DXBC,
 /// root signature, PSO, viewport/scissor, draw.
@@ -21,7 +21,7 @@ namespace Loom.DX12;
 /// dependency-free.
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12Triangle : IDisposable
+internal sealed unsafe class DirectX12Triangle : IDisposable
 {
 	// Clip space here is D3D's: +Y up, z in [0,1]. No Y-flip (FrameInputs documents "identity on D3D12").
 	private const string Hlsl = """
@@ -43,7 +43,7 @@ internal sealed unsafe class DX12Triangle : IDisposable
 	private ComPtr<ID3D12RootSignature> _rootSignature;
 	private ComPtr<ID3D12PipelineState> _pipelineState;
 
-	public DX12Triangle(DX12Context ctx, Silk.NET.DXGI.Format renderTargetFormat)
+	public DirectX12Triangle(DirectX12Context ctx, Silk.NET.DXGI.Format renderTargetFormat)
 	{
 		using var compiler = D3DCompiler.GetApi();
 		var hlsl = Encoding.ASCII.GetBytes(Hlsl);

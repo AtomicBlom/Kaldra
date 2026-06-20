@@ -9,10 +9,10 @@ using Silk.NET.Direct3D12;
 
 using DxgiFormat = Silk.NET.DXGI.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// The DX12 <see cref="IRenderContext"/> — the per-frame command recorder handed to each pass's
+/// The DirectX12 <see cref="IRenderContext"/> — the per-frame command recorder handed to each pass's
 /// <c>.Draw</c> callback (the counterpart of the Vulkan backend's <c>RenderContext</c>). It is stateful: the
 /// engine pushes the frame inputs + slot (<see cref="BeginFrame"/>) and, per pass, the actual render-target
 /// formats + depth format (<see cref="BeginPass"/>) so a technique bakes a pipeline matching the pass's
@@ -22,34 +22,34 @@ namespace Loom.DX12;
 /// (vertex/index buffers + an MVP root constant). Compute and ImGui land in following slices.
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
+internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposable
 {
-	private const string NextSlice = "DX12: this render verb lands in a following executor slice.";
+	private const string NextSlice = "DirectX12: this render verb lands in a following executor slice.";
 	private const uint DefaultShader4ComponentMapping = 0x1688; // D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
 
-	private readonly DX12Context _ctx;
-	private readonly DX12TechniqueCache _techniques;
-	private readonly DX12DescriptorRing _ring;
-	private readonly DX12MeshStore _meshes;
-	private readonly DX12TextureStore _textures;
-	private readonly DX12MaterialStore _materials;
-	private readonly DX12InstanceUploadBuffer _instanceUpload;
+	private readonly DirectX12Context _ctx;
+	private readonly DirectX12TechniqueCache _techniques;
+	private readonly DirectX12DescriptorRing _ring;
+	private readonly DirectX12MeshStore _meshes;
+	private readonly DirectX12TextureStore _textures;
+	private readonly DirectX12MaterialStore _materials;
+	private readonly DirectX12InstanceUploadBuffer _instanceUpload;
 	// M15-0: per-frame UPLOAD-heap ring for the uniform seam (CSM matrices, lighting params, wind), 256-aligned
 	// so each block is a valid CBV base. Bound as a root CBV at b1 on a technique that reflects a constant buffer.
-	private readonly DX12InstanceUploadBuffer _uniformUpload;
+	private readonly DirectX12InstanceUploadBuffer _uniformUpload;
 	// M15-2: per-frame UPLOAD ring for the bone palette the compute pre-skin pass reads as a structured-buffer
 	// root SRV; 256-aligned (a multiple of the 64-byte matrix stride, so each block is element-aligned).
-	private readonly DX12InstanceUploadBuffer _storageUpload;
-	private DX12Transients? _transients;
+	private readonly DirectX12InstanceUploadBuffer _storageUpload;
+	private DirectX12Transients? _transients;
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled. The HUD pass's
 	// ctx.DrawImGui() forwards this frame's draw data to it. Null when EnableImGui hasn't been called.
-	private DX12ImGuiRenderer? _imgui;
+	private DirectX12ImGuiRenderer? _imgui;
 #endif
 	// The host's game-UI renderer (the twin of _imgui), wired in by the engine when the host calls EnableUI. The
 	// "ui" pass's ctx.DrawUI(surface) forwards that surface's composited draw data to it. Null until UI is enabled;
 	// MU0 Phase A's renderer is a no-op. Ungated — the neutral seam exists unconditionally (no native dep).
-	private DX12UIRenderer? _ui;
+	private DirectX12UIRenderer? _ui;
 
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
@@ -82,7 +82,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public bool HdrOutput { get; private set; }
 	private Camera[] _cascades = [];
 
-	public DX12RenderContext(DX12Context ctx, DX12TechniqueCache techniques, DX12DescriptorRing ring, DX12MeshStore meshes, DX12TextureStore textures, DX12MaterialStore materials, int frameCount)
+	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, DirectX12MaterialStore materials, int frameCount)
 	{
 		_ctx = ctx;
 		_techniques = techniques;
@@ -90,13 +90,13 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		_meshes = meshes;
 		_textures = textures;
 		_materials = materials;
-		_instanceUpload = new DX12InstanceUploadBuffer(ctx, frameCount);
-		_uniformUpload = new DX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
-		_storageUpload = new DX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
+		_instanceUpload = new DirectX12InstanceUploadBuffer(ctx, frameCount);
+		_uniformUpload = new DirectX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
+		_storageUpload = new DirectX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
 	}
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
-	public void SetTransients(DX12Transients transients) => _transients = transients;
+	public void SetTransients(DirectX12Transients transients) => _transients = transients;
 
 	/// <summary>Request that <paramref name="resourceId"/> be shown as a thumbnail in this frame's resource-viewer
 	/// grid (M13). Called by the engine's GetDebugTextureId as the host enumerates resources to display.</summary>
@@ -118,11 +118,11 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 
 #if LOOM_IMGUI
 	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
-	public void SetImGui(DX12ImGuiRenderer renderer) => _imgui = renderer;
+	public void SetImGui(DirectX12ImGuiRenderer renderer) => _imgui = renderer;
 #endif
 
 	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
-	public void SetUI(DX12UIRenderer renderer) => _ui = renderer;
+	public void SetUI(DirectX12UIRenderer renderer) => _ui = renderer;
 
 	public void BeginFrame(ComPtr<ID3D12GraphicsCommandList> cmd, FrameInputs inputs, bool hdrOutput, uint slot, uint fbWidth, uint fbHeight)
 	{
@@ -153,7 +153,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	// Adopt the Vulkan backend's clip-space convention (negate the projection's Y row), so the shared shaders need
 	// NO per-backend branch — ndc.y matches the +Y-down texture V everywhere (mesh MVP, fullscreen reprojection,
 	// the JFA's SV_Position). On its own this flips D3D12 upside down; the engine pairs it with a negative-height
-	// viewport (DX12Engine.RecordRasterPass) that turns D3D12's (1-ndc.y) screen map into Vulkan's (ndc.y+1), so
+	// viewport (DirectX12Engine.RecordRasterPass) that turns D3D12's (1-ndc.y) screen map into Vulkan's (ndc.y+1), so
 	// geometry stays upright. The host supplies a neutral +Y-up projection in FrameInputs (M7-B5); both backends
 	// flip it the same way here. (Earlier "identity ingest, no Y-flip" rendered mesh upright but left every
 	// fullscreen pass vertically mirrored vs Vulkan — one mesh→fullscreen→backbuffer hop = upside down.)
@@ -245,11 +245,11 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 
 	// Bind a material's loaded-texture SRVs into the technique's reflected SRV table (slots 0..N-1). Shared by
 	// Draw(mesh, material), textured instancing, and textured particles. The caller checks TableParam/InputCount.
-	private void BindMaterialTable(DX12Technique baked, Material material, string technique)
+	private void BindMaterialTable(DirectX12Technique baked, Material material, string technique)
 	{
 		var textures = _materials.TexturesOf(material.Id);
 		if (textures.Length < baked.InputCount)
-			throw new InvalidOperationException($"DX12: material supplies {textures.Length} textures but technique '{technique}' samples {baked.InputCount}.");
+			throw new InvalidOperationException($"DirectX12: material supplies {textures.Length} textures but technique '{technique}' samples {baked.InputCount}.");
 		var (cpu, gpu) = _ring.Allocate((uint)baked.InputCount);
 		for (var i = 0; i < baked.InputCount; i++)
 			WriteTextureSrv(textures[i], _ring.Offset(cpu, (uint)i));
@@ -275,10 +275,10 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 
 	// Push a scalar block to the pass's root constants (the per-pass channel: JFA step, exposure rate, a
 	// light-space matrix). Padded to the layout's 16 floats so the shader always reads defined memory.
-	private void SetPush(DX12Technique baked, ReadOnlySpan<float> push)
+	private void SetPush(DirectX12Technique baked, ReadOnlySpan<float> push)
 	{
 		if (baked.RootConstantParam < 0)
-			throw new InvalidOperationException("DX12: technique has no root-constant block but a push was supplied.");
+			throw new InvalidOperationException("DirectX12: technique has no root-constant block but a push was supplied.");
 		var block = stackalloc float[16];
 		for (var i = 0; i < push.Length && i < 16; i++)
 			block[i] = push[i];
@@ -287,7 +287,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 
 	// M15-0: stage a per-frame uniform block into the uniform ring and bind it as the technique's root CBV (b1).
 	// The UPLOAD-heap GPU address is bound directly — no descriptor heap entry needed for a root CBV.
-	private void BindUniforms(DX12Technique baked, ReadOnlySpan<float> data)
+	private void BindUniforms(DirectX12Technique baked, ReadOnlySpan<float> data)
 	{
 		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(data);
 		var gpuAddress = _uniformUpload.Upload(_slot, bytes);
@@ -295,19 +295,19 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	}
 
 	// Write the sampled inputs' SRVs into a fresh descriptor-ring range and bind it as the technique's SRV table.
-	private void BindInputs(DX12Technique baked, ReadOnlySpan<ResourceHandle> inputs)
+	private void BindInputs(DirectX12Technique baked, ReadOnlySpan<ResourceHandle> inputs)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DX12: sampled inputs require an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: sampled inputs require an active graph (SetGraph).");
 		if (baked.TableParam < 0)
-			throw new InvalidOperationException("DX12: technique declares no SRV table but sampled inputs were supplied.");
+			throw new InvalidOperationException("DirectX12: technique declares no SRV table but sampled inputs were supplied.");
 
 		var (cpu, gpu) = _ring.Allocate((uint)inputs.Length);
 		for (var i = 0; i < inputs.Length; i++)
 		{
 			var id = inputs[i].Id;
 			if (!_transients.IsTransient(id))
-				throw new NotSupportedException("DX12: sampling the backbuffer or a buffer resource lands in a later slice.");
+				throw new NotSupportedException("DirectX12: sampling the backbuffer or a buffer resource lands in a later slice.");
 			WriteSrv(id, _ring.Offset(cpu, (uint)i));
 		}
 		_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
@@ -335,9 +335,9 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DX12: compute requires an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: compute requires an active graph (SetGraph).");
 		if (storage.Length > 1)
-			throw new NotSupportedException("DX12: a compute pass binds one storage resource for now (the particle buffer / the exposure image); multi-storage compute lands later.");
+			throw new NotSupportedException("DirectX12: a compute pass binds one storage resource for now (the particle buffer / the exposure image); multi-storage compute lands later.");
 
 		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
 		_cmd.SetComputeRootSignature(baked.RootSignature);
@@ -410,7 +410,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void DrawParticles(ResourceHandle buffer, int count, string technique)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DX12: particles require an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: particles require an active graph (SetGraph).");
 
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
@@ -460,7 +460,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DX12: instancing from a buffer requires an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: instancing from a buffer requires an active graph (SetGraph).");
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
@@ -486,7 +486,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DX12: skinning requires an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: skinning requires an active graph (SetGraph).");
 		if (vertexCount <= 0 || palette.Length == 0)
 			return;
 
@@ -518,7 +518,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DX12: skinned draw requires an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: skinned draw requires an active graph (SetGraph).");
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
@@ -535,7 +535,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DX12: skinned draw requires an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: skinned draw requires an active graph (SetGraph).");
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
@@ -647,7 +647,7 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void DrawParticles(ResourceHandle buffer, int count, Material material, string technique)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DX12: particles require an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: particles require an active graph (SetGraph).");
 
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
@@ -691,13 +691,13 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		{
 			const float x0 = 300f, y0 = 30f, w = 200f, h = 112f, gap = 10f;
 			var cols = Math.Max(1, (int)((_fbWidth - x0 - 10f) / (w + gap)));
-			var thumbs = new DX12ImGuiRenderer.Thumbnail[_thumbRequests.Count];
+			var thumbs = new DirectX12ImGuiRenderer.Thumbnail[_thumbRequests.Count];
 			for (var i = 0; i < _thumbRequests.Count; i++)
 			{
 				var id = _thumbRequests[i];
 				var gx = x0 + i % cols * (w + gap);
 				var gy = y0 + i / cols * (h + gap);
-				thumbs[i] = new DX12ImGuiRenderer.Thumbnail(_transients.Resource(_slot, id), _transients.SrvFormat(_slot, id), gx, gy, w, h);
+				thumbs[i] = new DirectX12ImGuiRenderer.Thumbnail(_transients.Resource(_slot, id), _transients.SrvFormat(_slot, id), gx, gy, w, h);
 			}
 			_imgui.DrawThumbnails(_cmd, thumbs, _fbWidth, _fbHeight, _slot);
 			_thumbRequests.Clear();

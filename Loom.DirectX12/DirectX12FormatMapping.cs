@@ -2,14 +2,14 @@ using Loom.Core;
 using Loom.Core.Graph;
 using DxgiFormat = Silk.NET.DXGI.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// Translates the backend-neutral <see cref="Format"/> (Loom.Core) into a <c>DXGI_FORMAT</c> — the DX12
+/// Translates the backend-neutral <see cref="Format"/> (Loom.Core) into a <c>DXGI_FORMAT</c> — the DirectX12
 /// counterpart of the Vulkan backend's <c>FormatMapping</c>, and the only place abstract formats become
 /// API-specific on this backend.
 /// </summary>
-internal static class DX12FormatMapping
+internal static class DirectX12FormatMapping
 {
 	public static DxgiFormat ToDxgi(Format format) => format switch
 	{

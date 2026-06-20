@@ -3,12 +3,12 @@ using Silk.NET.Direct3D12;
 
 using DxgiFormat = Silk.NET.DXGI.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// A per-frame-in-flight <c>UPLOAD</c>-heap vertex buffer for CPU-driven instancing (M12) — the DX12
+/// A per-frame-in-flight <c>UPLOAD</c>-heap vertex buffer for CPU-driven instancing (M12) — the DirectX12
 /// counterpart of the Vulkan backend's <see cref="InstanceUploadBuffer"/>, modeled on
-/// <c>DX12ImGuiRenderer.EnsureBuffer</c>. <c>ctx.DrawInstanced(mesh, technique, span)</c> stages its
+/// <c>DirectX12ImGuiRenderer.EnsureBuffer</c>. <c>ctx.DrawInstanced(mesh, technique, span)</c> stages its
 /// per-instance data here each frame; <see cref="Upload"/> returns the GPU virtual address to point the
 /// instance <see cref="VertexBufferView"/> at.
 /// <para>
@@ -17,9 +17,9 @@ namespace Loom.DX12;
 /// frame still references it), freeing it at the slot's next <see cref="BeginFrame"/> once its GPU work is done.
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12InstanceUploadBuffer : IDisposable
+internal sealed unsafe class DirectX12InstanceUploadBuffer : IDisposable
 {
-	private readonly DX12Context _ctx;
+	private readonly DirectX12Context _ctx;
 	private readonly ulong _alignment;
 	private readonly ComPtr<ID3D12Resource>[] _buffers;
 	private readonly ulong[] _sizes;
@@ -28,7 +28,7 @@ internal sealed unsafe class DX12InstanceUploadBuffer : IDisposable
 
 	/// <param name="alignment">Per-append offset alignment — 16 for the instance stream (the default), or 256 for
 	/// the M15-0 uniform ring (D3D12 requires constant-buffer views 256-byte aligned).</param>
-	public DX12InstanceUploadBuffer(DX12Context ctx, int frameCount, ulong alignment = 16)
+	public DirectX12InstanceUploadBuffer(DirectX12Context ctx, int frameCount, ulong alignment = 16)
 	{
 		_ctx = ctx;
 		_alignment = alignment;

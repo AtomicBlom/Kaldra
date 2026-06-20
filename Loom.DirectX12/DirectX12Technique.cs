@@ -6,10 +6,10 @@ using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 using Format = Silk.NET.DXGI.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>One baked pipeline + its root signature, with the root-parameter slots the context binds against.</summary>
-internal sealed unsafe class DX12Technique : IDisposable
+internal sealed unsafe class DirectX12Technique : IDisposable
 {
 	public ComPtr<ID3D12RootSignature> RootSignature;
 	public ComPtr<ID3D12PipelineState> Pipeline;
@@ -52,7 +52,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 	/// stride for binding a GPU-filled instance buffer; 0 when the technique has no per-instance stream.</summary>
 	public int InstanceStride { get; }
 
-	public DX12Technique(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		IsCompute = template.IsCompute;
 		StorageBufferStride = template.StorageBufferStride;
@@ -78,7 +78,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 	// buffer with no reflected stride (the FXC built-in's ByteAddressBuffer) keeps the u0 root-UAV-by-address path.
 	// No compute technique mixes an image and a buffer, so u0 is unambiguous. All visible to ShaderVisibility.All
 	// (compute isn't covered by the per-stage VERTEX/PIXEL visibilities). Static samplers s0.. pair with the SRV table.
-	private void BakeCompute(DX12Context ctx, DX12TechniqueTemplate template)
+	private void BakeCompute(DirectX12Context ctx, DirectX12TechniqueTemplate template)
 	{
 		// root constants (b0) + N read-only structured-buffer root SRVs (t0..) + optional SRV table + storage.
 		var parameters = stackalloc RootParameter[3 + template.InputBufferCount];
@@ -183,7 +183,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 		}
 	}
 
-	private void BakeGraphics(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	private void BakeGraphics(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		// Root signature: optionally a 32-bit root-constants block (the MVP at b0/vertex for a mesh or particle
 		// technique, or a 16-float scalar block at b0/pixel for a post pass — one or the other, mirroring the
@@ -277,7 +277,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 			BlendMode.Additive => (Blend.One, Blend.One),
 			BlendMode.AlphaOver => (Blend.SrcAlpha, Blend.InvSrcAlpha),
 			BlendMode.None => (Blend.One, Blend.Zero),
-			_ => throw new NotSupportedException($"DX12: BlendMode '{template.Blend}' is not mapped to blend factors."),
+			_ => throw new NotSupportedException($"DirectX12: BlendMode '{template.Blend}' is not mapped to blend factors."),
 		};
 		var blend = new BlendDesc { AlphaToCoverageEnable = false, IndependentBlendEnable = false };
 		blend.RenderTarget[0] = new RenderTargetBlendDesc
@@ -430,7 +430,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 	{
 		SamplerAddress.Clamp => TextureAddressMode.Clamp,
 		SamplerAddress.Repeat => TextureAddressMode.Wrap,
-		_ => throw new NotSupportedException($"DX12: SamplerAddress '{address}' is not mapped to a TextureAddressMode."),
+		_ => throw new NotSupportedException($"DirectX12: SamplerAddress '{address}' is not mapped to a TextureAddressMode."),
 	};
 
 	private static Format ToDxgiFormat(VertexFormat format) => format switch
@@ -443,7 +443,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 
-	private void SerializeRootSignature(DX12Context ctx, RootSignatureDesc* rootDesc)
+	private void SerializeRootSignature(DirectX12Context ctx, RootSignatureDesc* rootDesc)
 	{
 		ComPtr<ID3D10Blob> blob = default;
 		ComPtr<ID3D10Blob> error = default;

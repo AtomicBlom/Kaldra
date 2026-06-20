@@ -1,12 +1,12 @@
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
 /// A shader-visible CBV/SRV/UAV descriptor heap with a per-frame bump allocator — the staging ground for the
-/// SRV descriptor tables a sampling pass binds. <see cref="DX12RenderContext"/> bump-allocates a contiguous range
-/// per sampling draw, writes the input SRVs there, and binds the table at the range's GPU handle. (DX12 has no
+/// SRV descriptor tables a sampling pass binds. <see cref="DirectX12RenderContext"/> bump-allocates a contiguous range
+/// per sampling draw, writes the input SRVs there, and binds the table at the range's GPU handle. (DirectX12 has no
 /// per-descriptor binding — you bind a heap once and index into it; this is the standard transient-descriptor pattern.)
 /// <para>
 /// <b>Double-buffered per frame-in-flight.</b> The heap is partitioned into <c>frameCount</c> equal regions and a
@@ -17,7 +17,7 @@ namespace Loom.DX12;
 /// descriptor-heavy graph). Each slot's region is only rewritten once its prior frame has retired (the per-frame fence).
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12DescriptorRing : IDisposable
+internal sealed unsafe class DirectX12DescriptorRing : IDisposable
 {
 	private ComPtr<ID3D12DescriptorHeap> _heap;
 	private readonly uint _capacity;
@@ -28,7 +28,7 @@ internal sealed unsafe class DX12DescriptorRing : IDisposable
 	private uint _next;       // next free descriptor (absolute index into the heap)
 	private uint _regionEnd;  // end of the current slot's region
 
-	public DX12DescriptorRing(DX12Context ctx, uint capacity, uint frameCount)
+	public DirectX12DescriptorRing(DirectX12Context ctx, uint capacity, uint frameCount)
 	{
 		_capacity = capacity;
 		_regionSize = capacity / frameCount;
@@ -64,7 +64,7 @@ internal sealed unsafe class DX12DescriptorRing : IDisposable
 		if (_next + count > _regionEnd)
 		{
 			throw new InvalidOperationException(
-				$"DX12 descriptor-ring overflow: this frame requested more than its per-slot budget of {_regionSize} " +
+				$"DirectX12 descriptor-ring overflow: this frame requested more than its per-slot budget of {_regionSize} " +
 				$"descriptors. Increase the heap capacity (currently {_capacity} across all in-flight slots).");
 		}
 		var cpu = new CpuDescriptorHandle { Ptr = _cpuStart.Ptr + (nuint)(_next * _increment) };

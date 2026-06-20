@@ -1,7 +1,7 @@
-# The canonical cross-backend parity loop in one command: capture a demo on Vulkan AND DX12 (headless, frozen
+# The canonical cross-backend parity loop in one command: capture a demo on Vulkan AND DirectX12 (headless, frozen
 # time) then count + locate + diff. Writes <demo>-vk.png / <demo>-dx12.png / <demo>-diff.png to -OutDir and
 # prints colour counts, content coverage, and the diff summary. Builds Loom.Sandbox once up front unless -NoBuild.
-# Requires the default UseVulkan + UseDX12 build. This is a dev-box convenience (it spawns the windowed sandbox);
+# Requires the default UseVulkan + UseDirectX12 build. This is a dev-box convenience (it spawns the windowed sandbox);
 # CI uses the TUnit golden harness (Loom.Tests) instead.
 param(
   # The demo to capture: a 0-based index, an exact (case-insensitive) name, or a unique case-insensitive
@@ -28,9 +28,9 @@ if (-not $NoBuild) {
 
 function Capture($backend, $out) {
   # The sandbox is configured entirely by command-line options now (no LOOM_* env vars). --capture grabs one
-  # frame with frozen time + a fixed delta and exits; --backend selects Vulkan (the default) or DX12.
+  # frame with frozen time + a fixed delta and exits; --backend selects Vulkan (the default) or DirectX12.
   $runArgs = @('run', '--project', $proj, '--no-build', '--', '--demo', $Demo, '--capture', $out)
-  if ($backend -eq 'DX12') { $runArgs += @('--backend', 'dx12') }
+  if ($backend -eq 'DirectX12') { $runArgs += @('--backend', 'dx12') }
   & dotnet @runArgs 2>&1 |
     Select-String -Pattern 'captured|debug layer|error|exception|not a known' |
     ForEach-Object { "  [$backend] $($_.Line.Trim())" }
@@ -38,7 +38,7 @@ function Capture($backend, $out) {
 
 "Capturing '$Demo' on both backends -> $OutDir"
 Capture 'Vulkan' $vk
-Capture 'DX12'   $dx
+Capture 'DirectX12'   $dx
 ""
 & "$PSScriptRoot/colorcount.ps1" -Path $vk
 & "$PSScriptRoot/colorcount.ps1" -Path $dx

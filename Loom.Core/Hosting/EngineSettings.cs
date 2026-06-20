@@ -5,7 +5,7 @@ namespace Loom.Core.Hosting;
 /// <see cref="IRenderBackend.Create"/>, replacing the scattered constructor args and environment variables of
 /// earlier milestones (Planning.md §3). A host <em>may</em> read environment variables into it, but the object
 /// is the source of truth. Subclass it per backend (<c>VulkanEngineSettings</c>, a future
-/// <c>DX12EngineSettings</c>) to carry backend-only knobs (preferred adapter, required extensions); the neutral
+/// <c>DirectX12EngineSettings</c>) to carry backend-only knobs (preferred adapter, required extensions); the neutral
 /// engine surface only ever reads the base properties, and a backend down-casts to read its own.
 /// </summary>
 public class EngineSettings

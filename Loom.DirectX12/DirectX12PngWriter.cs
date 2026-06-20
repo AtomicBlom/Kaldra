@@ -1,15 +1,15 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// Minimal, dependency-free PNG encoder (8-bit RGBA) for debug framebuffer captures — the DX12 backend's own
-/// copy of the encoder the Vulkan backend ships (kept local so Loom.DX12 doesn't reference Loom.Vulkan). Uses
+/// Minimal, dependency-free PNG encoder (8-bit RGBA) for debug framebuffer captures — the DirectX12 backend's own
+/// copy of the encoder the Vulkan backend ships (kept local so Loom.DirectX12 doesn't reference Loom.Vulkan). Uses
 /// the built-in <see cref="ZLibStream"/> for the IDAT stream and a hand-rolled CRC-32; filter type 0 on every
 /// scanline. Not optimized — fine for validation grabs.
 /// </summary>
-internal static class PngWriter
+internal static class DirectX12PngWriter
 {
 	private static readonly byte[] Signature = [137, 80, 78, 71, 13, 10, 26, 10];
 	private static readonly uint[] CrcTable = BuildCrcTable();

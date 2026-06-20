@@ -10,7 +10,7 @@ namespace Loom.Core.Hosting;
 /// using var engine = backend.Create(window.VkSurface, width, height, settings);
 /// </code>
 /// Which backends are <em>present</em> is decided by the build (the M8 <c>&lt;UseVulkan&gt;</c>/
-/// <c>&lt;UseDX12&gt;</c> flags pull in the assemblies); which present backend <em>runs</em> is the runtime
+/// <c>&lt;UseDirectX12&gt;</c> flags pull in the assemblies); which present backend <em>runs</em> is the runtime
 /// selection above. A backend's module initializer fires when its assembly is first touched — constructing the
 /// backend's <see cref="EngineSettings"/> subclass (the one sanctioned place a backend type appears in app
 /// code) is enough to load it before <see cref="AvailableEngines"/> is read.

@@ -1,6 +1,6 @@
-// The DX12 Dear ImGui renderer is compiled only when the engine is built with ImGui (UseImGui=true). When off,
-// the whole type is excluded and ImGui.NET is not referenced (Loom.DX12.csproj); the neutral ctx.DrawImGui() /
-// EnableImGui() seam in Loom.Core stays, as documented no-ops. The DX12 twin of Loom.Vulkan.ImGuiRenderer.
+// The DirectX12 Dear ImGui renderer is compiled only when the engine is built with ImGui (UseImGui=true). When off,
+// the whole type is excluded and ImGui.NET is not referenced (Loom.DirectX12.csproj); the neutral ctx.DrawImGui() /
+// EnableImGui() seam in Loom.Core stays, as documented no-ops. The DirectX12 twin of Loom.Vulkan.ImGuiRenderer.
 #if LOOM_IMGUI
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -12,7 +12,7 @@ using Silk.NET.Direct3D12;
 
 using DxgiFormat = Silk.NET.DXGI.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
 /// Loom's DirectX 12 Dear ImGui renderer — the <c>imgui_impl_dx12</c> equivalent (the twin of the Vulkan
@@ -24,17 +24,17 @@ namespace Loom.DX12;
 /// <para>
 /// It records <em>into</em> the already-open "hud" pass — which <c>.Blends</c> the backbuffer at native
 /// resolution, so the UI is crisp and untouched by bloom/pixelation. The engine has already bound the
-/// backbuffer RTV and set the negative-height viewport (DX12RenderContext's Vulkan-convention clip space);
+/// backbuffer RTV and set the negative-height viewport (DirectX12RenderContext's Vulkan-convention clip space);
 /// this records vertices, PSO, and the scissored draw loop into that scope. The font atlas + its texture are
 /// created once; the per-slot vertex/index buffers are UPLOAD-heap and grown on demand (the slot's fence has
 /// been waited before the executor records it again, so reusing the buffer is hazard-free). The font SRV is
 /// written into the engine's shader-visible descriptor ring each frame (the heap already bound for the frame).
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12ImGuiRenderer : IDisposable
+internal sealed unsafe class DirectX12ImGuiRenderer : IDisposable
 {
-	private readonly DX12Context _ctx;
-	private readonly DX12DescriptorRing _ring;
+	private readonly DirectX12Context _ctx;
+	private readonly DirectX12DescriptorRing _ring;
 
 	private ComPtr<ID3D12RootSignature> _rootSignature;
 	private ComPtr<ID3D12PipelineState> _pipeline;
@@ -225,7 +225,7 @@ internal sealed unsafe class DX12ImGuiRenderer : IDisposable
 		cmd.DrawIndexedInstanced((uint)(segments.Length * 6), 1, 0, 0, 0);
 	}
 
-	public DX12ImGuiRenderer(DX12Context ctx, DX12DescriptorRing ring, byte[] vertexDxil, byte[] fragmentDxil, DxgiFormat rtvFormat, int framesInFlight)
+	public DirectX12ImGuiRenderer(DirectX12Context ctx, DirectX12DescriptorRing ring, byte[] vertexDxil, byte[] fragmentDxil, DxgiFormat rtvFormat, int framesInFlight)
 	{
 		_ctx = ctx;
 		_ring = ring;
@@ -364,7 +364,7 @@ internal sealed unsafe class DX12ImGuiRenderer : IDisposable
 
 	// Build ImGui's font atlas, upload it to a DEFAULT-heap texture via an UPLOAD-heap staging buffer (a texture
 	// can't live in an UPLOAD heap), and leave it in PIXEL_SHADER_RESOURCE. A one-shot command list + fence does
-	// the copy at init (the DX12 analogue of the Vulkan renderer's BeginOneTime/EndOneTime).
+	// the copy at init (the DirectX12 analogue of the Vulkan renderer's BeginOneTime/EndOneTime).
 	private void UploadFontAtlas()
 	{
 		var io = ImGui.GetIO();

@@ -4,10 +4,10 @@ using Loom.Core.Geometry;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// Bakes and caches DX12 pipelines per technique — the counterpart of the Vulkan backend's
+/// Bakes and caches DirectX12 pipelines per technique — the counterpart of the Vulkan backend's
 /// <c>TechniqueCache</c>. A graphics pipeline is keyed by the technique name plus the pass's actual
 /// render-target formats <em>and depth format</em> (a PSO is format-specific, exactly like a Vulkan
 /// dynamic-rendering pipeline). The HLSL is compiled once per unique key and the PSO cached for the
@@ -18,27 +18,27 @@ namespace Loom.DX12;
 /// storage buffer + a scalar root constant), and the per-instance particle billboard path.
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12TechniqueCache : IDisposable
+internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 {
-	private readonly DX12Context _ctx;
-	private readonly Dictionary<string, DX12TechniqueTemplate> _templates = [];
-	private readonly Dictionary<string, DX12Technique> _baked = [];
+	private readonly DirectX12Context _ctx;
+	private readonly Dictionary<string, DirectX12TechniqueTemplate> _templates = [];
+	private readonly Dictionary<string, DirectX12Technique> _baked = [];
 
-	public DX12TechniqueCache(DX12Context ctx) => _ctx = ctx;
+	public DirectX12TechniqueCache(DirectX12Context ctx) => _ctx = ctx;
 
-	public void Register(string name, DX12TechniqueTemplate template) => _templates[name] = template;
+	public void Register(string name, DirectX12TechniqueTemplate template) => _templates[name] = template;
 
-	public DX12Technique GetOrBake(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	public DirectX12Technique GetOrBake(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		if (!_templates.TryGetValue(name, out var template))
-			throw new InvalidOperationException($"DX12: technique '{name}' was not defined — call DefineTechnique first.");
+			throw new InvalidOperationException($"DirectX12: technique '{name}' was not defined — call DefineTechnique first.");
 
 		var key = BuildKey(name, colorFormats, depthFormat, depthReadOnly, template);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
-		var technique = new DX12Technique(_ctx, template, colorFormats, depthFormat, depthReadOnly);
-		// Name the baked PSO + root signature for GPU debuggers (DX12 has no separate shader objects — the DXIL
+		var technique = new DirectX12Technique(_ctx, template, colorFormats, depthFormat, depthReadOnly);
+		// Name the baked PSO + root signature for GPU debuggers (DirectX12 has no separate shader objects — the DXIL
 		// lives in the PSO, so naming the PSO is the shader-naming equivalent). [Conditional]: stripped without
 		// UseNamedGPUObjects. Distinct target-format variants of one technique share the logical name.
 		_ctx.SetObjectName((ID3D12Object*)technique.Pipeline.Handle, $"pipeline:{name}");
@@ -47,7 +47,7 @@ internal sealed unsafe class DX12TechniqueCache : IDisposable
 		return technique;
 	}
 
-	private static string BuildKey(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, in DX12TechniqueTemplate template)
+	private static string BuildKey(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, in DirectX12TechniqueTemplate template)
 	{
 		var key = name;
 		foreach (var format in colorFormats)
@@ -59,9 +59,9 @@ internal sealed unsafe class DX12TechniqueCache : IDisposable
 		return key;
 	}
 
-	// SHA-256 over the template's bytecode plus every input that affects the baked PSO — the DX12 counterpart of
+	// SHA-256 over the template's bytecode plus every input that affects the baked PSO — the DirectX12 counterpart of
 	// the Vulkan TechniqueCache content hash.
-	private static string TemplateDigest(in DX12TechniqueTemplate t)
+	private static string TemplateDigest(in DirectX12TechniqueTemplate t)
 	{
 		using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 		hash.AppendData(t.VertexBytecode);

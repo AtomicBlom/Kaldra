@@ -6,19 +6,19 @@ using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// DirectX 12 device bring-up — the DX12 counterpart of <c>VulkanContext</c> (Planning.md §2). Owns the
+/// DirectX 12 device bring-up — the DirectX12 counterpart of <c>VulkanContext</c> (Planning.md §2). Owns the
 /// long-lived API handles: the DXGI factory, the D3D12 device, the direct (graphics) command queue, and the
 /// debug layer. The Vulkan/Silk.NET stack is quarantined in this assembly; nothing here reaches Core/Graph.
 /// <para>
 /// This first slice creates the device on the system default adapter (this dev box is single-GPU — an
 /// Adreno on Windows-on-ARM); explicit high-performance/discrete adapter selection honouring
-/// <see cref="DX12EngineSettings.PreferDiscreteGpu"/> is a later refinement.
+/// <see cref="DirectX12EngineSettings.PreferDiscreteGpu"/> is a later refinement.
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12Context : IDisposable
+internal sealed unsafe class DirectX12Context : IDisposable
 {
 	public D3D12 D3D12 { get; }
 	public DXGI DXGI { get; }
@@ -27,7 +27,7 @@ internal sealed unsafe class DX12Context : IDisposable
 	public ComPtr<ID3D12Device> Device;
 	public ComPtr<ID3D12CommandQueue> GraphicsQueue;
 
-	/// <summary>The debug-layer message queue (null when validation is off/unavailable) — the DX12 analogue of the Vulkan validation messenger; drained each frame by the engine.</summary>
+	/// <summary>The debug-layer message queue (null when validation is off/unavailable) — the DirectX12 analogue of the Vulkan validation messenger; drained each frame by the engine.</summary>
 	public ComPtr<ID3D12InfoQueue> InfoQueue;
 
 	/// <summary>Bytes between consecutive descriptors in an RTV heap — needed to index hand-built RTV handles.</summary>
@@ -38,7 +38,7 @@ internal sealed unsafe class DX12Context : IDisposable
 
 	private ComPtr<ID3D12Debug> _debug;
 
-	public DX12Context(DX12EngineSettings settings)
+	public DirectX12Context(DirectX12EngineSettings settings)
 	{
 		D3D12 = D3D12.GetApi();
 		DXGI = DXGI.GetApi(default(INativeWindowSource)); // null window: load the system dxgi.dll directly (no DXVK)
@@ -71,7 +71,7 @@ internal sealed unsafe class DX12Context : IDisposable
 		SilkMarshal.ThrowHResult(D3D12.CreateDevice(default(ComPtr<IDXGIAdapter>), D3DFeatureLevel.Level110, out Device));
 
 		// The info queue exists only when the debug layer is active; draining it each frame is how this backend
-		// reports "validation-clean" (the DX12 equivalent of the Vulkan validation-layer messages).
+		// reports "validation-clean" (the DirectX12 equivalent of the Vulkan validation-layer messages).
 		if (settings.EnableValidation && Device.QueryInterface(out ComPtr<ID3D12InfoQueue> infoQueue) >= 0 && infoQueue.Handle is not null)
 			InfoQueue = infoQueue;
 
@@ -139,7 +139,7 @@ internal sealed unsafe class DX12Context : IDisposable
 		return errors;
 	}
 
-	// GPU object names + per-pass debug-label scopes (UseNamedGPUObjects), for PIX/RenderDoc captures — the DX12
+	// GPU object names + per-pass debug-label scopes (UseNamedGPUObjects), for PIX/RenderDoc captures — the DirectX12
 	// counterpart of VulkanContext's helpers. [Conditional] so the calls (and their string marshalling) vanish
 	// entirely without the flag; they no-op safely if the debug layer/capture tooling isn't present.
 

@@ -324,7 +324,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_inspectable.Clear();
 		var executed = graph;
 #if LOOM_IMGUI
-		// Gate on ImGui being live: graphs set before EnableImGui (the DX12 aliasing diagnostics) keep their exact
+		// Gate on ImGui being live: graphs set before EnableImGui (the DirectX12 aliasing diagnostics) keep their exact
 		// aliasing; gallery graphs (set/switched with the UI up) get the inspection edges.
 		if (_imgui is not null)
 		{

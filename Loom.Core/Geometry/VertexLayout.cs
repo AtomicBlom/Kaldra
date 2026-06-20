@@ -14,7 +14,7 @@ namespace Loom.Core.Geometry;
 /// layout is the <em>shared contract</em> between a mesh and the technique that draws it — a stride mismatch is
 /// a clear engine error, not a silent corruption.
 /// <para>
-/// Backend-neutral by construction (no graphics-API type), so the same layout drives Vulkan and DX12. It is the
+/// Backend-neutral by construction (no graphics-API type), so the same layout drives Vulkan and DirectX12. It is the
 /// natural output of an asset importer too — a glTF loader reads accessors and emits a layout + packed buffer
 /// (PlanningPhase2 §6: assets are loader-owned, Core never gains a decode dependency).
 /// </para>
@@ -111,7 +111,7 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 	/// instance describes and looks the atlas region up from the uv-rect.
 	/// <para>
 	/// The four rows share one repeated semantic (<c>ISPRITE0..3</c>), exactly like <see cref="Transform"/>'s
-	/// <c>ITRANSFORM</c> — DX12 binds per-instance attributes by semantic name + index, and four <em>distinct</em>
+	/// <c>ITRANSFORM</c> — DirectX12 binds per-instance attributes by semantic name + index, and four <em>distinct</em>
 	/// per-instance semantics bind as zero there (the quads collapse), so an indexed-row layout is required.
 	/// </para>
 	/// </summary>
@@ -130,7 +130,7 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 	/// light's bounding box, then samples the 2D G-buffer normal per covered pixel and accumulates the light
 	/// additively. The two rows carry the light's world position + radius + intensity, and its colour + height
 	/// off the plane. As with <see cref="Sprite"/>/<see cref="Transform"/>, the rows share one repeated semantic
-	/// (<c>ILIGHT0..1</c>) so DX12's semantic-name-plus-index binding picks them up.
+	/// (<c>ILIGHT0..1</c>) so DirectX12's semantic-name-plus-index binding picks them up.
 	/// </summary>
 	public static VertexLayout Light2D { get; } = new(
 		VertexInputRate.PerInstance,
@@ -147,7 +147,7 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 	/// the engine's old hard-coded single-<c>float4</c> particle vertex input into a layout-driven one (a technique
 	/// declares it via <c>TechniqueDescriptor.Instance</c> with <c>ParticleInput</c>); a technique that leaves it
 	/// null keeps the legacy single-<c>float4</c> path. The two rows carry position + remaining-life and
-	/// velocity + per-particle seed; the repeated <c>IPARTICLE0..1</c> semantic matches DX12's name-plus-index binding.
+	/// velocity + per-particle seed; the repeated <c>IPARTICLE0..1</c> semantic matches DirectX12's name-plus-index binding.
 	/// </summary>
 	public static VertexLayout Particle { get; } = new(
 		VertexInputRate.PerInstance,
@@ -161,7 +161,7 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 	/// plant's world position + uniform scale, and its yaw + a wind phase + bend stiffness. The instanced foliage
 	/// vertex shader rebuilds each plant's transform, sways it by the per-frame wind (height-weighted, offset by
 	/// the per-instance phase so the field doesn't move in lockstep), and alpha-tests the blade cutout. As with the
-	/// other per-instance layouts, the rows share one repeated semantic (<c>IFOLIAGE0..1</c>) for DX12's binding.
+	/// other per-instance layouts, the rows share one repeated semantic (<c>IFOLIAGE0..1</c>) for DirectX12's binding.
 	/// </summary>
 	public static VertexLayout Foliage { get; } = new(
 		VertexInputRate.PerInstance,

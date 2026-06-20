@@ -6,11 +6,11 @@ using Silk.NET.Direct3D12;
 
 using DxgiFormat = Silk.NET.DXGI.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// The DX12 backend's game-UI renderer (PlanningUI.md §D6) — the twin of <see cref="DX12ImGuiRenderer"/> for the
-/// XAML UI engine and the DX12 counterpart of <c>Loom.Vulkan.UIRenderer</c>, cloned from the ImGui renderer. The
+/// The DirectX12 backend's game-UI renderer (PlanningUI.md §D6) — the twin of <see cref="DirectX12ImGuiRenderer"/> for the
+/// XAML UI engine and the DirectX12 counterpart of <c>Loom.Vulkan.UIRenderer</c>, cloned from the ImGui renderer. The
 /// "ui" pass's <c>ctx.DrawUI(surface)</c> forwards that surface's composited, neutral <see cref="UIDrawData"/>
 /// here; this records it into the already-open render-target scope (the engine bound the backbuffer RTV + the
 /// negative-height viewport already).
@@ -23,10 +23,10 @@ namespace Loom.DX12;
 /// UPLOAD-heap and grown on demand.
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12UIRenderer : IDisposable
+internal sealed unsafe class DirectX12UIRenderer : IDisposable
 {
-	private readonly DX12Context _ctx;
-	private readonly DX12DescriptorRing _ring;
+	private readonly DirectX12Context _ctx;
+	private readonly DirectX12DescriptorRing _ring;
 
 	private ComPtr<ID3D12RootSignature> _rootSignature;
 	private ComPtr<ID3D12PipelineState> _pipeline;
@@ -46,7 +46,7 @@ internal sealed unsafe class DX12UIRenderer : IDisposable
 	private const uint PushCount = 7;
 	private const float HdrPaperWhiteScale = 200f / 80f; // UIPaperWhiteNits / 80 (§D4.4); SDR passes 1.0.
 
-	public DX12UIRenderer(DX12Context ctx, DX12DescriptorRing ring, byte[] vertexDxil, byte[] fragmentDxil, DxgiFormat rtvFormat, int framesInFlight, TextureData? fontAtlas)
+	public DirectX12UIRenderer(DirectX12Context ctx, DirectX12DescriptorRing ring, byte[] vertexDxil, byte[] fragmentDxil, DxgiFormat rtvFormat, int framesInFlight, TextureData? fontAtlas)
 	{
 		_ctx = ctx;
 		_ring = ring;
@@ -182,7 +182,7 @@ internal sealed unsafe class DX12UIRenderer : IDisposable
 	}
 
 	// Upload tightly packed RGBA8 pixels to a DEFAULT-heap texture via an UPLOAD-heap staging buffer, leaving it in
-	// PIXEL_SHADER_RESOURCE. A one-shot command list + fence does the copy at init (mirrors DX12ImGuiRenderer's
+	// PIXEL_SHADER_RESOURCE. A one-shot command list + fence does the copy at init (mirrors DirectX12ImGuiRenderer's
 	// UploadFontAtlas). Linear/UNORM — the atlas carries SDF distances, never sRGB colour.
 	private ComPtr<ID3D12Resource> UploadTexture(int width, int height, ReadOnlySpan<byte> rgba)
 	{

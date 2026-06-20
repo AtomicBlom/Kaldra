@@ -5,10 +5,10 @@ using Silk.NET.Direct3D12;
 
 using DxgiFormat = Silk.NET.DXGI.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// Owns GPU-resident textures — the DX12 counterpart of the Vulkan backend's <see cref="TextureStore"/>
+/// Owns GPU-resident textures — the DirectX12 counterpart of the Vulkan backend's <see cref="TextureStore"/>
 /// (PlanningPhase2.md M11). Each texture is a DEFAULT-heap committed <c>Texture2D</c> with a full mip chain,
 /// uploaded once from an UPLOAD-heap staging buffer via per-subresource <c>CopyTextureRegion</c>, then left in
 /// <c>PixelShaderResource</c>. Mip levels arrive pre-built on the CPU in <see cref="TextureData"/>, so the
@@ -16,7 +16,7 @@ namespace Loom.DX12;
 /// The upload is synchronous (a private allocator + list + fence), like the Vulkan store's queue-wait — fine
 /// for build-once assets.
 /// </summary>
-internal sealed unsafe class DX12TextureStore : IDisposable
+internal sealed unsafe class DirectX12TextureStore : IDisposable
 {
 	private struct StoredTexture
 	{
@@ -25,7 +25,7 @@ internal sealed unsafe class DX12TextureStore : IDisposable
 		public uint MipLevels;
 	}
 
-	private readonly DX12Context _ctx;
+	private readonly DirectX12Context _ctx;
 	private readonly List<StoredTexture> _textures = [];
 
 	private ComPtr<ID3D12CommandAllocator> _allocator;
@@ -34,7 +34,7 @@ internal sealed unsafe class DX12TextureStore : IDisposable
 	private ulong _fenceValue;
 	private readonly nint _fenceEvent;
 
-	public DX12TextureStore(DX12Context ctx)
+	public DirectX12TextureStore(DirectX12Context ctx)
 	{
 		_ctx = ctx;
 		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandAllocator(CommandListType.Direct, out _allocator));
@@ -43,7 +43,7 @@ internal sealed unsafe class DX12TextureStore : IDisposable
 		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out _fence));
 		_fenceEvent = CreateEventW(0, 0, 0, 0);
 		if (_fenceEvent == 0)
-			throw new InvalidOperationException("DX12: CreateEvent failed for the texture-upload fence.");
+			throw new InvalidOperationException("DirectX12: CreateEvent failed for the texture-upload fence.");
 	}
 
 	/// <summary>Upload a texture + its mip chain and return a handle a material can bundle.</summary>

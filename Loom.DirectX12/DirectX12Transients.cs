@@ -7,10 +7,10 @@ using Silk.NET.Direct3D12;
 
 using DxgiFormat = Silk.NET.DXGI.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// The concrete GPU resources backing a graph's transients — the DX12 counterpart of the Vulkan backend's
+/// The concrete GPU resources backing a graph's transients — the DirectX12 counterpart of the Vulkan backend's
 /// <c>TransientResources</c>. Each colour/depth transient gets one texture (plus an RTV/DSV) per
 /// frame-in-flight slot, and each buffer one UAV buffer per slot, so a frame's write never races a prior
 /// frame's read. The backbuffer is <em>not</em> here (it's the swapchain's facade, handled by the engine).
@@ -25,7 +25,7 @@ namespace Loom.DX12;
 /// heap-tier 1 is fine). Buffers and the backbuffer aren't aliased — buffers get their own committed allocation.
 /// </para>
 /// </summary>
-internal sealed unsafe class DX12Transients : IDisposable
+internal sealed unsafe class DirectX12Transients : IDisposable
 {
 	public struct Target
 	{
@@ -50,7 +50,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 	private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
 	private ComPtr<ID3D12DescriptorHeap> _dsvHeap;
 
-	public DX12Transients(DX12Context ctx, RenderGraph graph, AliasPlan aliasPlan, uint bufferCount, uint swapWidth, uint swapHeight)
+	public DirectX12Transients(DirectX12Context ctx, RenderGraph graph, AliasPlan aliasPlan, uint bufferCount, uint swapWidth, uint swapHeight)
 	{
 		var count = graph.Resources.Length;
 		_isTransient = new bool[count];
@@ -68,7 +68,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 			if (resource.Kind == ResourceKind.Backbuffer)
 				continue; // the swapchain facade, owned by the engine
 			if (resource.Kind is not (ResourceKind.Color or ResourceKind.Depth or ResourceKind.Buffer or ResourceKind.Persistent))
-				throw new NotSupportedException($"DX12: resource kind {resource.Kind} ('{resource.Name}') is not supported yet.");
+				throw new NotSupportedException($"DirectX12: resource kind {resource.Kind} ('{resource.Name}') is not supported yet.");
 			_isTransient[resource.Id] = true; // managed + sampleable (true for persistent too, so it can be sampled)
 			if (resource.Kind == ResourceKind.Persistent)
 			{
@@ -130,7 +130,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 
 	// Group the aliasable (colour/depth) resources by their AliasPlan bucket, back each bucket with one placed-
 	// resource heap (sized to its largest member), and create every member at offset 0 so they share the memory.
-	private void AllocateAliasedTargets(DX12Context ctx, AliasPlan aliasPlan, List<ResourceHandle> aliasable, uint slot,
+	private void AllocateAliasedTargets(DirectX12Context ctx, AliasPlan aliasPlan, List<ResourceHandle> aliasable, uint slot,
 		CpuDescriptorHandle rtvStart, CpuDescriptorHandle dsvStart, uint rtvInc, uint dsvInc, ref uint rtvCursor, ref uint dsvCursor)
 	{
 		var groups = new Dictionary<int, List<ResourceHandle>>();
@@ -170,7 +170,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 				var isDepth = resource.Kind == ResourceKind.Depth;
 				// A depth target is created TYPELESS (so it can also be sampled); its DSV/clear use the typed depth
 				// format (D32_FLOAT) and its SRV the typed colour-compatible format (R32_FLOAT). Colour: all the same.
-				var (_, viewFormat, srvFormat) = DX12FormatMapping.ToDxgiViews(resource.Format);
+				var (_, viewFormat, srvFormat) = DirectX12FormatMapping.ToDxgiViews(resource.Format);
 				var clear = BuildClear(viewFormat, isDepth);
 				ComPtr<ID3D12Resource> texture = default;
 				SilkMarshal.ThrowHResult(ctx.Device.CreatePlacedResource(heap, 0, &desc, ResourceStates.Common, &clear, out texture));
@@ -196,7 +196,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 
 	// One device-local UAV buffer per Buffer resource per frame slot. Buffers aren't aliased (not RT/DS), so
 	// they keep a committed allocation; a compute binds it as a root UAV, a draw as a vertex buffer (§7.6).
-	private void AllocateBuffers(DX12Context ctx, List<ResourceHandle> bufferTargets, uint bufferCount)
+	private void AllocateBuffers(DirectX12Context ctx, List<ResourceHandle> bufferTargets, uint bufferCount)
 	{
 		for (uint slot = 0; slot < bufferCount; slot++)
 			foreach (var resource in bufferTargets)
@@ -212,12 +212,12 @@ internal sealed unsafe class DX12Transients : IDisposable
 	// Created with AllowUnorderedAccess (a compute read-writes it as a storage image) and sampled later as an SRV;
 	// R16F is directly UAV- and SRV-creatable, so no typeless split is needed (unlike depth). Uninitialised on the
 	// first frame by design — the auto-exposure shader clamps the garbage into a sane range before easing from it.
-	private void AllocatePersistent(DX12Context ctx, List<ResourceHandle> persistentTargets)
+	private void AllocatePersistent(DirectX12Context ctx, List<ResourceHandle> persistentTargets)
 	{
 		foreach (var resource in persistentTargets)
 		{
 			var (w, h) = _extents[resource.Id];
-			var (resFormat, _, srvFormat) = DX12FormatMapping.ToDxgiViews(resource.Format);
+			var (resFormat, _, srvFormat) = DirectX12FormatMapping.ToDxgiViews(resource.Format);
 			var heapProps = new HeapProperties { Type = HeapType.Default, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
 			var desc = new ResourceDesc
 			{
@@ -259,7 +259,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 		var (w, h) = _extents[resource.Id];
 		// Depth is created TYPELESS (R32_TYPELESS) so the same resource can carry a typed DSV and a typed SRV (a
 		// D32_FLOAT resource can't be sampled); colour uses its typed format directly.
-		var (format, _, _) = DX12FormatMapping.ToDxgiViews(resource.Format);
+		var (format, _, _) = DirectX12FormatMapping.ToDxgiViews(resource.Format);
 		var flags = resource.Kind == ResourceKind.Depth ? ResourceFlags.AllowDepthStencil : ResourceFlags.AllowRenderTarget;
 		return new ResourceDesc
 		{
@@ -303,7 +303,7 @@ internal sealed unsafe class DX12Transients : IDisposable
 
 	// A device-local (Default-heap) buffer the compute writes via a root UAV and a draw reads as a vertex
 	// stream — created with AllowUnorderedAccess, starting in COMMON (the executor transitions it per the plan).
-	private static ComPtr<ID3D12Resource> CreateBufferResource(DX12Context ctx, uint byteSize)
+	private static ComPtr<ID3D12Resource> CreateBufferResource(DirectX12Context ctx, uint byteSize)
 	{
 		var heapProps = new HeapProperties { Type = HeapType.Default, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
 		var desc = new ResourceDesc

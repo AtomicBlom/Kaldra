@@ -19,10 +19,10 @@ using Silk.NET.Maths;
 using DxgiFormat = Silk.NET.DXGI.Format;
 using Format = Loom.Core.Graph.Format;
 
-namespace Loom.DX12;
+namespace Loom.DirectX12;
 
 /// <summary>
-/// The DirectX 12 <see cref="IEngine"/> (Planning.md §2 "bake + record" layer, DX12 edition). Stands up the
+/// The DirectX 12 <see cref="IEngine"/> (Planning.md §2 "bake + record" layer, DirectX12 edition). Stands up the
 /// device + swapchain and records command lists with fence-based frame pacing. This first slice mirrors how the
 /// Vulkan backend started (M0/M1): it clears the backbuffer (and, next slice, draws a hand-baked triangle)
 /// before the render-graph executor is ported. The graph-driven members therefore throw
@@ -30,25 +30,25 @@ namespace Loom.DX12;
 /// <see cref="GraphSchedule"/>/<see cref="BarrierPlan"/>/<c>AliasPlan</c> are consumed here exactly as the
 /// Vulkan engine consumes them.
 /// </summary>
-public sealed unsafe class DX12Engine : IEngine
+public sealed unsafe class DirectX12Engine : IEngine
 {
 	private const uint BufferCount = 2; // matches the Vulkan backend's 2 frames in flight
 
-	private readonly DX12EngineSettings _settings;
-	private readonly DX12Context _ctx;
-	private readonly DX12Swapchain _swapchain;
-	private readonly DX12Triangle _triangle;
-	private readonly DX12TechniqueCache _techniques;
-	private readonly DX12DescriptorRing _ring;
-	private readonly DX12MeshStore _meshes;
-	private readonly DX12TextureStore _textures;
-	private readonly DX12MaterialStore _materials;
-	private readonly DX12RenderContext _context;
-	private DX12Transients? _transients;
+	private readonly DirectX12EngineSettings _settings;
+	private readonly DirectX12Context _ctx;
+	private readonly DirectX12Swapchain _swapchain;
+	private readonly DirectX12Triangle _triangle;
+	private readonly DirectX12TechniqueCache _techniques;
+	private readonly DirectX12DescriptorRing _ring;
+	private readonly DirectX12MeshStore _meshes;
+	private readonly DirectX12TextureStore _textures;
+	private readonly DirectX12MaterialStore _materials;
+	private readonly DirectX12RenderContext _context;
+	private DirectX12Transients? _transients;
 #if LOOM_IMGUI
-	private DX12ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
+	private DirectX12ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
-	private DX12UIRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
+	private DirectX12UIRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -60,7 +60,7 @@ public sealed unsafe class DX12Engine : IEngine
 	private bool _disposed;
 
 	// The active graph + its derived plans (null until SetGraph). Per-buffer backbuffer state is tracked because
-	// D3D12 transition barriers need the resource's exact current state (see DX12StateMapping).
+	// D3D12 transition barriers need the resource's exact current state (see DirectX12StateMapping).
 	private RenderGraph? _graph;
 	private BarrierPlan? _barrierPlan;
 	private AliasPlan? _aliasPlan;
@@ -105,11 +105,11 @@ public sealed unsafe class DX12Engine : IEngine
 	private readonly ConcurrentQueue<string> _reloadQueue = new();
 	private AssetWatcher? _shaderWatcher;
 
-	public DX12Engine(nint hwnd, int width, int height, DX12EngineSettings settings)
+	public DirectX12Engine(nint hwnd, int width, int height, DirectX12EngineSettings settings)
 	{
 		_settings = settings;
-		_ctx = new DX12Context(settings);
-		_swapchain = new DX12Swapchain(_ctx, hwnd, width, height, BufferCount);
+		_ctx = new DirectX12Context(settings);
+		_swapchain = new DirectX12Swapchain(_ctx, hwnd, width, height, BufferCount);
 
 		for (uint i = 0; i < BufferCount; i++)
 		{
@@ -126,15 +126,15 @@ public sealed unsafe class DX12Engine : IEngine
 		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out _fence));
 		_fenceEvent = CreateEventW(0, 0, 0, 0);
 		if (_fenceEvent == 0)
-			throw new InvalidOperationException("CreateEvent failed for the DX12 frame-pacing fence.");
+			throw new InvalidOperationException("CreateEvent failed for the DirectX12 frame-pacing fence.");
 
-		_triangle = new DX12Triangle(_ctx, _swapchain.Format);
-		_techniques = new DX12TechniqueCache(_ctx);
-		_ring = new DX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the M13 resource viewer's debug SRVs
-		_meshes = new DX12MeshStore(_ctx);
-		_textures = new DX12TextureStore(_ctx);
-		_materials = new DX12MaterialStore();
-		_context = new DX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, _materials, (int)BufferCount);
+		_triangle = new DirectX12Triangle(_ctx, _swapchain.Format);
+		_techniques = new DirectX12TechniqueCache(_ctx);
+		_ring = new DirectX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the M13 resource viewer's debug SRVs
+		_meshes = new DirectX12MeshStore(_ctx);
+		_textures = new DirectX12TextureStore(_ctx);
+		_materials = new DirectX12MaterialStore();
+		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, _materials, (int)BufferCount);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
@@ -144,7 +144,7 @@ public sealed unsafe class DX12Engine : IEngine
 		if (_ctx.GraphicsQueue.GetTimestampFrequency(ref frequency) >= 0)
 			_timestampFrequency = frequency;
 
-		Console.WriteLine($"[loom] DX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
+		Console.WriteLine($"[loom] DirectX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
 
 		// Shader hot-reload (M13), opt-in. Watch the loose DXIL/reflection artifacts; an external process rewrites
 		// them and this picks up the new bytecode + rebuilds affected PSOs. Off by default.
@@ -193,7 +193,7 @@ public sealed unsafe class DX12Engine : IEngine
 		_techniques.Reset(); // dispose stale PSOs; next GetOrBake rebuilds from the re-registered templates
 	}
 
-	public string BackendName => "DX12";
+	public string BackendName => "DirectX12";
 	public string DeviceName => _ctx.DeviceName;
 
 	public bool GpuTimingEnabled
@@ -212,7 +212,7 @@ public sealed unsafe class DX12Engine : IEngine
 		if (_imgui is not null && resourceId >= 0 && _inspectable.Exists(r => r.Id == resourceId))
 		{
 			_context.RequestThumbnail(resourceId); // engine draws the image in the HUD pass (ImGui.Image no-ops on arm64)
-			return (nint)(resourceId + DX12RenderContext.DebugTextureBase);
+			return (nint)(resourceId + DirectX12RenderContext.DebugTextureBase);
 		}
 #endif
 		return 0;
@@ -287,7 +287,7 @@ public sealed unsafe class DX12Engine : IEngine
 	}
 
 	// Graph-driven path: consume the neutral BarrierPlan derived in SetGraph. Per pass, emit its barriers, bind
-	// its derived render target(s), run its record callback; then the final present transition. The DX12 mirror
+	// its derived render target(s), run its record callback; then the final present transition. The DirectX12 mirror
 	// of VulkanEngine's per-frame RecordGraph.
 	private void RenderGraphFrame(FrameInputs inputs)
 	{
@@ -409,7 +409,7 @@ public sealed unsafe class DX12Engine : IEngine
 			if (attachment.State == ResourceState.ColorAttachment)
 			{
 				if (colorCount >= 8)
-					throw new NotSupportedException("DX12: a pass declares more than 8 colour attachments; D3D12 caps simultaneous render targets at 8 (D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT).");
+					throw new NotSupportedException("DirectX12: a pass declares more than 8 colour attachments; D3D12 caps simultaneous render targets at 8 (D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT).");
 				if (attachment.Resource.IsBackbuffer)
 				{
 					rtv[colorCount] = _swapchain.RtvHandle(index);
@@ -440,7 +440,7 @@ public sealed unsafe class DX12Engine : IEngine
 		}
 
 		if (colorCount == 0 && !hasDepth)
-			throw new NotSupportedException("DX12: a raster pass with no colour or depth target is not supported yet.");
+			throw new NotSupportedException("DirectX12: a raster pass with no colour or depth target is not supported yet.");
 
 		_commandList.OMSetRenderTargets((uint)colorCount, colorCount > 0 ? rtv : null, false, hasDepth ? &dsv : null);
 
@@ -449,7 +449,7 @@ public sealed unsafe class DX12Engine : IEngine
 			_commandList.ClearDepthStencilView(dsv, ClearFlags.Depth, 1f, 0, 0u, (Box2D<int>*)null);
 
 		// Negative-height viewport (origin at the bottom): turns D3D12's (1-ndc.y) NDC→screen map into Vulkan's
-		// (ndc.y+1). Paired with the Vulkan-style flipped projection (DX12RenderContext.ClipSpace) this renders
+		// (ndc.y+1). Paired with the Vulkan-style flipped projection (DirectX12RenderContext.ClipSpace) this renders
 		// geometry upright AND makes every fullscreen pass map uv→screen exactly like Vulkan — so the shared
 		// shaders need no per-backend Y handling (see ClipSpace). The scissor stays in pixel space (not flipped).
 		var viewport = new Viewport { TopLeftX = 0, TopLeftY = height, Width = width, Height = -(float)height, MinDepth = 0, MaxDepth = 1 };
@@ -463,7 +463,7 @@ public sealed unsafe class DX12Engine : IEngine
 
 	// A compute pass has no render targets and no render-target binding — its resource transitions (the storage
 	// buffer → UNORDERED_ACCESS) were emitted before this; just record the dispatch. Empty attachments keep the
-	// context's pass state stable (the DX12 mirror of VulkanEngine's compute branch in RecordPass).
+	// context's pass state stable (the DirectX12 mirror of VulkanEngine's compute branch in RecordPass).
 	private void RecordComputePass(PassBarriers pass)
 	{
 		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
@@ -492,10 +492,10 @@ public sealed unsafe class DX12Engine : IEngine
 	}
 
 	// Track the resource's real D3D12 state and emit a transition only when the required state differs (D3D12
-	// barriers need the exact current state, unlike Vulkan's "Undefined" old layout — see DX12StateMapping).
+	// barriers need the exact current state, unlike Vulkan's "Undefined" old layout — see DirectX12StateMapping).
 	private void EmitGraphTransition(uint index, ResourceTransition transition)
 	{
-		var target = DX12StateMapping.For(transition.To);
+		var target = DirectX12StateMapping.For(transition.To);
 		var id = transition.Resource.Id;
 
 		if (transition.Resource.IsBackbuffer)
@@ -509,7 +509,7 @@ public sealed unsafe class DX12Engine : IEngine
 
 		// An aliased transient reuses memory another bucket member held — before its first (re)activation this
 		// frame, an aliasing barrier orders this use after whatever last touched the shared memory (and marks its
-		// contents undefined, which the pass's clear/full-write then initialises). The DX12 analogue of the
+		// contents undefined, which the pass's clear/full-write then initialises). The DirectX12 analogue of the
 		// Vulkan backend's widened-source-scope birth barrier; once per resource per frame.
 		if (_transients!.IsAliasedMember(id) && _aliasBarriered.Add(id))
 			EmitAliasingBarrier(_transients.Resource(index, id));
@@ -626,8 +626,8 @@ public sealed unsafe class DX12Engine : IEngine
 			new ReadOnlySpan<byte>(src + (long)y * rowPitch, width * 4).CopyTo(rgba.AsSpan(y * width * 4));
 		_readback.Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 
-		PngWriter.WriteRgba(path, width, height, rgba);
-		Console.WriteLine($"[loom] DX12 captured {width}x{height} -> {path}");
+		DirectX12PngWriter.WriteRgba(path, width, height, rgba);
+		Console.WriteLine($"[loom] DirectX12 captured {width}x{height} -> {path}");
 	}
 
 	// Record the copy of this frame's object-id target into the slot's READBACK buffer (after the passes that wrote
@@ -736,7 +736,7 @@ public sealed unsafe class DX12Engine : IEngine
 	{
 		Format.R16F => 2,
 		Format.R32Uint => 4,
-		_ => throw new NotSupportedException($"DX12: readback of format {format} is not supported (the id buffer is R16F)."),
+		_ => throw new NotSupportedException($"DirectX12: readback of format {format} is not supported (the id buffer is R16F)."),
 	};
 
 	private static uint Align(uint value, uint alignment) => (value + alignment - 1) & ~(alignment - 1);
@@ -781,7 +781,7 @@ public sealed unsafe class DX12Engine : IEngine
 		if (_graph is not null)
 		{
 			_transients?.Dispose();
-			_transients = new DX12Transients(_ctx, _graph, _aliasPlan!, BufferCount, _swapchain.Width, _swapchain.Height);
+			_transients = new DirectX12Transients(_ctx, _graph, _aliasPlan!, BufferCount, _swapchain.Width, _swapchain.Height);
 			_context.SetTransients(_transients);
 			for (uint i = 0; i < BufferCount; i++)
 				_backbufferState[i] = ResourceStates.Present;
@@ -812,7 +812,7 @@ public sealed unsafe class DX12Engine : IEngine
 
 		_debugErrors += _ctx.DrainDebugMessages();
 		if (_ctx.InfoQueue.Handle is not null)
-			Console.WriteLine($"[loom] DX12 debug layer: {(_debugErrors == 0 ? "clean (no errors/corruption)" : $"{_debugErrors} error/corruption message(s)")}.");
+			Console.WriteLine($"[loom] DirectX12 debug layer: {(_debugErrors == 0 ? "clean (no errors/corruption)" : $"{_debugErrors} error/corruption message(s)")}.");
 
 		if (_fenceEvent != 0)
 			CloseHandle(_fenceEvent);
@@ -869,63 +869,63 @@ public sealed unsafe class DX12Engine : IEngine
 		var storageBufferStride = 0;
 		// M15-0: descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
 		// as a root CBV at b1 (0 for a built-in stand-in, which has no UBO).
-		var uniformBuffers = DX12Shaders.ResolveUniformBufferCount(dir, shader);
+		var uniformBuffers = DirectX12Shaders.ResolveUniformBufferCount(dir, shader);
 		// M15-2: read-only structured-buffer compute inputs (skin's bind-pose verts + bone palette) — root SRVs.
-		var inputBuffers = descriptor.IsCompute ? DX12Shaders.ResolveComputeInputBuffers(dir, shader) : 0;
+		var inputBuffers = descriptor.IsCompute ? DirectX12Shaders.ResolveComputeInputBuffers(dir, shader) : 0;
 		string source;
 
 		if (descriptor.IsCompute)
 		{
-			var cs = DX12Shaders.TryResolveStageDxil(dir, shader, "cs");
+			var cs = DirectX12Shaders.TryResolveStageDxil(dir, shader, "cs");
 			if (cs is not null)
 			{
 				(vertexBytecode, fragmentBytecode) = ([], cs);
-				inputCount = DX12Shaders.ResolveSampledInputCount(dir, shader);
+				inputCount = DirectX12Shaders.ResolveSampledInputCount(dir, shader);
 				// Compute storage shape from reflection: a RW texture (exposure) / RW structured buffer (particles)
 				// → UAV table (the stride lets the shader's GetDimensions work); a raw buffer (stride 0) → root UAV.
-				(storageImages, storageBuffers, storageBufferStride) = DX12Shaders.ResolveComputeStorage(dir, shader);
+				(storageImages, storageBuffers, storageBufferStride) = DirectX12Shaders.ResolveComputeStorage(dir, shader);
 				source = $"{shader}.cs.dxil (Slang→signed DXIL)";
 			}
-			else if (DX12Shaders.Builtins.TryGetValue(shader, out var builtin))
+			else if (DirectX12Shaders.Builtins.TryGetValue(shader, out var builtin))
 			{
-				(vertexBytecode, fragmentBytecode) = ([], DX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.FragmentEntry, "cs_5_1"));
+				(vertexBytecode, fragmentBytecode) = ([], DirectX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.FragmentEntry, "cs_5_1"));
 				inputCount = builtin.InputCount;
 				storageBuffers = 1; // the built-in compute stand-in is the GPU-particle buffer (root UAV at u0)
 				source = "built-in (FXC)";
 			}
 			else
 			{
-				throw new NotSupportedException($"DX12: compute shader '{shader}' has no '{shader}.cs.dxil' in '{dir}' and no built-in stand-in.");
+				throw new NotSupportedException($"DirectX12: compute shader '{shader}' has no '{shader}.cs.dxil' in '{dir}' and no built-in stand-in.");
 			}
 		}
 		else
 		{
-			var vs = DX12Shaders.TryResolveStageDxil(dir, shader, "vs");
-			var ps = DX12Shaders.TryResolveStageDxil(dir, shader, "ps");
+			var vs = DirectX12Shaders.TryResolveStageDxil(dir, shader, "vs");
+			var ps = DirectX12Shaders.TryResolveStageDxil(dir, shader, "ps");
 			if (vs is not null && ps is not null)
 			{
 				(vertexBytecode, fragmentBytecode) = (vs, ps);
-				inputCount = DX12Shaders.ResolveSampledInputCount(dir, shader);
+				inputCount = DirectX12Shaders.ResolveSampledInputCount(dir, shader);
 				source = $"{shader}.{{vs,ps}}.dxil (Slang→signed DXIL)";
 			}
-			else if (DX12Shaders.Builtins.TryGetValue(shader, out var builtin))
+			else if (DirectX12Shaders.Builtins.TryGetValue(shader, out var builtin))
 			{
-				vertexBytecode = DX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.VertexEntry, "vs_5_1");
-				fragmentBytecode = DX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.FragmentEntry, "ps_5_1");
+				vertexBytecode = DirectX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.VertexEntry, "vs_5_1");
+				fragmentBytecode = DirectX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.FragmentEntry, "ps_5_1");
 				inputCount = builtin.InputCount;
 				source = "built-in (FXC)";
 			}
 			else
 			{
-				throw new NotSupportedException($"DX12: shader '{shader}' has no '{shader}.[vs,ps].dxil' in '{dir}' and no built-in stand-in.");
+				throw new NotSupportedException($"DirectX12: shader '{shader}' has no '{shader}.[vs,ps].dxil' in '{dir}' and no built-in stand-in.");
 			}
 		}
 
-		Console.WriteLine($"[loom] DX12 technique '{name}' ← {source}.");
+		Console.WriteLine($"[loom] DirectX12 technique '{name}' ← {source}.");
 		// Resolve the per-vertex layout (explicit, else canonical pos/normal/uv for a mesh technique, else none),
 		// mirroring the Vulkan backend — a non-null Instance marks it instanced (M12 — per-technique layouts).
 		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
-		_techniques.Register(name, new DX12TechniqueTemplate(
+		_techniques.Register(name, new DirectX12TechniqueTemplate(
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
@@ -954,7 +954,7 @@ public sealed unsafe class DX12Engine : IEngine
 
 		// M13 resource viewer: enumerate the colour/depth resources the host can preview, and (with the debug UI
 		// live) inject HUD .Samples edges so the Execute layer derives their keep-alive + PixelShaderResource
-		// transition — the viewer samples live images, not aliased corpses. Graphs set before EnableImGui (the DX12
+		// transition — the viewer samples live images, not aliased corpses. Graphs set before EnableImGui (the DirectX12
 		// aliasing diagnostics) keep their exact aliasing. The author's graph is untouched; we execute `executed`.
 		_inspectable.Clear();
 		var executed = graph;
@@ -978,11 +978,11 @@ public sealed unsafe class DX12Engine : IEngine
 			_backbufferState[i] = ResourceStates.Present;
 
 		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
-			Console.WriteLine($"[loom] DX12 transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
+			Console.WriteLine($"[loom] DirectX12 transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
 		_transients?.Dispose();
 		// Build transients from `executed` (same resources/ids; the injected edges only affect derived state).
-		_transients = new DX12Transients(_ctx, executed, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
+		_transients = new DirectX12Transients(_ctx, executed, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
 		_context.SetTransients(_transients);
 		SetupPick(graph);
 		SetupTiming();
@@ -1037,7 +1037,7 @@ public sealed unsafe class DX12Engine : IEngine
 	{
 		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
 		if (stride != layout.Stride)
-			throw new InvalidOperationException($"DX12: vertex element size ({stride} bytes) does not match the layout stride ({layout.Stride} bytes).");
+			throw new InvalidOperationException($"DirectX12: vertex element size ({stride} bytes) does not match the layout stride ({layout.Stride} bytes).");
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
@@ -1057,11 +1057,11 @@ public sealed unsafe class DX12Engine : IEngine
 	public void EnableImGui()
 	{
 #if LOOM_IMGUI
-		var vs = DX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "imgui", "vs")
-			?? throw new NotSupportedException("DX12: the ImGui shader DXIL (imgui.vs.dxil) was not found — build with UseImGui=true so it is emitted + embedded.");
-		var ps = DX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "imgui", "ps")
-			?? throw new NotSupportedException("DX12: the ImGui shader DXIL (imgui.ps.dxil) was not found — build with UseImGui=true so it is emitted + embedded.");
-		_imgui = new DX12ImGuiRenderer(_ctx, _ring, vs, ps, _swapchain.RenderTargetFormat, (int)BufferCount);
+		var vs = DirectX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "imgui", "vs")
+			?? throw new NotSupportedException("DirectX12: the ImGui shader DXIL (imgui.vs.dxil) was not found — build with UseImGui=true so it is emitted + embedded.");
+		var ps = DirectX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "imgui", "ps")
+			?? throw new NotSupportedException("DirectX12: the ImGui shader DXIL (imgui.ps.dxil) was not found — build with UseImGui=true so it is emitted + embedded.");
+		_imgui = new DirectX12ImGuiRenderer(_ctx, _ring, vs, ps, _swapchain.RenderTargetFormat, (int)BufferCount);
 		_context.SetImGui(_imgui);
 #endif
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
@@ -1073,18 +1073,18 @@ public sealed unsafe class DX12Engine : IEngine
 			return; // idempotent — enabling twice keeps the existing renderer (pass the atlas on the first call)
 
 		// MU1: stand up the real ui.slang renderer (white-texel + optional MTSDF atlas) and wire it to the context.
-		var vs = DX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "ui", "vs")
-			?? throw new NotSupportedException("DX12: the UI shader DXIL (ui.vs.dxil) was not found — was ui.slang built + embedded?");
-		var ps = DX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "ui", "ps")
-			?? throw new NotSupportedException("DX12: the UI shader DXIL (ui.ps.dxil) was not found — was ui.slang built + embedded?");
-		_ui = new DX12UIRenderer(_ctx, _ring, vs, ps, _swapchain.RenderTargetFormat, (int)BufferCount, fontAtlas);
+		var vs = DirectX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "ui", "vs")
+			?? throw new NotSupportedException("DirectX12: the UI shader DXIL (ui.vs.dxil) was not found — was ui.slang built + embedded?");
+		var ps = DirectX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "ui", "ps")
+			?? throw new NotSupportedException("DirectX12: the UI shader DXIL (ui.ps.dxil) was not found — was ui.slang built + embedded?");
+		_ui = new DirectX12UIRenderer(_ctx, _ring, vs, ps, _swapchain.RenderTargetFormat, (int)BufferCount, fontAtlas);
 		_context.SetUI(_ui);
 	}
 
 	/// <summary>
 	/// The object id at picking-domain pixel (<paramref name="x"/>, <paramref name="y"/>) — read from the CPU copy
 	/// of the graph's first readback target, a few frames stale (invisible for hover). 0 when out of bounds, before
-	/// the first copy lands, or when the active graph declares no readback target. The DX12 twin of Vulkan's SamplePick.
+	/// the first copy lands, or when the active graph declares no readback target. The DirectX12 twin of Vulkan's SamplePick.
 	/// </summary>
 	public float SamplePick(int x, int y)
 	{
