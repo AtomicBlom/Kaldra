@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Loom.Core.Hosting;
 
 namespace Loom.Core.Materials;
@@ -62,6 +63,27 @@ public sealed class TextureData
 		}
 
 		return new TextureData(format, width, height, levels);
+	}
+
+	/// <summary>
+	/// Build an HDR <see cref="TextureData"/> from tightly packed RGBA16F (half-float) texels — the source format
+	/// for an image-based-lighting environment / equirectangular map. A single mip level only: HDR sources don't
+	/// ship a mip chain (the IBL prefilter generates the roughness mips on the GPU), so no float box filter is
+	/// needed here. The half data is stored verbatim as bytes (8 per texel); the backend's texture store maps
+	/// <see cref="TextureFormat.Rgba16F"/> to its native half-float format and uploads the level unchanged.
+	/// </summary>
+	/// <param name="width">Image width in texels (positive).</param>
+	/// <param name="height">Image height in texels (positive).</param>
+	/// <param name="rgba">Row-major RGBA16F texels (4 halves per texel); length must equal <c>width*height*4</c>.</param>
+	public static TextureData FromRgba16F(int width, int height, ReadOnlySpan<Half> rgba)
+	{
+		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+		if (rgba.Length != width * height * 4)
+			throw new ArgumentException($"Expected {width * height * 4} RGBA16F components for a {width}×{height} image, got {rgba.Length}.", nameof(rgba));
+
+		var bytes = MemoryMarshal.AsBytes(rgba).ToArray();
+		return new TextureData(TextureFormat.Rgba16F, width, height, [new MipLevel(width, height, bytes)]);
 	}
 
 	/// <summary>

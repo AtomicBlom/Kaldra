@@ -19,4 +19,8 @@ public enum TextureFormat
 
 	/// <summary>RGBA8 linear (unorm) — data, not colour (normal maps, masks); sampled verbatim.</summary>
 	Rgba8Unorm,
+
+	/// <summary>RGBA 16-bit float — HDR source imagery (an image-based-lighting environment / equirectangular map),
+	/// where 8-bit unorm would clip the values above 1 that IBL integrates over.</summary>
+	Rgba16F,
 }

@@ -49,7 +49,13 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 	/// <summary>Upload a texture + its mip chain and return a handle a material can bundle.</summary>
 	public Texture Create(TextureData data)
 	{
-		var format = data.Format == TextureFormat.Rgba8Srgb ? DxgiFormat.FormatR8G8B8A8UnormSrgb : DxgiFormat.FormatR8G8B8A8Unorm;
+		var format = data.Format switch
+		{
+			TextureFormat.Rgba8Srgb => DxgiFormat.FormatR8G8B8A8UnormSrgb,
+			TextureFormat.Rgba8Unorm => DxgiFormat.FormatR8G8B8A8Unorm,
+			TextureFormat.Rgba16F => DxgiFormat.FormatR16G16B16A16Float,
+			_ => throw new NotSupportedException($"No DirectX12 texture format mapping for {data.Format}."),
+		};
 		var mipLevels = (uint)data.Levels.Count;
 
 		// DEFAULT-heap committed texture with the full mip chain, created ready to receive the copy.
@@ -85,7 +91,7 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		for (var i = 0; i < data.Levels.Count; i++)
 		{
 			var level = data.Levels[i];
-			var srcPitch = level.Width * 4;                 // tightly packed RGBA8
+			var srcPitch = level.Pixels.Length / level.Height; // tightly packed source row (bytes-per-texel from the level)
 			var dstPitch = (int)layouts[i].Footprint.RowPitch; // 256-aligned
 			var rowBytes = (int)rowSizes[i];                // unpadded bytes per row
 			fixed (byte* src = level.Pixels)

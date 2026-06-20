@@ -42,7 +42,13 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 	/// <summary>Upload a texture + its mip chain and return a handle a material can bundle.</summary>
 	public Texture Create(TextureData data)
 	{
-		var format = data.Format == TextureFormat.Rgba8Srgb ? VkFormat.R8G8B8A8Srgb : VkFormat.R8G8B8A8Unorm;
+		var format = data.Format switch
+		{
+			TextureFormat.Rgba8Srgb => VkFormat.R8G8B8A8Srgb,
+			TextureFormat.Rgba8Unorm => VkFormat.R8G8B8A8Unorm,
+			TextureFormat.Rgba16F => VkFormat.R16G16B16A16Sfloat,
+			_ => throw new VulkanException($"No Vulkan texture format mapping for {data.Format}."),
+		};
 		var mipLevels = (uint)data.Levels.Count;
 
 		// Device-local sampled image with the full mip chain.

@@ -136,6 +136,28 @@ public class TextureDataTests
 	}
 
 	[Test]
+	public void FromRgba16F_is_a_single_half_float_level()
+	{
+		Half[] texels = new Half[3 * 2 * 4];
+		for (var i = 0; i < texels.Length; i++)
+			texels[i] = (Half)(i * 0.25f);
+
+		var data = TextureData.FromRgba16F(3, 2, texels);
+
+		data.Format.ShouldBe(TextureFormat.Rgba16F);
+		data.Levels.ShouldHaveSingleItem();
+		(data.Levels[0].Width, data.Levels[0].Height).ShouldBe((3, 2));
+		data.Levels[0].Pixels.Length.ShouldBe(3 * 2 * 4 * sizeof(ushort)); // 8 bytes per RGBA16F texel
+	}
+
+	[Test]
+	public void FromRgba16F_rejects_a_wrong_length_buffer()
+	{
+		Should.Throw<ArgumentException>(() =>
+			TextureData.FromRgba16F(4, 4, new Half[4 * 4 * 3]));
+	}
+
+	[Test]
 	public void Box_filter_clamps_edge_taps_on_a_1xN_column()
 	{
 		// 1x2 column, reds {40, 80}. The x tap clamps to column 0, so the 1x1 result averages the two rows:

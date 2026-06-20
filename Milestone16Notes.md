@@ -44,3 +44,17 @@ normal scale), and read them in `GltfLoader.ResolveMaterial`.
   for now; the PBR consumer (M16-1) decides how to treat factor-only materials when it lands.
 - Verified: `Loom.Assets` builds clean; `GltfSkinningLoadTests` 4/4 pass (no regression to `cube.gltf`
   / `rigged_bar.glb` loading). The new properties read as "unused" until the PBR shader consumes them.
+
+**Checkpoint 2 — float/HDR textures (the IBL environment source).** Added `TextureFormat.Rgba16F`,
+`TextureData.FromRgba16F(width, height, ReadOnlySpan<Half>)` (single level — HDR sources ship no mip
+chain; the GPU prefilter makes the roughness mips), and `ImageLoader.LoadHdr/DecodeHdr` (StbImageSharp
+`ImageResultFloat` → float→half). Both texture stores map `Rgba16F` to their native half format
+(`R16G16B16A16Sfloat` / `FormatR16G16B16A16Float`).
+- Decision: store HDR as **16-bit half**, not 32-bit float — IBL precision is ample and it halves
+  memory for a multi-MB equirect map; it also matches the engine's existing `Rgba16F` HDR storage.
+- Fixed a latent assumption in `DirectX12TextureStore` upload: `srcPitch` was hardcoded `Width*4`
+  (RGBA8). Now derived as `Pixels.Length / Height` — format-agnostic, so the 8-byte RGBA16F rows
+  upload correctly (and any future bytes-per-texel just works). Vulkan's upload was already
+  format-agnostic (copies the level bytes wholesale; the image format drives the layout).
+- Verified: full solution builds clean (Vulkan + DirectX12); `TextureDataTests` 17/17 (incl. 2 new
+  RGBA16F tests). The byte-for-byte HDR→GPU path is exercised on the GPU in checkpoint 3 (cubemaps).
