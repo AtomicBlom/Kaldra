@@ -17,6 +17,9 @@
   <ItemGroup>
     <PackageReference Include="TUnit" />
     <PackageReference Include="Shouldly" />
+    <!-- Drive Loom.UI.SourceGen directly (CSharpGeneratorDriver) to unit-test the diagnostics and incremental
+         caching that the build-time analyzer path can't exercise (invalid XAML would break this project's own build). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -33,5 +36,13 @@
   </ItemGroup>
 
   <Import Project="..\build\Loom.Sdk\Loom.UI.targets" />
+
+  <!-- The SDK registers the generator as a build-time analyzer with ReferenceOutputAssembly=false (never a runtime
+       dependency for real consumers). Flip it to true for this test project only, so the XamlSourceGenerator type
+       is referenceable by the CSharpGeneratorDriver-based tests. Update (not a second ProjectReference) so the
+       generator is still registered exactly once as an analyzer. -->
+  <ItemGroup>
+    <ProjectReference Update="..\Loom.UI.SourceGen\Loom.UI.SourceGen.csproj" ReferenceOutputAssembly="true" />
+  </ItemGroup>
 
 </Project>

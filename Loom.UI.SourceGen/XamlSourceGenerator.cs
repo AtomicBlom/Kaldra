@@ -1,4 +1,5 @@
 using System.Text;
+using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -9,22 +10,27 @@ using Microsoft.CodeAnalysis.Text;
 namespace Loom.UI.SourceGen;
 
 /// <summary>
-/// The XAML → typed control-tree incremental generator (PlanningUI.md §D1.4). For each <c>.xaml</c>
-/// <see cref="AdditionalText"/> it emits a <c>partial</c> of the <c>x:Class</c> with typed <c>x:Name</c> fields and an
+/// The XAML → typed control-tree incremental generator. For each <c>.xaml</c> <see cref="AdditionalText"/> it
+/// emits a <c>partial</c> of the <c>x:Class</c> with typed <c>x:Name</c> fields and an
 /// <c>InitializeComponent()</c> that builds the tree with generated <c>new</c> (never reflection) and assigns
 /// literal/enum properties resolved against the <see cref="Compilation"/> semantic model.
 /// <para>
-/// MU2 adds compiled data + event binding (§D1.5/§D1.7): <c>{x:Bind path[, Mode=OneTime|OneWay]}</c> on a property
-/// emits a typed <c>&lt;Class&gt;_Bindings</c> helper (Initialize/Update/Subscribe/StopTracking + INPC tracking that
-/// switches on <c>PropertyName</c> literals); an event attribute (<c>Click="{x:Bind OnClick}"</c> or bare
-/// <c>Click="OnClick"</c>) wires <c>el.Click += this.OnClick</c>, signature-checked against the control's event.
-/// TwoWay / functions / converters / fallback / <c>{StaticResource}</c> are out of the MU2 subset and diagnose.
+/// Compiled data + event binding: <c>{x:Bind path[, Mode=OneTime|OneWay]}</c> on a property emits a typed
+/// <c>&lt;Class&gt;_Bindings</c> helper (Initialize/Update/Subscribe/StopTracking + INPC tracking that switches on
+/// <c>PropertyName</c> literals); an event attribute (<c>Click="{x:Bind OnClick}"</c> or bare <c>Click="OnClick"</c>)
+/// wires <c>el.Click += this.OnClick</c>, signature-checked against the control's event. TwoWay / functions /
+/// converters / fallback / <c>{StaticResource}</c> are out of the supported subset and diagnose.
 /// </para>
 /// </summary>
 [Generator(LanguageNames.CSharp)]
 public sealed class XamlSourceGenerator : IIncrementalGenerator
 {
+	private const string TrackName = "XamlGenerate";
+
 	private static readonly XNamespace X = "http://schemas.microsoft.com/winfx/2006/xaml";
+	// Elements live in the Loom UI namespace (the default xmlns of a Loom view); an element in any other
+	// namespace is foreign and must not be silently resolved as if it were a Loom control.
+	private static readonly XNamespace Ui = "https://github.com/AtomicBlom/Loom/ui";
 
 	private static readonly DiagnosticDescriptor ParseError = new("LOOMUI001", "Invalid XAML",
 		"XAML parse error: {0}", "Loom.UI", DiagnosticSeverity.Error, true);
@@ -35,11 +41,11 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 	private static readonly DiagnosticDescriptor UnknownProperty = new("LOOMUI004", "Unknown property",
 		"'{0}' has no settable property '{1}'", "Loom.UI", DiagnosticSeverity.Error, true);
 	private static readonly DiagnosticDescriptor UnsupportedProperty = new("LOOMUI005", "Unsupported property type",
-		"Property '{0}' of type '{1}' is outside the MU0 XAML subset (string / numeric / bool / enum)", "Loom.UI", DiagnosticSeverity.Error, true);
+		"Property '{0}' of type '{1}' is outside the XAML subset (string / numeric / bool / enum)", "Loom.UI", DiagnosticSeverity.Error, true);
 	private static readonly DiagnosticDescriptor NoContentModel = new("LOOMUI006", "Element cannot hold children",
 		"'{0}' has no Children/Child/Content to host the child '{1}'", "Loom.UI", DiagnosticSeverity.Error, true);
 	private static readonly DiagnosticDescriptor UnsupportedMarkup = new("LOOMUI007", "Unsupported markup",
-		"Markup '{0}' is outside the MU2 XAML subset (only {{x:Bind path, Mode=OneTime|OneWay}} + event handlers)", "Loom.UI", DiagnosticSeverity.Error, true);
+		"Markup '{0}' is outside the XAML subset (only {{x:Bind path, Mode=OneTime|OneWay}} + event handlers)", "Loom.UI", DiagnosticSeverity.Error, true);
 	private static readonly DiagnosticDescriptor BindPathUnresolved = new("LOOMUI008", "Unresolved x:Bind path",
 		"x:Bind path '{0}' could not be resolved on '{1}'", "Loom.UI", DiagnosticSeverity.Error, true);
 	private static readonly DiagnosticDescriptor BindTypeMismatch = new("LOOMUI009", "Incompatible x:Bind types",
@@ -49,10 +55,45 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 
 	public void Initialize(IncrementalGeneratorInitializationContext context)
 	{
-		var xaml = context.AdditionalTextsProvider.Where(a => a.Path.EndsWith(".xaml", System.StringComparison.OrdinalIgnoreCase));
-		var combined = xaml.Combine(context.CompilationProvider);
-		context.RegisterSourceOutput(combined, (spc, pair) => Generate(spc, pair.Right, pair.Left));
+		// Extract each .xaml to a value-equatable (path, text) model so editing an unrelated C# file does not
+		// re-read or re-hash the views. The model produced by Generate is itself value-equatable (EquatableArray),
+		// so when an unrelated compilation change leaves the generated output identical, the source-output step is
+		// cached and nothing is re-emitted. The semantic resolution inside Generate still re-runs when the
+		// compilation changes — it resolves element/property/event types against the live model — but its equal
+		// result short-circuits the (re-)emit, which is the part that would otherwise churn the IDE every keystroke.
+		var inputs = context.AdditionalTextsProvider
+			.Where(static a => a.Path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase))
+			.Select(static (a, ct) => new XamlInput(a.Path, a.GetText(ct)?.ToString() ?? ""));
+
+		var results = inputs.Combine(context.CompilationProvider)
+			.Select(static (pair, ct) => Generate(pair.Left, pair.Right, ct))
+			.WithTrackingName(TrackName);
+
+		context.RegisterSourceOutput(results, static (spc, result) =>
+		{
+			foreach (var d in result.Diagnostics.AsArray())
+				spc.ReportDiagnostic(d.ToDiagnostic());
+			foreach (var s in result.Sources.AsArray())
+				spc.AddSource(s.HintName, SourceText.From(s.Text, Encoding.UTF8));
+		});
 	}
+
+	// The value-equatable input (one .xaml view) — equality by path + content, so it is cached across C# edits.
+	private readonly record struct XamlInput(string Path, string Text);
+
+	// One emitted compilation unit: the AddSource hint name (unique across the compilation) + its text.
+	private readonly record struct GeneratedSource(string HintName, string Text);
+
+	// A diagnostic captured as value-equatable data, so it rides in the cached result and is reported (rebuilt into
+	// a Diagnostic) only by the source-output step. DiagnosticDescriptor, TextSpan and LinePositionSpan are all
+	// value-equatable; the message args are wrapped so the array compares by contents.
+	private readonly record struct DiagnosticInfo(DiagnosticDescriptor Descriptor, string FilePath, TextSpan Span, LinePositionSpan LineSpan, EquatableArray<string> Args)
+	{
+		public Diagnostic ToDiagnostic() => Diagnostic.Create(Descriptor, Location.Create(FilePath, Span, LineSpan), Args.AsArray());
+	}
+
+	// The whole generated output for one view — value-equatable, so an unchanged view caches the source-output step.
+	private readonly record struct GenResult(EquatableArray<GeneratedSource> Sources, EquatableArray<DiagnosticInfo> Diagnostics);
 
 	// One resolved x:Bind on a property: assign target.Prop = <read of path on the page>, optionally INPC-tracked.
 	private sealed class Bind(string targetVar, string targetProp, string[] path, ITypeSymbol[] resultTypes, ITypeSymbol leafType, bool oneWay)
@@ -65,44 +106,53 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		public bool OneWay { get; } = oneWay;
 	}
 
-	private sealed class Gen(Compilation compilation, SourceProductionContext spc, AdditionalText file, INamedTypeSymbol? pageType)
+	private sealed class Gen(Compilation compilation, string path, SourceText text, INamedTypeSymbol? pageType, CancellationToken ct)
 	{
 		public Compilation Compilation { get; } = compilation;
-		public SourceProductionContext Spc { get; } = spc;
-		public AdditionalText File { get; } = file;
+		public string Path { get; } = path;
+		public SourceText Text { get; } = text;
 		public INamedTypeSymbol? PageType { get; } = pageType;
+		public CancellationToken Ct { get; } = ct;
 		public List<string> Fields { get; } = [];
 		public StringBuilder Body { get; } = new();
 		public List<string> EventWires { get; } = [];   // "Btn.Click += this.OnClick;" lines (in InitializeComponent)
 		public List<Bind> Bindings { get; } = [];
+		public List<DiagnosticInfo> Diagnostics { get; } = [];
 		public int Counter;
+
+		public void Report(DiagnosticDescriptor descriptor, XObject node, params string[] args) =>
+			Diagnostics.Add(MakeDiagnostic(descriptor, Path, Text, node, args));
 	}
 
-	private static void Generate(SourceProductionContext spc, Compilation compilation, AdditionalText file)
+	private static GenResult Generate(XamlInput input, Compilation compilation, CancellationToken ct)
 	{
-		var src = file.GetText(spc.CancellationToken)?.ToString();
-		if (string.IsNullOrWhiteSpace(src))
-			return;
+		if (string.IsNullOrWhiteSpace(input.Text))
+			return default;
+
+		var text = SourceText.From(input.Text);
 
 		XDocument doc;
-		try { doc = XDocument.Parse(src!, LoadOptions.SetLineInfo); }
-		catch (XmlException ex) { spc.ReportDiagnostic(Diagnostic.Create(ParseError, Loc(file, 1, 1), ex.Message)); return; }
+		try { doc = XDocument.Parse(input.Text, LoadOptions.SetLineInfo); }
+		catch (XmlException ex) { return new GenResult(default, new[] { MakeDiagnostic(ParseError, input.Path, text, 1, 1, [ex.Message]) }); }
 
 		var root = doc.Root;
 		if (root is null)
-			return;
+			return default;
 
 		var classAttr = root.Attribute(X + "Class");
-		if (classAttr is null) { spc.ReportDiagnostic(Diagnostic.Create(MissingClass, Loc(file, root))); return; }
+		if (classAttr is null)
+			return new GenResult(default, new[] { MakeDiagnostic(MissingClass, input.Path, text, root, []) });
 
 		var (ns, cls) = SplitClass(classAttr.Value);
-		var pageType = compilation.GetTypeByMetadataName(classAttr.Value);
-		var gen = new Gen(compilation, spc, file, pageType);
+		var fullClass = classAttr.Value;
+		var pageType = compilation.GetTypeByMetadataName(fullClass);
+		var gen = new Gen(compilation, input.Path, text, pageType, ct);
 
-		var rootVar = EmitElement(gen, root);
-		if (rootVar is null)
-			return;
+		// Resolve the root element type once and reuse it for both emit and the Root field's declared type.
 		var rootType = ResolveType(compilation, root.Name.LocalName);
+		var rootVar = EmitElement(gen, root, rootType);
+		if (rootVar is null)
+			return new GenResult(default, gen.Diagnostics.ToArray());
 		var rootTypeName = rootType?.ToDisplayString() ?? "global::Loom.UI.UIElement";
 
 		var hasBindings = gen.Bindings.Count > 0;
@@ -135,17 +185,21 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		sb.AppendLine("\t}");
 		sb.AppendLine("}");
 
-		spc.AddSource($"{cls}.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
-
-		if (hasBindings)
-			EmitBindings(spc, ns, cls, gen.Bindings);
+		var main = new GeneratedSource(HintName(fullClass, ""), sb.ToString());
+		var sources = hasBindings
+			? new[] { main, EmitBindings(fullClass, ns, cls, gen.Bindings) }
+			: new[] { main };
+		return new GenResult(sources, gen.Diagnostics.ToArray());
 	}
 
 	// Emit construction for one element; returns the C# variable holding it (a field for x:Name'd / bound / evented).
-	private static string? EmitElement(Gen gen, XElement el)
+	// The root's type is resolved once by the caller and threaded in; child elements resolve their own.
+	private static string? EmitElement(Gen gen, XElement el, INamedTypeSymbol? knownType = null)
 	{
-		var type = ResolveType(gen.Compilation, el.Name.LocalName);
-		if (type is null) { gen.Spc.ReportDiagnostic(Diagnostic.Create(UnknownElement, Loc(gen.File, el), el.Name.LocalName)); return null; }
+		gen.Ct.ThrowIfCancellationRequested();
+
+		var type = knownType ?? ResolveType(gen.Compilation, el.Name.LocalName);
+		if (type is null) { gen.Report(UnknownElement, el, el.Name.LocalName); return null; }
 
 		var typeName = type.ToDisplayString();
 		var nameAttr = el.Attribute(X + "Name");
@@ -176,7 +230,7 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 			if (attr.IsNamespaceDeclaration || attr.Name.Namespace == X)
 				continue;
 			if (attr.Name.Namespace != XNamespace.None || attr.Name.LocalName.Contains('.'))
-				continue; // attached / property-element syntax: out of the MU2 subset
+				continue; // attached / property-element syntax: out of the supported subset
 
 			var name = attr.Name.LocalName;
 			var value = attr.Value;
@@ -189,7 +243,7 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 				if (handler is null)
 					continue;
 				if (!HandlerSignatureOk(gen, handler))
-					gen.Spc.ReportDiagnostic(Diagnostic.Create(EventHandlerSignature, Loc(gen.File, attr), gen.PageType?.ToDisplayString() ?? "the page", handler, name));
+					gen.Report(EventHandlerSignature, attr, gen.PageType?.ToDisplayString() ?? "the page", handler, name);
 				gen.EventWires.Add($"{var}.{name} += this.{handler};");
 				continue;
 			}
@@ -199,19 +253,19 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 			{
 				if (!TryParseXBind(inner, out var path, out var oneWay))
 				{
-					gen.Spc.ReportDiagnostic(Diagnostic.Create(UnsupportedMarkup, Loc(gen.File, attr), value.Trim()));
+					gen.Report(UnsupportedMarkup, attr, value.Trim());
 					continue;
 				}
 				var prop = FindProperty(type, name);
-				if (prop is null) { gen.Spc.ReportDiagnostic(Diagnostic.Create(UnknownProperty, Loc(gen.File, attr), typeName, name)); continue; }
+				if (prop is null) { gen.Report(UnknownProperty, attr, typeName, name); continue; }
 				if (!TryResolvePath(gen.PageType, path, out var resultTypes, out var leafType))
 				{
-					gen.Spc.ReportDiagnostic(Diagnostic.Create(BindPathUnresolved, Loc(gen.File, attr), string.Join(".", path), gen.PageType?.ToDisplayString() ?? "the page"));
+					gen.Report(BindPathUnresolved, attr, string.Join(".", path), gen.PageType?.ToDisplayString() ?? "the page");
 					continue;
 				}
 				if (!gen.Compilation.ClassifyConversion(leafType, prop.Type).IsImplicit)
 				{
-					gen.Spc.ReportDiagnostic(Diagnostic.Create(BindTypeMismatch, Loc(gen.File, attr), leafType.ToDisplayString(), name, prop.Type.ToDisplayString()));
+					gen.Report(BindTypeMismatch, attr, leafType.ToDisplayString(), name, prop.Type.ToDisplayString());
 					continue;
 				}
 				gen.Bindings.Add(new Bind(var, prop.Name, path, resultTypes, leafType, oneWay));
@@ -220,16 +274,17 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 
 			// Plain literal / enum value.
 			var prop2 = FindProperty(type, name);
-			if (prop2 is null) { gen.Spc.ReportDiagnostic(Diagnostic.Create(UnknownProperty, Loc(gen.File, attr), typeName, name)); continue; }
+			if (prop2 is null) { gen.Report(UnknownProperty, attr, typeName, name); continue; }
 			var literal = Literal(prop2.Type, value);
-			if (literal is null) { gen.Spc.ReportDiagnostic(Diagnostic.Create(UnsupportedProperty, Loc(gen.File, attr), name, prop2.Type.ToDisplayString())); continue; }
+			if (literal is null) { gen.Report(UnsupportedProperty, attr, name, prop2.Type.ToDisplayString()); continue; }
 			gen.Body.AppendLine($"\t\t{var}.{prop2.Name} = {literal};");
 		}
 
-		// Child elements (skip property-element syntax for MU2).
+		// Child elements (skip property-element syntax for the supported subset).
 		var kind = ContainerKind(type);
 		foreach (var childEl in el.Elements())
 		{
+			gen.Ct.ThrowIfCancellationRequested();
 			if (childEl.Name.LocalName.Contains('.'))
 				continue;
 			var childVar = EmitElement(gen, childEl);
@@ -240,16 +295,16 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 				case "Children": gen.Body.AppendLine($"\t\t{var}.Children.Add({childVar});"); break;
 				case "Child": gen.Body.AppendLine($"\t\t{var}.Child = {childVar};"); break;
 				case "Content": gen.Body.AppendLine($"\t\t{var}.Content = {childVar};"); break;
-				default: gen.Spc.ReportDiagnostic(Diagnostic.Create(NoContentModel, Loc(gen.File, childEl), typeName, childEl.Name.LocalName)); break;
+				default: gen.Report(NoContentModel, childEl, typeName, childEl.Name.LocalName); break;
 			}
 		}
 
 		return var;
 	}
 
-	// --- MU2: the generated Bindings helper (PlanningUI.md §D1.5/§D1.7) ---
+	// --- The generated Bindings helper ---
 
-	private static void EmitBindings(SourceProductionContext spc, string? ns, string cls, List<Bind> binds)
+	private static GeneratedSource EmitBindings(string fullClass, string? ns, string cls, List<Bind> binds)
 	{
 		var sb = new StringBuilder();
 		sb.AppendLine("// <auto-generated/> by Loom.UI.SourceGen");
@@ -351,7 +406,7 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		sb.AppendLine("\t}");
 		sb.AppendLine("}");
 
-		spc.AddSource($"{cls}.Bindings.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
+		return new GeneratedSource(HintName(fullClass, ".Bindings"), sb.ToString());
 	}
 
 	// "Target.Prop = <typed read of the page path>;" — coalescing a null string and a deep-path-nullable value.
@@ -419,13 +474,13 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 			return false;
 		var p = head.Substring("x:Bind".Length).Trim();
 		if (p.Length == 0 || p.Contains('(') || p.Contains(' '))
-			return false; // functions / spaces not in the MU2 subset
+			return false; // functions / spaces not in the supported subset
 		var segs = p.Split('.');
 		foreach (var s in segs)
 			if (!IsIdentifier(s))
 				return false;
 		if (segs.Length > 2)
-			return false; // MU2 supports up to 2-hop paths
+			return false; // up to 2-hop paths are supported
 		for (var i = 1; i < parts.Length; i++)
 		{
 			var kv = parts[i].Split('=');
@@ -434,13 +489,13 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 			var key = kv[0].Trim();
 			var val = kv[1].Trim();
 			if (key != "Mode")
-				return false; // Converter / FallbackValue / TargetNullValue are MU3
+				return false; // Converter / FallbackValue / TargetNullValue are unsupported
 			if (val == "OneWay")
 				oneWay = true;
 			else if (val == "OneTime")
 				oneWay = false;
 			else
-				return false; // TwoWay is MU3
+				return false; // TwoWay is unsupported
 		}
 		path = segs;
 		return true;
@@ -508,11 +563,11 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 			return value.Trim(); // bare handler name: Click="OnClick"
 		if (inner.TrimStart().StartsWith("x:Bind"))
 		{
-			var h = inner.Substring(inner.IndexOf("x:Bind", System.StringComparison.Ordinal) + "x:Bind".Length).Trim();
+			var h = inner.Substring(inner.IndexOf("x:Bind", StringComparison.Ordinal) + "x:Bind".Length).Trim();
 			if (IsIdentifier(h))
 				return h;
 		}
-		gen.Spc.ReportDiagnostic(Diagnostic.Create(UnsupportedMarkup, Loc(gen.File, attr), value.Trim()));
+		gen.Report(UnsupportedMarkup, attr, value.Trim());
 		return null;
 	}
 
@@ -576,15 +631,32 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		return dot < 0 ? (null, full) : (full.Substring(0, dot), full.Substring(dot + 1));
 	}
 
-	private static Location Loc(AdditionalText file, XObject node)
+	// A unique, file-name-safe AddSource hint: the fully-qualified class (so two views with the same short class
+	// name in different namespaces don't collide on one hint name and crash the whole compilation).
+	private static string HintName(string fullClass, string suffix)
 	{
-		var li = (IXmlLineInfo)node;
-		return li.HasLineInfo() ? Loc(file, li.LineNumber, li.LinePosition) : Loc(file, 1, 1);
+		var sb = new StringBuilder(fullClass.Length + suffix.Length + 5);
+		foreach (var c in fullClass)
+			sb.Append(char.IsLetterOrDigit(c) || c == '.' || c == '_' ? c : '_');
+		return sb.Append(suffix).Append(".g.cs").ToString();
 	}
 
-	private static Location Loc(AdditionalText file, int line, int col)
+	private static DiagnosticInfo MakeDiagnostic(DiagnosticDescriptor descriptor, string path, SourceText text, XObject node, string[] args)
 	{
-		var pos = new LinePosition(System.Math.Max(0, line - 1), System.Math.Max(0, col - 1));
-		return Location.Create(file.Path, new TextSpan(0, 0), new LinePositionSpan(pos, pos));
+		var li = (IXmlLineInfo)node;
+		return li.HasLineInfo()
+			? MakeDiagnostic(descriptor, path, text, li.LineNumber, li.LinePosition, args)
+			: MakeDiagnostic(descriptor, path, text, 1, 1, args);
+	}
+
+	// A consistent diagnostic location: a zero-length span anchored at the real (line, col), so the IDE squiggle
+	// lands where the offending markup is rather than at the start of the file.
+	private static DiagnosticInfo MakeDiagnostic(DiagnosticDescriptor descriptor, string path, SourceText text, int line, int col, string[] args)
+	{
+		var lp = new LinePosition(Math.Max(0, line - 1), Math.Max(0, col - 1));
+		var start = 0;
+		if (lp.Line < text.Lines.Count)
+			start = Math.Min(text.Lines[lp.Line].Start + lp.Character, text.Length);
+		return new DiagnosticInfo(descriptor, path, new TextSpan(start, 0), new LinePositionSpan(lp, lp), args);
 	}
 }
