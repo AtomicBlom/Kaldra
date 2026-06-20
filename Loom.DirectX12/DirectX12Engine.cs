@@ -48,7 +48,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 #if LOOM_IMGUI
 	private DirectX12ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
-	private DirectX12UIRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
+	private bool _uiEnabled; // set when the host calls EnableUI: the "ui" technique + textures are registered
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -829,7 +829,6 @@ public sealed unsafe class DirectX12Engine : IEngine
 #if LOOM_IMGUI
 		_imgui?.Dispose();
 #endif
-		_ui?.Dispose();
 		_transients?.Dispose();
 		_context.Dispose();
 		_meshes.Dispose();
@@ -1069,8 +1068,8 @@ public sealed unsafe class DirectX12Engine : IEngine
 
 	public void EnableUI(TextureData? fontAtlas = null)
 	{
-		if (_ui is not null)
-			return; // idempotent — enabling twice keeps the existing renderer (pass the atlas on the first call)
+		if (_uiEnabled)
+			return; // idempotent — enabling twice keeps the first call's technique + textures (pass the atlas then)
 
 		// The game UI renders through the public draw-list path: a "ui" technique baked from ui.slang like any
 		// other, plus engine-owned textures (a 1×1 white texel for fills/borders, the optional MTSDF atlas for
@@ -1080,14 +1079,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 		var white = CreateTexture(TextureData.FromRgba8(1, 1, [255, 255, 255, 255], TextureFormat.Rgba8Unorm, generateMips: false));
 		var font = fontAtlas is not null ? CreateTexture(fontAtlas) : (Texture?)null;
 		_context.SetUITextures(white, font);
-
-		// Stand up the bespoke ui.slang renderer too, still the one DrawUI forwards to.
-		var vs = DirectX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "ui", "vs")
-			?? throw new NotSupportedException("DirectX12: the UI shader DXIL (ui.vs.dxil) was not found — was ui.slang built + embedded?");
-		var ps = DirectX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "ui", "ps")
-			?? throw new NotSupportedException("DirectX12: the UI shader DXIL (ui.ps.dxil) was not found — was ui.slang built + embedded?");
-		_ui = new DirectX12UIRenderer(_ctx, _ring, vs, ps, _swapchain.RenderTargetFormat, (int)BufferCount, fontAtlas);
-		_context.SetUI(_ui);
+		_uiEnabled = true;
 	}
 
 	/// <summary>

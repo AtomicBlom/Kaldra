@@ -74,7 +74,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 #if LOOM_IMGUI
 	private VulkanImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
-	private VulkanUIRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
+	private bool _uiEnabled; // set when the host calls EnableUI: the "ui" technique + textures are registered
 
 	// Engine-owned shaders (tonemap/blit/fullscreen/exposure/imgui/debugview) ship embedded in THIS assembly
 	// under the manifest prefix "<assembly>.Shaders." (the Loom SDK's Embed mode sets the same prefix from
@@ -414,8 +414,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 	public void EnableUI(TextureData? fontAtlas = null)
 	{
-		if (_ui is not null)
-			return; // idempotent — enabling twice keeps the existing renderer (pass the atlas on the first call)
+		if (_uiEnabled)
+			return; // idempotent — enabling twice keeps the first call's technique + textures (pass the atlas then)
 
 		// The game UI renders through the public draw-list path: a "ui" technique baked from ui.slang like any
 		// other, plus engine-owned textures (a 1×1 white texel for fills/borders, the optional MTSDF atlas for
@@ -425,11 +425,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		var white = CreateTexture(TextureData.FromRgba8(1, 1, [255, 255, 255, 255], TextureFormat.Rgba8Unorm, generateMips: false));
 		var font = fontAtlas is not null ? CreateTexture(fontAtlas) : (Texture?)null;
 		_context.SetUITextures(white, font);
-
-		// Stand up the bespoke ui.slang renderer too, still the one DrawUI forwards to.
-		var spirv = ResolveShaderAsset("ui", ".spv");
-		_ui = new VulkanUIRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight, fontAtlas);
-		_context.SetUI(_ui);
+		_uiEnabled = true;
 	}
 
 	public float SamplePick(int x, int y)
@@ -1153,7 +1149,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 #if LOOM_IMGUI
 		_imgui?.Dispose(); // before the allocator — it holds VMA font/vertex/index allocations
 #endif
-		_ui?.Dispose(); // likewise before the allocator — the UI renderer holds VMA atlas/vertex/index allocations
 		_descriptors.Dispose();
 		_meshes.Dispose();
 		_textures.Dispose(); // before the allocator — it holds VMA image allocations

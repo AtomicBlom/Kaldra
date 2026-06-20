@@ -50,10 +50,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	// ctx.DrawImGui() forwards this frame's draw data to it. Null when EnableImGui hasn't been called.
 	private DirectX12ImGuiRenderer? _imgui;
 #endif
-	// The host's game-UI renderer (the twin of _imgui), wired in by the engine when the host calls EnableUI. The
-	// "ui" pass's ctx.DrawUI(surface) forwards that surface's composited draw data to it. Null until UI is enabled;
-	// MU0 Phase A's renderer is a no-op. Ungated — the neutral seam exists unconditionally (no native dep).
-	private DirectX12UIRenderer? _ui;
 	// The engine-created UI textures the "ui" draw-list technique samples (white texel at index 0, optional font
 	// atlas at index 1) — set on EnableUI, used by DrawUI to feed DrawList. _uiEnabled gates DrawUI (a default
 	// Texture handle is indistinguishable from a real one, so the flag, not the handle, says UI is set up).
@@ -136,9 +132,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
 	public void SetImGui(DirectX12ImGuiRenderer renderer) => _imgui = renderer;
 #endif
-
-	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
-	public void SetUI(DirectX12UIRenderer renderer) => _ui = renderer;
 
 	/// <summary>The engine-created UI textures (1×1 white texel + optional font atlas) the "ui" draw-list technique
 	/// samples — a command's <c>TextureIndex</c> selects between them. Wired in by the engine on EnableUI.</summary>

@@ -73,10 +73,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	// ctx.DrawImGui() seam) exist even when the engine is built without ImGui (UseImGui=false).
 	private nint _imguiDrawData;
 
-	// The host's game-UI renderer (the twin of _imgui), set by the engine when the host calls EnableUI. The "ui"
-	// pass's ctx.DrawUI(surface) forwards that surface's draw data to it. Null until UI is enabled; MU0 Phase A's
-	// renderer is a no-op (PlanningUI.md MU0). Ungated — the neutral seam exists unconditionally (no native dep).
-	private VulkanUIRenderer? _ui;
 	// The engine-created UI textures the "ui" draw-list technique samples (white texel at index 0, optional font
 	// atlas at index 1) — set on EnableUI, used by DrawUI to feed DrawList. _uiEnabled gates DrawUI (a default
 	// Texture handle is indistinguishable from a real one, so the flag, not the handle, says UI is set up).
@@ -186,9 +182,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
 	public void SetImGui(VulkanImGuiRenderer renderer) => _imgui = renderer;
 #endif
-
-	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
-	public void SetUI(VulkanUIRenderer renderer) => _ui = renderer;
 
 	/// <summary>The engine-created UI textures (1×1 white texel + optional font atlas) the "ui" draw-list technique
 	/// samples — a command's <c>TextureIndex</c> selects between them. Wired in by the engine on EnableUI.</summary>
