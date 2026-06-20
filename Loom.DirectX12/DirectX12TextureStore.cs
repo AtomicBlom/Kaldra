@@ -23,6 +23,7 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		public ComPtr<ID3D12Resource> Resource;
 		public DxgiFormat Format;
 		public uint MipLevels;
+		public bool IsCube;
 	}
 
 	private readonly DirectX12Context _ctx;
@@ -56,7 +57,11 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 			TextureFormat.Rgba16F => DxgiFormat.FormatR16G16B16A16Float,
 			_ => throw new NotSupportedException($"No DirectX12 texture format mapping for {data.Format}."),
 		};
-		var mipLevels = (uint)data.Levels.Count;
+		// A cube map is six array slices viewed as a TextureCube; the per-slice mip count is MipsPerFace and the
+		// total subresource count (slices × mips, face-major like the Levels list) drives the footprints + copies.
+		var mipsPerFace = (uint)data.MipsPerFace;
+		var arraySize = (ushort)data.LayerCount;
+		var subresourceCount = (uint)data.Levels.Count;
 
 		// DEFAULT-heap committed texture with the full mip chain, created ready to receive the copy.
 		var defaultHeap = new HeapProperties { Type = HeapType.Default, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
@@ -66,8 +71,8 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 			Alignment = 0,
 			Width = (ulong)data.Width,
 			Height = (uint)data.Height,
-			DepthOrArraySize = 1,
-			MipLevels = (ushort)mipLevels,
+			DepthOrArraySize = arraySize,
+			MipLevels = (ushort)mipsPerFace,
 			Format = format,
 			SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = 1, Quality = 0 },
 			Layout = TextureLayout.LayoutUnknown,
@@ -78,11 +83,11 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 			&defaultHeap, HeapFlags.None, &desc, ResourceStates.CopyDest, (ClearValue*)null, out texture));
 
 		// Footprints: where each subresource lands in the staging buffer (256-aligned row pitch, per-subresource offset).
-		var layouts = stackalloc PlacedSubresourceFootprint[(int)mipLevels];
-		var numRows = stackalloc uint[(int)mipLevels];
-		var rowSizes = stackalloc ulong[(int)mipLevels];
+		var layouts = stackalloc PlacedSubresourceFootprint[(int)subresourceCount];
+		var numRows = stackalloc uint[(int)subresourceCount];
+		var rowSizes = stackalloc ulong[(int)subresourceCount];
 		ulong totalBytes;
-		_ctx.Device.GetCopyableFootprints(&desc, 0, mipLevels, 0, layouts, numRows, rowSizes, &totalBytes);
+		_ctx.Device.GetCopyableFootprints(&desc, 0, subresourceCount, 0, layouts, numRows, rowSizes, &totalBytes);
 
 		var staging = CreateUploadBuffer(totalBytes);
 		void* mapped;
@@ -103,7 +108,7 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		// One-time copy: lay each subresource in, then transition the whole texture to a shader resource.
 		SilkMarshal.ThrowHResult(_allocator.Reset());
 		SilkMarshal.ThrowHResult(_cmd.Reset(_allocator, default(ComPtr<ID3D12PipelineState>)));
-		for (var i = 0u; i < mipLevels; i++)
+		for (var i = 0u; i < subresourceCount; i++)
 		{
 			var dst = new TextureCopyLocation
 			{
@@ -143,7 +148,7 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		staging.Dispose();
 
 		var id = _textures.Count;
-		_textures.Add(new StoredTexture { Resource = texture, Format = format, MipLevels = mipLevels });
+		_textures.Add(new StoredTexture { Resource = texture, Format = format, MipLevels = mipsPerFace, IsCube = data.IsCube });
 		return new Texture(id, data.Width, data.Height);
 	}
 
@@ -155,6 +160,9 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 
 	/// <summary>The texture's mip-level count (so the SRV exposes the whole chain, not just mip 0).</summary>
 	public uint MipLevels(int textureId) => _textures[textureId].MipLevels;
+
+	/// <summary>True when the texture is a cube map (six array slices), so the SRV is created as a <c>TextureCube</c>.</summary>
+	public bool IsCube(int textureId) => _textures[textureId].IsCube;
 
 	private ComPtr<ID3D12Resource> CreateUploadBuffer(ulong size)
 	{

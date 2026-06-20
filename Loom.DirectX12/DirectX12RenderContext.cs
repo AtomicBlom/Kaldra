@@ -276,20 +276,33 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
 	}
 
-	// Create a Texture2D SRV over a loaded texture, exposing its full mip chain (unlike the transient WriteSrv,
-	// which is single-mip). Material textures sample through this.
+	// Create an SRV over a loaded texture, exposing its full mip chain (unlike the transient WriteSrv, which is
+	// single-mip). Material textures sample through this. A cube map is viewed as a TextureCube (its six array
+	// slices); everything else as a Texture2D.
 	private void WriteTextureSrv(int textureId, CpuDescriptorHandle dest)
 	{
+		var mips = _textures.MipLevels(textureId);
 		var srv = new ShaderResourceViewDesc
 		{
 			Format = _textures.SrvFormat(textureId),
-			ViewDimension = SrvDimension.Texture2D,
 			Shader4ComponentMapping = DefaultShader4ComponentMapping,
-			Anonymous = new ShaderResourceViewDescUnion
-			{
-				Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = _textures.MipLevels(textureId), PlaneSlice = 0, ResourceMinLODClamp = 0f }
-			}
 		};
+		if (_textures.IsCube(textureId))
+		{
+			srv.ViewDimension = SrvDimension.Texturecube;
+			srv.Anonymous = new ShaderResourceViewDescUnion
+			{
+				TextureCube = new TexcubeSrv { MostDetailedMip = 0, MipLevels = mips, ResourceMinLODClamp = 0f },
+			};
+		}
+		else
+		{
+			srv.ViewDimension = SrvDimension.Texture2D;
+			srv.Anonymous = new ShaderResourceViewDescUnion
+			{
+				Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = mips, PlaneSlice = 0, ResourceMinLODClamp = 0f },
+			};
+		}
 		_ctx.Device.CreateShaderResourceView(_textures.Resource(textureId), &srv, dest);
 	}
 

@@ -69,3 +69,23 @@ the existing gamma-correct box filter.
 - Per-face (not cross-face-edge) mip filtering — the standard, deterministic, backend-identical choice.
 - Verified: Core builds; `TextureDataTests` 20/20 (+3 cube tests). Backend cube create/view/upload is
   checkpoints 3b (Vulkan) + 3c (DirectX12).
+
+**Checkpoint 3b/3c — backend cube create/view/upload (both backends).**
+- Vulkan (`VulkanTextureStore`): image created `CUBE_COMPATIBLE` with `ArrayLayers = LayerCount`, viewed
+  as `ImageViewType.TypeCube`; the upload derives `(baseArrayLayer, mipLevel)` from the face-major level
+  index (`face = i / MipsPerFace`, `mip = i % MipsPerFace`). The cube-ness lives in the view, so the
+  combined-image-sampler material binding is unchanged.
+- DirectX12 (`DirectX12TextureStore` + `DirectX12RenderContext`): resource is a 6-slice `Texture2D`
+  (`DepthOrArraySize = LayerCount`, `MipLevels = MipsPerFace`); the material SRV branches to
+  `SrvDimension.Texturecube` (`TexcubeSrv`) for a cube. Separated the conflated `mipLevels` into
+  `mipsPerFace` (SRV/resource) vs `subresourceCount` (footprints/copies); the face-major level order
+  equals D3D12's subresource index, so the upload loop maps 1:1 with no reshuffle.
+- Status: **both backends compile; full solution builds.** GPU cube *sampling* is not yet visually
+  verified — it gets exercised + parity-checked by its first consumer (the skybox / IBL pass next).
+- **Decision (IBL approach):** generate the IBL cubes (irradiance, prefiltered specular) + BRDF LUT on
+  the **CPU** and upload them via this cube `TextureData` path, rather than building GPU-writable cube
+  render targets / per-face UAVs. Rationale: it reuses the just-built mechanism, is deterministic and
+  byte-identical across backends (matching the engine's CPU-mip parity philosophy), and keeps the
+  lighting pass to plain sampled bindings (irradiance cube + prefiltered cube + 2D BRDF LUT). The cost
+  is CPU bake time at load, acceptable for the reference demo (cache to disk if it bites). This means
+  GPU-writable cube graph resources are **not** needed for M16-1 — a meaningful scope reduction.
