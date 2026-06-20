@@ -50,17 +50,22 @@ public sealed class Grid : Panel
 		var cols = ColumnDefinitions.Count > 0 ? [.. ColumnDefinitions] : new[] { GridLength.Star };
 		var rows = RowDefinitions.Count > 0 ? [.. RowDefinitions] : new[] { GridLength.Star };
 
-		_colSizes = ResolveTracks(cols, available.Width, horizontal: true);
-		_rowSizes = ResolveTracks(rows, available.Height, horizontal: false);
-
-		// Final measure of each child against its (resolved) cell — the sum of the tracks it spans.
+		// Measure each child exactly once, against a cell constraint derived from the track types it spans: a Pixel
+		// track contributes its fixed extent; an Auto or Star track is left unconstrained, so the child reports its
+		// content size (which sizes Auto/Star tracks, with Star taking its proportional share only at arrange). One
+		// measure per child — no second resolved-size pass — so constraint-dependent content cannot desire one size
+		// for the track and a different one for its final cell.
 		foreach (var child in Children.Items)
 		{
-			var ci = Math.Clamp(GetColumn(child), 0, _colSizes.Length - 1);
-			var ri = Math.Clamp(GetRow(child), 0, _rowSizes.Length - 1);
-			child.Measure(new Size(SpanSum(_colSizes, ci, GetColumnSpan(child)), SpanSum(_rowSizes, ri, GetRowSpan(child))));
+			var ci = ClampIndex(GetColumn(child), cols.Length);
+			var ri = ClampIndex(GetRow(child), rows.Length);
+			child.Measure(new Size(
+				CellConstraint(cols, ci, GetColumnSpan(child)),
+				CellConstraint(rows, ri, GetRowSpan(child))));
 		}
 
+		_colSizes = ResolveTracks(cols, available.Width, horizontal: true);
+		_rowSizes = ResolveTracks(rows, available.Height, horizontal: false);
 		return new Size(Sum(_colSizes), Sum(_rowSizes));
 	}
 
@@ -89,12 +94,14 @@ public sealed class Grid : Panel
 		return s;
 	}
 
-	// Resolve one axis: Pixel fixed, Auto = max child desired in that track, Star = proportional share of leftover.
+	// Resolve one axis: Pixel fixed, Auto = max child desired in that track, Star = proportional share of the leftover
+	// when the axis is finite — and content-sized (like Auto) when it is infinite. Reads the children's already-
+	// computed DesiredSize; it never measures.
 	private float[] ResolveTracks(GridLength[] defs, float available, bool horizontal)
 	{
 		var sizes = new float[defs.Length];
 		float used = 0f, starWeight = 0f;
-		var hasFiniteSpace = !float.IsPositiveInfinity(available);
+		var finite = !float.IsPositiveInfinity(available);
 
 		for (var i = 0; i < defs.Length; i++)
 		{
@@ -104,16 +111,32 @@ public sealed class Grid : Panel
 			else starWeight += d.Value;
 		}
 
-		var leftover = hasFiniteSpace ? MathF.Max(0f, available - used) : 0f;
-		if (starWeight > 0f)
+		if (starWeight <= 0f)
+			return sizes;
+
+		if (finite)
+		{
+			var leftover = MathF.Max(0f, available - used);
 			for (var i = 0; i < defs.Length; i++)
 				if (defs[i].IsStar)
 					sizes[i] = leftover * (defs[i].Value / starWeight);
+		}
+		else
+		{
+			// Under an infinite constraint there is no leftover to divide, so a Star track sizes to its content,
+			// exactly like Auto (matching WinUI). Without this every Star track resolves to zero, and a default
+			// (single-Star) Grid measured unconstrained — a StackPanel's stacking axis, a Canvas — would desire
+			// nothing and render nothing.
+			for (var i = 0; i < defs.Length; i++)
+				if (defs[i].IsStar)
+					sizes[i] = AutoExtent(i, horizontal);
+		}
 		return sizes;
 	}
 
-	// Max desired extent of the single-cell children in a track (measured unconstrained for Auto sizing). Spanning
-	// children are excluded — MU2 does not distribute a span's desired size across its Auto tracks (documented).
+	// Max desired extent of the single-cell children in a track. Children were measured once in MeasureOverride
+	// (Auto/Star cells unconstrained), so this only reads DesiredSize. Spanning children are excluded — a span's
+	// desired size is not distributed across its Auto tracks (documented).
 	private float AutoExtent(int track, bool horizontal)
 	{
 		var max = 0f;
@@ -123,11 +146,27 @@ public sealed class Grid : Panel
 			var span = Math.Max(1, horizontal ? GetColumnSpan(child) : GetRowSpan(child));
 			if (t != track || span != 1)
 				continue;
-			child.Measure(Size.Infinite);
 			max = MathF.Max(max, horizontal ? child.DesiredSize.Width : child.DesiredSize.Height);
 		}
 		return max;
 	}
+
+	// The measure constraint for a child's cell: the summed extent of the Pixel tracks it spans, or unbounded if any
+	// spanned track is Auto/Star (so the child reports its content size for that track's sizing).
+	private static float CellConstraint(GridLength[] defs, int start, int span)
+	{
+		var end = Math.Min(defs.Length, start + Math.Max(1, span));
+		var sum = 0f;
+		for (var i = start; i < end; i++)
+		{
+			if (!defs[i].IsPixel)
+				return float.PositiveInfinity;
+			sum += defs[i].Value;
+		}
+		return sum;
+	}
+
+	private static int ClampIndex(int value, int length) => Math.Clamp(value, 0, length - 1);
 
 	private static float Sum(float[] a) { float s = 0f; foreach (var v in a) s += v; return s; }
 

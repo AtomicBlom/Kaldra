@@ -86,6 +86,44 @@ public sealed class LayoutTests
 	}
 
 	[Test]
+	public void Grid_star_tracks_size_to_content_under_an_infinite_constraint()
+	{
+		// A Canvas measures its child with infinite width AND height. A default Grid (one implicit Star column + row)
+		// must size those Star tracks to content there — not collapse to zero, which would render nothing.
+		var grid = new Grid();
+		grid.Children.Add(new Border { Width = 60, Height = 40 });
+		var canvas = new Canvas();
+		canvas.Children.Add(grid);
+		Root(canvas);
+
+		grid.DesiredSize.ShouldBe(new Size(60, 40));
+	}
+
+	[Test]
+	public void Grid_measures_each_child_once_even_in_an_auto_track()
+	{
+		var grid = new Grid();
+		grid.ColumnDefinitions.Add(GridLength.Auto);
+		grid.ColumnDefinitions.Add(GridLength.Star);
+		var probe = new MeasureCounter();
+		grid.Children.Add(probe); // column 0 (Auto)
+		Root(grid, 300, 100);
+
+		probe.Measures.ShouldBe(1); // once — not the Auto-sizing pass plus a resolved-cell re-measure
+	}
+
+	// A leaf whose MeasureOverride count is observable, for asserting the Grid measures each child exactly once.
+	private sealed class MeasureCounter : FrameworkElement
+	{
+		public int Measures { get; private set; }
+		protected override Size MeasureOverride(Size available)
+		{
+			Measures++;
+			return new Size(30, 20);
+		}
+	}
+
+	[Test]
 	public void Canvas_places_children_at_their_attached_left_top()
 	{
 		var dot = new Border { Width = 8, Height = 8 };
