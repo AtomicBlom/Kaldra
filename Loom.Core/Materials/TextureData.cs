@@ -26,12 +26,23 @@ public sealed class TextureData
 	/// (or the single base level when mips weren't generated).</summary>
 	public IReadOnlyList<MipLevel> Levels { get; }
 
-	private TextureData(TextureFormat format, int width, int height, IReadOnlyList<MipLevel> levels)
+	/// <summary>True when this is a cube map (six faces) rather than a flat 2D image.</summary>
+	public bool IsCube { get; }
+
+	/// <summary>Array layers: 6 for a cube map, 1 for a 2D image.</summary>
+	public int LayerCount => IsCube ? 6 : 1;
+
+	/// <summary>Mip levels <em>per face / layer</em>. For a cube, <see cref="Levels"/> is laid out face-major —
+	/// <c>Levels[face * MipsPerFace + mip]</c> — matching the subresource index order both backends expect.</summary>
+	public int MipsPerFace => Levels.Count / LayerCount;
+
+	private TextureData(TextureFormat format, int width, int height, IReadOnlyList<MipLevel> levels, bool isCube = false)
 	{
 		Format = format;
 		Width = width;
 		Height = height;
 		Levels = levels;
+		IsCube = isCube;
 	}
 
 	/// <summary>
@@ -84,6 +95,42 @@ public sealed class TextureData
 
 		var bytes = MemoryMarshal.AsBytes(rgba).ToArray();
 		return new TextureData(TextureFormat.Rgba16F, width, height, [new MipLevel(width, height, bytes)]);
+	}
+
+	/// <summary>
+	/// Build a cube-map <see cref="TextureData"/> from six square faces, optionally generating each face's mip
+	/// chain. <paramref name="faces"/> holds the six faces concatenated in the standard cube order
+	/// (+X, −X, +Y, −Y, +Z, −Z), each <paramref name="size"/>×<paramref name="size"/> tightly packed RGBA8. The
+	/// levels are stored face-major — <c>Levels[face * MipsPerFace + mip]</c> — which is exactly the subresource
+	/// order both backends index, so the texture store uploads them without reshuffling. Each face is mipped
+	/// independently with the same deterministic (gamma-correct) box filter as <see cref="FromRgba8"/>.
+	/// </summary>
+	/// <param name="size">Face edge length in texels (positive); a cube face is square.</param>
+	/// <param name="faces">Six concatenated faces, each <c>size*size*4</c> RGBA8 bytes; length must equal <c>6*size*size*4</c>.</param>
+	/// <param name="format">The pixel encoding (shared by all faces).</param>
+	/// <param name="generateMips">When true (default), mip each face down to 1×1; otherwise one level per face.</param>
+	public static TextureData FromCubeFaces(int size, ReadOnlySpan<byte> faces, TextureFormat format, bool generateMips = true)
+	{
+		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(size);
+		var faceBytes = size * size * 4;
+		if (faces.Length != 6 * faceBytes)
+			throw new ArgumentException($"Expected {6 * faceBytes} RGBA8 bytes for six {size}×{size} cube faces, got {faces.Length}.", nameof(faces));
+
+		var levels = new List<MipLevel>();
+		for (var face = 0; face < 6; face++)
+		{
+			var current = new MipLevel(size, size, faces.Slice(face * faceBytes, faceBytes).ToArray());
+			levels.Add(current);
+			if (!generateMips)
+				continue;
+			while (current.Width > 1 || current.Height > 1)
+			{
+				current = Downsample(current, format);
+				levels.Add(current);
+			}
+		}
+
+		return new TextureData(format, size, size, levels, isCube: true);
 	}
 
 	/// <summary>

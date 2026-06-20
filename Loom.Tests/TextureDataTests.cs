@@ -158,6 +158,43 @@ public class TextureDataTests
 	}
 
 	[Test]
+	public void FromCubeFaces_is_six_mipped_faces_laid_out_face_major()
+	{
+		// Six distinct solid faces, 4×4 → mips 4,2,1 = 3 per face, 18 levels total, face-major.
+		var faces = new byte[6 * 4 * 4 * 4];
+		for (var face = 0; face < 6; face++)
+			for (var i = 0; i < 4 * 4; i++)
+				faces[(face * 4 * 4 + i) * 4 + 0] = (byte)(face * 40); // a per-face red value
+
+		var data = TextureData.FromCubeFaces(4, faces, TextureFormat.Rgba8Unorm);
+
+		data.IsCube.ShouldBeTrue();
+		data.LayerCount.ShouldBe(6);
+		data.MipsPerFace.ShouldBe(3);
+		data.Levels.Count.ShouldBe(18);
+		// Face-major: Levels[face * MipsPerFace] is that face's base level, carrying its red value.
+		for (var face = 0; face < 6; face++)
+			data.Levels[face * data.MipsPerFace].Pixels[0].ShouldBe((byte)(face * 40));
+	}
+
+	[Test]
+	public void FromCubeFaces_without_mips_is_one_level_per_face()
+	{
+		var data = TextureData.FromCubeFaces(8, new byte[6 * 8 * 8 * 4], TextureFormat.Rgba8Unorm, generateMips: false);
+
+		data.IsCube.ShouldBeTrue();
+		data.Levels.Count.ShouldBe(6);
+		data.MipsPerFace.ShouldBe(1);
+	}
+
+	[Test]
+	public void FromCubeFaces_rejects_a_wrong_length_buffer()
+	{
+		Should.Throw<ArgumentException>(() =>
+			TextureData.FromCubeFaces(4, new byte[5 * 4 * 4 * 4], TextureFormat.Rgba8Unorm));
+	}
+
+	[Test]
 	public void Box_filter_clamps_edge_taps_on_a_1xN_column()
 	{
 		// 1x2 column, reds {40, 80}. The x tap clamps to column 0, so the 1x1 result averages the two rows:

@@ -58,3 +58,14 @@ chain; the GPU prefilter makes the roughness mips), and `ImageLoader.LoadHdr/Dec
   format-agnostic (copies the level bytes wholesale; the image format drives the layout).
 - Verified: full solution builds clean (Vulkan + DirectX12); `TextureDataTests` 17/17 (incl. 2 new
   RGBA16F tests). The byte-for-byte HDR→GPU path is exercised on the GPU in checkpoint 3 (cubemaps).
+
+**Checkpoint 3a — cube `TextureData` (Core).** `TextureData.FromCubeFaces(size, faces, format, mips)`
+plus `IsCube`/`LayerCount`/`MipsPerFace`. Six faces (+X,−X,+Y,−Y,+Z,−Z) each mipped independently with
+the existing gamma-correct box filter.
+- Key layout decision: levels are stored **face-major** — `Levels[face*MipsPerFace + mip]`. That index
+  equals D3D12's subresource index formula (`mip + arraySlice*MipLevels`) exactly, so the DX12 upload
+  loop needs no reshuffle, and Vulkan just sets `baseArrayLayer = i / MipsPerFace`,
+  `mipLevel = i % MipsPerFace`. One layout serves both backends.
+- Per-face (not cross-face-edge) mip filtering — the standard, deterministic, backend-identical choice.
+- Verified: Core builds; `TextureDataTests` 20/20 (+3 cube tests). Backend cube create/view/upload is
+  checkpoints 3b (Vulkan) + 3c (DirectX12).
