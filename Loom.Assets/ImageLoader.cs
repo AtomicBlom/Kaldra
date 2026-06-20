@@ -1,5 +1,4 @@
-using Loom.Core;
-
+using Loom.Core.Materials;
 using StbImageSharp;
 
 namespace Loom.Assets;

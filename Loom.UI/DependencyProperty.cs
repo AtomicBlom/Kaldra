@@ -1,5 +1,3 @@
-using System.Threading;
-
 namespace Loom.UI;
 
 /// <summary>

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text;
 
 using Loom.Core;
+using Loom.Core.Graph;
 
 namespace Loom.Graph;
 

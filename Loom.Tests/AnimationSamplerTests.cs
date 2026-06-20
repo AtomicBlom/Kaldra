@@ -1,8 +1,7 @@
-using System.Collections.Immutable;
 using System.Numerics;
 
 using Loom.Assets;
-using Loom.Core;
+using Loom.Core.Animation;
 
 namespace Loom.Tests;
 

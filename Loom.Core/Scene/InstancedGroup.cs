@@ -1,4 +1,5 @@
 using System.Numerics;
+using Loom.Core.Geometry;
 
 namespace Loom.Core.Scene;
 

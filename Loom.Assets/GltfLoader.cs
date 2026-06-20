@@ -1,9 +1,8 @@
 using System.Collections.Immutable;
 using System.Numerics;
-
-using Loom.Core;
-
-using SharpGLTF.Animations;
+using Loom.Core.Animation;
+using Loom.Core.Geometry;
+using Loom.Core.Materials;
 using SharpGLTF.Schema2;
 
 using GltfMaterial = SharpGLTF.Schema2.Material;

@@ -1,5 +1,6 @@
-using Silk.NET.Vulkan;
-using BlendMode = Loom.Core.BlendMode;
+using Loom.Core.Geometry;
+using Loom.Core.Graph;
+using Format = Silk.NET.Vulkan.Format;
 
 namespace Loom.Vulkan;
 
@@ -35,6 +36,6 @@ public readonly record struct TechniqueDescription(
 	int StorageCount = 0,
 	int StorageBufferCount = 0,
 	bool ParticleInput = false,
-	Loom.Core.VertexLayout? Layout = null,
-	Loom.Core.VertexLayout? Instance = null,
+	VertexLayout? Layout = null,
+	VertexLayout? Instance = null,
 	int UniformBufferCount = 0);

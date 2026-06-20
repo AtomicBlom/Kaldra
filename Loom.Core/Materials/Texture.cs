@@ -1,3 +1,5 @@
+using Loom.Core.Geometry;
+
 namespace Loom.Core.Materials;
 
 /// <summary>

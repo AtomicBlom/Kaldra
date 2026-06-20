@@ -1,3 +1,5 @@
+using Loom.Core.Graph;
+
 namespace Loom.Core.Geometry;
 
 /// <summary>

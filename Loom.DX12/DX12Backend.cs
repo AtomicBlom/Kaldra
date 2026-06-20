@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 
 using Loom.Core;
+using Loom.Core.Hosting;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;

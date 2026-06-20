@@ -1,5 +1,3 @@
-using Loom.Core;
-
 namespace Loom.UI.Tests;
 
 /// <summary>

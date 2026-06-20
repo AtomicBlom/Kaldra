@@ -1,4 +1,6 @@
-using Loom.Core;
+using Loom.Core.Geometry;
+using Loom.Core.Graph;
+using Loom.Core.Materials;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
@@ -431,13 +433,13 @@ internal sealed unsafe class DX12Technique : IDisposable
 		_ => throw new NotSupportedException($"DX12: SamplerAddress '{address}' is not mapped to a TextureAddressMode."),
 	};
 
-	private static Format ToDxgiFormat(Loom.Core.VertexFormat format) => format switch
+	private static Format ToDxgiFormat(VertexFormat format) => format switch
 	{
-		Loom.Core.VertexFormat.Float => Format.FormatR32Float,
-		Loom.Core.VertexFormat.Float2 => Format.FormatR32G32Float,
-		Loom.Core.VertexFormat.Float3 => Format.FormatR32G32B32Float,
-		Loom.Core.VertexFormat.Float4 => Format.FormatR32G32B32A32Float,
-		Loom.Core.VertexFormat.UInt4 => Format.FormatR32G32B32A32Uint,
+		VertexFormat.Float => Format.FormatR32Float,
+		VertexFormat.Float2 => Format.FormatR32G32Float,
+		VertexFormat.Float3 => Format.FormatR32G32B32Float,
+		VertexFormat.Float4 => Format.FormatR32G32B32A32Float,
+		VertexFormat.UInt4 => Format.FormatR32G32B32A32Uint,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 

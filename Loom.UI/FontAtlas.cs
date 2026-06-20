@@ -3,6 +3,7 @@ using System.Text.Json;
 
 using Loom.Assets;
 using Loom.Core;
+using Loom.Core.Materials;
 
 namespace Loom.UI;
 

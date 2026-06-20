@@ -1,4 +1,4 @@
-using Loom.Core;
+using Loom.Core.Materials;
 
 namespace Loom.DX12;
 

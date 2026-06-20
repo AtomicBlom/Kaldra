@@ -1,8 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using System.Text;
-
-using Loom.Core;
+using Loom.Core.Primitives;
 
 namespace Loom.UI;
 

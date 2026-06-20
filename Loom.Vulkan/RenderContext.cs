@@ -3,6 +3,11 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 
 using Loom.Core;
+using Loom.Core.Geometry;
+using Loom.Core.Graph;
+using Loom.Core.Hosting;
+using Loom.Core.Materials;
+using Loom.Core.UI;
 using Silk.NET.Vulkan;
 using VkFormat = Silk.NET.Vulkan.Format;
 

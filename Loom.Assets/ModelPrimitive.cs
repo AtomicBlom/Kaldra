@@ -1,4 +1,5 @@
-using Loom.Core;
+using Loom.Core.Animation;
+using Loom.Core.Geometry;
 
 namespace Loom.Assets;
 

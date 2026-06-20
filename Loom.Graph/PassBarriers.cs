@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
-
-using Loom.Core;
+using Loom.Core.Graph;
 
 namespace Loom.Graph;
 

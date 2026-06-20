@@ -1,7 +1,7 @@
 using System.Numerics;
 
 using Loom.Assets;
-using Loom.Core;
+using Loom.Core.Animation;
 
 namespace Loom.Tests;
 
@@ -60,7 +60,7 @@ public class GltfSkinningLoadTests
 		var clip = model.Clips[0];
 		clip.Name.ShouldBe("bend");
 		clip.Duration.ShouldBe(2f, 1e-3f); // last keyframe at t=2
-		// The clip drives joint 1 (bone1) with a rotation track; bone0 is unkeyed.
+										   // The clip drives joint 1 (bone1) with a rotation track; bone0 is unkeyed.
 		var channel = clip.Channels.Single(c => c.JointIndex == 1);
 		channel.Rotation.ShouldNotBeNull();
 		channel.Rotation!.Times.Length.ShouldBe(3); // keys at 0, 1, 2

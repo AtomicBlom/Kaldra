@@ -1,7 +1,9 @@
 using System.Numerics;
-
+using Loom.Core.Geometry;
+using Loom.Core.Graph;
 using Silk.NET.Vulkan;
-using BlendMode = Loom.Core.BlendMode;
+using Format = Silk.NET.Vulkan.Format;
+using VertexInputRate = Silk.NET.Vulkan.VertexInputRate;
 
 namespace Loom.Vulkan;
 
@@ -168,7 +170,7 @@ public sealed unsafe class Technique : IDisposable
 	// matrix — instanced drawing). Vulkan vertex-input locations are one flat namespace across bindings, so
 	// locations are assigned in order: per-vertex attributes get 0..k-1, per-instance attributes continue at
 	// k.. — the instanced shader's [[vk::location]]s must match.
-	private static PipelineVertexInputStateCreateInfo* VertexInput(NativeArena arena, Loom.Core.VertexLayout vertexLayout, Loom.Core.VertexLayout? instanceLayout)
+	private static PipelineVertexInputStateCreateInfo* VertexInput(NativeArena arena, VertexLayout vertexLayout, VertexLayout? instanceLayout)
 	{
 		var bindingCount = instanceLayout is null ? 1 : 2;
 		var attributeCount = vertexLayout.Attributes.Length + (instanceLayout?.Attributes.Length ?? 0);
@@ -198,13 +200,13 @@ public sealed unsafe class Technique : IDisposable
 		});
 	}
 
-	private static Format ToVkFormat(Loom.Core.VertexFormat format) => format switch
+	private static Format ToVkFormat(VertexFormat format) => format switch
 	{
-		Loom.Core.VertexFormat.Float => Format.R32Sfloat,
-		Loom.Core.VertexFormat.Float2 => Format.R32G32Sfloat,
-		Loom.Core.VertexFormat.Float3 => Format.R32G32B32Sfloat,
-		Loom.Core.VertexFormat.Float4 => Format.R32G32B32A32Sfloat,
-		Loom.Core.VertexFormat.UInt4 => Format.R32G32B32A32Uint,
+		VertexFormat.Float => Format.R32Sfloat,
+		VertexFormat.Float2 => Format.R32G32Sfloat,
+		VertexFormat.Float3 => Format.R32G32B32Sfloat,
+		VertexFormat.Float4 => Format.R32G32B32A32Sfloat,
+		VertexFormat.UInt4 => Format.R32G32B32A32Uint,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 
@@ -213,7 +215,7 @@ public sealed unsafe class Technique : IDisposable
 	// (§7.6 GPU particles). With a layout (M14-4 generalized particles) the stream's attributes/stride come from
 	// it (e.g. VertexLayout.Particle: two IPARTICLE float4 rows, 32 bytes); without one, the legacy single float4
 	// (xyz position + w life, stride 16) — so the original ParticlesDemo path is unchanged.
-	private static PipelineVertexInputStateCreateInfo* VertexInputForParticles(NativeArena arena, Loom.Core.VertexLayout? layout)
+	private static PipelineVertexInputStateCreateInfo* VertexInputForParticles(NativeArena arena, VertexLayout? layout)
 	{
 		if (layout is null)
 		{

@@ -1,3 +1,6 @@
+using Loom.Core.Geometry;
+using Loom.Core.UI;
+
 namespace Loom.Core.Hosting;
 
 /// <summary>

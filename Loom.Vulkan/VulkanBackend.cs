@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 
 using Loom.Core;
+using Loom.Core.Hosting;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Vulkan;
 
@@ -18,14 +19,14 @@ public sealed class VulkanBackend : IRenderBackend
 	/// <summary>
 	/// Register the Vulkan backend as the Loom.Vulkan assembly loads (Planning.md §5 backend registry) — but only
 	/// if <see cref="IsSupported"/> confirms a Vulkan 1.3 device is actually present. An unusable backend then never
-	/// appears in <see cref="Core.Engine.AvailableEngines"/>, so the host's selection falls through to a working one
+	/// appears in <see cref="Engine.AvailableEngines"/>, so the host's selection falls through to a working one
 	/// instead of crashing later in <see cref="Create"/>.
 	/// </summary>
 	[ModuleInitializer]
 	internal static void Register()
 	{
 		if (IsSupported())
-			Core.Engine.Register(new VulkanBackend());
+			Engine.Register(new VulkanBackend());
 	}
 #pragma warning restore CA2255
 

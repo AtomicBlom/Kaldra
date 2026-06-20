@@ -1,4 +1,7 @@
 using Loom.Core;
+using Loom.Core.Geometry;
+using Loom.Core.Graph;
+using Loom.Core.Materials;
 
 namespace Loom.Vulkan;
 
@@ -14,7 +17,7 @@ namespace Loom.Vulkan;
 /// <param name="VertexEntry">Vertex entry-point name.</param>
 /// <param name="FragmentEntry">Fragment entry-point name.</param>
 /// <param name="SampleCount">Number of sampled inputs the fragment reads (combined image samplers at set 0, bindings 0..N-1).</param>
-/// <param name="HasVertexInput">True if the vertex stage reads a <see cref="Loom.Core.Vertex"/> buffer (a mesh technique) rather than fabricating a fullscreen triangle.</param>
+/// <param name="HasVertexInput">True if the vertex stage reads a <see cref="Vertex"/> buffer (a mesh technique) rather than fabricating a fullscreen triangle.</param>
 /// <param name="Blend">The blend equation — pairs with a pass that <c>.Blends</c> its target (alpha-over for transparency, additive for bloom).</param>
 /// <param name="LinearFilter">Sample inputs with a linear (rather than nearest) sampler — smooth filtering for bloom's downsample/upsample; nearest elsewhere keeps the pixel grid crisp.</param>
 /// <param name="HasFragmentPush">True if the shader's fragment (or, for a compute technique, compute) stage reads a small push-constant block (up to four floats) — the per-pass scalar channel (JFA step, hovered id, exposure rate).</param>

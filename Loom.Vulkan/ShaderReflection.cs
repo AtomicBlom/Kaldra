@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Loom.Core.Materials;
 
 namespace Loom.Vulkan;
 
@@ -6,7 +7,7 @@ namespace Loom.Vulkan;
 /// The descriptor-set shape of a shader, read from the <c>slangc -reflection-json</c> sidecar that
 /// Loom.Shaders emits next to each <c>.spv</c> (M7-B4; the §10 "Slang's own reflection" decision). It counts
 /// how many sampled inputs, storage images, storage buffers, and uniform (constant) buffers the shader binds,
-/// so the app no longer hand-counts them on a <see cref="Loom.Core.TechniqueDescriptor"/> —
+/// so the app no longer hand-counts them on a <see cref="TechniqueDescriptor"/> —
 /// <see cref="VulkanEngine.DefineTechnique"/> derives them here and the bake builds the descriptor-set layout.
 /// </summary>
 internal readonly record struct ShaderReflection(int SampleCount, int StorageImageCount, int StorageBufferCount, int UniformBufferCount)

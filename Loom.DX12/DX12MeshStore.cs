@@ -1,7 +1,6 @@
 using System.Runtime.InteropServices;
-
-using Loom.Core;
-
+using Loom.Core.Animation;
+using Loom.Core.Geometry;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 

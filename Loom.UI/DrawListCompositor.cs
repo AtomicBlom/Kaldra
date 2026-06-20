@@ -1,6 +1,8 @@
 using System.Numerics;
 
 using Loom.Core;
+using Loom.Core.Primitives;
+using Loom.Core.UI;
 
 namespace Loom.UI;
 

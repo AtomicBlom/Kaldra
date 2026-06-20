@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
-
-using Silk.NET.Direct3D.Compilers;
+using Loom.Core.Geometry;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 
@@ -88,7 +87,7 @@ internal sealed unsafe class DX12TechniqueCache : IDisposable
 		return Convert.ToHexString(hash.GetHashAndReset());
 	}
 
-	private static void AppendLayout(IncrementalHash hash, Loom.Core.VertexLayout? layout)
+	private static void AppendLayout(IncrementalHash hash, VertexLayout? layout)
 	{
 		if (layout is null)
 		{

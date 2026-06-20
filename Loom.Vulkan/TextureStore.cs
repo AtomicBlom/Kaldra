@@ -1,4 +1,5 @@
 using Loom.Core;
+using Loom.Core.Materials;
 using Silk.NET.Vulkan;
 using VMASharp;
 

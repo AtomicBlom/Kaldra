@@ -3,6 +3,12 @@ using System.Diagnostics;
 
 using Loom.Assets;
 using Loom.Core;
+using Loom.Core.Animation;
+using Loom.Core.Geometry;
+using Loom.Core.Graph;
+using Loom.Core.Hosting;
+using Loom.Core.Materials;
+using Loom.Core.UI;
 using Loom.Graph;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Vulkan;

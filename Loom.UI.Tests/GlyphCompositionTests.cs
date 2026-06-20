@@ -1,4 +1,4 @@
-using Loom.Core;
+using Loom.Core.UI;
 using Loom.UI.Controls;
 
 namespace Loom.UI.Tests;

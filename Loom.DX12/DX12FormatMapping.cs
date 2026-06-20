@@ -1,5 +1,5 @@
 using Loom.Core;
-
+using Loom.Core.Graph;
 using DxgiFormat = Silk.NET.DXGI.Format;
 
 namespace Loom.DX12;

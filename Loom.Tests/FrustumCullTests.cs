@@ -1,6 +1,6 @@
 using System.Numerics;
-
-using Loom.Core;
+using Loom.Core.Geometry;
+using Loom.Core.Scene;
 
 namespace Loom.Tests;
 

@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 
 using Loom.Core;
+using Loom.Core.Materials;
+using Loom.Core.UI;
 using Silk.NET.Vulkan;
 using VMASharp;
 

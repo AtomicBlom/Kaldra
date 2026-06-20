@@ -1,3 +1,5 @@
+using Loom.Core.Materials;
+
 namespace Loom.Core.Graph;
 
 /// <summary>

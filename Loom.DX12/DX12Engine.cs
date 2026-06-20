@@ -4,6 +4,11 @@ using System.Runtime.InteropServices;
 
 using Loom.Assets;
 using Loom.Core;
+using Loom.Core.Animation;
+using Loom.Core.Geometry;
+using Loom.Core.Graph;
+using Loom.Core.Hosting;
+using Loom.Core.Materials;
 using Loom.Graph;
 
 using Silk.NET.Core.Native;
@@ -12,6 +17,7 @@ using Silk.NET.DXGI;
 using Silk.NET.Maths;
 
 using DxgiFormat = Silk.NET.DXGI.Format;
+using Format = Loom.Core.Graph.Format;
 
 namespace Loom.DX12;
 
@@ -72,7 +78,7 @@ public sealed unsafe class DX12Engine : IEngine
 	// frames stale — invisible for hover). _pickId < 0 when the active graph declares no readback target.
 	private int _pickId = -1;
 	private uint _pickWidth, _pickHeight, _pickRowPitch;
-	private Loom.Core.Format _pickFormat;
+	private Format _pickFormat;
 	private readonly ComPtr<ID3D12Resource>[] _pickReadback = new ComPtr<ID3D12Resource>[BufferCount];
 	private readonly bool[] _pickValid = new bool[BufferCount];
 	private float[] _pickCpu = [];
@@ -726,10 +732,10 @@ public sealed unsafe class DX12Engine : IEngine
 		return buffer;
 	}
 
-	private static uint BytesPerTexel(Loom.Core.Format format) => format switch
+	private static uint BytesPerTexel(Format format) => format switch
 	{
-		Loom.Core.Format.R16F => 2,
-		Loom.Core.Format.R32Uint => 4,
+		Format.R16F => 2,
+		Format.R32Uint => 4,
 		_ => throw new NotSupportedException($"DX12: readback of format {format} is not supported (the id buffer is R16F)."),
 	};
 

@@ -1,4 +1,6 @@
-using Loom.Core;
+using Loom.Core.Geometry;
+using Loom.Core.Graph;
+using Loom.Core.Materials;
 
 namespace Loom.DX12;
 
@@ -15,5 +17,5 @@ internal readonly record struct DX12TechniqueTemplate(
 	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None,
 	int StorageImages = 0, int StorageBuffers = 0, int StorageBufferStride = 0,
 	SamplerAddress Address = SamplerAddress.Clamp,
-	Loom.Core.VertexLayout? Layout = null, Loom.Core.VertexLayout? Instance = null,
+	VertexLayout? Layout = null, VertexLayout? Instance = null,
 	int UniformBufferCount = 0, int InputBufferCount = 0);

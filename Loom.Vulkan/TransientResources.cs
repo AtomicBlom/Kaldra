@@ -1,6 +1,7 @@
 using System.Diagnostics;
 
 using Loom.Core;
+using Loom.Core.Graph;
 using Loom.Graph;
 using Silk.NET.Vulkan;
 using VMASharp;

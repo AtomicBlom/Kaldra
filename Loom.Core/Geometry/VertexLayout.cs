@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using Loom.Core.Animation;
+using Loom.Core.Scene;
 
 namespace Loom.Core.Geometry;
 

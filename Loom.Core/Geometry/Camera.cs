@@ -4,7 +4,7 @@ namespace Loom.Core.Geometry;
 
 /// <summary>
 /// The view onto the scene a pass renders from: a view matrix and a projection. Per-frame data the host
-/// updates and the pass pulls from <see cref="IRenderContext.Camera"/> (never captured — §8). Backend-neutral
+/// updates and the pass pulls from <see cref="Camera"/> (never captured — §8). Backend-neutral
 /// (<c>System.Numerics</c>); matrices follow the row-vector convention (<c>clip = position · MVP</c>), so the
 /// combined transform composes left-to-right. The host builds <see cref="Projection"/> in a neutral convention
 /// (right-handed, +Y up); the backend applies its own clip-space fix-up on ingest — the Vulkan +Y-down Y-flip,

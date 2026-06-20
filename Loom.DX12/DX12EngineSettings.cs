@@ -1,4 +1,4 @@
-using Loom.Core;
+using Loom.Core.Hosting;
 
 namespace Loom.DX12;
 

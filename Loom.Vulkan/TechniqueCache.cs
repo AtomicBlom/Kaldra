@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Loom.Core.Geometry;
 
 namespace Loom.Vulkan;
 
@@ -58,7 +59,7 @@ public sealed class TechniqueCache(VulkanContext ctx) : IDisposable
 
 	// Fold a vertex layout into the content hash so two techniques sharing a shader but differing in layout
 	// (per-vertex attributes or the presence/shape of a per-instance stream) bake distinct pipelines.
-	private static void AppendLayout(IncrementalHash hash, Loom.Core.VertexLayout? layout)
+	private static void AppendLayout(IncrementalHash hash, VertexLayout? layout)
 	{
 		if (layout is null)
 		{
