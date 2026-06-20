@@ -181,6 +181,40 @@ public class GraphScheduleTests
 	}
 
 	[Test]
+	public void Compute_then_compute_on_one_storage_buffer_depends_in_program_order()
+	{
+		// The GPU-particle / sim-step shape: a second compute that .ReadWrites the same storage buffer must wait
+		// on the first (a storage read-modify-write is both reader and writer, so this is a RAW+WAW hazard).
+		var s = Schedule(g =>
+		{
+			var buffer = g.Buffer("sim", 1024);
+			g.Compute("step1").ReadWrites(buffer);
+			g.Compute("step2").ReadWrites(buffer);
+		});
+
+		DepsOf(s, "step2").ShouldBe(["step1"]);
+	}
+
+	[Test]
+	public void Ping_pong_handle_swap_chains_dependencies_through_both_buffers()
+	{
+		// The §8 ping-pong idiom (bloom / JFA): two physical targets and a (read, write) tuple swapped between
+		// passes. The derivation must follow the handles — pass 'v' reads what 'h' wrote.
+		var s = Schedule(g =>
+		{
+			var world = g.Domain("world", 64, 64);
+			var a = world.Color("a", Format.Rgba16F);
+			var b = world.Color("b", Format.Rgba16F);
+			g.Pass("seed").Writes(a);          // produce a
+			g.Pass("h").Samples(a).Writes(b);  // a -> b
+			g.Pass("v").Samples(b).Writes(a);  // b -> a (read/write swapped)
+		});
+
+		DepsOf(s, "h").ShouldBe(["seed"]);
+		DepsOf(s, "v").ShouldBe(["h"]);
+	}
+
+	[Test]
 	public void Reading_a_persistent_before_writing_is_allowed()
 	{
 		// Persistent resources carry cross-frame history, so read-before-write is legal (Planning.md §8).

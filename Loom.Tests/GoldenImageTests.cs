@@ -19,18 +19,18 @@ public class GoldenImageTests
 	public void Captures_match_committed_baselines_within_tolerance()
 	{
 		// Opt-in: the GPU-producing capture step runs locally (tools/golden.ps1) and sets LOOM_GOLDEN_DIR. Without
-		// it — e.g. the no-GPU CI run — this passes vacuously.
+		// it — e.g. the no-GPU CI run — the test is SKIPPED (reported as skipped, not a silent vacuous pass).
 		var captureDir = Environment.GetEnvironmentVariable("LOOM_GOLDEN_DIR");
 		if (string.IsNullOrEmpty(captureDir))
-			return;
+			throw new TUnit.Core.Exceptions.SkipTestException("LOOM_GOLDEN_DIR is not set — run tools/golden.ps1 to capture frames (the GPU step) before comparing.");
 		if (!Directory.Exists(GoldensDir) || Directory.GetFiles(GoldensDir, "*.png").Length == 0)
-			return;
+			throw new InvalidOperationException($"LOOM_GOLDEN_DIR is set but no committed baselines were found under {GoldensDir} — the golden test cannot run.");
 
 		var failures = new List<string>();
 		foreach (var baseline in Directory.GetFiles(GoldensDir, "*.png"))
 		{
 			var name = Path.GetFileName(baseline);
-			var capture = Path.Combine(captureDir!, name);
+			var capture = Path.Combine(captureDir, name);
 			if (!File.Exists(capture))
 			{
 				failures.Add($"{name}: no capture in LOOM_GOLDEN_DIR");
