@@ -54,7 +54,7 @@ public sealed class TextureData
 			var current = levels[0];
 			while (current.Width > 1 || current.Height > 1)
 			{
-				current = Downsample(current);
+				current = Downsample(current, format);
 				levels.Add(current);
 			}
 		}
@@ -63,10 +63,14 @@ public sealed class TextureData
 	}
 
 	/// <summary>
-	/// Halve a level with a 2×2 integer box filter (rounded average per channel; odd/edge taps clamp to the
-	/// last source texel). Pure integer math so the result is bit-for-bit reproducible across machines/backends.
+	/// Halve a level with a 2×2 box filter. An sRGB-encoded colour texture (<see cref="TextureFormat.Rgba8Srgb"/>)
+	/// must be averaged in <em>linear</em> light — decode each colour channel to linear, average, re-encode — or
+	/// the mips darken (the classic gamma-incorrect-mipmap artefact); alpha is always linear, as are all channels
+	/// of an <see cref="TextureFormat.Rgba8Unorm"/> texture. The averaging is integer arithmetic over precomputed
+	/// transfer tables, so both backends still upload byte-identical level data. Odd/edge taps clamp to the last
+	/// source texel.
 	/// </summary>
-	private static MipLevel Downsample(MipLevel src)
+	private static MipLevel Downsample(MipLevel src, TextureFormat format)
 	{
 		var sw = src.Width;
 		var sh = src.Height;
@@ -74,6 +78,7 @@ public sealed class TextureData
 		var dh = Math.Max(1, sh >> 1);
 		var dst = new byte[dw * dh * 4];
 		var s = src.Pixels;
+		var srgb = format == TextureFormat.Rgba8Srgb;
 
 		for (var dy = 0; dy < dh; dy++)
 		{
@@ -91,10 +96,57 @@ public sealed class TextureData
 				var d = (dy * dw + dx) * 4;
 
 				for (var c = 0; c < 4; c++)
-					dst[d + c] = (byte)((s[i00 + c] + s[i01 + c] + s[i10 + c] + s[i11 + c] + 2) >> 2);
+				{
+					// The three colour channels of an sRGB texture average in linear light; alpha (c == 3) is
+					// always linear, as is every channel of a UNORM texture.
+					if (srgb && c < 3)
+					{
+						var lin = SrgbToLinear[s[i00 + c]] + SrgbToLinear[s[i01 + c]]
+							+ SrgbToLinear[s[i10 + c]] + SrgbToLinear[s[i11 + c]];
+						dst[d + c] = LinearToSrgb[(lin + 2) >> 2];
+					}
+					else
+					{
+						dst[d + c] = (byte)((s[i00 + c] + s[i01 + c] + s[i10 + c] + s[i11 + c] + 2) >> 2);
+					}
+				}
 			}
 		}
 
 		return new MipLevel(dw, dh, dst);
+	}
+
+	// sRGB transfer-function tables for gamma-correct mip averaging, built once. SrgbToLinear maps an 8-bit sRGB
+	// code to a 16-bit linear value; LinearToSrgb is its exact nearest-inverse (encode a linear value to the
+	// closest sRGB code), so a value that is decoded and re-encoded unchanged round-trips exactly — a solid
+	// colour is preserved through every mip. Integer-valued so the per-mip averaging stays exact.
+	private static readonly ushort[] SrgbToLinear = BuildSrgbToLinear();
+	private static readonly byte[] LinearToSrgb = BuildLinearToSrgb(SrgbToLinear);
+
+	private static ushort[] BuildSrgbToLinear()
+	{
+		var table = new ushort[256];
+		for (var i = 0; i < 256; i++)
+		{
+			var s = i / 255.0;
+			var linear = s <= 0.04045 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+			table[i] = (ushort)Math.Clamp((int)Math.Round(linear * 65535.0), 0, 65535);
+		}
+		return table;
+	}
+
+	private static byte[] BuildLinearToSrgb(ushort[] srgbToLinear)
+	{
+		// Nearest-inverse of the forward table. srgbToLinear is strictly increasing, so a single advancing
+		// pointer finds, for each 16-bit linear value, the sRGB code whose linear value is closest.
+		var table = new byte[65536];
+		var code = 0;
+		for (var linear = 0; linear < 65536; linear++)
+		{
+			while (code < 255 && Math.Abs(srgbToLinear[code + 1] - linear) < Math.Abs(srgbToLinear[code] - linear))
+				code++;
+			table[linear] = (byte)code;
+		}
+		return table;
 	}
 }

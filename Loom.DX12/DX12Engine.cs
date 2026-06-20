@@ -402,6 +402,8 @@ public sealed unsafe class DX12Engine : IEngine
 			var id = attachment.Resource.Id;
 			if (attachment.State == ResourceState.ColorAttachment)
 			{
+				if (colorCount >= 8)
+					throw new NotSupportedException("DX12: a pass declares more than 8 colour attachments; D3D12 caps simultaneous render targets at 8 (D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT).");
 				if (attachment.Resource.IsBackbuffer)
 				{
 					rtv[colorCount] = _swapchain.RtvHandle(index);

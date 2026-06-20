@@ -58,8 +58,15 @@ internal sealed unsafe class DX12DescriptorRing : IDisposable
 	/// <summary>Reserve <paramref name="count"/> contiguous descriptors; returns the CPU handle (to write into) and GPU handle (to bind).</summary>
 	public (CpuDescriptorHandle Cpu, GpuDescriptorHandle Gpu) Allocate(uint count)
 	{
+		// Fail loud on overflow. Wrapping back into this slot's region would overwrite descriptors that an
+		// earlier draw recorded into this same command list still references at execute time — silent wrong
+		// pixels. The heap must instead be sized for the worst-case per-frame descriptor budget at creation.
 		if (_next + count > _regionEnd)
-			_next = _regionEnd - _regionSize; // wrap within this slot's region — per-frame counts are tiny, so this never overruns a live range
+		{
+			throw new InvalidOperationException(
+				$"DX12 descriptor-ring overflow: this frame requested more than its per-slot budget of {_regionSize} " +
+				$"descriptors. Increase the heap capacity (currently {_capacity} across all in-flight slots).");
+		}
 		var cpu = new CpuDescriptorHandle { Ptr = _cpuStart.Ptr + (nuint)(_next * _increment) };
 		var gpu = new GpuDescriptorHandle { Ptr = _gpuStart.Ptr + (ulong)(_next * _increment) };
 		_next += count;

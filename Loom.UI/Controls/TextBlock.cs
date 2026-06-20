@@ -15,7 +15,7 @@ public sealed class TextBlock : FrameworkElement
 		DependencyProperty.Register<TextBlock, float>(nameof(FontSize),
 			new PropertyMetadata<TextBlock, float> { DefaultValue = 14f, Invalidates = InvalidationFlags.Measure });
 
-	/// <summary>The text to lay out (placeholder metrics until MSDF shaping, MU1).</summary>
+	/// <summary>The text to lay out and render as MTSDF glyphs (advance-based width; no HarfBuzz shaping).</summary>
 	public string Text { get => GetValue(TextProperty); set => SetValue(TextProperty, value); }
 
 	/// <summary>Font size in DIPs.</summary>

@@ -84,7 +84,7 @@ public sealed class RenderGraph
 
 		sb.Append("resources\n");
 		foreach (var resource in Resources)
-			sb.Append($"  {resource.Id}|{resource.Name}|{resource.Kind}|{resource.Format}|@{resource.Domain.Name}|s={resource.Scale:R}|n={resource.Count}\n");
+			sb.Append($"  {resource.Id}|{resource.Name}|{resource.Kind}|{resource.Format}|@{resource.Domain.Name}|s={resource.Scale:R}|n={resource.Count}|b={resource.ByteSize}\n");
 
 		sb.Append("passes\n");
 		foreach (var pass in Passes)

@@ -149,6 +149,14 @@ public sealed class BarrierPlan
 			.OrderBy(f => f.Res.Id)
 			.Select(f =>
 			{
+				// A handle both sampled and colour-written by the SAME pass is a GPU feedback hazard Loom does not
+				// model (the priority below would silently drop the read). Reject it at derive time rather than
+				// mis-deriving the barrier — use two passes, or a ping-pong handle pair.
+				if (f.Sample && (f.Write || f.Blend))
+				{
+					throw new GraphValidationException(
+						$"Resource '{f.Res.Name}' is both sampled and written (.Writes/.Blends) by the same pass — an unsupported in-pass feedback hazard.");
+				}
 				if (f.WriteDepth)
 					return new Use(f.Res, ResourceState.DepthAttachment, IsAttachment: true, IsBlend: false, IsReadOnlyAttachment: false);
 				if (f.ReadDepth)

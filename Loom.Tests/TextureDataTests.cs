@@ -114,4 +114,39 @@ public class TextureDataTests
 		Should.Throw<ArgumentOutOfRangeException>(() =>
 			TextureData.FromRgba8(w, h, [], TextureFormat.Rgba8Unorm));
 	}
+
+	[Test]
+	public void Srgb_mips_average_in_linear_light_not_gamma_space()
+	{
+		// A 2x2 red checker of black (0) and white (255). Averaged in LINEAR light the result is ~188 sRGB
+		// (linear 0.5 re-encoded), far brighter than the gamma-incorrect 128 a naive byte average gives.
+		var px = new byte[2 * 2 * 4];
+		byte[] reds = [0, 255, 255, 0];
+		for (var i = 0; i < 4; i++)
+		{
+			px[i * 4 + 0] = reds[i];
+			px[i * 4 + 3] = 255;
+		}
+
+		var srgb = TextureData.FromRgba8(2, 2, px, TextureFormat.Rgba8Srgb).Levels[1].Pixels[0];
+		var unorm = TextureData.FromRgba8(2, 2, px, TextureFormat.Rgba8Unorm).Levels[1].Pixels[0];
+
+		unorm.ShouldBe((byte)128);            // naive gamma-space average
+		srgb.ShouldBeGreaterThan((byte)160);  // gamma-correct: linear-light average is noticeably brighter
+	}
+
+	[Test]
+	public void Box_filter_clamps_edge_taps_on_a_1xN_column()
+	{
+		// 1x2 column, reds {40, 80}. The x tap clamps to column 0, so the 1x1 result averages the two rows:
+		// (40 + 40 + 80 + 80 + 2) >> 2 = 60. Pins the odd-dimension edge-clamp tap selection.
+		var px = new byte[1 * 2 * 4];
+		px[0 * 4 + 0] = 40; px[0 * 4 + 3] = 255;
+		px[1 * 4 + 0] = 80; px[1 * 4 + 3] = 255;
+
+		var mip = TextureData.FromRgba8(1, 2, px, TextureFormat.Rgba8Unorm).Levels[^1];
+
+		(mip.Width, mip.Height).ShouldBe((1, 1));
+		mip.Pixels[0].ShouldBe((byte)60);
+	}
 }

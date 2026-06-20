@@ -20,7 +20,10 @@ public sealed unsafe class NativeArena : IDisposable
 	/// <summary>Allocates zero-initialized space for <paramref name="count"/> values of <typeparamref name="T"/>.</summary>
 	public T* Alloc<T>(int count = 1) where T : unmanaged
 	{
-		var ptr = NativeMemory.AllocZeroed((nuint)(sizeof(T) * count));
+		ArgumentOutOfRangeException.ThrowIfNegative(count);
+		// Compute the byte count in native width — sizeof(T) * count in 32-bit int would overflow for a large
+		// array (e.g. a bindless descriptor array) and under-allocate, corrupting the heap on write.
+		var ptr = NativeMemory.AllocZeroed((nuint)sizeof(T) * (nuint)count);
 		_blocks.Add((nint)ptr);
 		return (T*)ptr;
 	}

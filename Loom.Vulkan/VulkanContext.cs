@@ -72,14 +72,25 @@ public sealed unsafe class VulkanContext : IDisposable
 		_wantDebugUtils = true;
 #endif
 
-		CreateInstance(surface);
-		if (_wantDebugUtils && Vk.TryGetInstanceExtension(Instance, out ExtDebugUtils debugUtils))
-			_debugUtils = debugUtils;
-		if (_validation)
-			SetUpDebugMessenger();
-		CreateSurface(surface);
-		PickPhysicalDevice();
-		CreateLogicalDevice();
+		// Bring-up is not exception-safe on its own: a failure after CreateInstance (no 1.3 device, missing
+		// surface/swapchain extension) would leak the live instance/surface/messenger because Dispose never runs.
+		// Dispose is handle-guarded, so tearing down the partially-built context on failure is safe.
+		try
+		{
+			CreateInstance(surface);
+			if (_wantDebugUtils && Vk.TryGetInstanceExtension(Instance, out ExtDebugUtils debugUtils))
+				_debugUtils = debugUtils;
+			if (_validation)
+				SetUpDebugMessenger();
+			CreateSurface(surface);
+			PickPhysicalDevice();
+			CreateLogicalDevice();
+		}
+		catch
+		{
+			Dispose();
+			throw;
+		}
 	}
 
 	private bool CheckValidationLayerSupport()
