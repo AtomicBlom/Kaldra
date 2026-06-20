@@ -1,16 +1,46 @@
 namespace Loom.UI.Controls;
 
 /// <summary>
-/// A clickable <see cref="ContentControl"/> with a default background (PlanningUI.md §D2.1). Phase B exposes a
-/// plain <see cref="Click"/> event; the routed <c>Click</c> event synthesized from pointer press/release lands
-/// with the input pipeline in MU2.
+/// A clickable <see cref="ContentControl"/> with a default background (PlanningUI.md §D2.1/§D5.3). <see cref="Click"/>
+/// is a bubbling routed event synthesized from a pointer press + release over the button: the button listens to its
+/// own (bubbled) pointer events, tracks the pressed state, and raises <see cref="Click"/> on release — unless the
+/// pointer left the button first (press-then-leave does not click).
 /// </summary>
 public sealed class Button : ContentControl
 {
-	public Button() => Background = HdrColor.FromRgb(60, 60, 70);
+	/// <summary>The bubbling routed event raised when the button is clicked.</summary>
+	public static readonly RoutedEvent ClickEvent = RoutedEvent.Register(nameof(Click), RoutingStrategy.Bubble);
 
-	public event EventHandler? Click;
+	private bool _isPressed;
 
-	/// <summary>Raise <see cref="Click"/> (invoked by the input pipeline in MU2; public for headless tests now).</summary>
-	public void PerformClick() => Click?.Invoke(this, EventArgs.Empty);
+	public Button()
+	{
+		Background = HdrColor.FromRgb(60, 60, 70);
+		AddHandler(PointerPressedEvent, OnPointerPressed);
+		AddHandler(PointerReleasedEvent, OnPointerReleased);
+		AddHandler(PointerExitedEvent, OnPointerExited);
+	}
+
+	/// <summary>Raised when the button is clicked. Wired by the generator (<c>btn.Click += OnClick</c>) — bubbles.</summary>
+	public event RoutedEventHandler Click
+	{
+		add => AddHandler(ClickEvent, value);
+		remove => RemoveHandler(ClickEvent, value);
+	}
+
+	/// <summary>Raise <see cref="Click"/> directly (the input pipeline synthesizes it on press→release; public for
+	/// headless tests so a click can be driven without the pointer stack).</summary>
+	public void PerformClick() => RaiseEvent(ClickEvent, new RoutedEventArgs());
+
+	private void OnPointerPressed(object sender, RoutedEventArgs e) => _isPressed = true;
+
+	private void OnPointerExited(object sender, RoutedEventArgs e) => _isPressed = false;
+
+	private void OnPointerReleased(object sender, RoutedEventArgs e)
+	{
+		if (!_isPressed)
+			return;
+		_isPressed = false;
+		PerformClick();
+	}
 }

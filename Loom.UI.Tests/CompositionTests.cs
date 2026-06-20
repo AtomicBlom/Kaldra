@@ -57,11 +57,19 @@ public sealed class CompositionTests
 	}
 
 	[Test]
-	public void Render_revision_advances_each_composite_for_no_op_detection()
+	public void Render_revision_is_stable_across_a_no_op_and_advances_on_change()
 	{
-		var root = Root(new Border { Background = HdrColor.FromRgb(1, 2, 3), Width = 10, Height = 10 }, 10, 10);
+		// MU2 frame-level no-op (PlanningUI.md §D2.4/§D2.5): a clean re-render re-submits the cached draw data with
+		// the SAME Revision (so the host/backend can skip work); a real visual change bumps it.
+		var border = new Border { Background = HdrColor.FromRgb(1, 2, 3), Width = 10, Height = 10 };
+		var root = Root(border, 10, 10);
+
 		var r1 = root.Render().Revision;
-		var r2 = root.Render().Revision;
-		r2.ShouldBeGreaterThan(r1);
+		var r2 = root.Render().Revision;   // nothing changed ⇒ no recomposite
+		r2.ShouldBe(r1);
+
+		border.Background = HdrColor.FromRgb(9, 9, 9);
+		var r3 = root.Render().Revision;   // a visual change recomposites
+		r3.ShouldBeGreaterThan(r2);
 	}
 }
