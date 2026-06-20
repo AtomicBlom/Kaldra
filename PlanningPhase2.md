@@ -20,7 +20,7 @@ Loom today is a mature **render-graph + effects** engine. What's shipped and pro
 - **Execute layer:** topological scheduling, derived barriers/layout transitions, transient memory aliasing, lifetime analysis — all backend-neutral.
 - **Eight shipped effects:** deferred G-buffer + multi-light lighting, single shadow map, SSAO + blur, forward alpha-blend transparency, GPU particles (compute→vertex), JFA outlines + GPU→CPU picking readback, bloom pyramid, auto-exposure + tonemap. Plus HDR (scRGB) output, a low-res world domain + upscale, and an ImGui HUD. `FullReferenceDemo` composes them all (~19 passes).
 - **Shaders:** offline Slang → SPIR-V + signed DXIL, reflection-derived descriptor layouts.
-- **Tooling:** deterministic headless capture (`LOOM_SMOKE_FRAMES`, `LOOM_CAPTURE` + frozen time), validation layers / DX12 info-queue, `RenderGraph.Dump()`/`Hash()`, per-pass GPU debug labels, `Loom.Tests` (xUnit) over the describe/execute layers.
+- **Tooling:** deterministic headless capture (the sandbox's `--smoke-frames` / `--capture` options + frozen time), validation layers / DX12 info-queue, `RenderGraph.Dump()`/`Hash()`, per-pass GPU debug labels, `Loom.Tests` (TUnit) over the describe/execute layers.
 
 **What it is not.** Loom is not yet an *asset/scene* engine. There is no texture or model loading, no material system, no normal mapping, no instancing, no culling, no sprites/2D, and no animation. Geometry is hand-built `Vertex` (Position/Normal/UV) uploaded once; the user submits one `ctx.Draw` per mesh and owns all culling. That asset/scene/geometry half is the entire subject of Phase 2.
 
@@ -202,7 +202,7 @@ The dependency rule is unchanged: `Sandbox → {Vulkan, DX12} → Graph → Core
 
 Phase 2 verifies the same way Phase 1 proved every effect:
 1. Each feature gets a focused `Loom.Sandbox` demo.
-2. `LOOM_CAPTURE` + frozen time → a deterministic frame.
+2. `--capture` + frozen time → a deterministic frame.
 3. **Cross-backend pixel diff** — Vulkan vs DX12 must match within the established tolerance.
 4. Golden-image regression (formalized in M13) guards against drift.
 5. Validation layers / DX12 info-queue stay clean.

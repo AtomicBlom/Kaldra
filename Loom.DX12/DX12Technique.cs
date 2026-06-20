@@ -33,11 +33,16 @@ internal sealed unsafe class DX12Technique : IDisposable
 	/// <summary>Element stride (bytes) of a structured-buffer storage resource, for building its UAV descriptor's <c>StructureByteStride</c>/<c>NumElements</c>; 0 for a texture or raw buffer.</summary>
 	public int StorageBufferStride { get; private set; }
 
+	/// <summary>Byte stride of the per-instance particle vertex stream's <c>VertexBufferView</c> — the layout's stride
+	/// (M14-4 generalized particles) or 16 for the legacy single-<c>float4</c> path; 0 for a non-particle technique.</summary>
+	public int ParticleStride { get; }
+
 	public DX12Technique(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		IsCompute = template.IsCompute;
 		StorageBufferStride = template.StorageBufferStride;
 		InputCount = template.InputCount;
+		ParticleStride = template.ParticleInput ? template.Instance?.Stride ?? 4 * sizeof(float) : 0;
 
 		if (template.IsCompute)
 		{
@@ -327,8 +332,37 @@ internal sealed unsafe class DX12Technique : IDisposable
 				pso.InputLayout = new InputLayoutDesc { NumElements = (uint)total, PInputElementDescs = elements };
 				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
 			}
+			else if (template.ParticleInput && template.Instance is not null)
+			{
+				// Generalized particles (M14-4): the per-instance stream's attributes come from the layout (slot 0,
+				// PerInstanceData), exactly like the template.Layout path's instance rows — semantic name + index
+				// (so two "IPARTICLE" rows become IPARTICLE0..1), DXGI format + byte offset from the Core layout.
+				var particleLayout = template.Instance;
+				var nameCapacity = 0;
+				for (var i = 0; i < particleLayout.Attributes.Length; i++)
+					nameCapacity += particleLayout.Attributes[i].Semantic.Length + 1;
+
+				var names = stackalloc byte[nameCapacity];
+				var elements = stackalloc InputElementDesc[particleLayout.Attributes.Length];
+				var nameOffset = 0;
+				var semanticCounter = new Dictionary<string, uint>();
+				for (var i = 0; i < particleLayout.Attributes.Length; i++)
+				{
+					var attribute = particleLayout.Attributes[i];
+					var namePtr = names + nameOffset;
+					for (var c = 0; c < attribute.Semantic.Length; c++)
+						names[nameOffset++] = (byte)attribute.Semantic[c];
+					names[nameOffset++] = 0;
+					semanticCounter.TryGetValue(attribute.Semantic, out var index);
+					semanticCounter[attribute.Semantic] = index + 1;
+					elements[i] = new InputElementDesc { SemanticName = namePtr, SemanticIndex = index, Format = ToDxgiFormat(attribute.Format), InputSlot = 0, AlignedByteOffset = (uint)particleLayout.Offsets[i], InputSlotClass = InputClassification.PerInstanceData, InstanceDataStepRate = 1 };
+				}
+				pso.InputLayout = new InputLayoutDesc { NumElements = (uint)particleLayout.Attributes.Length, PInputElementDescs = elements };
+				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
+			}
 			else if (template.ParticleInput)
 			{
+				// Legacy single-float4 particle stream (the original ParticlesDemo) — xyz position + w life, slot 0.
 				ReadOnlySpan<byte> position = "POSITION\0"u8;
 				fixed (byte* pPos = position)
 				{

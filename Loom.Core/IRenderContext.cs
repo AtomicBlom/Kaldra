@@ -124,6 +124,15 @@ public interface IRenderContext
 	void DrawParticles(ResourceHandle buffer, int count, string technique);
 
 	/// <summary>
+	/// As <see cref="DrawParticles(ResourceHandle, int, string)"/>, but binds <paramref name="material"/>'s
+	/// textures into the technique's reflected sampler slots (texture 0 → binding 0, …) — the textured-particle
+	/// path (M14): a sprite-sheet atlas the render shader samples for sub-UV frames + colour-over-life. The
+	/// particle stream still rides in <paramref name="buffer"/> (a <c>.ReadsVertex</c> resource); the material
+	/// only adds the sampled atlas, exactly as <see cref="Draw(Mesh, Material, string)"/> adds it to a mesh draw.
+	/// </summary>
+	void DrawParticles(ResourceHandle buffer, int count, Material material, string technique);
+
+	/// <summary>
 	/// Draw <paramref name="mesh"/> once per element of <paramref name="instances"/> (M12 — GPU instancing,
 	/// CPU-driven). The engine uploads the span to a per-frame host-visible instance buffer and binds it as the
 	/// technique's per-instance stream (binding 1). <paramref name="technique"/> must declare a per-instance
@@ -133,6 +142,27 @@ public interface IRenderContext
 	/// graph edge — the data is CPU-sourced, so no <c>.ReadsVertex</c> is needed.
 	/// </summary>
 	void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances) where T : unmanaged;
+
+	/// <summary>
+	/// As <see cref="DrawInstanced{T}(Mesh, string, ReadOnlySpan{T})"/>, but binds <paramref name="material"/>'s
+	/// textures into the technique's reflected sampler slots (texture 0 → binding 0, …) — the textured-instanced
+	/// path (M14 sprite/tile batching): one draw places <paramref name="instances"/>-many quads, each sampling the
+	/// shared atlas. The instance stream and the material are independent — the stream carries per-quad transform +
+	/// uv-rect + tint, the material supplies the atlas every instance shares. This is
+	/// <see cref="Draw(Mesh, Material, string)"/> + an instance stream; a technique that reflects no samplers
+	/// ignores the material.
+	/// </summary>
+	void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged;
+
+	/// <summary>
+	/// As <see cref="DrawInstanced{T}(Mesh, string, ReadOnlySpan{T})"/>, but the technique also samples the graph
+	/// resources in <paramref name="sampled"/> (each bound in order as sampled input 0..N-1, exactly as
+	/// <see cref="FullScreen(string, ReadOnlySpan{ResourceHandle})"/> binds them) — the instanced-draw-that-reads-
+	/// the-G-buffer path (M14 2D lighting): each instance is one additive light volume, and the fragment samples the
+	/// G-buffer normal/albedo at the covered pixel to shade it. Every entry must be a resource the pass declared
+	/// with <c>.Samples</c>, so the graph derives the read dependency and shader-read transition.
+	/// </summary>
+	void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<ResourceHandle> sampled) where T : unmanaged;
 
 	/// <summary>
 	/// Draw <paramref name="mesh"/> <paramref name="count"/> times, reading the per-instance stream from

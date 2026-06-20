@@ -124,7 +124,7 @@ public sealed unsafe class DX12Engine : IEngine
 
 		_triangle = new DX12Triangle(_ctx, _swapchain.Format);
 		_techniques = new DX12TechniqueCache(_ctx);
-		_ring = new DX12DescriptorRing(_ctx, 512); // headroom for per-pass SRVs + the M13 resource viewer's debug SRVs
+		_ring = new DX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the M13 resource viewer's debug SRVs
 		_meshes = new DX12MeshStore(_ctx);
 		_textures = new DX12TextureStore(_ctx);
 		_materials = new DX12MaterialStore();
@@ -302,7 +302,7 @@ public sealed unsafe class DX12Engine : IEngine
 		// Bind the shader-visible heap for this command list, then reset its per-frame bump allocator.
 		var heap = _ring.Heap.Handle;
 		_commandList.SetDescriptorHeaps(1, &heap);
-		_ring.Reset();
+		_ring.Reset(index); // this slot's own region — must not clobber the other in-flight frame's live descriptors
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
 		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _swapchain.Width, _swapchain.Height);
 

@@ -1404,7 +1404,7 @@ throws").
   `Loom.Assets`) and **no backend** — the same "neutral layers only, never Vulkan/DX12" rule that
   [Loom.Tests](Loom.Tests/Loom.Tests.csproj) follows. New UI-track tests are authored here directly in TUnit
   (`[Test]` / `[Arguments]` / data sources) with Shouldly assertions (`value.ShouldBe(…)`). *(The existing
-  `Loom.Tests` is xUnit today and is being migrated to TUnit separately; that migration is out of scope here.)*
+  `Loom.Tests` has since been migrated to TUnit as well, so both projects share one test framework.)*
 - **Source-gen snapshot tests** live in `Loom.UI.Tests` via the `Microsoft.CodeAnalysis.*` testing harness; split
   into a sibling `Loom.UI.SourceGen.Tests` *only* if the Roslyn-harness dependencies prove awkward to host beside
   the runtime tests (a fallback, not the default).

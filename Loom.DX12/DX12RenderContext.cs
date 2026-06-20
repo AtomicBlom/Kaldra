@@ -209,17 +209,22 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		// FullScreen uses for transients, but the SRVs come from the TextureStore (loaded textures, multi-mip).
 		// A technique that samples nothing (depth-only/shadow) has no table and ignores the material.
 		if (baked.TableParam >= 0 && baked.InputCount > 0)
-		{
-			var textures = _materials.TexturesOf(material.Id);
-			if (textures.Length < baked.InputCount)
-				throw new InvalidOperationException($"DX12: material supplies {textures.Length} textures but technique '{technique}' samples {baked.InputCount}.");
-			var (cpu, gpu) = _ring.Allocate((uint)baked.InputCount);
-			for (var i = 0; i < baked.InputCount; i++)
-				WriteTextureSrv(textures[i], _ring.Offset(cpu, (uint)i));
-			_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
-		}
+			BindMaterialTable(baked, material, technique);
 
 		_meshes.Draw(_cmd, mesh.Id);
+	}
+
+	// Bind a material's loaded-texture SRVs into the technique's reflected SRV table (slots 0..N-1). Shared by
+	// Draw(mesh, material), textured instancing, and textured particles. The caller checks TableParam/InputCount.
+	private void BindMaterialTable(DX12Technique baked, Material material, string technique)
+	{
+		var textures = _materials.TexturesOf(material.Id);
+		if (textures.Length < baked.InputCount)
+			throw new InvalidOperationException($"DX12: material supplies {textures.Length} textures but technique '{technique}' samples {baked.InputCount}.");
+		var (cpu, gpu) = _ring.Allocate((uint)baked.InputCount);
+		for (var i = 0; i < baked.InputCount; i++)
+			WriteTextureSrv(textures[i], _ring.Offset(cpu, (uint)i));
+		_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
 	}
 
 	// Create a Texture2D SRV over a loaded texture, exposing its full mip chain (unlike the transient WriteSrv,
@@ -377,13 +382,14 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
-		// The buffer IS the per-instance vertex stream (one float4 per particle); the graph put it in
-		// VERTEX_AND_CONSTANT_BUFFER before this pass. 6 fabricated quad verts × one instance per particle.
+		// The buffer IS the per-instance vertex stream (one particle per element); the graph put it in
+		// VERTEX_AND_CONSTANT_BUFFER before this pass. Stride is the technique's particle stride (16 for the
+		// legacy float4, the layout's stride for a generalized particle). 6 fabricated quad verts × one instance.
 		var vbv = new VertexBufferView
 		{
 			BufferLocation = _transients.Resource(_slot, buffer.Id).GetGPUVirtualAddress(),
 			SizeInBytes = _transients.ByteSize(buffer.Id),
-			StrideInBytes = 16,
+			StrideInBytes = (uint)baked.ParticleStride,
 		};
 		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.IASetVertexBuffers(0, 1, &vbv);
@@ -435,6 +441,90 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 			StrideInBytes = count > 0 ? byteSize / (uint)count : byteSize,
 		};
 		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count);
+	}
+
+	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged
+	{
+		if (instances.Length == 0)
+			return;
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = Camera.ViewProjection; // the per-instance world data rides in the instance stream
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		// Material atlas → the technique's reflected SRV table, identical to Draw(mesh, material); every instance
+		// samples the shared atlas, the per-instance uv-rect (in the stream) picks each quad's region.
+		if (baked.TableParam >= 0 && baked.InputCount > 0)
+			BindMaterialTable(baked, material, technique);
+
+		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances);
+		var gpuAddress = _instanceUpload.Upload(_slot, bytes);
+		var instanceView = new VertexBufferView
+		{
+			BufferLocation = gpuAddress,
+			SizeInBytes = (uint)bytes.Length,
+			StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>(),
+		};
+		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
+	}
+
+	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<ResourceHandle> sampled) where T : unmanaged
+	{
+		if (instances.Length == 0)
+			return;
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = Camera.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		// Sampled graph resources (the G-buffer) → the technique's SRV table, identical to FullScreen: each
+		// instanced light volume samples the normal/albedo at its covered pixel. The graph put them in PixelShaderResource.
+		if (sampled.Length > 0)
+			BindInputs(baked, sampled);
+
+		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances);
+		var gpuAddress = _instanceUpload.Upload(_slot, bytes);
+		var instanceView = new VertexBufferView
+		{
+			BufferLocation = gpuAddress,
+			SizeInBytes = (uint)bytes.Length,
+			StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>(),
+		};
+		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
+	}
+
+	public void DrawParticles(ResourceHandle buffer, int count, Material material, string technique)
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: particles require an active graph (SetGraph).");
+
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = Camera.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		// The sprite-sheet atlas → reflected SRV table, so the render shader can sub-UV sample per frame.
+		if (baked.TableParam >= 0 && baked.InputCount > 0)
+			BindMaterialTable(baked, material, technique);
+
+		var vbv = new VertexBufferView
+		{
+			BufferLocation = _transients.Resource(_slot, buffer.Id).GetGPUVirtualAddress(),
+			SizeInBytes = _transients.ByteSize(buffer.Id),
+			StrideInBytes = (uint)baked.ParticleStride,
+		};
+		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		_cmd.IASetVertexBuffers(0, 1, &vbv);
+		_cmd.DrawInstanced(6, (uint)count, 0, 0);
 	}
 
 	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
