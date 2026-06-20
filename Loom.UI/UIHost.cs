@@ -2,6 +2,8 @@ using System.Numerics;
 using System.Text;
 
 using Loom.Core;
+using Loom.Core.Geometry;
+using Loom.Core.UI;
 
 namespace Loom.UI;
 
