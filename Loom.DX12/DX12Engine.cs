@@ -42,6 +42,7 @@ public sealed unsafe class DX12Engine : IEngine
 #if LOOM_IMGUI
 	private DX12ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
+	private DX12UIRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -857,6 +858,11 @@ public sealed unsafe class DX12Engine : IEngine
 		var storageImages = 0;
 		var storageBuffers = 0;
 		var storageBufferStride = 0;
+		// M15-0: descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
+		// as a root CBV at b1 (0 for a built-in stand-in, which has no UBO).
+		var uniformBuffers = DX12Shaders.ResolveUniformBufferCount(dir, shader);
+		// M15-2: read-only structured-buffer compute inputs (skin's bind-pose verts + bone palette) — root SRVs.
+		var inputBuffers = descriptor.IsCompute ? DX12Shaders.ResolveComputeInputBuffers(dir, shader) : 0;
 		string source;
 
 		if (descriptor.IsCompute)
@@ -914,7 +920,7 @@ public sealed unsafe class DX12Engine : IEngine
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
-			descriptor.Address, layout, descriptor.Instance));
+			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers));
 
 		// Hot-reload bookkeeping (M13): one shader → many techniques; remember the descriptor so a reload rebuilds it.
 		_descriptorsByName[name] = descriptor;
@@ -1026,6 +1032,8 @@ public sealed unsafe class DX12Engine : IEngine
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
+	public Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
+
 	public Texture CreateTexture(TextureData data) => _textures.Create(data);
 
 	public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
@@ -1048,6 +1056,17 @@ public sealed unsafe class DX12Engine : IEngine
 		_context.SetImGui(_imgui);
 #endif
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
+	}
+
+	public void EnableUI()
+	{
+		if (_ui is not null)
+			return; // idempotent — enabling twice keeps the existing renderer
+
+		// MU0 Phase A: stand up the no-op UI renderer and wire it to the context, so the ctx.DrawUI() seam is live
+		// on both backends. No shader resolve yet — the ui.slang PSO + atlas upload arrive in MU1.
+		_ui = new DX12UIRenderer();
+		_context.SetUI(_ui);
 	}
 
 	/// <summary>

@@ -26,6 +26,18 @@ public sealed record FrameInputs
 	/// <summary>The sun's view + projection this frame; surfaced as <see cref="IRenderContext.SunView"/> for the shadow pass and the lighting shadow test.</summary>
 	public Camera SunView { get; init; } = Camera.Identity;
 
+	/// <summary>
+	/// The sun's per-cascade views this frame (M15-3 — cascaded shadow maps), nearest cascade first; surfaced as
+	/// <see cref="IRenderContext.Cascades"/>. Each is a neutral ortho <see cref="Camera"/> fitted to a slice of the
+	/// view frustum (the backend applies its clip-space fix-up per cascade, as for <see cref="SunView"/>). A
+	/// per-cascade depth pass renders from each; the deferred lighting pass selects a cascade by view distance.
+	/// Empty (the default) when a demo uses the single <see cref="SunView"/> shadow.
+	/// </summary>
+	public IReadOnlyList<Camera> Cascades { get; init; } = [];
+
+	/// <summary>The far view-space distance covered by each cascade in <see cref="Cascades"/> (the split boundaries), for the lighting pass's cascade selection (M15-3).</summary>
+	public IReadOnlyList<float> CascadeSplits { get; init; } = [];
+
 	/// <summary>The object id under the cursor (0 = nothing); surfaced as <see cref="IRenderContext.HoverId"/> to seed the JFA outline.</summary>
 	public uint HoverId { get; init; }
 
@@ -35,4 +47,13 @@ public sealed record FrameInputs
 	/// after <see cref="IEngine.EnableImGui"/>. The pointer is the UI-agnostic hand-off (Planning.md §8).
 	/// </summary>
 	public nint ImGuiDrawData { get; init; }
+
+	/// <summary>
+	/// This frame's composited game-UI surfaces — each <see cref="UISurfaceId"/> paired with the neutral
+	/// <see cref="UIDrawData"/> the host's compositor produced for it (PlanningUI.md §Core surface additions). A
+	/// pass names one with <c>ctx.DrawUI(id)</c>; the backend looks it up here and records it. Empty (the default)
+	/// draws no UI. Meaningful only after <see cref="IEngine.EnableUI"/>. Pulled in the pass closure, never
+	/// captured, so the graph stays frame-independent (Planning.md §8).
+	/// </summary>
+	public IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> UISurfaces { get; init; } = [];
 }

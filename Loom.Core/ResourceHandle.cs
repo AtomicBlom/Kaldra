@@ -63,38 +63,3 @@ public abstract class ResourceHandle
 
 	public override string ToString() => $"{Name}:{Kind}<{Format}>";
 }
-
-/// <summary>A handle that can be <c>.Samples</c>'d (read in a shader): a colour or depth image.</summary>
-public interface ITextureHandle;
-
-/// <summary>A handle that can be <c>.ReadWrites</c>'d (general read-modify-write storage): a storage image or a buffer.</summary>
-public interface IStorageHandle;
-
-/// <summary>
-/// A colour image target. Produced by <c>.Writes</c>/<c>.Blends</c>, read by <c>.Samples</c>, and (as a
-/// storage image — e.g. the persistent exposure value) by <c>.ReadWrites</c>. Also the static type of the
-/// <see cref="GraphBuilder.Backbuffer"/> and <see cref="GraphBuilder.Persistent"/> image handles, which are
-/// colour-like (their distinct lifetime is carried by <see cref="ResourceHandle.Kind"/>).
-/// </summary>
-public sealed class ColorHandle : ResourceHandle, ITextureHandle, IStorageHandle
-{
-	internal ColorHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count)
-		: base(id, name, format, kind, domain, scale, count, byteSize: 0) { }
-}
-
-/// <summary>A depth/stencil target. Written by <c>.WritesDepth</c>, tested by <c>.ReadsDepth</c>, and sampleable.</summary>
-public sealed class DepthHandle : ResourceHandle, ITextureHandle
-{
-	internal DepthHandle(int id, string name, Format format, Domain domain, float scale)
-		: base(id, name, format, ResourceKind.Depth, domain, scale, count: 1, byteSize: 0) { }
-}
-
-/// <summary>
-/// A GPU storage buffer (not an image). A compute pass <c>.ReadWrites</c> it and a draw <c>.ReadsVertex</c> it
-/// (GPU particles — §7.6). Sized in bytes, not resolution-bound.
-/// </summary>
-public sealed class BufferHandle : ResourceHandle, IStorageHandle
-{
-	internal BufferHandle(int id, string name, Format format, Domain domain, int byteSize)
-		: base(id, name, format, ResourceKind.Buffer, domain, scale: 1f, count: 1, byteSize: byteSize) { }
-}

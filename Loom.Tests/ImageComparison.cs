@@ -1,14 +1,5 @@
 namespace Loom.Tests;
 
-/// <summary>Result of comparing two RGBA images (M13 golden harness): the worst and average per-channel difference,
-/// and how many pixels exceed a per-channel tolerance.</summary>
-internal readonly record struct ImageDiff(int Width, int Height, int MaxChannelDiff, double MeanChannelDiff, int FailedPixels, int TotalPixels)
-{
-	public double FailedFraction => TotalPixels == 0 ? 0 : (double)FailedPixels / TotalPixels;
-	public override string ToString() =>
-		$"{Width}x{Height}: maxDiff={MaxChannelDiff}, meanDiff={MeanChannelDiff:F3}, failed={FailedPixels}/{TotalPixels} ({FailedFraction:P2})";
-}
-
 /// <summary>Compares decoded RGBA images for the golden-image harness (M13): a regression check against a committed
 /// baseline, and a cross-backend check (Vulkan vs DX12) — both expressed as a tolerance on per-channel difference.</summary>
 internal static class ImageComparison

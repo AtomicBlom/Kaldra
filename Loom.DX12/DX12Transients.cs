@@ -40,9 +40,9 @@ internal sealed unsafe class DX12Transients : IDisposable
 	private readonly (uint W, uint H)[] _extents; // by resourceId (same across slots)
 	private readonly uint[] _byteSizes; // by resourceId, for Buffer-kind resources
 	private readonly bool[] _isTransient; // by resourceId
-	// Persistent resources (e.g. the auto-exposure 1×1 image) live ACROSS frames — allocated ONCE, not per-slot,
-	// and never aliased. Stored in slot 0; the accessors redirect persistent ids there so state is shared (a
-	// transition this frame must see where last frame left it), exactly as the Vulkan backend shares one image.
+										  // Persistent resources (e.g. the auto-exposure 1×1 image) live ACROSS frames — allocated ONCE, not per-slot,
+										  // and never aliased. Stored in slot 0; the accessors redirect persistent ids there so state is shared (a
+										  // transition this frame must see where last frame left it), exactly as the Vulkan backend shares one image.
 	private readonly bool[] _isPersistent; // by resourceId
 	private readonly HashSet<int> _aliasedMemberIds = []; // ids in a multi-member bucket — need an aliasing barrier
 	private readonly List<ComPtr<ID3D12Heap>> _heaps = []; // per-bucket-per-slot placed-resource heaps

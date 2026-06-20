@@ -9,7 +9,7 @@ name: CI
 
 on:
   push:
-    branches: [master, Milestone13]
+    branches: [master, Milestone13, loom-ui]
   pull_request:
 
 jobs:
@@ -28,5 +28,21 @@ jobs:
       - name: Build (neutral layers + tests)
         run: dotnet build Loom.Tests/Loom.Tests.csproj -c Release
 
+      # TUnit runs on Microsoft.Testing.Platform; the repo-root global.json opts `dotnet test` into MTP mode,
+      # which takes the project via --project (the bare path form is VSTest-only and removed in the .NET 10 SDK).
       - name: Test (no-GPU unit tests; golden-image regression auto-skips)
-        run: dotnet test Loom.Tests/Loom.Tests.csproj -c Release --no-build
+        run: dotnet test --project Loom.Tests/Loom.Tests.csproj -c Release --no-build
+
+      # NativeAOT gate (PlanningUI.md §Verification / MU0). Loom.UI is marked <IsAotCompatible>, which turns on the
+      # trim/AOT/single-file Roslyn analyzers; build it with warnings promoted to errors so any reflection or
+      # AOT-unsafe pattern fails CI. The UI runtime is neutral (Core + Assets only), so it builds on this no-GPU
+      # runner. A full PublishAot smoke of Loom.Sandbox needs the GPU backends + Slang/DXC toolchain (absent here)
+      # and rides a self-hosted GPU runner later, exactly as the golden-image regression does.
+      - name: NativeAOT gate (Loom.UI; AOT/trim analyzers as errors)
+        run: dotnet build Loom.UI/Loom.UI.csproj -c Release -p:TreatWarningsAsErrors=true
+
+      # The headless UI unit tests (draw-list/Dump golden, neutral types) — no backend, like the graph tests above.
+      - name: Build + test (UI no-GPU unit tests)
+        run: |
+          dotnet build Loom.UI.Tests/Loom.UI.Tests.csproj -c Release
+          dotnet test --project Loom.UI.Tests/Loom.UI.Tests.csproj -c Release --no-build

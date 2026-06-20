@@ -36,6 +36,18 @@ public interface IRenderContext
 	Camera SunView { get; }
 
 	/// <summary>
+	/// The sun's per-cascade views this frame (M15-3 — cascaded shadow maps), nearest cascade first. A per-cascade
+	/// depth pass draws the scene from <c>Cascades[i]</c> (as <see cref="SunView"/> drives the single shadow pass);
+	/// the deferred lighting pass packs these into its uniform buffer and selects a cascade per pixel by view
+	/// distance (<see cref="CascadeSplits"/>). Empty when the demo uses the single-map <see cref="SunView"/> path.
+	/// Per-frame host data, pulled not captured (§8).
+	/// </summary>
+	IReadOnlyList<Camera> Cascades { get; }
+
+	/// <summary>The far view-space distance each entry of <see cref="Cascades"/> covers — the split boundaries the lighting pass selects a cascade against (M15-3).</summary>
+	IReadOnlyList<float> CascadeSplits { get; }
+
+	/// <summary>
 	/// The camera to render from this frame (view + projection). Per-frame data the host supplies; a pass's
 	/// <c>.Draw</c> closure pulls it from here rather than capturing it, so the graph stays frame-independent
 	/// (§8). <see cref="Draw"/> uses it to transform geometry into clip space.
@@ -155,6 +167,16 @@ public interface IRenderContext
 	void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged;
 
 	/// <summary>
+	/// As <see cref="DrawInstanced{T}(Mesh, Material, string, ReadOnlySpan{T})"/>, but also hands the technique a
+	/// per-frame <paramref name="uniforms"/> block (M15-0 — the uniform seam): the engine stages it into a
+	/// per-frame uniform buffer and binds it as the technique's constant buffer, visible to the vertex stage. The
+	/// foliage path uses it for wind (time + direction + strength) read in the vertex shader to sway each blade,
+	/// while <paramref name="material"/> supplies the alpha-test cutout texture. The per-instance MVP still comes
+	/// from <see cref="Camera"/>. Per-frame inputs are pulled from the context, not captured (§8).
+	/// </summary>
+	void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<float> uniforms) where T : unmanaged;
+
+	/// <summary>
 	/// As <see cref="DrawInstanced{T}(Mesh, string, ReadOnlySpan{T})"/>, but the technique also samples the graph
 	/// resources in <paramref name="sampled"/> (each bound in order as sampled input 0..N-1, exactly as
 	/// <see cref="FullScreen(string, ReadOnlySpan{ResourceHandle})"/> binds them) — the instanced-draw-that-reads-
@@ -174,6 +196,38 @@ public interface IRenderContext
 	void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count);
 
 	/// <summary>
+	/// Compute-skin <paramref name="skinnedMesh"/>'s bind-pose vertices by <paramref name="palette"/> (the
+	/// per-frame bone matrices) into <paramref name="output"/> — the GPU pre-skin pass (M15): one dispatch
+	/// transforms position/normal/tangent by each vertex's blended bone matrices and writes a plain
+	/// <see cref="VertexLayout.MeshStandard"/>-shaped buffer, so the depth/g-buffer/shadow passes draw the skinned
+	/// result with their existing techniques. <paramref name="output"/> is a buffer the pass declared with
+	/// <c>.ReadWrites</c> (so the graph derives the compute→vertex-input barrier to each <see cref="DrawSkinned"/>
+	/// reader). <paramref name="palette"/> is uploaded to a per-frame buffer the compute reads; it is a method
+	/// argument, pulled from app state refreshed before <c>Render</c> (not captured — §8). One pre-skin feeds
+	/// every cascade/depth/g-buffer pass that reads <paramref name="output"/>, so a skinned mesh is skinned once.
+	/// </summary>
+	void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<System.Numerics.Matrix4x4> palette, BufferHandle output, int vertexCount);
+
+	/// <summary>
+	/// Draw <paramref name="mesh"/>'s index buffer with its per-vertex stream sourced from
+	/// <paramref name="skinnedVertices"/> — a buffer a <see cref="DispatchSkin"/> just wrote (M15) — instead of the
+	/// mesh's own (bind-pose) vertex buffer. The buffer must be one the pass declared with <c>.ReadsVertex</c>, so
+	/// the graph derives the compute→vertex barrier. The technique consumes the <see cref="VertexLayout.MeshStandard"/>
+	/// layout (the skinned output is plain pos/normal/uv/tangent), so existing mesh techniques work unchanged.
+	/// Unlike <see cref="DrawParticles"/>, this is an indexed per-vertex draw using the mesh's index count.
+	/// </summary>
+	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique);
+
+	/// <summary>As <see cref="DrawSkinned(Mesh, BufferHandle, string)"/>, from an explicit <paramref name="view"/> (e.g. a shadow cascade's sun view) instead of <see cref="Camera"/>.</summary>
+	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view);
+
+	/// <summary>As <see cref="DrawSkinned(Mesh, BufferHandle, string)"/>, binding <paramref name="material"/>'s textures into the technique's reflected sampler slots (the textured skinned-character g-buffer draw).</summary>
+	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique);
+
+	/// <summary>As <see cref="DrawSkinned(Mesh, BufferHandle, Material, string)"/>, from an explicit <paramref name="view"/>.</summary>
+	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view);
+
+	/// <summary>
 	/// Render the host's Dear ImGui draw data into the current pass's target — the screen-space HUD/debug
 	/// overlay (Planning.md §6/§9: a native-resolution UI layer on top of the pixelated world). The host owns
 	/// the ImGui context and produces the draw data each frame (<c>ImGui.Render()</c>); this verb is the neutral
@@ -181,4 +235,15 @@ public interface IRenderContext
 	/// <c>.Blends</c> the backbuffer (the "hud" pass). A no-op if the host hasn't enabled ImGui.
 	/// </summary>
 	void DrawImGui();
+
+	/// <summary>
+	/// Render the host's game UI surface <paramref name="surface"/> into the current pass's target — the
+	/// counterpart to <see cref="DrawImGui"/> for the XAML UI engine (PlanningUI.md §Core surface additions). The
+	/// host composites each surface to a neutral <see cref="UIDrawData"/> off the render graph and hands the set in
+	/// via <see cref="FrameInputs.UISurfaces"/>; this verb is the neutral hand-off so <c>Loom.Core</c> stays
+	/// UI-agnostic — the backend's UI renderer translates it into GPU work. Used from the screen-space overlay pass
+	/// that <c>.Blends</c> the backbuffer (the "ui" pass) or an in-world pass that <c>.Writes</c> a quad target. A
+	/// no-op if the host hasn't enabled UI or supplied that surface this frame.
+	/// </summary>
+	void DrawUI(UISurfaceId surface);
 }

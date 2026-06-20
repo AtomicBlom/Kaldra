@@ -1,0 +1,31 @@
+<Project>
+
+  <!--
+    Loom XAML build machinery (PlanningUI.md MU0 Phase C) — property defaults.
+
+    Imported by any project that authors Loom.UI XAML views: Loom.UI itself (real views, later milestones)
+    and Loom.UI.Tests (the generator proof). It carries NO runtime/backend reference — the Loom.UI.SourceGen
+    generator is a build-time analyzer only — so it sits beside Loom.Shaders.props in build/Loom.Sdk and can be
+    imported without pulling in the backend selection.
+
+    A consuming project just writes the two imports (props near the top, targets near the bottom):
+        <Import Project="..\build\Loom.Sdk\Loom.UI.props" />
+        ... body ...
+        <Import Project="..\build\Loom.Sdk\Loom.UI.targets" />
+    The targets half then registers every *.xaml under the project as AdditionalFiles and references the
+    XAML -> typed control-tree generator (Loom.UI.SourceGen) as an analyzer.
+  -->
+
+  <PropertyGroup>
+    <!-- On by default; a project can set LoomXamlEnable=false to opt a build out of XAML codegen. -->
+    <LoomXamlEnable Condition="'$(LoomXamlEnable)' == ''">true</LoomXamlEnable>
+
+    <!-- Repo root, resolved from this file's location (build/Loom.Sdk/ -> two levels up). Used to locate the
+         Loom.UI.SourceGen analyzer project. Overridable via $(LoomUIRepoRoot). -->
+    <LoomUIRepoRoot Condition="'$(LoomUIRepoRoot)' == ''">$(MSBuildThisFileDirectory)..\..\</LoomUIRepoRoot>
+
+    <!-- Folder scanned for *.xaml views (recursively). Defaults to the consuming project's directory. -->
+    <LoomXamlSourceDir Condition="'$(LoomXamlSourceDir)' == ''">$(MSBuildProjectDirectory)</LoomXamlSourceDir>
+  </PropertyGroup>
+
+</Project>

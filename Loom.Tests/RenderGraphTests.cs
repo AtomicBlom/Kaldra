@@ -16,11 +16,11 @@ public class RenderGraphTests
 		g.Present(g.Backbuffer);
 	});
 
-	[Fact]
+	[Test]
 	public void Hash_is_deterministic_across_identical_builds() =>
-		Assert.Equal(Baseline().Hash(), Baseline().Hash());
+		Baseline().Hash().ShouldBe(Baseline().Hash());
 
-	[Fact]
+	[Test]
 	public void Hash_ignores_record_callbacks()
 	{
 		var withEmpty = RenderGraph.Define(g => g.Domain("world", 320, 180).Color("a", Format.Rgba8Srgb));
@@ -36,11 +36,11 @@ public class RenderGraphTests
 		});
 
 		// Different delegate bodies, identical structure -> identical hash. (withEmpty differs: no pass.)
-		Assert.Equal(a.Hash(), b.Hash());
-		Assert.NotEqual(withEmpty.Hash(), a.Hash());
+		b.Hash().ShouldBe(a.Hash());
+		a.Hash().ShouldNotBe(withEmpty.Hash());
 	}
 
-	[Fact]
+	[Test]
 	public void Hash_is_insensitive_to_access_order_within_a_pass()
 	{
 		var ab = RenderGraph.Define(g =>
@@ -58,10 +58,10 @@ public class RenderGraphTests
 			g.Pass("p").Writes(b, a);
 		});
 
-		Assert.Equal(ab.Hash(), ba.Hash());
+		ba.Hash().ShouldBe(ab.Hash());
 	}
 
-	[Fact]
+	[Test]
 	public void Hash_is_sensitive_to_pass_order()
 	{
 		// Program order is a real derivation input, so swapping passes must change the hash.
@@ -82,18 +82,18 @@ public class RenderGraphTests
 			g.Pass("px").Writes(x);
 		});
 
-		Assert.NotEqual(xy.Hash(), yx.Hash());
+		yx.Hash().ShouldNotBe(xy.Hash());
 	}
 
-	[Fact]
+	[Test]
 	public void Hash_is_sensitive_to_format()
 	{
 		var srgb = RenderGraph.Define(g => g.Domain("world", 320, 180).Color("a", Format.Rgba8Srgb));
 		var hdr = RenderGraph.Define(g => g.Domain("world", 320, 180).Color("a", Format.Rgba16F));
-		Assert.NotEqual(srgb.Hash(), hdr.Hash());
+		hdr.Hash().ShouldNotBe(srgb.Hash());
 	}
 
-	[Fact]
+	[Test]
 	public void Hash_is_sensitive_to_write_vs_blend()
 	{
 		var writes = RenderGraph.Define(g =>
@@ -106,39 +106,39 @@ public class RenderGraphTests
 			var lit = g.Domain("world", 320, 180).Color("lit", Format.Rgba16F);
 			g.Pass("p").Blends(lit);
 		});
-		Assert.NotEqual(writes.Hash(), blends.Hash());
+		blends.Hash().ShouldNotBe(writes.Hash());
 	}
 
-	[Fact]
+	[Test]
 	public void Present_target_is_recorded()
 	{
 		var graph = Baseline();
-		Assert.NotNull(graph.PresentTarget);
-		Assert.True(graph.PresentTarget!.IsBackbuffer);
+		graph.PresentTarget.ShouldNotBeNull();
+		graph.PresentTarget!.IsBackbuffer.ShouldBeTrue();
 	}
 
-	[Fact]
+	[Test]
 	public void Graph_without_present_has_null_target()
 	{
 		var graph = RenderGraph.Define(g => g.Domain("world", 320, 180).Color("a", Format.Rgba8Srgb));
-		Assert.Null(graph.PresentTarget);
+		graph.PresentTarget.ShouldBeNull();
 	}
 
-	[Fact]
+	[Test]
 	public void Dump_mentions_domains_resources_passes_and_present()
 	{
 		var dump = Baseline().Dump();
-		Assert.Contains("world", dump);
-		Assert.Contains("albedo", dump);
-		Assert.Contains("lighting", dump);
-		Assert.Contains("Present: <backbuffer>", dump);
+		dump.ShouldContain("world");
+		dump.ShouldContain("albedo");
+		dump.ShouldContain("lighting");
+		dump.ShouldContain("Present: <backbuffer>");
 	}
 
 	/// <summary>
 	/// The §6 reference-frame shape (minus the g.Bloom sub-graph helper, which is M5): deferred geometry
 	/// → lighting → forward transparency → nearest upscale → HUD → present. Proves the vocabulary composes.
 	/// </summary>
-	[Fact]
+	[Test]
 	public void Reference_frame_shape_composes()
 	{
 		ColorHandle? lit = null;
@@ -164,20 +164,20 @@ public class RenderGraphTests
 			g.Present(screen);
 		});
 
-		Assert.Equal(["gbuffer", "lighting", "transparent", "upscale", "hud"], graph.Passes.Select(p => p.Name));
+		graph.Passes.Select(p => p.Name).ShouldBe(new[] { "gbuffer", "lighting", "transparent", "upscale", "hud" });
 
 		// Two domains: the low-res world plus the native backbuffer.
-		Assert.Equal(2, graph.Domains.Length);
+		graph.Domains.Length.ShouldBe(2);
 
 		// lit is produced by lighting and accumulated onto by transparent.
-		Assert.Contains(graph.Passes.Single(p => p.Name == "lighting").ResourcesWith(AccessKind.Write), r => r == lit);
-		Assert.Contains(graph.Passes.Single(p => p.Name == "transparent").ResourcesWith(AccessKind.Blend), r => r == lit);
+		graph.Passes.Single(p => p.Name == "lighting").ResourcesWith(AccessKind.Write).ShouldContain(r => r == lit);
+		graph.Passes.Single(p => p.Name == "transparent").ResourcesWith(AccessKind.Blend).ShouldContain(r => r == lit);
 
 		// depth is written once and only read by the transparent pass.
-		Assert.Contains(graph.Passes.Single(p => p.Name == "gbuffer").ResourcesWith(AccessKind.WriteDepth), r => r == depth);
-		Assert.Contains(graph.Passes.Single(p => p.Name == "transparent").ResourcesWith(AccessKind.ReadDepth), r => r == depth);
+		graph.Passes.Single(p => p.Name == "gbuffer").ResourcesWith(AccessKind.WriteDepth).ShouldContain(r => r == depth);
+		graph.Passes.Single(p => p.Name == "transparent").ResourcesWith(AccessKind.ReadDepth).ShouldContain(r => r == depth);
 
 		// Both backbuffer writers target the one swapchain resource; present points at it.
-		Assert.True(graph.PresentTarget!.IsBackbuffer);
+		graph.PresentTarget!.IsBackbuffer.ShouldBeTrue();
 	}
 }

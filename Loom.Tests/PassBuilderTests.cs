@@ -12,7 +12,7 @@ public class PassBuilderTests
 			body(g, world);
 		});
 
-	[Fact]
+	[Test]
 	public void Writes_records_a_write_edge_per_resource()
 	{
 		var graph = SinglePass((g, world) =>
@@ -22,11 +22,11 @@ public class PassBuilderTests
 			g.Pass("p").Writes(a, b);
 		});
 
-		var pass = Assert.Single(graph.Passes);
-		Assert.Equal(["a", "b"], pass.ResourcesWith(AccessKind.Write).Select(r => r.Name));
+		var pass = graph.Passes.ShouldHaveSingleItem();
+		pass.ResourcesWith(AccessKind.Write).Select(r => r.Name).ShouldBe(new[] { "a", "b" });
 	}
 
-	[Fact]
+	[Test]
 	public void All_verbs_record_their_distinct_access_kinds()
 	{
 		var graph = SinglePass((g, world) =>
@@ -47,18 +47,18 @@ public class PassBuilderTests
 		});
 
 		var p = graph.Passes[0];
-		Assert.Equal("sampled", Assert.Single(p.ResourcesWith(AccessKind.Sample)).Name);
-		Assert.Equal("color", Assert.Single(p.ResourcesWith(AccessKind.Blend)).Name);
-		Assert.Equal("depth", Assert.Single(p.ResourcesWith(AccessKind.WriteDepth)).Name);
-		Assert.Equal("storage", Assert.Single(p.ResourcesWith(AccessKind.ReadWrite)).Name);
-		Assert.Equal("depth", Assert.Single(graph.Passes[1].ResourcesWith(AccessKind.ReadDepth)).Name);
+		p.ResourcesWith(AccessKind.Sample).ShouldHaveSingleItem().Name.ShouldBe("sampled");
+		p.ResourcesWith(AccessKind.Blend).ShouldHaveSingleItem().Name.ShouldBe("color");
+		p.ResourcesWith(AccessKind.WriteDepth).ShouldHaveSingleItem().Name.ShouldBe("depth");
+		p.ResourcesWith(AccessKind.ReadWrite).ShouldHaveSingleItem().Name.ShouldBe("storage");
+		graph.Passes[1].ResourcesWith(AccessKind.ReadDepth).ShouldHaveSingleItem().Name.ShouldBe("depth");
 	}
 
 	/// <summary>
 	/// The load-bearing distinction (Planning.md §8): producing vs accumulating must stay distinguishable
 	/// on the same resource, because barrier derivation depends on it.
 	/// </summary>
-	[Fact]
+	[Test]
 	public void Writes_and_Blends_are_distinguishable_on_the_same_resource()
 	{
 		var graph = SinglePass((g, world) =>
@@ -68,25 +68,25 @@ public class PassBuilderTests
 			g.Pass("accumulate").Blends(lit);
 		});
 
-		Assert.Equal(AccessKind.Write, Assert.Single(graph.Passes[0].Accesses).Kind);
-		Assert.Equal(AccessKind.Blend, Assert.Single(graph.Passes[1].Accesses).Kind);
+		graph.Passes[0].Accesses.ShouldHaveSingleItem().Kind.ShouldBe(AccessKind.Write);
+		graph.Passes[1].Accesses.ShouldHaveSingleItem().Kind.ShouldBe(AccessKind.Blend);
 	}
 
-	[Fact]
+	[Test]
 	public void Pass_defaults_to_the_graphics_queue()
 	{
 		var graph = SinglePass((g, _) => g.Pass("p"));
-		Assert.Equal(Queue.Graphics, Assert.Single(graph.Passes).Queue);
+		graph.Passes.ShouldHaveSingleItem().Queue.ShouldBe(Queue.Graphics);
 	}
 
-	[Fact]
+	[Test]
 	public void Queue_assignment_is_recorded()
 	{
 		var graph = SinglePass((g, _) => g.Compute("c").Queue(Queue.AsyncCompute));
-		Assert.Equal(Queue.AsyncCompute, Assert.Single(graph.Passes).Queue);
+		graph.Passes.ShouldHaveSingleItem().Queue.ShouldBe(Queue.AsyncCompute);
 	}
 
-	[Fact]
+	[Test]
 	public void Raster_and_compute_passes_carry_their_kind()
 	{
 		var graph = SinglePass((g, _) =>
@@ -95,37 +95,37 @@ public class PassBuilderTests
 			g.Compute("compute");
 		});
 
-		Assert.Equal(PassKind.Raster, graph.Passes[0].Kind);
-		Assert.Equal(PassKind.Compute, graph.Passes[1].Kind);
+		graph.Passes[0].Kind.ShouldBe(PassKind.Raster);
+		graph.Passes[1].Kind.ShouldBe(PassKind.Compute);
 	}
 
-	[Fact]
+	[Test]
 	public void Draw_on_a_compute_pass_throws() =>
-		Assert.Throws<InvalidOperationException>(() =>
+		Should.Throw<InvalidOperationException>(() =>
 			SinglePass((g, _) => g.Compute("c").Draw(_ => { })));
 
-	[Fact]
+	[Test]
 	public void Dispatch_on_a_raster_pass_throws() =>
-		Assert.Throws<InvalidOperationException>(() =>
+		Should.Throw<InvalidOperationException>(() =>
 			SinglePass((g, _) => g.Pass("p").Dispatch(_ => { })));
 
-	[Fact]
+	[Test]
 	public void Record_callback_is_retained()
 	{
 		var graph = SinglePass((g, _) => g.Pass("p").Draw(_ => { }));
-		Assert.NotNull(Assert.Single(graph.Passes).Record);
+		graph.Passes.ShouldHaveSingleItem().Record.ShouldNotBeNull();
 	}
 
-	[Fact]
+	[Test]
 	public void Pass_without_a_callback_has_null_record()
 	{
 		var graph = SinglePass((g, _) => g.Pass("p"));
-		Assert.Null(Assert.Single(graph.Passes).Record);
+		graph.Passes.ShouldHaveSingleItem().Record.ShouldBeNull();
 	}
 
-	[Fact]
+	[Test]
 	public void Duplicate_pass_name_throws() =>
-		Assert.Throws<InvalidOperationException>(() =>
+		Should.Throw<InvalidOperationException>(() =>
 			SinglePass((g, _) =>
 			{
 				g.Pass("p");

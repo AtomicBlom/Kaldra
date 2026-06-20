@@ -36,4 +36,5 @@ public readonly record struct TechniqueDescription(
 	int StorageBufferCount = 0,
 	bool ParticleInput = false,
 	Loom.Core.VertexLayout? Layout = null,
-	Loom.Core.VertexLayout? Instance = null);
+	Loom.Core.VertexLayout? Instance = null,
+	int UniformBufferCount = 0);

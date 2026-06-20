@@ -57,7 +57,7 @@ pwsh Scripts/Verification/coverage.ps1 -Path capture.png
 
 The whole loop in one command: capture a demo on **both** backends (headless, frozen time), then
 `colorcount` + `coverage` + `diff` each. Pass the **exact demo name**. Builds `Loom.Sandbox` once
-unless `-NoBuild`. A dev-box convenience (it spawns the windowed sandbox); CI uses the xUnit golden
+unless `-NoBuild`. A dev-box convenience (it spawns the windowed sandbox); CI uses the TUnit golden
 harness instead.
 
 ```powershell

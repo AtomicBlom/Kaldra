@@ -37,16 +37,16 @@
 
   <!-- The first backend. The Vulkan/Silk.NET stack is quarantined here. -->
   <ItemGroup>
-    <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
-    <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.23.0" />
-    <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.23.0" />
-    <PackageReference Include="Silk.NET.Maths" Version="2.23.0" />
+    <PackageReference Include="Silk.NET.Vulkan" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" />
+    <PackageReference Include="Silk.NET.Maths" />
     <!-- ImGui rendering is inherently backend-specific (like imgui_impl_vulkan), so the ImGui Vulkan
          renderer lives here. Only Loom.Vulkan + the host see ImGui.NET; Loom.Core/Graph stay UI-agnostic.
          Gated on <UseImGui> (repo-wide, Directory.Build.props) — off drops the dependency entirely. -->
-    <PackageReference Include="ImGui.NET" Version="1.91.6.1" Condition="'$(UseImGui)' == 'true'" />
+    <PackageReference Include="ImGui.NET" Condition="'$(UseImGui)' == 'true'" />
     <!-- Hermetic slangc for compiling the engine's own shaders (bundled in the package; win-x64 / win-arm64). -->
-    <PackageReference Include="Slang.Sdk" Version="0.5.1" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 
   <!-- Shared shader-compile targets (after the body, so LoomShaderSourceDir is set). -->

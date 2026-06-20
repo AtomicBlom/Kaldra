@@ -68,6 +68,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 #if LOOM_IMGUI
 	private ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
+	private UIRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
 
 	// Engine-owned shaders (tonemap/blit/fullscreen/exposure/imgui/debugview) ship embedded in THIS assembly
 	// under the manifest prefix "<assembly>.Shaders." (the Loom SDK's Embed mode sets the same prefix from
@@ -119,9 +120,12 @@ internal sealed unsafe class VulkanEngine : IEngine
 	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
 	private Camera _frameCamera = Camera.Identity;
 	private Camera _frameSun = Camera.Identity;
+	private Camera[] _frameCascades = [];
+	private IReadOnlyList<float> _frameCascadeSplits = [];
 	private float _frameTime;
 	private uint _frameHover;
 	private nint _frameImGui;
+	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _frameUISurfaces = [];
 
 	private int _currentFrame;
 	private bool _framebufferResized;
@@ -239,7 +243,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 			descriptor.ParticleInput,
 			descriptor.Address,
 			layout,
-			descriptor.Instance);
+			descriptor.Instance,
+			reflection.UniformBufferCount);
 
 		// Hot-reload bookkeeping (M13): remember which techniques a shader backs (one shader → many techniques, e.g.
 		// bloom_sample → bloom.down + bloom.up) and each technique's descriptor, so a reload can rebuild the template.
@@ -286,6 +291,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 			throw new VulkanException($"Vertex element size ({stride} bytes) does not match the layout stride ({layout.Stride} bytes).");
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
+
+	public Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
 	public Texture CreateTexture(TextureData data) => _textures.Create(data);
 
@@ -398,6 +405,17 @@ internal sealed unsafe class VulkanEngine : IEngine
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
 	}
 
+	public void EnableUI()
+	{
+		if (_ui is not null)
+			return; // idempotent — enabling twice keeps the existing renderer
+
+		// MU0 Phase A: stand up the no-op UI renderer and wire it to the context, so the ctx.DrawUI() seam is live
+		// on both backends. No shader resolve yet — the ui.slang pipeline + atlas upload arrive in MU1.
+		_ui = new UIRenderer();
+		_context.SetUI(_ui);
+	}
+
 	public float SamplePick(int x, int y)
 	{
 		if (_readbackId < 0 || (uint)x >= (uint)_readbackWidth || (uint)y >= (uint)_readbackHeight)
@@ -457,9 +475,16 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		_frameCamera = ClipSpace(inputs.Camera);
 		_frameSun = ClipSpace(inputs.SunView);
+		// Flip each cascade's clip space the same way (M15-3) — neutral matrices in, the backend's Y-flip applied.
+		if (_frameCascades.Length != inputs.Cascades.Count)
+			_frameCascades = new Camera[inputs.Cascades.Count];
+		for (var i = 0; i < inputs.Cascades.Count; i++)
+			_frameCascades[i] = ClipSpace(inputs.Cascades[i]);
+		_frameCascadeSplits = inputs.CascadeSplits;
 		_frameTime = inputs.Time;
 		_frameHover = inputs.HoverId;
 		_frameImGui = inputs.ImGuiDrawData;
+		_frameUISurfaces = inputs.UISurfaces;
 		DrawFrame((float)inputs.DeltaSeconds);
 	}
 
@@ -586,7 +611,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameHover, _frameImGui, _frameUISurfaces, _swapchain.Extent, _swapchain.HdrActive);
 
 		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).

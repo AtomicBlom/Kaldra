@@ -96,6 +96,66 @@ internal static unsafe class DX12Shaders
 	}
 
 	/// <summary>
+	/// Count the descriptor-bound constant buffers a shader reads (M15-0 — the per-frame uniform seam), from its
+	/// reflection sidecar: a <c>descriptorTableSlot</c> parameter of type <c>constantBuffer</c> (distinct from a
+	/// <c>pushConstantBuffer</c> push, which never reaches the descriptor heap). 0 or 1 in practice; the backend
+	/// binds it as a root CBV at register b1. (0 when there's no sidecar.)
+	/// </summary>
+	public static int ResolveUniformBufferCount(string shaderDir, string name)
+	{
+		var json = TryReadEmbedded(name + ".json");
+		if (json is null)
+		{
+			var path = Path.Combine(shaderDir, name + ".json");
+			if (!File.Exists(path))
+				return 0;
+			json = File.ReadAllBytes(path);
+		}
+		using var doc = JsonDocument.Parse(json);
+		var count = 0;
+		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
+			foreach (var p in parameters.EnumerateArray())
+			{
+				if (!p.TryGetProperty("binding", out var binding) || !binding.TryGetProperty("kind", out var bk) || bk.GetString() != "descriptorTableSlot")
+					continue;
+				if (p.TryGetProperty("type", out var type) && type.TryGetProperty("kind", out var tk) && tk.GetString() == "constantBuffer")
+					count++;
+			}
+		return count;
+	}
+
+	/// <summary>
+	/// Count the read-only structured/byte-address buffers a compute shader binds (M15-2 — the skin compute's
+	/// bind-pose verts + bone palette), from its reflection sidecar. These are neither SRV-table textures (counted
+	/// by <see cref="ResolveSampledInputCount"/>) nor RW storage (counted by <see cref="ResolveComputeStorage"/>),
+	/// so they need their own count; the backend binds each as a structured-buffer root SRV (t0..) by GPU address.
+	/// </summary>
+	public static int ResolveComputeInputBuffers(string shaderDir, string name)
+	{
+		var json = TryReadEmbedded(name + ".json");
+		if (json is null)
+		{
+			var path = Path.Combine(shaderDir, name + ".json");
+			if (!File.Exists(path))
+				return 0;
+			json = File.ReadAllBytes(path);
+		}
+		using var doc = JsonDocument.Parse(json);
+		var count = 0;
+		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
+			foreach (var p in parameters.EnumerateArray())
+			{
+				if (!p.TryGetProperty("type", out var type) || !type.TryGetProperty("kind", out var tk) || tk.GetString() != "resource")
+					continue;
+				var baseShape = type.TryGetProperty("baseShape", out var shape) ? shape.GetString() : null;
+				var readWrite = type.TryGetProperty("access", out var access) && access.GetString() == "readWrite";
+				if (baseShape is "structuredBuffer" or "byteAddressBuffer" && !readWrite)
+					count++;
+			}
+		return count;
+	}
+
+	/// <summary>
 	/// The compute storage resources a shader binds, from its reflection sidecar: how many read-write TEXTURES
 	/// (storage images — bound via a UAV descriptor table on DX12, e.g. the auto-exposure 1×1 image), how many
 	/// read-write BUFFERS (e.g. the GPU-particle buffer), and a structured buffer's element STRIDE in bytes.

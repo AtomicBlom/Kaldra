@@ -2,7 +2,7 @@
 # time) then count + locate + diff. Writes <demo>-vk.png / <demo>-dx12.png / <demo>-diff.png to -OutDir and
 # prints colour counts, content coverage, and the diff summary. Builds Loom.Sandbox once up front unless -NoBuild.
 # Requires the default UseVulkan + UseDX12 build. This is a dev-box convenience (it spawns the windowed sandbox);
-# CI uses the xUnit golden harness (Loom.Tests) instead.
+# CI uses the TUnit golden harness (Loom.Tests) instead.
 param(
   # The demo to capture: a 0-based index, an exact (case-insensitive) name, or a unique case-insensitive
   # substring, e.g. "Sprites + Atlas" or just "sprites" (an ambiguous/unmatched value makes the sandbox exit

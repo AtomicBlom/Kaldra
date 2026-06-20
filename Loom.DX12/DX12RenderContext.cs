@@ -32,12 +32,22 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	private readonly DX12TextureStore _textures;
 	private readonly DX12MaterialStore _materials;
 	private readonly DX12InstanceUploadBuffer _instanceUpload;
+	// M15-0: per-frame UPLOAD-heap ring for the uniform seam (CSM matrices, lighting params, wind), 256-aligned
+	// so each block is a valid CBV base. Bound as a root CBV at b1 on a technique that reflects a constant buffer.
+	private readonly DX12InstanceUploadBuffer _uniformUpload;
+	// M15-2: per-frame UPLOAD ring for the bone palette the compute pre-skin pass reads as a structured-buffer
+	// root SRV; 256-aligned (a multiple of the 64-byte matrix stride, so each block is element-aligned).
+	private readonly DX12InstanceUploadBuffer _storageUpload;
 	private DX12Transients? _transients;
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled. The HUD pass's
 	// ctx.DrawImGui() forwards this frame's draw data to it. Null when EnableImGui hasn't been called.
 	private DX12ImGuiRenderer? _imgui;
 #endif
+	// The host's game-UI renderer (the twin of _imgui), wired in by the engine when the host calls EnableUI. The
+	// "ui" pass's ctx.DrawUI(surface) forwards that surface's composited draw data to it. Null until UI is enabled;
+	// MU0 Phase A's renderer is a no-op. Ungated — the neutral seam exists unconditionally (no native dep).
+	private DX12UIRenderer? _ui;
 
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
@@ -48,9 +58,11 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	private Vector4[] _debugLines = [];
 	private int _debugLineCount;
 	private const uint DebugLineColor = 0xFF00FFFFu; // IM_COL32 yellow
-	// This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
-	// DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
+													 // This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
+													 // DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
 	private nint _imguiDrawData;
+	// This frame's composited UI surfaces, pulled from FrameInputs.UISurfaces; ctx.DrawUI looks one up by id.
+	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
 	private uint _fbWidth;
 	private uint _fbHeight;
 	private DxgiFormat[] _colorFormats = [];
@@ -63,7 +75,10 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public uint HoverId { get; private set; }
 	public Camera SunView { get; private set; } = Camera.Identity;
 	public Camera Camera { get; private set; } = Camera.Identity;
+	public IReadOnlyList<Camera> Cascades { get; private set; } = [];
+	public IReadOnlyList<float> CascadeSplits { get; private set; } = [];
 	public bool HdrOutput { get; private set; }
+	private Camera[] _cascades = [];
 
 	public DX12RenderContext(DX12Context ctx, DX12TechniqueCache techniques, DX12DescriptorRing ring, DX12MeshStore meshes, DX12TextureStore textures, DX12MaterialStore materials, int frameCount)
 	{
@@ -74,6 +89,8 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		_textures = textures;
 		_materials = materials;
 		_instanceUpload = new DX12InstanceUploadBuffer(ctx, frameCount);
+		_uniformUpload = new DX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
+		_storageUpload = new DX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
 	}
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
@@ -102,11 +119,15 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public void SetImGui(DX12ImGuiRenderer renderer) => _imgui = renderer;
 #endif
 
+	/// <summary>The host's game-UI renderer (backend-specific), wired in by the engine when UI is enabled (EnableUI).</summary>
+	public void SetUI(DX12UIRenderer renderer) => _ui = renderer;
+
 	public void BeginFrame(ComPtr<ID3D12GraphicsCommandList> cmd, FrameInputs inputs, bool hdrOutput, uint slot, uint fbWidth, uint fbHeight)
 	{
 		_cmd = cmd;
 		_slot = slot;
 		_imguiDrawData = inputs.ImGuiDrawData;
+		_uiSurfaces = inputs.UISurfaces;
 		_fbWidth = fbWidth;
 		_fbHeight = fbHeight;
 		DeltaTime = (float)inputs.DeltaSeconds;
@@ -114,8 +135,17 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		HoverId = inputs.HoverId;
 		Camera = ClipSpace(inputs.Camera);
 		SunView = ClipSpace(inputs.SunView);
+		// Flip each cascade's clip space the same way as SunView (M15-3).
+		if (_cascades.Length != inputs.Cascades.Count)
+			_cascades = new Camera[inputs.Cascades.Count];
+		for (var i = 0; i < inputs.Cascades.Count; i++)
+			_cascades[i] = ClipSpace(inputs.Cascades[i]);
+		Cascades = _cascades;
+		CascadeSplits = inputs.CascadeSplits;
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
+		_uniformUpload.BeginFrame(slot);  // and its per-frame uniform staging (M15-0)
+		_storageUpload.BeginFrame(slot);  // and the bone-palette staging (M15-2)
 	}
 
 	// Adopt the Vulkan backend's clip-space convention (negate the projection's Y row), so the shared shaders need
@@ -156,8 +186,15 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
+		// The per-pass data channel: a technique that reflects a uniform buffer (M15-0) routes the float block to
+		// its root CBV (no 16-float cap); otherwise it rides the fixed 16-DWORD root-constant block.
 		if (push.Length > 0)
-			SetPush(baked, push);
+		{
+			if (baked.CbvRootParam >= 0)
+				BindUniforms(baked, push);
+			else
+				SetPush(baked, push);
+		}
 		if (inputs.Length > 0)
 			BindInputs(baked, inputs);
 
@@ -244,6 +281,15 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		for (var i = 0; i < push.Length && i < 16; i++)
 			block[i] = push[i];
 		_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
+	}
+
+	// M15-0: stage a per-frame uniform block into the uniform ring and bind it as the technique's root CBV (b1).
+	// The UPLOAD-heap GPU address is bound directly — no descriptor heap entry needed for a root CBV.
+	private void BindUniforms(DX12Technique baked, ReadOnlySpan<float> data)
+	{
+		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(data);
+		var gpuAddress = _uniformUpload.Upload(_slot, bytes);
+		_cmd.SetGraphicsRootConstantBufferView((uint)baked.CbvRootParam, gpuAddress);
 	}
 
 	// Write the sampled inputs' SRVs into a fresh descriptor-ring range and bind it as the technique's SRV table.
@@ -433,6 +479,81 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count);
 	}
 
+	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: skinning requires an active graph (SetGraph).");
+		if (vertexCount <= 0 || palette.Length == 0)
+			return;
+
+		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
+		_cmd.SetComputeRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		// vertexCount rides the compute root constant (as a float — exact for any realistic count).
+		if (baked.RootConstantParam >= 0)
+		{
+			var count = (float)vertexCount;
+			_cmd.SetComputeRoot32BitConstants((uint)baked.RootConstantParam, 1, &count, 0);
+		}
+
+		// All three buffers bind as root descriptors by GPU address — no descriptor heap. They are raw
+		// ByteAddressBuffers (the skin shader Loads/Stores at explicit byte offsets), so the output is a root UAV
+		// (stride 0): t0 = bind-pose verts, t1 = bone palette, u0 = output.
+		var paletteBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(palette);
+		var paletteAddress = _storageUpload.Upload(_slot, paletteBytes);
+		_cmd.SetComputeRootShaderResourceView((uint)baked.InputBufferBaseParam, _meshes.BindPoseAddress(skinnedMesh.Id));
+		_cmd.SetComputeRootShaderResourceView((uint)(baked.InputBufferBaseParam + 1), paletteAddress);
+		_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, output.Id).GetGPUVirtualAddress());
+
+		_cmd.Dispatch((uint)((vertexCount + 63) / 64), 1, 1);
+	}
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique) => DrawSkinned(mesh, skinnedVertices, technique, Camera);
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view)
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: skinned draw requires an active graph (SetGraph).");
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = view.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		_meshes.DrawSkinned(_cmd, mesh.Id, SkinnedView(skinnedVertices));
+	}
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique) => DrawSkinned(mesh, skinnedVertices, material, technique, Camera);
+
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view)
+	{
+		if (_transients is null)
+			throw new InvalidOperationException("DX12: skinned draw requires an active graph (SetGraph).");
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = view.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		if (baked.TableParam >= 0 && baked.InputCount > 0)
+			BindMaterialTable(baked, material, technique);
+
+		_meshes.DrawSkinned(_cmd, mesh.Id, SkinnedView(skinnedVertices));
+	}
+
+	// The compute pre-skin output as a per-vertex stream: a MeshStandard-strided view over the transient buffer.
+	private VertexBufferView SkinnedView(BufferHandle skinnedVertices) => new()
+	{
+		BufferLocation = _transients!.Resource(_slot, skinnedVertices.Id).GetGPUVirtualAddress(),
+		SizeInBytes = _transients.ByteSize(skinnedVertices.Id),
+		StrideInBytes = (uint)VertexLayout.MeshStandard.Stride,
+	};
+
 	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged
 	{
 		if (instances.Length == 0)
@@ -447,6 +568,36 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 
 		// Material atlas → the technique's reflected SRV table, identical to Draw(mesh, material); every instance
 		// samples the shared atlas, the per-instance uv-rect (in the stream) picks each quad's region.
+		if (baked.TableParam >= 0 && baked.InputCount > 0)
+			BindMaterialTable(baked, material, technique);
+
+		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances);
+		var gpuAddress = _instanceUpload.Upload(_slot, bytes);
+		var instanceView = new VertexBufferView
+		{
+			BufferLocation = gpuAddress,
+			SizeInBytes = (uint)bytes.Length,
+			StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>(),
+		};
+		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
+	}
+
+	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<float> uniforms) where T : unmanaged
+	{
+		if (instances.Length == 0)
+			return;
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		var mvp = Camera.ViewProjection;
+		if (baked.RootConstantParam >= 0)
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
+
+		// The per-frame uniform block (M15-0) — e.g. foliage wind, read in the vertex stage — bound as the root
+		// CBV (b1), alongside the material's alpha-test texture. The MVP still rides the b0 root constants.
+		if (uniforms.Length > 0 && baked.CbvRootParam >= 0)
+			BindUniforms(baked, uniforms);
 		if (baked.TableParam >= 0 && baked.InputCount > 0)
 			BindMaterialTable(baked, material, technique);
 
@@ -554,9 +705,39 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 #endif
 	}
 
+	// Forward this frame's composited UI surface to the backend renderer, recording into the already-bound render
+	// target — the twin of DrawImGui for the XAML UI engine. No-op when UI isn't enabled, the host supplied no
+	// draw data for this surface, or the surface is empty. MU0 Phase A: the renderer itself no-ops.
+	public void DrawUI(UISurfaceId surface)
+	{
+		if (_ui is null)
+			return;
+
+		// Indexed loop, not foreach/LINQ: avoids an enumerator allocation on the per-frame render path (§8: 0 GC).
+		UIDrawData? draw = null;
+		for (var i = 0; i < _uiSurfaces.Count; i++)
+		{
+			if (_uiSurfaces[i].Id == surface)
+			{
+				draw = _uiSurfaces[i].Draw;
+				break;
+			}
+		}
+
+		if (draw is null || draw.Commands.IsEmpty)
+			return;
+
+		_ui.Render(_cmd, draw, _fbWidth, _fbHeight, _slot);
+	}
+
 	// M13 resource viewer: GetDebugTextureId returns (resourceId + DebugTextureBase) — a non-zero id the host uses to
 	// gate "inspectable?". The engine draws the matching thumbnail grid in the HUD pass.
 	internal const int DebugTextureBase = 0x10000;
 
-	public void Dispose() => _instanceUpload.Dispose();
+	public void Dispose()
+	{
+		_instanceUpload.Dispose();
+		_uniformUpload.Dispose();
+		_storageUpload.Dispose();
+	}
 }

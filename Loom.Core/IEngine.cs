@@ -39,6 +39,16 @@ public interface IEngine : IDisposable
 	Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged;
 
 	/// <summary>
+	/// Upload a skinned mesh's bind-pose vertices (the <see cref="VertexLayout.MeshSkinned"/> layout) once and get
+	/// a <see cref="Mesh"/> handle (M15). Unlike <see cref="CreateMesh{T}"/>, the bind-pose vertex buffer is made
+	/// readable by a compute shader (the pre-skin pass reads it as a structured buffer), and the returned mesh's
+	/// index buffer is what <see cref="IRenderContext.DrawSkinned(Mesh, BufferHandle, string)"/> draws — its
+	/// vertex stream comes from the compute's skinned output, not this buffer. The vertices' bone indices
+	/// reference the model's skeleton (the palette <see cref="IRenderContext.DispatchSkin"/> applies).
+	/// </summary>
+	Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices);
+
+	/// <summary>
 	/// Upload a texture (and its mip chain) once and get a stable <see cref="Texture"/> handle to bundle into a
 	/// <see cref="Material"/>. Takes neutral <see cref="TextureData"/> — no graphics-API type crosses the
 	/// boundary; the backend's texture store decodes nothing and just uploads the levels. Call after creation,
@@ -69,6 +79,15 @@ public interface IEngine : IDisposable
 	/// <see cref="FrameInputs.ImGuiDrawData"/> each frame.
 	/// </summary>
 	void EnableImGui();
+
+	/// <summary>
+	/// Stand up the backend's game-UI renderer (PlanningUI.md §Core surface additions) — the counterpart to
+	/// <see cref="EnableImGui"/> for the XAML UI engine. Call once after creation; thereafter a pass can call
+	/// <c>ctx.DrawUI(surface)</c> and the host feeds composited surfaces via <see cref="FrameInputs.UISurfaces"/>
+	/// each frame. A no-op until the backend renderer ships its pixels (MU1); the seam is wired now so the
+	/// describe/execute layers and both backends carry the verb from MU0 (PlanningUI.md MU0).
+	/// </summary>
+	void EnableUI();
 
 	/// <summary>Render one frame of the active graph from <paramref name="inputs"/> (Planning.md §5 <c>graph.Render</c>).</summary>
 	void Render(FrameInputs inputs);

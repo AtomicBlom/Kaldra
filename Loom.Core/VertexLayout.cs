@@ -2,28 +2,6 @@ using System.Collections.Immutable;
 
 namespace Loom.Core;
 
-/// <summary>How the input assembler advances through a <see cref="VertexLayout"/>'s buffer.</summary>
-public enum VertexInputRate
-{
-	/// <summary>One element per vertex — the mesh's geometry stream (binding 0).</summary>
-	PerVertex,
-
-	/// <summary>One element per instance — the per-instance stream a <c>DrawInstanced</c> reads (binding 1).</summary>
-	PerInstance,
-}
-
-/// <summary>
-/// One attribute in a <see cref="VertexLayout"/>: a semantic name plus its element format. The semantic is the
-/// neutral link between the data and the shader — Vulkan binds by <c>[[vk::location]]</c> (assigned in order),
-/// DX12 binds by HLSL semantic name + index (the index derived from how many earlier attributes share the
-/// name, so four <c>"ITRANSFORM"</c> rows become <c>ITRANSFORM0..3</c>). Semantic names map 1:1 onto glTF
-/// attribute names (POSITION, NORMAL, TEXCOORD, TANGENT, …), which is what makes an importer's output drop
-/// straight into a layout (PlanningPhase2 — M15 glTF).
-/// </summary>
-/// <param name="Semantic">The attribute's semantic name (uppercase by convention — POSITION, NORMAL, TEXCOORD, …).</param>
-/// <param name="Format">The attribute's element format.</param>
-public readonly record struct VertexAttribute(string Semantic, VertexFormat Format);
-
 /// <summary>
 /// A backend-neutral description of one vertex stream: an ordered attribute set, the byte offset of each
 /// attribute (tight-packed in declaration order), the resulting stride, and whether the input assembler
@@ -93,6 +71,22 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		new VertexAttribute("TANGENT", VertexFormat.Float4));
 
 	/// <summary>
+	/// The skinned-mesh per-vertex layout (M15) — <see cref="MeshStandard"/> plus the two skinning attributes:
+	/// <c>JOINTS</c> (four bone indices, <see cref="VertexFormat.UInt4"/>) and <c>WEIGHTS</c> (four normalized
+	/// blend weights, float4), 80 bytes, mirroring <see cref="SkinnedVertex"/>. A skinned mesh's bind-pose buffer
+	/// is uploaded against this; the compute pre-skin pass reads it (+ a bone palette) and writes a plain
+	/// <see cref="MeshStandard"/>-shaped buffer, so the depth/g-buffer/shadow techniques draw the skinned output
+	/// unchanged. The semantics map 1:1 onto glTF's <c>JOINTS_0</c>/<c>WEIGHTS_0</c>.
+	/// </summary>
+	public static VertexLayout MeshSkinned { get; } = new(
+		new VertexAttribute("POSITION", VertexFormat.Float3),
+		new VertexAttribute("NORMAL", VertexFormat.Float3),
+		new VertexAttribute("TEXCOORD", VertexFormat.Float2),
+		new VertexAttribute("TANGENT", VertexFormat.Float4),
+		new VertexAttribute("JOINTS", VertexFormat.UInt4),
+		new VertexAttribute("WEIGHTS", VertexFormat.Float4));
+
+	/// <summary>
 	/// The standard per-instance stream for instanced drawing — a 4×4 world matrix as four <c>ITRANSFORM</c>
 	/// rows (4 × float4, 64 bytes), advancing one per instance at binding 1. A CPU-uploaded
 	/// <see cref="System.Numerics.Matrix4x4"/> per instance lands here directly; the shader rebuilds the matrix
@@ -158,6 +152,20 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		binding: 0,
 		new VertexAttribute("IPARTICLE", VertexFormat.Float4),  // position.xyz, life (1 at spawn → 0 at death)
 		new VertexAttribute("IPARTICLE", VertexFormat.Float4)); // velocity.xyz, seed (per-particle random)
+
+	/// <summary>
+	/// The per-instance stream for foliage instancing (M15-5) — one plant per instance (2 × float4, 32 bytes) at
+	/// binding 1, paired with a blade/card per-vertex mesh (<see cref="MeshStandard"/>). The two rows carry the
+	/// plant's world position + uniform scale, and its yaw + a wind phase + bend stiffness. The instanced foliage
+	/// vertex shader rebuilds each plant's transform, sways it by the per-frame wind (height-weighted, offset by
+	/// the per-instance phase so the field doesn't move in lockstep), and alpha-tests the blade cutout. As with the
+	/// other per-instance layouts, the rows share one repeated semantic (<c>IFOLIAGE0..1</c>) for DX12's binding.
+	/// </summary>
+	public static VertexLayout Foliage { get; } = new(
+		VertexInputRate.PerInstance,
+		binding: 1,
+		new VertexAttribute("IFOLIAGE", VertexFormat.Float4),  // world position.xyz, uniform scale
+		new VertexAttribute("IFOLIAGE", VertexFormat.Float4)); // yaw, wind phase, bend stiffness, pad
 
 	public bool Equals(VertexLayout? other)
 	{

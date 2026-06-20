@@ -14,51 +14,51 @@ public class FrustumCullTests
 
 	private static Bounds UnitBox => Bounds.FromCenterExtents(Vector3.Zero, new Vector3(0.5f));
 
-	[Fact]
+	[Test]
 	public void Translation_moves_the_box_and_keeps_its_size()
 	{
 		var world = UnitBox.Transform(Matrix4x4.CreateTranslation(10, 0, 0));
 
-		Assert.Equal(new Vector3(10, 0, 0), world.Center);
-		Assert.Equal(new Vector3(0.5f, 0.5f, 0.5f), world.Extents);
+		world.Center.ShouldBe(new Vector3(10, 0, 0));
+		world.Extents.ShouldBe(new Vector3(0.5f, 0.5f, 0.5f));
 	}
 
-	[Fact]
+	[Test]
 	public void Rotation_grows_the_axis_aligned_extents_conservatively()
 	{
 		// A unit cube spun 45° about Y: its world AABB half-width in X/Z grows to 0.5*(cos45+sin45) ≈ 0.707.
 		var world = UnitBox.Transform(Matrix4x4.CreateRotationY(MathF.PI / 4f));
 
-		Assert.Equal(0.7071f, world.Extents.X, 3);
-		Assert.Equal(0.5f, world.Extents.Y, 3);
-		Assert.Equal(0.7071f, world.Extents.Z, 3);
+		world.Extents.X.ShouldBe(0.7071f, 0.001);
+		world.Extents.Y.ShouldBe(0.5f, 0.001);
+		world.Extents.Z.ShouldBe(0.7071f, 0.001);
 	}
 
-	[Fact]
+	[Test]
 	public void A_box_at_the_focus_is_inside_the_frustum()
 	{
 		var frustum = LookAtOrigin().ExtractFrustum();
-		Assert.True(frustum.Intersects(UnitBox));
+		frustum.Intersects(UnitBox).ShouldBeTrue();
 	}
 
-	[Fact]
+	[Test]
 	public void A_box_far_to_the_side_is_culled()
 	{
 		var frustum = LookAtOrigin().ExtractFrustum();
 		var offscreen = UnitBox.Transform(Matrix4x4.CreateTranslation(100, 0, 0));
-		Assert.False(frustum.Intersects(offscreen));
+		frustum.Intersects(offscreen).ShouldBeFalse();
 	}
 
-	[Fact]
+	[Test]
 	public void A_box_behind_the_camera_is_culled()
 	{
 		var frustum = LookAtOrigin().ExtractFrustum();
 		// The camera sits at z=5 looking toward -Z, so z=20 is well behind it.
 		var behind = UnitBox.Transform(Matrix4x4.CreateTranslation(0, 0, 20));
-		Assert.False(frustum.Intersects(behind));
+		frustum.Intersects(behind).ShouldBeFalse();
 	}
 
-	[Fact]
+	[Test]
 	public void Scene_cull_compacts_only_the_visible_instances()
 	{
 		var group = new InstancedGroup(new Mesh(0, 36), "instanced");
@@ -71,13 +71,13 @@ public class FrustumCullTests
 		var visible = new Matrix4x4[group.Count];
 		var drawn = group.Cull(LookAtOrigin().ExtractFrustum(), visible);
 
-		Assert.Equal(3, group.Count);
-		Assert.Equal(2, drawn); // the two at the focus survive; the offscreen one is culled
-		Assert.Equal(atFocus, visible[0]);
-		Assert.Equal(atFocus, visible[1]);
+		group.Count.ShouldBe(3);
+		drawn.ShouldBe(2); // the two at the focus survive; the offscreen one is culled
+		visible[0].ShouldBe(atFocus);
+		visible[1].ShouldBe(atFocus);
 	}
 
-	[Fact]
+	[Test]
 	public void Copy_all_takes_every_instance_without_culling()
 	{
 		var group = new InstancedGroup(new Mesh(0, 36), "instanced");
@@ -85,6 +85,6 @@ public class FrustumCullTests
 		group.Add(Matrix4x4.CreateTranslation(200, 0, 0), UnitBox);
 
 		var all = new Matrix4x4[group.Count];
-		Assert.Equal(2, group.CopyAll(all));
+		group.CopyAll(all).ShouldBe(2);
 	}
 }

@@ -1,0 +1,14 @@
+<Project>
+
+  <!--
+    Shield for vendored code (external/VMASharp). Mirrors the sibling external/Directory.Build.props: MSBuild/NuGet
+    imports the *nearest* Directory.Packages.props walking up and stops, so this opts the submodule out of the
+    repo-root Central Package Management. The vendored projects keep their own inline <PackageReference> versions
+    (they pin different Silk.NET builds and pull GLFW/Newtonsoft that the Loom solution does not use).
+  -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+</Project>
