@@ -40,6 +40,10 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	// M15-2: per-frame UPLOAD ring for the bone palette the compute pre-skin pass reads as a structured-buffer
 	// root SRV; 256-aligned (a multiple of the 64-byte matrix stride, so each block is element-aligned).
 	private readonly DirectX12InstanceUploadBuffer _storageUpload;
+	// Per-frame UPLOAD rings for ctx.DrawList's dynamic geometry — a vertex ring and an index ring (typeless UPLOAD
+	// buffers bound by GPU address), so several draw lists in one frame append at successive offsets rather than clobber.
+	private readonly DirectX12InstanceUploadBuffer _listVtx;
+	private readonly DirectX12InstanceUploadBuffer _listIdx;
 	private DirectX12Transients? _transients;
 #if LOOM_IMGUI
 	// The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled. The HUD pass's
@@ -93,6 +97,8 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_instanceUpload = new DirectX12InstanceUploadBuffer(ctx, frameCount);
 		_uniformUpload = new DirectX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
 		_storageUpload = new DirectX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
+		_listVtx = new DirectX12InstanceUploadBuffer(ctx, frameCount);
+		_listIdx = new DirectX12InstanceUploadBuffer(ctx, frameCount);
 	}
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
@@ -148,6 +154,8 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
 		_uniformUpload.BeginFrame(slot);  // and its per-frame uniform staging (M15-0)
 		_storageUpload.BeginFrame(slot);  // and the bone-palette staging (M15-2)
+		_listVtx.BeginFrame(slot);        // and the draw-list geometry staging
+		_listIdx.BeginFrame(slot);
 	}
 
 	// Adopt the Vulkan backend's clip-space convention (negate the projection's Y row), so the shared shaders need
@@ -672,6 +680,66 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.DrawInstanced(6, (uint)count, 0, 0);
 	}
 
+	public void DrawList<TVertex>(string technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
+	{
+		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
+			return;
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_cmd.SetGraphicsRootSignature(baked.RootSignature);
+		_cmd.SetPipelineState(baked.Pipeline);
+
+		// Stage this frame's geometry into the dynamic rings (bump-allocated: several draw lists in one frame
+		// append at successive offsets rather than overwrite each other).
+		var vtxBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices);
+		var idxBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(indices);
+		var vtxAddr = _listVtx.Upload(_slot, vtxBytes);
+		var idxAddr = _listIdx.Upload(_slot, idxBytes);
+
+		var vbv = new VertexBufferView { BufferLocation = vtxAddr, SizeInBytes = (uint)vtxBytes.Length, StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<TVertex>() };
+		var ibv = new IndexBufferView { BufferLocation = idxAddr, SizeInBytes = (uint)idxBytes.Length, Format = DxgiFormat.FormatR16Uint };
+		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		_cmd.IASetVertexBuffers(0, 1, &vbv);
+		_cmd.IASetIndexBuffer(&ibv);
+
+		// Negative-height viewport (origin at the bottom) so the same +Y-down clip math as the Vulkan backend applies.
+		var viewport = new Viewport { TopLeftX = 0, TopLeftY = _fbHeight, Width = _fbWidth, Height = -(float)_fbHeight, MinDepth = 0, MaxDepth = 1 };
+		_cmd.RSSetViewports(1, &viewport);
+
+		// The shared per-list push fills the block's first slots; each command rewrites the slot right after it with
+		// its tag (the draw-list contract), then re-pushes the whole block (push count = the used slots + the tag).
+		var block = stackalloc float[8];
+		var pushLen = Math.Min(push.Length, 7);
+		for (var i = 0; i < pushLen; i++)
+			block[i] = push[i];
+
+		foreach (var c in commands)
+		{
+			var clip = c.ClipRect;
+			var minX = MathF.Max(0, clip.X);
+			var minY = MathF.Max(0, clip.Y);
+			var maxX = MathF.Min(_fbWidth, clip.X + clip.Width);
+			var maxY = MathF.Min(_fbHeight, clip.Y + clip.Height);
+			if (maxX <= minX || maxY <= minY)
+				continue;
+
+			*(uint*)(block + pushLen) = c.Tag;
+			if (baked.RootConstantParam >= 0)
+				_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, (uint)(pushLen + 1), block, 0);
+
+			// Write the bound texture's SRV (real format + full mip chain) into a fresh ring slot, then bind the table.
+			if (baked.TableParam >= 0)
+			{
+				var (cpu, gpu) = _ring.Allocate(1);
+				WriteTextureSrv(textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id, cpu);
+				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
+			}
+
+			var scissor = new Silk.NET.Maths.Box2D<int>((int)minX, (int)minY, (int)maxX, (int)maxY);
+			_cmd.RSSetScissorRects(1, &scissor);
+			_cmd.DrawIndexedInstanced((uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
+		}
+	}
+
 	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
 	// scope (the engine has bound the backbuffer RTV + negative-height viewport). No-op when ImGui isn't enabled
 	// or the host produced no draw data this frame — and a compiled-out no-op when built without ImGui.
@@ -743,5 +811,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_instanceUpload.Dispose();
 		_uniformUpload.Dispose();
 		_storageUpload.Dispose();
+		_listVtx.Dispose();
+		_listIdx.Dispose();
 	}
 }

@@ -233,6 +233,25 @@ public interface IRenderContext
 	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view);
 
 	/// <summary>
+	/// Submit a per-frame, variable-size indexed vertex stream as a batched draw list into the current pass —
+	/// the backend-neutral verb behind overlay/UI-style rendering (a draw list is just vertices + 16-bit indices +
+	/// a list of <see cref="DrawCommand"/>s, each a clip rect + a texture + an index range). The geometry is staged
+	/// fresh each frame, so the spans may differ every call; the engine owns the upload. <paramref name="technique"/>
+	/// is a normal <c>DefineTechnique</c> name whose layout matches <typeparamref name="TVertex"/> and that declares
+	/// one sampler slot; each command binds <paramref name="textures"/>[<see cref="DrawCommand.TextureIndex"/>] into
+	/// it. <paramref name="push"/> is the shared per-list push block; the per-command <see cref="DrawCommand.Tag"/>
+	/// rewrites the slot right after it (a list-push technique, <see cref="Materials.TechniqueDescriptor.HasListPush"/>).
+	/// Several calls in one pass append rather than overwrite.
+	/// </summary>
+	void DrawList<TVertex>(
+		string technique,
+		ReadOnlySpan<Texture> textures,
+		ReadOnlySpan<TVertex> vertices,
+		ReadOnlySpan<ushort> indices,
+		ReadOnlySpan<DrawCommand> commands,
+		ReadOnlySpan<float> push) where TVertex : unmanaged;
+
+	/// <summary>
 	/// Render the host's Dear ImGui draw data into the current pass's target — the screen-space HUD/debug
 	/// overlay (Planning.md §6/§9: a native-resolution UI layer on top of the pixelated world). The host owns
 	/// the ImGui context and produces the draw data each frame (<c>ImGui.Render()</c>); this verb is the neutral

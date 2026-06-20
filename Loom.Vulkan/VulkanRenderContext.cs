@@ -42,6 +42,11 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	// M15-2: per-frame host-visible ring for the bone palette the compute pre-skin pass reads as a structured
 	// buffer — StorageBufferBit, 256-aligned (≥ minStorageBufferOffsetAlignment).
 	private readonly VulkanInstanceUploadBuffer _storageUpload;
+	// Per-frame host-visible rings for ctx.DrawList's dynamic geometry — a vertex ring and an index ring, the same
+	// retire-not-free staging as the instance stream, so several draw lists in one frame append at successive
+	// offsets rather than clobber each other.
+	private readonly VulkanInstanceUploadBuffer _listVtx;
+	private readonly VulkanInstanceUploadBuffer _listIdx;
 	private readonly Sampler _nearestSampler;
 	private readonly Sampler _linearSampler;
 	// Repeat-addressing, mip-sampling samplers for material textures (tiled across geometry) — a linear and a
@@ -134,6 +139,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_instanceUpload = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight);
 		_uniformUpload = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.UniformBufferBit, alignment: 256);
 		_storageUpload = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.StorageBufferBit, alignment: 256);
+		_listVtx = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.VertexBufferBit);
+		_listIdx = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.IndexBufferBit);
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
 		_repeatLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.Repeat);
@@ -192,6 +199,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_instanceUpload.BeginFrame(frameSlot); // reset this slot's per-frame instance staging
 		_uniformUpload.BeginFrame(frameSlot);  // and its per-frame uniform staging (M15-0)
 		_storageUpload.BeginFrame(frameSlot);  // and the bone-palette staging (M15-2)
+		_listVtx.BeginFrame(frameSlot);        // and the draw-list geometry staging
+		_listIdx.BeginFrame(frameSlot);
 	}
 
 	/// <summary>
@@ -518,6 +527,75 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_vk.CmdDraw(_cmd, 6, (uint)count, 0, 0); // 6 fabricated quad verts × one instance per particle
 	}
 
+	public void DrawList<TVertex>(string technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
+	{
+		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
+			return;
+		var baked = Bake(technique);
+		var template = _registry[technique];
+
+		// Stage this frame's geometry into the dynamic rings (bump-allocated: several draw lists in one frame
+		// append at successive offsets rather than overwrite each other).
+		var (vtxBuffer, vtxOffset) = _listVtx.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices));
+		var (idxBuffer, idxOffset) = _listIdx.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(indices));
+
+		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
+		_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
+
+		Viewport viewport = new() { X = 0, Y = 0, Width = _fbExtent.Width, Height = _fbExtent.Height, MinDepth = 0, MaxDepth = 1 };
+		_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
+
+		// The shared per-list push fills the block's first slots; each command rewrites the slot right after it with
+		// its tag (the draw-list contract). Pad to the layout's fixed range so the shader always reads defined memory.
+		const int blockFloats = VulkanTechnique.ListPushSize / sizeof(float);
+		var block = stackalloc float[blockFloats];
+		var pushLen = Math.Min(push.Length, blockFloats - 1);
+		for (var i = 0; i < pushLen; i++)
+			block[i] = push[i];
+
+		var sampler = template.Address switch
+		{
+			SamplerAddress.Repeat => template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler,
+			SamplerAddress.Clamp => template.LinearFilter ? _linearSampler : _nearestSampler,
+			_ => throw new VulkanException($"SamplerAddress '{template.Address}' is not mapped to a sampler."),
+		};
+
+		foreach (var c in commands)
+		{
+			var clip = c.ClipRect;
+			var minX = MathF.Max(0, clip.X);
+			var minY = MathF.Max(0, clip.Y);
+			var maxX = MathF.Min(_fbExtent.Width, clip.X + clip.Width);
+			var maxY = MathF.Min(_fbExtent.Height, clip.Y + clip.Height);
+			if (maxX <= minX || maxY <= minY)
+				continue;
+
+			*(uint*)(block + pushLen) = c.Tag;
+			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, block);
+
+			var view = _textures.View(textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id);
+			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+			var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
+			var write = new WriteDescriptorSet
+			{
+				SType = StructureType.WriteDescriptorSet,
+				DstSet = set,
+				DstBinding = 0,
+				DescriptorCount = 1,
+				DescriptorType = DescriptorType.CombinedImageSampler,
+				PImageInfo = &imageInfo,
+			};
+			_vk.UpdateDescriptorSets(_ctx.Device, 1, in write, 0, null);
+			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+
+			Rect2D scissor = new(new Offset2D((int)minX, (int)minY), new Extent2D((uint)(maxX - minX), (uint)(maxY - minY)));
+			_vk.CmdSetScissor(_cmd, 0, 1, in scissor);
+
+			_vk.CmdDrawIndexed(_cmd, (uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
+		}
+	}
+
 	// Bind sampled graph resources (transients) as combined image samplers at bindings 0..N-1 — the path
 	// FullScreen and the instanced light volumes share. The graph put each in ShaderReadOnly before this pass.
 	// A present uniform buffer (M15-0) is written as the last binding (index inputs.Length), matching the set
@@ -825,6 +903,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_instanceUpload.Dispose();
 		_uniformUpload.Dispose();
 		_storageUpload.Dispose();
+		_listVtx.Dispose();
+		_listIdx.Dispose();
 		if (_nearestSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _nearestSampler, null);
 		if (_linearSampler.Handle != 0)
