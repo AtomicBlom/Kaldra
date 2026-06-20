@@ -75,4 +75,83 @@ public sealed class XamlGeneratorDriverTests
 		hints.Length.ShouldBe(2);
 		hints.Distinct().Count().ShouldBe(2);
 	}
+
+	// A valid Loom view (StackPanel root) wrapping the given body / extra root attributes.
+	private static string Wrap(string body, string rootAttrs = "") => $"""
+		<StackPanel xmlns="https://github.com/AtomicBlom/Loom/ui"
+					xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+					x:Class="Demo.V" {rootAttrs}>
+			{body}
+		</StackPanel>
+		""";
+
+	[Test]
+	public void Invalid_x_Name_is_diagnosed_and_not_emitted_as_a_broken_identifier()
+	{
+		// 'event' is a C# keyword; emitting it verbatim as a field name would be uncompilable.
+		var result = XamlGeneratorHarness.Run(Wrap("""<TextBlock x:Name="event" Text="hi" />"""));
+
+		result.DiagnosticIds().ShouldContain("LOOMUI011");
+		var gen = result.AllGeneratedText();
+		gen.ShouldContain("partial class V");   // the view still generates (compilable), just without the bad field
+		gen.ShouldNotContain("TextBlock event");
+	}
+
+	[Test]
+	public void Duplicate_x_Name_is_diagnosed()
+	{
+		var result = XamlGeneratorHarness.Run(Wrap("""
+			<TextBlock x:Name="Dup" />
+			<TextBlock x:Name="Dup" />
+			"""));
+		result.DiagnosticIds().ShouldContain("LOOMUI011");
+	}
+
+	[Test]
+	public void x_Name_colliding_with_the_reserved_Root_field_is_diagnosed()
+	{
+		XamlGeneratorHarness.Run(Wrap("""<TextBlock x:Name="Root" />"""))
+			.DiagnosticIds().ShouldContain("LOOMUI011");
+	}
+
+	[Test]
+	public void Invalid_enum_member_is_diagnosed()
+	{
+		XamlGeneratorHarness.Run(Wrap("", rootAttrs: """Orientation="Sideways" """))
+			.DiagnosticIds().ShouldContain("LOOMUI012");
+	}
+
+	[Test]
+	public void Non_numeric_value_for_a_numeric_property_is_diagnosed()
+	{
+		XamlGeneratorHarness.Run(Wrap("""<TextBlock FontSize="big" />"""))
+			.DiagnosticIds().ShouldContain("LOOMUI012");
+	}
+
+	[Test]
+	public void Element_in_a_foreign_namespace_is_reported_unknown()
+	{
+		const string xaml = """
+			<StackPanel xmlns="https://github.com/AtomicBlom/Loom/ui"
+						xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+						xmlns:f="urn:foreign" x:Class="Demo.V">
+				<f:Widget />
+			</StackPanel>
+			""";
+		XamlGeneratorHarness.Run(xaml).DiagnosticIds().ShouldContain("LOOMUI003");
+	}
+
+	[Test]
+	public void Property_element_syntax_is_surfaced_not_silently_dropped()
+	{
+		XamlGeneratorHarness.Run(Wrap("<StackPanel.Resources />"))
+			.DiagnosticIds().ShouldContain("LOOMUI013");
+	}
+
+	[Test]
+	public void Inline_text_content_is_surfaced_not_silently_dropped()
+	{
+		XamlGeneratorHarness.Run(Wrap("<TextBlock>Hello</TextBlock>"))
+			.DiagnosticIds().ShouldContain("LOOMUI013");
+	}
 }

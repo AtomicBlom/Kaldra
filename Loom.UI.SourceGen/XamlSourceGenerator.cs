@@ -1,5 +1,5 @@
+using System.Globalization;
 using System.Text;
-using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -52,6 +52,12 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		"x:Bind source type '{0}' is not assignable to target property '{1}' of type '{2}'", "Loom.UI", DiagnosticSeverity.Error, true);
 	private static readonly DiagnosticDescriptor EventHandlerSignature = new("LOOMUI010", "Bad event handler",
 		"'{0}' has no handler '{1}(object, RoutedEventArgs)' for event '{2}'", "Loom.UI", DiagnosticSeverity.Error, true);
+	private static readonly DiagnosticDescriptor InvalidName = new("LOOMUI011", "Invalid x:Name",
+		"x:Name '{0}' is not usable as a field — it must be a unique, non-reserved C# identifier", "Loom.UI", DiagnosticSeverity.Error, true);
+	private static readonly DiagnosticDescriptor InvalidLiteral = new("LOOMUI012", "Invalid property value",
+		"'{0}' is not a valid value for property '{1}' of type '{2}'", "Loom.UI", DiagnosticSeverity.Error, true);
+	private static readonly DiagnosticDescriptor IgnoredContent = new("LOOMUI013", "Ignored XAML content",
+		"Ignored {0} — it is outside the supported XAML subset (elements, literal/enum attributes, {{x:Bind}}, and event handlers)", "Loom.UI", DiagnosticSeverity.Warning, true);
 
 	public void Initialize(IncrementalGeneratorInitializationContext context)
 	{
@@ -118,6 +124,10 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		public List<string> EventWires { get; } = [];   // "Btn.Click += this.OnClick;" lines (in InitializeComponent)
 		public List<Bind> Bindings { get; } = [];
 		public List<DiagnosticInfo> Diagnostics { get; } = [];
+		// Every emitted field/local name, so x:Name's and synthesized names never collide. "Root" is reserved
+		// up front because the generator always emits a Root field.
+		public HashSet<string> UsedNames { get; } = ["Root"];
+		public INamedTypeSymbol? RootType { get; set; }
 		public int Counter;
 
 		public void Report(DiagnosticDescriptor descriptor, XObject node, params string[] args) =>
@@ -148,12 +158,11 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		var pageType = compilation.GetTypeByMetadataName(fullClass);
 		var gen = new Gen(compilation, input.Path, text, pageType, ct);
 
-		// Resolve the root element type once and reuse it for both emit and the Root field's declared type.
-		var rootType = ResolveType(compilation, root.Name.LocalName);
-		var rootVar = EmitElement(gen, root, rootType);
+		var rootVar = EmitElement(gen, root, isRoot: true);
 		if (rootVar is null)
 			return new GenResult(default, gen.Diagnostics.ToArray());
-		var rootTypeName = rootType?.ToDisplayString() ?? "global::Loom.UI.UIElement";
+		// EmitElement resolved the root element type once (namespace-checked) and stored it for reuse here.
+		var rootTypeName = gen.RootType?.ToDisplayString() ?? "global::Loom.UI.UIElement";
 
 		var hasBindings = gen.Bindings.Count > 0;
 
@@ -185,7 +194,7 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		sb.AppendLine("\t}");
 		sb.AppendLine("}");
 
-		var main = new GeneratedSource(HintName(fullClass, ""), sb.ToString());
+		var main = new GeneratedSource(MakeHintName(fullClass, ""), sb.ToString());
 		var sources = hasBindings
 			? new[] { main, EmitBindings(fullClass, ns, cls, gen.Bindings) }
 			: new[] { main };
@@ -194,34 +203,42 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 
 	// Emit construction for one element; returns the C# variable holding it (a field for x:Name'd / bound / evented).
 	// The root's type is resolved once by the caller and threaded in; child elements resolve their own.
-	private static string? EmitElement(Gen gen, XElement el, INamedTypeSymbol? knownType = null)
+	private static string? EmitElement(Gen gen, XElement el, bool isRoot = false)
 	{
 		gen.Ct.ThrowIfCancellationRequested();
 
-		var type = knownType ?? ResolveType(gen.Compilation, el.Name.LocalName);
+		// Only elements in the Loom UI namespace (or no namespace) are Loom controls; a foreign-namespaced element
+		// is reported unknown rather than silently resolved by its local name as if it were one.
+		var type = el.Name.Namespace == Ui || el.Name.Namespace == XNamespace.None
+			? ResolveType(gen.Compilation, el.Name.LocalName)
+			: null;
+		if (isRoot)
+			gen.RootType = type;
 		if (type is null) { gen.Report(UnknownElement, el, el.Name.LocalName); return null; }
 
 		var typeName = type.ToDisplayString();
 		var nameAttr = el.Attribute(X + "Name");
 
-		// Bound or evented elements must be reachable from the Bindings helper / InitializeComponent → make a field.
-		var needsField = nameAttr is not null || NeedsField(type, el);
+		// A valid, unique x:Name becomes a typed field. An invalid or duplicate name is diagnosed (not emitted as a
+		// broken identifier); the element still builds — as a field if it is bound/evented, otherwise a local.
+		var hasName = TryValidateName(gen, nameAttr);
+		var needsField = hasName || NeedsField(type, el);
 		string var;
-		if (nameAttr is not null)
+		if (hasName)
 		{
-			var = nameAttr.Value;
+			var = nameAttr!.Value;
 			gen.Fields.Add($"internal {typeName} {var} = null!;");
 			gen.Body.AppendLine($"\t\t{var} = new {typeName}();");
 		}
 		else if (needsField)
 		{
-			var = $"__b{gen.Counter++}";
+			var = NewName(gen, "__b");
 			gen.Fields.Add($"internal {typeName} {var} = null!;");
 			gen.Body.AppendLine($"\t\t{var} = new {typeName}();");
 		}
 		else
 		{
-			var = $"__e{gen.Counter++}";
+			var = NewName(gen, "__e");
 			gen.Body.AppendLine($"\t\tvar {var} = new {typeName}();");
 		}
 
@@ -229,8 +246,16 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		{
 			if (attr.IsNamespaceDeclaration || attr.Name.Namespace == X)
 				continue;
-			if (attr.Name.Namespace != XNamespace.None || attr.Name.LocalName.Contains('.'))
-				continue; // attached / property-element syntax: out of the supported subset
+			if (attr.Name.Namespace != XNamespace.None)
+			{
+				gen.Report(IgnoredContent, attr, $"namespaced attribute '{attr.Name.LocalName}'");
+				continue;
+			}
+			if (attr.Name.LocalName.Contains('.'))
+			{
+				gen.Report(IgnoredContent, attr, $"attached property '{attr.Name.LocalName}'");
+				continue;
+			}
 
 			var name = attr.Name.LocalName;
 			var value = attr.Value;
@@ -275,18 +300,24 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 			// Plain literal / enum value.
 			var prop2 = FindProperty(type, name);
 			if (prop2 is null) { gen.Report(UnknownProperty, attr, typeName, name); continue; }
-			var literal = Literal(prop2.Type, value);
-			if (literal is null) { gen.Report(UnsupportedProperty, attr, name, prop2.Type.ToDisplayString()); continue; }
-			gen.Body.AppendLine($"\t\t{var}.{prop2.Name} = {literal};");
+			switch (TryLiteral(prop2.Type, value, out var code))
+			{
+				case LiteralStatus.Ok: gen.Body.AppendLine($"\t\t{var}.{prop2.Name} = {code};"); break;
+				case LiteralStatus.BadValue: gen.Report(InvalidLiteral, attr, value.Trim(), name, prop2.Type.ToDisplayString()); break;
+				default: gen.Report(UnsupportedProperty, attr, name, prop2.Type.ToDisplayString()); break;
+			}
 		}
 
-		// Child elements (skip property-element syntax for the supported subset).
+		// Child elements. Property-element syntax (<Type.Property>) is outside the subset and surfaced, not dropped.
 		var kind = ContainerKind(type);
 		foreach (var childEl in el.Elements())
 		{
 			gen.Ct.ThrowIfCancellationRequested();
 			if (childEl.Name.LocalName.Contains('.'))
+			{
+				gen.Report(IgnoredContent, childEl, $"property element '{childEl.Name.LocalName}'");
 				continue;
+			}
 			var childVar = EmitElement(gen, childEl);
 			if (childVar is null)
 				continue;
@@ -298,6 +329,15 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 				default: gen.Report(NoContentModel, childEl, typeName, childEl.Name.LocalName); break;
 			}
 		}
+
+		// Inline text content (<TextBlock>Hello</TextBlock>) has no place in the element model and is dropped —
+		// surface it once rather than losing it silently.
+		foreach (var textNode in el.Nodes().OfType<XText>())
+			if (!string.IsNullOrWhiteSpace(textNode.Value))
+			{
+				gen.Report(IgnoredContent, textNode, "text content");
+				break;
+			}
 
 		return var;
 	}
@@ -406,7 +446,7 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		sb.AppendLine("\t}");
 		sb.AppendLine("}");
 
-		return new GeneratedSource(HintName(fullClass, ".Bindings"), sb.ToString());
+		return new GeneratedSource(MakeHintName(fullClass, ".Bindings"), sb.ToString());
 	}
 
 	// "Target.Prop = <typed read of the page path>;" — coalescing a null string and a deep-path-nullable value.
@@ -609,20 +649,69 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 		return null;
 	}
 
-	private static string? Literal(ITypeSymbol type, string value)
+	private enum LiteralStatus { Ok, BadValue, UnsupportedType }
+
+	// Convert a literal/enum attribute value to C#, validating that it actually fits the property type — so a typo
+	// (FontSize="big", Orientation="Sideways") becomes a diagnostic rather than uncompilable generated code. A
+	// string value is emitted verbatim (properly escaped); numeric/bool/enum values are trimmed first.
+	private static LiteralStatus TryLiteral(ITypeSymbol type, string raw, out string code)
 	{
+		code = "";
+		var value = raw.Trim();
 		if (type.TypeKind == TypeKind.Enum)
-			return $"{type.ToDisplayString()}.{value.Trim()}";
-		return type.SpecialType switch
 		{
-			SpecialType.System_String => SyntaxFactory.Literal(value).ToString(),
-			SpecialType.System_Object => SyntaxFactory.Literal(value).ToString(), // Content="text" → string (ContentControl wraps it)
-			SpecialType.System_Boolean => value.Trim().ToLowerInvariant(),
-			SpecialType.System_Single => $"{value.Trim()}f",
-			SpecialType.System_Double => $"{value.Trim()}d",
-			SpecialType.System_Int32 => value.Trim(),
-			_ => null,
-		};
+			if (!type.GetMembers(value).OfType<IFieldSymbol>().Any())
+				return LiteralStatus.BadValue;
+			code = $"{type.ToDisplayString()}.{value}";
+			return LiteralStatus.Ok;
+		}
+		switch (type.SpecialType)
+		{
+			case SpecialType.System_String:
+			case SpecialType.System_Object: // Content="text" → string (ContentControl wraps it)
+				code = SyntaxFactory.Literal(raw).ToString();
+				return LiteralStatus.Ok;
+			case SpecialType.System_Boolean:
+				if (string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)) { code = "true"; return LiteralStatus.Ok; }
+				if (string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)) { code = "false"; return LiteralStatus.Ok; }
+				return LiteralStatus.BadValue;
+			case SpecialType.System_Single:
+				if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _)) { code = $"{value}f"; return LiteralStatus.Ok; }
+				return LiteralStatus.BadValue;
+			case SpecialType.System_Double:
+				if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out _)) { code = $"{value}d"; return LiteralStatus.Ok; }
+				return LiteralStatus.BadValue;
+			case SpecialType.System_Int32:
+				if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)) { code = value; return LiteralStatus.Ok; }
+				return LiteralStatus.BadValue;
+			default:
+				return LiteralStatus.UnsupportedType;
+		}
+	}
+
+	// Validate an x:Name into a usable, unique field name. A null name (unnamed element) returns false silently;
+	// an invalid (keyword / non-identifier) or duplicate name is diagnosed. A successful name is reserved so a
+	// later x:Name or synthesized name cannot reuse it.
+	private static bool TryValidateName(Gen gen, XAttribute? nameAttr)
+	{
+		if (nameAttr is null)
+			return false;
+		var name = nameAttr.Value;
+		if (IsValidFieldIdentifier(name) && gen.UsedNames.Add(name))
+			return true;
+		gen.Report(InvalidName, nameAttr, name);
+		return false;
+	}
+
+	private static bool IsValidFieldIdentifier(string name) =>
+		SyntaxFacts.IsValidIdentifier(name) && SyntaxFacts.GetKeywordKind(name) == SyntaxKind.None;
+
+	// A fresh synthesized variable name that is guaranteed not to collide with an x:Name or another synthesized one.
+	private static string NewName(Gen gen, string prefix)
+	{
+		string name;
+		do { name = $"{prefix}{gen.Counter++}"; } while (!gen.UsedNames.Add(name));
+		return name;
 	}
 
 	private static (string? ns, string cls) SplitClass(string full)
@@ -633,7 +722,7 @@ public sealed class XamlSourceGenerator : IIncrementalGenerator
 
 	// A unique, file-name-safe AddSource hint: the fully-qualified class (so two views with the same short class
 	// name in different namespaces don't collide on one hint name and crash the whole compilation).
-	private static string HintName(string fullClass, string suffix)
+	private static string MakeHintName(string fullClass, string suffix)
 	{
 		var sb = new StringBuilder(fullClass.Length + suffix.Length + 5);
 		foreach (var c in fullClass)
