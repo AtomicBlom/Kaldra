@@ -64,4 +64,26 @@ public class VertexLayoutTests
 	[Test]
 	public void An_empty_layout_is_rejected() =>
 		Should.Throw<ArgumentException>(() => new VertexLayout());
+
+	[Test]
+	[Arguments(VertexFormat.UInt4, 16)]
+	public void UInt4_byte_size(VertexFormat format, int expected) =>
+		format.ByteSize().ShouldBe(expected);
+
+	[Test]
+	public void Mesh_skinned_extends_the_standard_layout_with_joints_and_weights()
+	{
+		var layout = VertexLayout.MeshSkinned;
+
+		layout.InputRate.ShouldBe(VertexInputRate.PerVertex);
+		layout.Binding.ShouldBe(0);
+		layout.Stride.ShouldBe(80); // MeshStandard (48) + JOINTS (UInt4, 16) + WEIGHTS (Float4, 16) — matches SkinnedVertex
+		layout.Offsets.ToArray().ShouldBe(new[] { 0, 12, 24, 32, 48, 64 });
+		layout.Attributes.Select(a => a.Semantic).ToArray().ShouldBe(new[] { "POSITION", "NORMAL", "TEXCOORD", "TANGENT", "JOINTS", "WEIGHTS" });
+		layout.Attributes[4].Format.ShouldBe(VertexFormat.UInt4);
+	}
+
+	[Test]
+	public void Skinned_vertex_struct_is_80_bytes_matching_the_layout() =>
+		System.Runtime.CompilerServices.Unsafe.SizeOf<SkinnedVertex>().ShouldBe(VertexLayout.MeshSkinned.Stride);
 }

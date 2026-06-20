@@ -21,4 +21,7 @@ public enum VertexFormat
 
 	/// <summary>Four 32-bit floats (e.g. a tangent, a colour, or one row of an instance transform).</summary>
 	Float4,
+
+	/// <summary>Four 32-bit unsigned integers — the four bone indices of a skinned vertex's <c>JOINTS</c> attribute (M15).</summary>
+	UInt4,
 }

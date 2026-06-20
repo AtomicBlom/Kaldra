@@ -71,6 +71,22 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		new VertexAttribute("TANGENT", VertexFormat.Float4));
 
 	/// <summary>
+	/// The skinned-mesh per-vertex layout (M15) — <see cref="MeshStandard"/> plus the two skinning attributes:
+	/// <c>JOINTS</c> (four bone indices, <see cref="VertexFormat.UInt4"/>) and <c>WEIGHTS</c> (four normalized
+	/// blend weights, float4), 80 bytes, mirroring <see cref="SkinnedVertex"/>. A skinned mesh's bind-pose buffer
+	/// is uploaded against this; the compute pre-skin pass reads it (+ a bone palette) and writes a plain
+	/// <see cref="MeshStandard"/>-shaped buffer, so the depth/g-buffer/shadow techniques draw the skinned output
+	/// unchanged. The semantics map 1:1 onto glTF's <c>JOINTS_0</c>/<c>WEIGHTS_0</c>.
+	/// </summary>
+	public static VertexLayout MeshSkinned { get; } = new(
+		new VertexAttribute("POSITION", VertexFormat.Float3),
+		new VertexAttribute("NORMAL", VertexFormat.Float3),
+		new VertexAttribute("TEXCOORD", VertexFormat.Float2),
+		new VertexAttribute("TANGENT", VertexFormat.Float4),
+		new VertexAttribute("JOINTS", VertexFormat.UInt4),
+		new VertexAttribute("WEIGHTS", VertexFormat.Float4));
+
+	/// <summary>
 	/// The standard per-instance stream for instanced drawing — a 4×4 world matrix as four <c>ITRANSFORM</c>
 	/// rows (4 × float4, 64 bytes), advancing one per instance at binding 1. A CPU-uploaded
 	/// <see cref="System.Numerics.Matrix4x4"/> per instance lands here directly; the shader rebuilds the matrix

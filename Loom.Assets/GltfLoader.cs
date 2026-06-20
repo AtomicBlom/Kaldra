@@ -1,29 +1,50 @@
+using System.Collections.Immutable;
 using System.Numerics;
 
 using Loom.Core;
 
+using SharpGLTF.Animations;
 using SharpGLTF.Schema2;
 
 using GltfMaterial = SharpGLTF.Schema2.Material;
+using GltfMesh = SharpGLTF.Schema2.Mesh;
 
 namespace Loom.Assets;
 
 /// <summary>
-/// Loads a glTF / GLB model into Loom's neutral description via SharpGLTF (managed, MIT). M11 scope: static
-/// triangle geometry + base-colour and normal textures — no skinning/animation (M15) or PBR channels (M16).
-/// Like <see cref="ImageLoader"/> it is a neutral producer (PlanningPhase2.md §8): it emits <see cref="Vertex"/>
-/// arrays and <see cref="TextureData"/>, never a graphics-API type, so the engine boundary stays clean.
+/// Loads a glTF / GLB model into Loom's neutral description via SharpGLTF (managed, MIT). Static triangle
+/// geometry + base-colour and normal textures (M11), plus — when the model is rigged — the skeleton, per-vertex
+/// bone indices/weights, and animation clips (M15). Like <see cref="ImageLoader"/> it is a neutral producer
+/// (PlanningPhase2.md §8): it emits <see cref="Vertex"/>/<see cref="SkinnedVertex"/> arrays, a
+/// <see cref="Skeleton"/>, <see cref="AnimationClip"/>s, and <see cref="TextureData"/> — never a graphics-API
+/// type, so the engine boundary stays clean. (PBR channels remain M16.)
 /// </summary>
 public static class GltfLoader
 {
-	/// <summary>Load and flatten a glTF/GLB file at <paramref name="path"/> into drawable primitives.</summary>
+	/// <summary>Load and flatten a glTF/GLB file at <paramref name="path"/> into drawable primitives (plus a skeleton + clips when rigged).</summary>
 	public static LoadedModel Load(string path)
 	{
 		var model = ModelRoot.Load(path);
 		var primitives = new List<ModelPrimitive>();
 		var materialCache = new Dictionary<GltfMaterial, ModelMaterial?>();
 
+		// Skinning (M15): a single-character model has one skin. Build the neutral skeleton from the first skin
+		// and a node→joint-index map; the same map says which meshes are skinned and retargets animation channels.
+		var gltfSkin = model.LogicalSkins.Count > 0 ? model.LogicalSkins[0] : null;
+		var nodeToJoint = new Dictionary<Node, int>();
+		var skeleton = gltfSkin is not null ? BuildSkeleton(gltfSkin, nodeToJoint) : null;
+
+		// A mesh is skinned iff a node references it together with our skin. (glTF puts the skin on the node, not
+		// the mesh; the bind-pose geometry lives in the mesh's accessors regardless.)
+		var skinnedMeshes = new HashSet<GltfMesh>();
+		if (gltfSkin is not null)
+			foreach (var node in model.LogicalNodes)
+				if (node.Mesh is not null && node.Skin == gltfSkin)
+					skinnedMeshes.Add(node.Mesh);
+
 		foreach (var mesh in model.LogicalMeshes)
+		{
+			var meshSkinned = skinnedMeshes.Contains(mesh);
 			foreach (var prim in mesh.Primitives)
 			{
 				// M11 draws triangle lists; skip points/lines/strips/fans rather than reinterpret their
@@ -67,16 +88,156 @@ public static class GltfLoader
 				if (tangents is null)
 					ComputeTangents(vertices, indices);
 
+				// Skinned geometry (M15): pull JOINTS_0/WEIGHTS_0 and interleave with the bind-pose verts. Both the
+				// static Vertices and the SkinnedVertices are kept, so a consumer can draw either.
+				var skinnedVertices = meshSkinned ? BuildSkinnedVertices(prim, vertices) : null;
+
 				primitives.Add(new ModelPrimitive
 				{
 					Vertices = vertices,
 					Indices = indices,
 					Material = ResolveMaterial(prim.Material, materialCache),
+					SkinnedVertices = skinnedVertices,
 				});
 			}
+		}
 
-		return new LoadedModel { Primitives = primitives };
+		return new LoadedModel
+		{
+			Primitives = primitives,
+			Skeleton = skeleton,
+			Clips = skeleton is not null ? BuildClips(model, nodeToJoint) : [],
+		};
 	}
+
+	// Build the neutral Skeleton from a glTF skin: each joint's parent index (within the joint set, -1 for a
+	// root), inverse bind matrix, bind-pose local transform, and name. Also fills <paramref name="nodeToJoint"/>
+	// (node → joint index) so the skinned-vertex extraction and animation retargeting can resolve joints.
+	private static Skeleton BuildSkeleton(Skin skin, Dictionary<Node, int> nodeToJoint)
+	{
+		var count = skin.JointsCount;
+		for (var j = 0; j < count; j++)
+			nodeToJoint[skin.GetJoint(j).Joint] = j;
+
+		var parents = ImmutableArray.CreateBuilder<int>(count);
+		var inverseBinds = ImmutableArray.CreateBuilder<Matrix4x4>(count);
+		var localBinds = ImmutableArray.CreateBuilder<Matrix4x4>(count);
+		var names = ImmutableArray.CreateBuilder<string>(count);
+		for (var j = 0; j < count; j++)
+		{
+			var (joint, inverseBind) = skin.GetJoint(j);
+			inverseBinds.Add(inverseBind);
+			localBinds.Add(joint.LocalMatrix);
+			names.Add(joint.Name ?? $"joint{j}");
+			parents.Add(joint.VisualParent is { } parent && nodeToJoint.TryGetValue(parent, out var pj) ? pj : -1);
+		}
+
+		return new Skeleton
+		{
+			ParentIndices = parents.MoveToImmutable(),
+			InverseBindMatrices = inverseBinds.MoveToImmutable(),
+			LocalBindTransforms = localBinds.MoveToImmutable(),
+			JointNames = names.MoveToImmutable(),
+		};
+	}
+
+	// Interleave a primitive's JOINTS_0/WEIGHTS_0 with its bind-pose verts. SharpGLTF returns both as Vector4
+	// arrays (joint indices as floats regardless of the UNSIGNED_BYTE/SHORT component type). Weights are
+	// renormalized to sum to 1 (glTF allows un-normalized weights); a zero-sum vertex falls back to joint 0.
+	private static SkinnedVertex[] BuildSkinnedVertices(MeshPrimitive prim, Vertex[] vertices)
+	{
+		var joints = prim.GetVertexAccessor("JOINTS_0")?.AsVector4Array();
+		var weights = prim.GetVertexAccessor("WEIGHTS_0")?.AsVector4Array();
+		var result = new SkinnedVertex[vertices.Length];
+		for (var i = 0; i < vertices.Length; i++)
+		{
+			var v = vertices[i];
+			var j = joints is not null ? joints[i] : Vector4.Zero;
+			var w = weights is not null ? weights[i] : new Vector4(1, 0, 0, 0);
+			var sum = w.X + w.Y + w.Z + w.W;
+			w = sum > 1e-6f ? w / sum : new Vector4(1, 0, 0, 0);
+			result[i] = new SkinnedVertex(
+				v.Position, v.Normal, v.Uv, v.Tangent,
+				(uint)j.X, (uint)j.Y, (uint)j.Z, (uint)j.W, w);
+		}
+		return result;
+	}
+
+	// Read the model's animations into neutral clips, retargeting each channel's node to a joint index. Channels
+	// targeting non-joint nodes are skipped. Step/Linear are read directly; cubic-spline is rejected (not yet sampled).
+	private static IReadOnlyList<AnimationClip> BuildClips(ModelRoot model, Dictionary<Node, int> nodeToJoint)
+	{
+		var clips = new List<AnimationClip>(model.LogicalAnimations.Count);
+		foreach (var animation in model.LogicalAnimations)
+		{
+			// Group the animation's channels by target joint (one JointChannel carries that joint's T/R/S tracks).
+			var byJoint = new Dictionary<int, (Vector3Track? T, QuaternionTrack? R, Vector3Track? S)>();
+			foreach (var channel in animation.Channels)
+			{
+				if (!nodeToJoint.TryGetValue(channel.TargetNode, out var jointIndex))
+					continue; // a channel that drives a non-joint node (camera, prop) — not skeletal animation
+
+				byJoint.TryGetValue(jointIndex, out var tracks);
+				var translation = channel.GetTranslationSampler();
+				var rotation = channel.GetRotationSampler();
+				var scale = channel.GetScaleSampler();
+				if (translation is not null)
+					tracks.T = ReadVector3Track(translation, animation.Name, "translation");
+				if (rotation is not null)
+					tracks.R = ReadQuaternionTrack(rotation, animation.Name);
+				if (scale is not null)
+					tracks.S = ReadVector3Track(scale, animation.Name, "scale");
+				byJoint[jointIndex] = tracks;
+			}
+
+			var channels = ImmutableArray.CreateBuilder<JointChannel>(byJoint.Count);
+			foreach (var (jointIndex, tracks) in byJoint)
+				channels.Add(new JointChannel { JointIndex = jointIndex, Translation = tracks.T, Rotation = tracks.R, Scale = tracks.S });
+
+			clips.Add(new AnimationClip
+			{
+				Name = animation.Name ?? $"clip{clips.Count}",
+				Duration = animation.Duration,
+				Channels = channels.ToImmutable(),
+			});
+		}
+		return clips;
+	}
+
+	private static Vector3Track ReadVector3Track(IAnimationSampler<Vector3> sampler, string? clip, string what)
+	{
+		var interpolation = ToInterpolation(sampler.InterpolationMode, clip, what);
+		var times = ImmutableArray.CreateBuilder<float>();
+		var values = ImmutableArray.CreateBuilder<Vector3>();
+		foreach (var (key, value) in sampler.GetLinearKeys())
+		{
+			times.Add(key);
+			values.Add(value);
+		}
+		return new Vector3Track { Times = times.ToImmutable(), Values = values.ToImmutable(), Interpolation = interpolation };
+	}
+
+	private static QuaternionTrack ReadQuaternionTrack(IAnimationSampler<Quaternion> sampler, string? clip)
+	{
+		var interpolation = ToInterpolation(sampler.InterpolationMode, clip, "rotation");
+		var times = ImmutableArray.CreateBuilder<float>();
+		var values = ImmutableArray.CreateBuilder<Quaternion>();
+		foreach (var (key, value) in sampler.GetLinearKeys())
+		{
+			times.Add(key);
+			values.Add(value);
+		}
+		return new QuaternionTrack { Times = times.ToImmutable(), Values = values.ToImmutable(), Interpolation = interpolation };
+	}
+
+	// Map SharpGLTF's interpolation enum to the neutral one. Cubic-spline isn't sampled yet, so reject it with a
+	// clear message rather than silently reading the (differently shaped) cubic keys through the linear accessor.
+	private static AnimationInterpolation ToInterpolation(AnimationInterpolationMode mode, string? clip, string what) => mode switch
+	{
+		AnimationInterpolationMode.STEP => AnimationInterpolation.Step,
+		AnimationInterpolationMode.LINEAR => AnimationInterpolation.Linear,
+		_ => throw new NotSupportedException($"glTF clip '{clip}' uses CUBICSPLINE interpolation for a joint's {what}, which Loom's animation runtime does not yet sample (M15)."),
+	};
 
 	private static ModelMaterial? ResolveMaterial(GltfMaterial? material, Dictionary<GltfMaterial, ModelMaterial?> cache)
 	{

@@ -26,6 +26,12 @@
     <Content Include="Goldens\**\*.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- M15: the committed rigged-bar glTF (one source of truth in the sandbox's assets), linked beside the test
+       assembly so GltfSkinningLoadTests can load it through GltfLoader. -->
+  <ItemGroup>
+    <Content Include="..\Loom.Sandbox\Assets\rigged_bar.glb" Link="rigged_bar.glb" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Describe + Execute layers: both backend-neutral, never the Vulkan backend. -->
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />

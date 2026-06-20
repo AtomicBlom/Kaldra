@@ -402,6 +402,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 		Loom.Core.VertexFormat.Float2 => Format.FormatR32G32Float,
 		Loom.Core.VertexFormat.Float3 => Format.FormatR32G32B32Float,
 		Loom.Core.VertexFormat.Float4 => Format.FormatR32G32B32A32Float,
+		Loom.Core.VertexFormat.UInt4 => Format.FormatR32G32B32A32Uint,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 

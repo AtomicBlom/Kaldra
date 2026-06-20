@@ -201,6 +201,7 @@ public sealed unsafe class Technique : IDisposable
 		Loom.Core.VertexFormat.Float2 => Format.R32G32Sfloat,
 		Loom.Core.VertexFormat.Float3 => Format.R32G32B32Sfloat,
 		Loom.Core.VertexFormat.Float4 => Format.R32G32B32A32Sfloat,
+		Loom.Core.VertexFormat.UInt4 => Format.R32G32B32A32Uint,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 
