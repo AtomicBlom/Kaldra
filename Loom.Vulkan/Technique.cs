@@ -37,14 +37,17 @@ public sealed unsafe class Technique : IDisposable
 		ctx.SetObjectName(ObjectType.ShaderModule, module.Handle, $"shader:{name}");
 		try
 		{
-			// A graphics technique's descriptors are visible to BOTH vertex and fragment: most are sampled only in
+			// A graphics technique's DESCRIPTORS are visible to BOTH vertex and fragment: most are sampled only in
 			// the fragment stage, but a vertex-stage UBO (M15-0: foliage wind) needs vertex visibility, and the
-			// broader flag is harmless for the samplers. Compute techniques bind to the compute stage.
-			var stage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit;
+			// broader flag is harmless for the samplers. Compute techniques bind to the compute stage. The scalar
+			// PUSH range, by contrast, stays single-stage (fragment for a draw, compute for a dispatch) — the
+			// vkCmdPushConstants call pushes exactly that stage, so the range's flags must match it.
+			var descriptorStage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit;
+			var scalarPushStage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.FragmentBit;
 			DescriptorSetLayout = description.SampleCount + description.StorageCount + description.StorageBufferCount + description.UniformBufferCount > 0
-				? CreateSetLayout(description.SampleCount, description.StorageCount, description.StorageBufferCount, description.UniformBufferCount, stage)
+				? CreateSetLayout(description.SampleCount, description.StorageCount, description.StorageBufferCount, description.UniformBufferCount, descriptorStage)
 				: default;
-			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput || description.ParticleInput, description.HasFragmentPush, stage);
+			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput || description.ParticleInput, description.HasFragmentPush, scalarPushStage);
 			Pipeline = description.IsCompute
 				? CreateComputePipeline(module, in description)
 				: CreatePipeline(module, in description);
