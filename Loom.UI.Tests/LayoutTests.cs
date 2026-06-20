@@ -21,8 +21,10 @@ public sealed class LayoutTests
 	[Test]
 	public void StackPanel_vertical_sums_main_axis_and_maxes_cross_axis()
 	{
-		var b1 = new Border { Width = 100, Height = 20 };
-		var b2 = new Border { Width = 50, Height = 30 };
+		// Left-aligned so the test pins the stacking (main-axis offsets), not the cross-axis alignment: a default
+		// Stretch child with an explicit width would center, which the dedicated alignment test covers.
+		var b1 = new Border { Width = 100, Height = 20, HorizontalAlignment = HorizontalAlignment.Left };
+		var b2 = new Border { Width = 50, Height = 30, HorizontalAlignment = HorizontalAlignment.Left };
 		var sp = new StackPanel();
 		sp.Children.Add(b1);
 		sp.Children.Add(b2);
@@ -36,7 +38,9 @@ public sealed class LayoutTests
 	[Test]
 	public void Border_adds_padding_and_border_around_its_child()
 	{
-		var inner = new Border { Width = 50, Height = 30 };
+		// Top-left aligned so the test pins the inset placement, not alignment within the content area (a default
+		// Stretch child with an explicit size centers — covered by the dedicated alignment test).
+		var inner = new Border { Width = 50, Height = 30, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
 		var outer = new Border { Padding = new Thickness(10), BorderThickness = new Thickness(2), Child = inner };
 		Root(outer);
 
@@ -48,6 +52,16 @@ public sealed class LayoutTests
 	public void Center_alignment_positions_within_the_slot()
 	{
 		var b = new Border { Width = 40, Height = 40, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+		Root(b);
+		b.LayoutRect.ShouldBe(new Rect((200 - 40) / 2f, (200 - 40) / 2f, 40, 40));
+	}
+
+	[Test]
+	public void Stretch_with_an_explicit_size_centers_in_its_slot()
+	{
+		// Alignment defaults to Stretch, but an explicit size stops the element filling its slot — WinUI then
+		// centers it (rather than pinning it to the near edge).
+		var b = new Border { Width = 40, Height = 40 };
 		Root(b);
 		b.LayoutRect.ShouldBe(new Rect((200 - 40) / 2f, (200 - 40) / 2f, 40, 40));
 	}

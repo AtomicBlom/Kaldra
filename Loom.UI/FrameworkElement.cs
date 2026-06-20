@@ -79,9 +79,11 @@ public abstract class FrameworkElement : UIElement
 		size = MathF.Min(size, slotSize);
 		var pos = alignmentIndex switch
 		{
-			1 => slotStart + (slotSize - size) / 2f, // Center
-			2 => slotStart + (slotSize - size),      // Right/Bottom
-			_ => slotStart,                          // Left/Top/Stretch
+			2 => slotStart + (slotSize - size),           // Far (Right / Bottom)
+			// Center; and Stretch that an explicit size kept from filling its slot also centers (WinUI: Stretch
+			// degrades to Center when the element can't fill). A true stretch fills the slot, so the offset is 0.
+			1 or 3 => slotStart + (slotSize - size) / 2f,
+			_ => slotStart,                               // Near (Left / Top)
 		};
 		return (pos, size);
 	}
