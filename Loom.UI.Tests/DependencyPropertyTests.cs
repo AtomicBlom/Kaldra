@@ -91,4 +91,30 @@ public sealed class DependencyPropertyTests
 		p.Value.ShouldBe(9);
 		p.Log.ShouldBeEmpty();
 	}
+
+	private sealed class CoerceProbe : DependencyObject
+	{
+		public static readonly DependencyProperty<CoerceProbe, int> MaxProperty =
+			DependencyProperty.Register<CoerceProbe, int>("Max", new PropertyMetadata<CoerceProbe, int> { DefaultValue = 100 });
+
+		public static readonly DependencyProperty<CoerceProbe, int> ValueProperty =
+			DependencyProperty.Register<CoerceProbe, int>("Value",
+				new PropertyMetadata<CoerceProbe, int> { Coerce = static (o, v) => Math.Min(v, o.Max) });
+
+		public int Max { get => GetValue(MaxProperty); set => SetValue(MaxProperty, value); }
+		public int Value { get => GetValue(ValueProperty); set => SetValue(ValueProperty, value); }
+	}
+
+	[Test]
+	public void Coercion_applies_to_the_resolved_value_and_reflects_a_dependency_on_read()
+	{
+		var p = new CoerceProbe();
+		p.Value = 50;
+		p.Value.ShouldBe(50); // under the default Max=100, uncoerced
+
+		// Lower Max below the stored Value: coercion runs against the resolved value on read, so Value follows Max —
+		// it is not frozen at the value coerced when it was written (which would still read 50).
+		p.Max = 30;
+		p.Value.ShouldBe(30);
+	}
 }

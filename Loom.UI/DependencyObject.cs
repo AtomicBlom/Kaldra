@@ -4,8 +4,8 @@ namespace Loom.UI;
 /// The base of everything that carries dependency properties (PlanningUI.md §D1.2). Holds a sparse, int-keyed
 /// effective-value store and resolves the WinUI value-precedence ladder:
 /// <para><c>Animation &gt; Local &gt; Style &gt; Inherited &gt; Default</c></para>
-/// A set recomputes the top of the ladder, fires the typed change callback only when the <em>resolved</em> value
-/// changes, and ORs the property's <see cref="InvalidationFlags"/> into the element (via
+/// A set recomputes the top of the ladder, coerces it, fires the typed change callback only when the
+/// <em>coerced resolved</em> value changes, and ORs the property's <see cref="InvalidationFlags"/> into the element (via
 /// <see cref="OnPropertyInvalidated"/>). Reflection-free: dispatch goes through the typed delegates on
 /// <see cref="DependencyProperty{TOwner, TValue}"/>. The animation rung exists from day one (a hard prerequisite
 /// for storyboards, MU4) even though nothing drives it until then.
@@ -49,13 +49,17 @@ public abstract class DependencyObject
 
 	private Dictionary<int, ValueSlot>? _slots;
 
-	/// <summary>Read the property's resolved value (top of the precedence ladder, else its typed default). No boxing
-	/// on the default path; a stored value is unboxed once on return.</summary>
+	/// <summary>Read the property's resolved value (top of the precedence ladder, else its typed default), coerced.
+	/// No boxing on the default path; a stored value is unboxed once on return.</summary>
 	public TValue GetValue<TOwner, TValue>(DependencyProperty<TOwner, TValue> dp) where TOwner : DependencyObject
 	{
-		if (_slots is not null && _slots.TryGetValue(dp.GlobalIndex, out var slot) && slot.TryResolve(out var v))
-			return (TValue)v!;
-		return dp.Metadata.DefaultValue;
+		var baseValue = _slots is not null && _slots.TryGetValue(dp.GlobalIndex, out var slot) && slot.TryResolve(out var v)
+			? (TValue)v!
+			: dp.Metadata.DefaultValue;
+		// Coercion applies to the resolved (effective) value, not per rung at write time — so a coercion that
+		// depends on another property reflects that property's current value on every read. No-op (and boxing-free)
+		// when no coerce callback is registered.
+		return dp.Metadata.Coerce is { } coerce ? coerce((TOwner)this, baseValue) : baseValue;
 	}
 
 	/// <summary>Write the <b>Local</b> rung (the public set). Never clobbers an active Animation value — animation
@@ -84,19 +88,24 @@ public abstract class DependencyObject
 		_slots ??= [];
 		_slots.TryGetValue(dp.GlobalIndex, out var slot);
 
-		var oldResolved = slot.TryResolve(out var ov) ? ov : dp.DefaultValueBoxed;
-		if (hasValue)
-			value = dp.CoerceBoxed(this, value);
-		slot.Put(rung, value, hasValue);
+		var oldEffective = Effective(dp, slot);
+		slot.Put(rung, value, hasValue); // store the raw base value; coercion is applied to the resolved value
 		_slots[dp.GlobalIndex] = slot;
-		var newResolved = slot.TryResolve(out var nv) ? nv : dp.DefaultValueBoxed;
+		var newEffective = Effective(dp, slot);
 
-		if (Equals(oldResolved, newResolved))
+		if (Equals(oldEffective, newEffective))
 			return;
 
-		dp.RaiseChanged(this, oldResolved, newResolved);
+		dp.RaiseChanged(this, oldEffective, newEffective);
 		if (dp.Invalidates != InvalidationFlags.None)
 			OnPropertyInvalidated(dp, dp.Invalidates);
+	}
+
+	// The coerced effective value of a slot: resolve the precedence ladder (else the typed default), then coerce.
+	private object? Effective(DependencyProperty dp, ValueSlot slot)
+	{
+		var baseValue = slot.TryResolve(out var v) ? v : dp.DefaultValueBoxed;
+		return dp.CoerceBoxed(this, baseValue);
 	}
 
 	/// <summary>Hook for a resolved-value change that carries <see cref="InvalidationFlags"/> — <see cref="UIElement"/>

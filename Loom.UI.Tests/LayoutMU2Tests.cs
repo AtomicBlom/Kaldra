@@ -68,4 +68,14 @@ public sealed class LayoutMU2Tests
 
 		cp.VisualChildren[0].ShouldBe(inner);
 	}
+
+	[Test]
+	public void ContentControl_keeps_its_hosted_child_when_an_equal_content_is_set_again()
+	{
+		var cc = new ContentControl { Content = new string('x', 3) };
+		var hosted = cc.VisualChildren[0];
+
+		cc.Content = new string('x', 3); // a different string instance with an equal value
+		cc.VisualChildren[0].ShouldBeSameAs(hosted); // value-equality short-circuit — the wrapping TextBlock is kept
+	}
 }
