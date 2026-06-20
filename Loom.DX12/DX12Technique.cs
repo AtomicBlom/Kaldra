@@ -46,6 +46,10 @@ internal sealed unsafe class DX12Technique : IDisposable
 	/// (M14-4 generalized particles) or 16 for the legacy single-<c>float4</c> path; 0 for a non-particle technique.</summary>
 	public int ParticleStride { get; }
 
+	/// <summary>Per-instance vertex stride (bytes) from the technique's declared instance layout — the authoritative
+	/// stride for binding a GPU-filled instance buffer; 0 when the technique has no per-instance stream.</summary>
+	public int InstanceStride { get; }
+
 	public DX12Technique(DX12Context ctx, DX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		IsCompute = template.IsCompute;
@@ -53,6 +57,7 @@ internal sealed unsafe class DX12Technique : IDisposable
 		InputCount = template.InputCount;
 		InputBufferCount = template.InputBufferCount;
 		ParticleStride = template.ParticleInput ? template.Instance?.Stride ?? 4 * sizeof(float) : 0;
+		InstanceStride = template.Instance?.Stride ?? 0;
 
 		if (template.IsCompute)
 		{

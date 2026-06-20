@@ -289,6 +289,9 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		var total = sampled.Length + storage.Length;
 		if (total > 0)
 		{
+			// Sampled inputs use the technique's declared filter (matching the Draw/FullScreen path and DX12's
+			// static sampler) — not a hardcoded nearest, which silently diverged from DX12 for a LinearFilter pass.
+			var sampler = _registry[technique].LinearFilter ? _linearSampler : _nearestSampler;
 			// Binding order matches the layout: sampled inputs (combined image samplers, ShaderReadOnly), then
 			// storage resources — a storage IMAGE (GENERAL) or, for a Buffer-kind resource, a storage BUFFER.
 			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
@@ -307,7 +310,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 				if (i < sampled.Length)
 				{
 					ref var image = ref _resources.Get(_frameSlot, sampled[i].Id);
-					imageInfos[i] = new DescriptorImageInfo { Sampler = _nearestSampler, ImageView = image.View, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
+					imageInfos[i] = new DescriptorImageInfo { Sampler = sampler, ImageView = image.View, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
 					write.DescriptorType = DescriptorType.CombinedImageSampler;
 					write.PImageInfo = &imageInfos[i];
 				}

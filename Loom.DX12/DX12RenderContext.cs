@@ -468,13 +468,15 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
 		// The instance stream is a graph storage buffer a compute filled; the pass's .ReadsVertex derived the
-		// transition to VERTEX_AND_CONSTANT_BUFFER. The stride is the buffer divided across its instances.
+		// transition to VERTEX_AND_CONSTANT_BUFFER. Take the per-instance stride from the technique's declared
+		// instance layout — the same source of truth Vulkan binds from — rather than dividing total bytes by
+		// count (which diverges when the buffer is over-allocated or the element has trailing padding).
 		var byteSize = _transients.ByteSize(instances.Id);
 		var instanceView = new VertexBufferView
 		{
 			BufferLocation = _transients.Resource(_slot, instances.Id).GetGPUVirtualAddress(),
 			SizeInBytes = byteSize,
-			StrideInBytes = count > 0 ? byteSize / (uint)count : byteSize,
+			StrideInBytes = baked.InstanceStride > 0 ? (uint)baked.InstanceStride : (count > 0 ? byteSize / (uint)count : byteSize),
 		};
 		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count);
 	}

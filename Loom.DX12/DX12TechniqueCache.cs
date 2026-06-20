@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 using Silk.NET.Direct3D.Compilers;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
@@ -31,7 +34,7 @@ internal sealed unsafe class DX12TechniqueCache : IDisposable
 		if (!_templates.TryGetValue(name, out var template))
 			throw new InvalidOperationException($"DX12: technique '{name}' was not defined — call DefineTechnique first.");
 
-		var key = BuildKey(name, colorFormats, depthFormat, depthReadOnly);
+		var key = BuildKey(name, colorFormats, depthFormat, depthReadOnly, template);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
@@ -45,13 +48,58 @@ internal sealed unsafe class DX12TechniqueCache : IDisposable
 		return technique;
 	}
 
-	private static string BuildKey(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	private static string BuildKey(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, in DX12TechniqueTemplate template)
 	{
 		var key = name;
 		foreach (var format in colorFormats)
 			key += "|" + (int)format;
 		key += "|d" + (int)depthFormat + (depthReadOnly ? "r" : "w");
+		// Fold the template's content into the key (mirroring the Vulkan cache's content hash) so re-registering a
+		// name with different bytecode / state / layout bakes a fresh PSO instead of returning the stale one.
+		key += "|t" + TemplateDigest(template);
 		return key;
+	}
+
+	// SHA-256 over the template's bytecode plus every input that affects the baked PSO — the DX12 counterpart of
+	// the Vulkan TechniqueCache content hash.
+	private static string TemplateDigest(in DX12TechniqueTemplate t)
+	{
+		using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+		hash.AppendData(t.VertexBytecode);
+		hash.AppendData(t.FragmentBytecode);
+		hash.AppendData(Encoding.UTF8.GetBytes(t.VertexEntry));
+		hash.AppendData("\0"u8);
+		hash.AppendData(Encoding.UTF8.GetBytes(t.FragmentEntry));
+		hash.AppendData(BitConverter.GetBytes(t.InputCount));
+		hash.AppendData(BitConverter.GetBytes(t.HasVertexInput));
+		hash.AppendData(BitConverter.GetBytes(t.HasFragmentPush));
+		hash.AppendData(BitConverter.GetBytes(t.LinearFilter));
+		hash.AppendData(BitConverter.GetBytes(t.IsCompute));
+		hash.AppendData(BitConverter.GetBytes(t.ParticleInput));
+		hash.AppendData(BitConverter.GetBytes((int)t.Blend));
+		hash.AppendData(BitConverter.GetBytes(t.StorageImages));
+		hash.AppendData(BitConverter.GetBytes(t.StorageBuffers));
+		hash.AppendData(BitConverter.GetBytes(t.StorageBufferStride));
+		hash.AppendData(BitConverter.GetBytes((int)t.Address));
+		hash.AppendData(BitConverter.GetBytes(t.UniformBufferCount));
+		hash.AppendData(BitConverter.GetBytes(t.InputBufferCount));
+		AppendLayout(hash, t.Layout);
+		AppendLayout(hash, t.Instance);
+		return Convert.ToHexString(hash.GetHashAndReset());
+	}
+
+	private static void AppendLayout(IncrementalHash hash, Loom.Core.VertexLayout? layout)
+	{
+		if (layout is null)
+		{
+			hash.AppendData(BitConverter.GetBytes(-1));
+			return;
+		}
+		hash.AppendData(BitConverter.GetBytes((int)layout.InputRate));
+		hash.AppendData(BitConverter.GetBytes(layout.Binding));
+		hash.AppendData(BitConverter.GetBytes(layout.Stride));
+		foreach (var attribute in layout.Attributes)
+			hash.AppendData(BitConverter.GetBytes((int)attribute.Format));
 	}
 
 	/// <summary>Dispose every baked PSO and empty the bake cache — used by shader hot-reload (M13) to force a fresh
