@@ -26,11 +26,11 @@ This is also a leading indicator worth acting on *now* because two agents are ac
 
 These describe a past or planned state that the code has since moved past. A reader trusts them and is wrong.
 
-- [DX12Engine.cs:18-26](Loom.DX12/DX12Engine.cs#L18) — class summary: *"The graph-driven members therefore throw `NotSupportedException` for now — they land in the following slice…"*. The graph path (`RenderGraphFrame`) is **fully implemented in this same file**. The summary describes a bootstrap that no longer exists.
-- [DX12RenderContext.cs:21](Loom.DX12/DX12RenderContext.cs#L21) — *"Compute and ImGui land in following slices."* Both are implemented here.
+- [DirectX12Engine.cs:18-26](Loom.DirectX12/DirectX12Engine.cs#L18) — class summary: *"The graph-driven members therefore throw `NotSupportedException` for now — they land in the following slice…"*. The graph path (`RenderGraphFrame`) is **fully implemented in this same file**. The summary describes a bootstrap that no longer exists.
+- [DirectX12RenderContext.cs:21](Loom.DirectX12/DirectX12RenderContext.cs#L21) — *"Compute and ImGui land in following slices."* Both are implemented here.
 - [Technique.cs:74](Loom.Vulkan/Technique.cs#L74) (Vulkan) — *"Hardcoded shape; SPIR-V reflection derives this later."* `ShaderReflection.FromBytes` already derives it.
-- [ResourceState.cs:8](Loom.Graph/ResourceState.cs#L8) — *"…lets a **future** DX12 backend reinterpret the same transitions"*. DX12 shipped. (Same stale "future DX12 / Vulkan today, DX12 later" framing in [BarrierPlan.cs:9](Loom.Graph/BarrierPlan.cs#L9), [PassBarriers.cs:10](Loom.Graph/PassBarriers.cs#L10).)
-- [DX12Shaders.cs:16](Loom.DX12/DX12Shaders.cs#L16) — summary frames FXC/HLSL as the path and "signed-DXIL via runtime DXC is the follow-up," but `TryResolveStageDxil` shows signed DXIL is already primary.
+- [ResourceState.cs:8](Loom.Graph/ResourceState.cs#L8) — *"…lets a **future** DirectX12 backend reinterpret the same transitions"*. DirectX12 shipped. (Same stale "future DirectX12 / Vulkan today, DirectX12 later" framing in [BarrierPlan.cs:9](Loom.Graph/BarrierPlan.cs#L9), [PassBarriers.cs:10](Loom.Graph/PassBarriers.cs#L10).)
+- [DirectX12Shaders.cs:16](Loom.DirectX12/DirectX12Shaders.cs#L16) — summary frames FXC/HLSL as the path and "signed-DXIL via runtime DXC is the follow-up," but `TryResolveStageDxil` shows signed DXIL is already primary.
 - [IRenderContext.cs:5-13](Loom.Core/IRenderContext.cs#L5) — the most-read interface in the layer opens with a roadmap paragraph ("M3 adds only… until the Technique builder lands (M5)…").
 
 ### B. Milestone & phase references (the core giveaway — pervasive)
@@ -54,17 +54,17 @@ The non-milestone cousin of B. Examples: [DescriptorAllocator.cs:10](Loom.Vulkan
 ### E. Bug archaeology / commit-style history in comments
 
 A comment that recounts a fixed bug belongs in the commit message, not the source.
-- [TransientResources.cs:265-270](Loom.Vulkan/TransientResources.cs#L265) — a full changelog entry: *"This branch **previously returned** `_swapExtent` unconditionally, dropping `resource.Scale` … DX12's DX12Transients **had this right** via …"*. The forward statement (each backbuffer-domain resource scales by its own `Scale`) is valuable; the archaeology is not.
+- [TransientResources.cs:265-270](Loom.Vulkan/TransientResources.cs#L265) — a full changelog entry: *"This branch **previously returned** `_swapExtent` unconditionally, dropping `resource.Scale` … DirectX12's DirectX12Transients **had this right** via …"*. The forward statement (each backbuffer-domain resource scales by its own `Scale`) is valuable; the archaeology is not.
 - [RenderContext.cs:570-571](Loom.Vulkan/RenderContext.cs#L570) — *"…replacement for **the old** interpolated-string pipeline-cache key."*
-- [DX12RenderContext.cs:137](Loom.DX12/DX12RenderContext.cs#L137) — *"(Earlier 'identity ingest, no Y-flip' rendered mesh upright but…)"*.
+- [DirectX12RenderContext.cs:137](Loom.DirectX12/DirectX12RenderContext.cs#L137) — *"(Earlier 'identity ingest, no Y-flip' rendered mesh upright but…)"*.
 
 ### F. Context-assuming exception messages + dead scaffold
 
 User-facing strings that assume milestone vocabulary:
-- [DX12RenderContext.cs:272](Loom.DX12/DX12RenderContext.cs#L272) — `"DX12: sampling the backbuffer or a buffer resource lands in a later slice."` — a user hitting this can't act on "a later slice."
-- [DX12RenderContext.cs:302](Loom.DX12/DX12RenderContext.cs#L302) — `"…multi-storage compute lands later."`
-- [DX12RenderContext.cs:25](Loom.DX12/DX12RenderContext.cs#L25) — `private const string NextSlice = "…lands in a following executor slice."` — **dead** (no references); delete.
-  *(Contrast the good ones in the same file: [DX12Engine.cs:884](Loom.DX12/DX12Engine.cs#L884) `"…has no '<name>.cs.dxil'… and no built-in stand-in."` — standalone and actionable.)*
+- [DirectX12RenderContext.cs:272](Loom.DirectX12/DirectX12RenderContext.cs#L272) — `"DirectX12: sampling the backbuffer or a buffer resource lands in a later slice."` — a user hitting this can't act on "a later slice."
+- [DirectX12RenderContext.cs:302](Loom.DirectX12/DirectX12RenderContext.cs#L302) — `"…multi-storage compute lands later."`
+- [DirectX12RenderContext.cs:25](Loom.DirectX12/DirectX12RenderContext.cs#L25) — `private const string NextSlice = "…lands in a following executor slice."` — **dead** (no references); delete.
+  *(Contrast the good ones in the same file: [DirectX12Engine.cs:884](Loom.DirectX12/DirectX12Engine.cs#L884) `"…has no '<name>.cs.dxil'… and no built-in stand-in."` — standalone and actionable.)*
 
 ### G. Gotchas welded to a milestone/section tag  — *strip the tag, KEEP the comment*
 
@@ -73,11 +73,11 @@ The highest-care category: a genuinely valuable explanation with an external ref
 - [RenderContext.cs:454-457](Loom.Vulkan/RenderContext.cs#L454) — Vulkan +Y-down clip-space explanation, tagged `(M7-B5)`.
 - [Technique.cs:201-205](Loom.Vulkan/Technique.cs#L201) — the legacy-float4 vs layout-driven particle-stride explanation, tagged `(M14-4)` + `§7.6`.
 - [GltfLoader.cs:29-31](Loom.Assets/GltfLoader.cs#L29) — why non-triangle primitives are skipped, prefixed `M11`.
-- [DX12ImGuiRenderer.cs](Loom.DX12/DX12ImGuiRenderer.cs) / [ImGuiRenderer.cs:68](Loom.Vulkan/ImGuiRenderer.cs#L68) — the win-arm64 by-value-`ImVec2` marshalling no-op (a real platform gotcha), repeated 4× each carrying `(M13)`.
+- [DirectX12ImGuiRenderer.cs](Loom.DirectX12/DirectX12ImGuiRenderer.cs) / [ImGuiRenderer.cs:68](Loom.Vulkan/ImGuiRenderer.cs#L68) — the win-arm64 by-value-`ImVec2` marshalling no-op (a real platform gotcha), repeated 4× each carrying `(M13)`.
 
 ### H. Redundant "restate-the-code" comments — *rare; the codebase is good here*
 
-Only isolated cases ([DX12InstanceUploadBuffer.cs:70](Loom.DX12/DX12InstanceUploadBuffer.cs#L70) `// 50% headroom` next to `needed + needed/2`; [RenderContext.cs:223](Loom.Vulkan/RenderContext.cs#L223)). Worth noting precisely *because* the codebase otherwise favors "why" over "what" — that instinct is good and should be preserved.
+Only isolated cases ([DirectX12InstanceUploadBuffer.cs:70](Loom.DirectX12/DirectX12InstanceUploadBuffer.cs#L70) `// 50% headroom` next to `needed + needed/2`; [RenderContext.cs:223](Loom.Vulkan/RenderContext.cs#L223)). Worth noting precisely *because* the codebase otherwise favors "why" over "what" — that instinct is good and should be preserved.
 
 ---
 
@@ -89,7 +89,7 @@ The owner wants public APIs well documented; these public members have *no* `///
 - [Swapchain.cs:15-21](Loom.Vulkan/Swapchain.cs#L15) — public `Handle`/`ImageFormat`/`ColorSpace`/`Extent`/`Images`/`ImageViews`/`ImageCount`.
 - [Technique.cs:20-21](Loom.Vulkan/Technique.cs#L20) — public `Pipeline`/`Layout`.
 - [VulkanContext.cs:29-40](Loom.Vulkan/VulkanContext.cs#L29) — the public property block (`Vk`/`Instance`/`Device`/queues/families/…).
-- [DX12Engine.cs](Loom.DX12/DX12Engine.cs) `IEngine` surface — `Render`, `Resize`, `WaitIdle`, `CreateMesh`/`CreateTexture`/`CreateMaterial`, `EnableUI`, `GetDebugTextureId`, `SetDebugLines` are bare while `EnableImGui` right beside them is documented (jarring asymmetry).
+- [DirectX12Engine.cs](Loom.DirectX12/DirectX12Engine.cs) `IEngine` surface — `Render`, `Resize`, `WaitIdle`, `CreateMesh`/`CreateTexture`/`CreateMaterial`, `EnableUI`, `GetDebugTextureId`, `SetDebugLines` are bare while `EnableImGui` right beside them is documented (jarring asymmetry).
 - [LayeredAssetSource.cs:17,19](Loom.Assets/LayeredAssetSource.cs#L17) `Roots`/`TryResolve`; [AssetWatcher.cs:80](Loom.Assets/AssetWatcher.cs#L80) `Dispose`.
 
 (`Loom.Core`, `Loom.Graph`, and `Loom.UI` are otherwise ~95–100% covered. `ToString`/`Equals`/`GetHashCode` overrides being bare is conventional and fine.)
@@ -104,9 +104,9 @@ The cleanup must be surgical — these are the high-water mark and should surviv
 - [VulkanEngine.cs:881-891](Loom.Vulkan/VulkanEngine.cs#L881) — aliasing-barrier source-scope widening ("the fresh-memory TopOfPipe source is unsafe — predecessor GPU work may still be running").
 - [LifetimePlan.cs:54-57](Loom.Graph/LifetimePlan.cs#L54) — readback lifetime extension (aliaser must not recycle a readback buffer before the end-of-frame copy → garbage picking / flickering outline). *(Drop the trailing `§7.4`.)*
 - [GraphSchedule.cs:97-103](Loom.Graph/GraphSchedule.cs#L97) — why the *readers*, not the writer, are a resource's precise prerequisites (WAR).
-- [DX12FormatMapping.cs:27-34](Loom.DX12/DX12FormatMapping.cs#L27) — the TYPELESS-depth (typed DSV + typed SRV) gotcha.
-- [DX12Technique.cs:193-198](Loom.DX12/DX12Technique.cs#L193) — one static sampler *per* sampled input, with the exact PSO-creation failure if you share `s0`.
-- [DX12Shaders.cs:98-110](Loom.DX12/DX12Shaders.cs#L98) — structured-buffer `StructureByteStride`/`NumElements` vs root-UAV `GetDimensions()==0` trap.
+- [DirectX12FormatMapping.cs:27-34](Loom.DirectX12/DirectX12FormatMapping.cs#L27) — the TYPELESS-depth (typed DSV + typed SRV) gotcha.
+- [DirectX12Technique.cs:193-198](Loom.DirectX12/DirectX12Technique.cs#L193) — one static sampler *per* sampled input, with the exact PSO-creation failure if you share `s0`.
+- [DirectX12Shaders.cs:98-110](Loom.DirectX12/DirectX12Shaders.cs#L98) — structured-buffer `StructureByteStride`/`NumElements` vs root-UAV `GetDimensions()==0` trap.
 - [DependencyObject.cs:5-9](Loom.UI/DependencyObject.cs#L5) — the DP precedence-ladder summary (`Animation > Local > Style > Inherited > Default`, "fire callback only on a *resolved* change"). *(Drop the `§D1.2` tail.)*
 - [Geometry.cs:81-93](Loom.Sandbox/Demos/Geometry.cs#L81) — glTF tangent handedness + Gram-Schmidt degenerate-UV guard.
 - [InstanceUploadBuffer.cs:13-18](Loom.Vulkan/InstanceUploadBuffer.cs#L13) — "retire, don't free" mid-frame growth (a draw recorded earlier still references the old buffer).
@@ -134,7 +134,7 @@ AFTER:  …falling back to SDR otherwise. (If still true: "A backend that has no
         treats this as SDR." — a capability fact, not a schedule.)
 ```
 
-**Stale class summary (DX12)** — [DX12Engine.cs:18-26](Loom.DX12/DX12Engine.cs#L18)
+**Stale class summary (DirectX12)** — [DirectX12Engine.cs:18-26](Loom.DirectX12/DirectX12Engine.cs#L18)
 ```
 BEFORE: …This first slice mirrors how the Vulkan backend started (M0/M1)… The graph-driven members therefore
         throw NotSupportedException for now — they land in the following slice…
@@ -142,10 +142,10 @@ AFTER:  …When a graph is set, Render() runs the executor (GraphSchedule/Barrie
         backend-neutral products); with no graph it falls back to a fixed clear + hand-baked triangle.
 ```
 
-**Exception message (DX12)** — [DX12RenderContext.cs:272](Loom.DX12/DX12RenderContext.cs#L272)
+**Exception message (DirectX12)** — [DirectX12RenderContext.cs:272](Loom.DirectX12/DirectX12RenderContext.cs#L272)
 ```
-BEFORE: "DX12: sampling the backbuffer or a buffer resource lands in a later slice."
-AFTER:  "DX12: only transient color/depth targets can be sampled; sampling the backbuffer or a buffer resource
+BEFORE: "DirectX12: sampling the backbuffer or a buffer resource lands in a later slice."
+AFTER:  "DirectX12: only transient color/depth targets can be sampled; sampling the backbuffer or a buffer resource
          is not supported."
 ```
 
@@ -160,7 +160,7 @@ AFTER:  // HDR output: negotiate scRGB (linear FP16)… the only HDR-specific ch
 **Bug archaeology → invariant (Vulkan)** — [TransientResources.cs:265-270](Loom.Vulkan/TransientResources.cs#L265)
 ```
 BEFORE: …(This branch previously returned _swapExtent unconditionally, dropping resource.Scale — so the bloom
-        mips were created FULL-resolution… DX12's DX12Transients had this right…)
+        mips were created FULL-resolution… DirectX12's DirectX12Transients had this right…)
 AFTER:  …Dropping resource.Scale here would make the bloom "downsample" chain a 1:1 copy — no glow spread,
         no halo.
 ```
@@ -201,7 +201,7 @@ AFTER:  /// Golden-image regression: compares freshly captured frames (in LOOM_G
 1. **Fix Category A (stale) first** — it's small and the comments are actively wrong, so it's the only part that risks misleading a reader (or one of the in-flight agents) *today*.
 2. **Semi-mechanical strip for B/C/D** — bare `(M…)`, `(Planning*.md §…)`, dangling `§…`, and trailing `(MUn)` clauses can be removed with review; the sentence usually reads correctly without them. This is the bulk by volume.
 3. **Manual, careful pass for E/F/G** — bug archaeology, exception messages, and gotcha-welded-to-tag need a human/considered rewrite (examples above). The dead `NextSlice` const just gets deleted.
-4. **Fill the doc gaps** — the `VertexLayout` constructors and the `DX12Engine` `IEngine` members are the ones that matter (public, author-facing).
+4. **Fill the doc gaps** — the `VertexLayout` constructors and the `DirectX12Engine` `IEngine` members are the ones that matter (public, author-facing).
 5. **Add a one-line comment convention to `CLAUDE.md`** so new code (and the M15/MU1 agents) stops generating the pattern. Suggested wording:
 
    > **Comments are self-contained.** Describe what the code does or why; never require the reader to look up a milestone, phase, or planning-doc section to understand a comment. Don't reference `Mxx`/`MUx`/`Phase x`/`§…` or narrate project history ("for now", "previously", "lands in…") in source — that belongs in commit messages / the board. Document public APIs. Keep comments that explain a non-obvious algorithm, gotcha, or "why this not that."

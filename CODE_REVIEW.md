@@ -12,7 +12,7 @@
 > This review was written against commit `6631217`. **Milestone 15** (skinning/CSM/sky/foliage/toon) and the **MU1 UI font-rendering** milestone have since landed (`Review` now tracks `master`). Status of the findings against the current tree:
 >
 > - **Most findings STAND** — the landed work added features, it did not fix the flagged defects. All P0 correctness bugs below are unchanged.
-> - **Resolved / partial:** `VertexFormat` gained `UInt4` (skinning need met; enum still narrow — *partial*); glTF skeleton/animation is correct but node-transform placement still STANDS for static/multi-node; the game-UI overlay seam is now exercised by several demos (*resolved*); cross-backend parity-test infrastructure exists but the direct Vulkan-vs-DX12 assertion still does not (*partial*).
+> - **Resolved / partial:** `VertexFormat` gained `UInt4` (skinning need met; enum still narrow — *partial*); glTF skeleton/animation is correct but node-transform placement still STANDS for static/multi-node; the game-UI overlay seam is now exercised by several demos (*resolved*); cross-backend parity-test infrastructure exists but the direct Vulkan-vs-DirectX12 assertion still does not (*partial*).
 > - **Font rendering now draws at cross-backend parity**, which resolved the "no-op UI renderer" comments — but left `TextBlock`'s `Text` doc stale-and-wrong (now **fixed**). No major new defects in the M15/font code.
 > - **All 7 XAML-generator defects and all 5 UI layout/DP findings STAND.**
 >
@@ -26,7 +26,7 @@ Loom is **architecturally healthy at its core.** The cardinal invariant — no g
 
 **Risk concentrates in three places:**
 
-1. **A cluster of latent correctness bugs** masked by current demo usage but which will fire as the engine scales: the DX12 descriptor-ring mid-frame wrap can silently corrupt per-pass descriptors, sRGB mips are box-filtered in gamma space (visibly wrong albedo on *both* backends), the bake-cache hash omits buffer `ByteSize`, and glTF loading ignores node transforms entirely.
+1. **A cluster of latent correctness bugs** masked by current demo usage but which will fire as the engine scales: the DirectX12 descriptor-ring mid-frame wrap can silently corrupt per-pass descriptors, sRGB mips are box-filtered in gamma space (visibly wrong albedo on *both* backends), the bake-cache hash omits buffer `ByteSize`, and glTF loading ignores node transforms entirely.
 2. **The async-compute / multi-queue façade** — `Queue.AsyncCompute` and `.Queue()` are authorable and documented as honored, but no layer derives cross-queue sync and neither backend creates a compute queue. The API actively lies about a named forward-looking pillar.
 3. **The brand-new `Loom.UI.SourceGen` XAML generator** (MU0/MU1, in flight) has several real correctness defects — broken incrementality, hint-name collisions, and unvalidated input that surfaces as confusing generated-code compile errors.
 
@@ -47,14 +47,14 @@ The **forward-looking gaps** (ray tracing, bindless, GPU-driven indirect, tempor
 
 ## Top priorities (fix first)
 
-1. **🟠 DX12 descriptor-ring mid-frame wrap** — [Loom.DX12/DX12DescriptorRing.cs:59-67](Loom.DX12/DX12DescriptorRing.cs#L59). Replace the silent `_next = _regionEnd - _regionSize` wrap-into-a-live-region with a throw/grow. It can silently corrupt descriptors an already-recorded draw still references → wrong pixels, no error. The M13 resource viewer will erode the headroom further.
+1. **🟠 DirectX12 descriptor-ring mid-frame wrap** — [Loom.DirectX12/DirectX12DescriptorRing.cs:59-67](Loom.DirectX12/DirectX12DescriptorRing.cs#L59). Replace the silent `_next = _regionEnd - _regionSize` wrap-into-a-live-region with a throw/grow. It can silently corrupt descriptors an already-recorded draw still references → wrong pixels, no error. The M13 resource viewer will erode the headroom further.
 2. **🟠 Gamma-incorrect sRGB mip generation** — [Loom.Core/TextureData.cs:69-99](Loom.Core/TextureData.cs#L69). Box-average sRGB albedo in *linear* space (decode → average → re-encode). Every base-colour/glTF texture currently gets systematically-too-dark mips on **both** backends. Parity is preserved but the answer is wrong.
 3. **🟠 Resolve the async-compute façade** — [Loom.Core/Queue.cs](Loom.Core/Queue.cs) + `GraphSchedule` + both backends. Either implement the cross-queue derivation or soften the doc to *"accepted but not yet honoured; treated as Graphics"* and reject `Queue.AsyncCompute` at derive time so the API stops lying.
 4. **🟠 Bake-cache hash omits buffer `ByteSize`** — [Loom.Core/RenderGraph.cs:85-87](Loom.Core/RenderGraph.cs#L85). Two graphs differing only in a buffer's byte size hash identically → cache reuses a stale-sized GPU allocation. `ToJson` already serializes `ByteSize`, so the two structural views disagree.
 5. **🟠 `Loom.UI.SourceGen` correctness defects** — [XamlSourceGenerator.cs](Loom.UI.SourceGen/XamlSourceGenerator.cs). Broken incrementality, short-class-name hint collisions, and unvalidated `x:Name`/literal/enum values that emit uncompilable code with no diagnostic. *(MU1 in flight — confirm with the owning agent first.)*
 6. **🟠 glTF node-transform omission** — [Loom.Assets/GltfLoader.cs:26-27](Loom.Assets/GltfLoader.cs#L26). The loader iterates `LogicalMeshes` directly, ignoring the scene graph → non-trivial glTF loads scrambled at the origin; multi-instanced meshes load once.
-7. **🟠 DXIL build passes green on DX-only shader failures** — [build/Loom.Sdk/Loom.Shaders.targets:71-73](build/Loom.Sdk/Loom.Shaders.targets#L71). `|| exit /b 0` unconditionally swallows *every* DXC error → a SPIR-V-valid/DXIL-invalid shader ships no blob and DX12 silently falls back at runtime. The exact class of parity break this layer exists to prevent.
-8. **🟡 Add an automated cross-backend parity test** — the parity bar (4/255, <0.5%) and `ImageComparison` comparator already exist; no test ever diffs a Vulkan capture against a DX12 capture.
+7. **🟠 DXIL build passes green on DX-only shader failures** — [build/Loom.Sdk/Loom.Shaders.targets:71-73](build/Loom.Sdk/Loom.Shaders.targets#L71). `|| exit /b 0` unconditionally swallows *every* DXC error → a SPIR-V-valid/DXIL-invalid shader ships no blob and DirectX12 silently falls back at runtime. The exact class of parity break this layer exists to prevent.
+8. **🟡 Add an automated cross-backend parity test** — the parity bar (4/255, <0.5%) and `ImageComparison` comparator already exist; no test ever diffs a Vulkan capture against a DirectX12 capture.
 
 ---
 
@@ -77,7 +77,7 @@ The **forward-looking gaps** (ray tracing, bindless, GPU-driven indirect, tempor
 
 Latent defects masked by current demo usage or single-backend conventions, but which will fire as the engine scales.
 
-- **🟠 DX12 descriptor-ring mid-frame wrap can clobber descriptors a still-recording frame references** — [DX12DescriptorRing.cs:59-67](Loom.DX12/DX12DescriptorRing.cs#L59) · also [DX12Engine.cs:127](Loom.DX12/DX12Engine.cs#L127), [DX12RenderContext.cs:133](Loom.DX12/DX12RenderContext.cs#L133), [DX12ImGuiRenderer.cs:529](Loom.DX12/DX12ImGuiRenderer.cs#L529) · *correctness, conf: medium*
+- **🟠 DirectX12 descriptor-ring mid-frame wrap can clobber descriptors a still-recording frame references** — [DirectX12DescriptorRing.cs:59-67](Loom.DirectX12/DirectX12DescriptorRing.cs#L59) · also [DirectX12Engine.cs:127](Loom.DirectX12/DirectX12Engine.cs#L127), [DirectX12RenderContext.cs:133](Loom.DirectX12/DirectX12RenderContext.cs#L133), [DirectX12ImGuiRenderer.cs:529](Loom.DirectX12/DirectX12ImGuiRenderer.cs#L529) · *correctness, conf: medium*
   `Allocate()` does `if (_next + count > _regionEnd) _next = _regionEnd - _regionSize;` — resetting the cursor to the **start** of this slot's live region, not a free area. D3D12 reads descriptors at execute time, so a later pass overwrites descriptors an earlier draw in the same command list still references. No assert on overflow.
   *Fix:* throw (or grow the heap) on overflow instead of wrapping; size from a documented worst-case per-frame descriptor budget, or track a high-water mark.
 
@@ -113,7 +113,7 @@ Latent defects masked by current demo usage or single-backend conventions, but w
   `Path.Combine(root, logicalName)` with no check the result stays under `root`; `..\..\secret` or an absolute name escapes. Currently unused in production paths (names are leaf-relative), but the contract doesn't constrain it — a future resource-pack/user-content path could traverse out and defeat layering.
   *Fix:* reject rooted names; verify `GetFullPath(candidate)` starts with `root + separator`.
 
-- **⚪ `RecordRasterPass` writes fixed-size `stackalloc[8]` with no bound on `colorCount`** — [DX12Engine.cs:388-421](Loom.DX12/DX12Engine.cs#L388) · *correctness, conf: high*
+- **⚪ `RecordRasterPass` writes fixed-size `stackalloc[8]` with no bound on `colorCount`** — [DirectX12Engine.cs:388-421](Loom.DirectX12/DirectX12Engine.cs#L388) · *correctness, conf: high*
   D3D12 caps MRT at 8 so a conforming graph stays in bounds, but a 9+ colour-write pass would stack-corrupt rather than fail clearly. No upstream guard in `Loom.Graph`/`PassBuilder`.
   *Fix:* `if (colorCount >= 8) throw …` (constant matching `D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT`).
 
@@ -125,33 +125,33 @@ Latent defects masked by current demo usage or single-backend conventions, but w
 
 The single most-reported issue (5 reviewers). Consolidated.
 
-- **🟠 `Queue.AsyncCompute` is declarable and documented as honored, but Execute + both backends silently ignore it** — [Queue.cs:7-14](Loom.Core/Queue.cs#L7) · [PassBuilder.cs:64-69](Loom.Core/PassBuilder.cs#L64) · [GraphSchedule.cs:47-186](Loom.Graph/GraphSchedule.cs#L47) · [BarrierPlan.cs:41-108](Loom.Graph/BarrierPlan.cs#L41) · [VulkanContext.cs:375-435](Loom.Vulkan/VulkanContext.cs#L375) · [DX12Context.cs:70-77](Loom.DX12/DX12Context.cs#L70) · *future-proofing, conf: high*
-  `Queue.cs` documents *"the graph derives the cross-queue timeline synchronisation."* But `Derive`/`TopologicalOrder`/`BarrierPlan.Derive` never read `pass.Queue` (only label strings do); the scheduler is single-timeline; Vulkan acquires only Graphics+Present (no compute family); DX12 creates one Direct queue + one fence. A user writing `.Queue(Queue.AsyncCompute)` gets it scheduled exactly as Graphics — a false affordance and a misleading present-tense doc. Planning.md §12 places this under M9 (partial), so the gap is *deferred*, not accidental — but the doc reads as shipped.
+- **🟠 `Queue.AsyncCompute` is declarable and documented as honored, but Execute + both backends silently ignore it** — [Queue.cs:7-14](Loom.Core/Queue.cs#L7) · [PassBuilder.cs:64-69](Loom.Core/PassBuilder.cs#L64) · [GraphSchedule.cs:47-186](Loom.Graph/GraphSchedule.cs#L47) · [BarrierPlan.cs:41-108](Loom.Graph/BarrierPlan.cs#L41) · [VulkanContext.cs:375-435](Loom.Vulkan/VulkanContext.cs#L375) · [DirectX12Context.cs:70-77](Loom.DirectX12/DirectX12Context.cs#L70) · *future-proofing, conf: high*
+  `Queue.cs` documents *"the graph derives the cross-queue timeline synchronisation."* But `Derive`/`TopologicalOrder`/`BarrierPlan.Derive` never read `pass.Queue` (only label strings do); the scheduler is single-timeline; Vulkan acquires only Graphics+Present (no compute family); DirectX12 creates one Direct queue + one fence. A user writing `.Queue(Queue.AsyncCompute)` gets it scheduled exactly as Graphics — a false affordance and a misleading present-tense doc. Planning.md §12 places this under M9 (partial), so the gap is *deferred*, not accidental — but the doc reads as shipped.
   *Fix:* (a) remove the member until wired, or (b) keep it but make the doc explicit and **reject `AsyncCompute` at derive time** (fail-loud). When implemented: partition `GraphSchedule` per queue, emit cross-queue edges, extend `BarrierPlan`/`ResourceTransition` with queue-ownership/semaphores, acquire a compute queue. Consider adding a `Transfer` member at the same time.
 
 ### 3 · Cross-backend parity risks
 
 Points where the two backends derive or apply something on different principles — latent traps masked by current usage.
 
-- **🟠 DXIL compile errors silently swallowed by `|| exit /b 0`** — [Loom.Shaders.targets:71-73](build/Loom.Sdk/Loom.Shaders.targets#L71) · also [DX12Engine.cs:889-906](Loom.DX12/DX12Engine.cs#L889) (runtime fallback) · *tests/parity, conf: high*
-  The swallow is *unconditional* — it can't distinguish "entry not found" (expected) from "entry found but failed DXIL compile" (a real DX-only divergence). Such a shader ships no blob; at runtime DX12 substitutes a stand-in (visual divergence) or throws only when the demo runs that technique. Hides the most likely class of cross-backend break.
+- **🟠 DXIL compile errors silently swallowed by `|| exit /b 0`** — [Loom.Shaders.targets:71-73](build/Loom.Sdk/Loom.Shaders.targets#L71) · also [DirectX12Engine.cs:889-906](Loom.DirectX12/DirectX12Engine.cs#L889) (runtime fallback) · *tests/parity, conf: high*
+  The swallow is *unconditional* — it can't distinguish "entry not found" (expected) from "entry found but failed DXIL compile" (a real DX-only divergence). Such a shader ships no blob; at runtime DirectX12 substitutes a stand-in (visual divergence) or throws only when the demo runs that technique. Hides the most likely class of cross-backend break.
   *Fix:* probe per-shader which stages should exist and hard-fail those; or post-validate every entry produced its declared `.dxil`. At minimum distinguish exit codes.
 
-- **🟡 Vulkan-vs-DX12 parity is never exercised by any test** — [ImageComparison.cs:3-4](Loom.Tests/ImageComparison.cs#L3) · also [GoldenImageTests.cs:15-16](Loom.Tests/GoldenImageTests.cs#L15), [tools/golden.ps1:45-50](tools/golden.ps1#L45) · *parity, conf: high*
-  `ImageComparison` documents a "cross-backend check (Vulkan vs DX12)" but golden tests compare each backend against committed baselines *independently* — never a Vulkan capture against a DX12 capture. The headline invariant has no automated assert; the `Max/MeanChannelDiff` the bar needs is computed but unwired.
-  *Fix:* an opt-in, GPU-gated test that reads a Vulkan + DX12 capture of the same demo and asserts `FailedFraction < 0.005` at tolerance 4.
+- **🟡 Vulkan-vs-DirectX12 parity is never exercised by any test** — [ImageComparison.cs:3-4](Loom.Tests/ImageComparison.cs#L3) · also [GoldenImageTests.cs:15-16](Loom.Tests/GoldenImageTests.cs#L15), [tools/golden.ps1:45-50](tools/golden.ps1#L45) · *parity, conf: high*
+  `ImageComparison` documents a "cross-backend check (Vulkan vs DirectX12)" but golden tests compare each backend against committed baselines *independently* — never a Vulkan capture against a DirectX12 capture. The headline invariant has no automated assert; the `Max/MeanChannelDiff` the bar needs is computed but unwired.
+  *Fix:* an opt-in, GPU-gated test that reads a Vulkan + DirectX12 capture of the same demo and asserts `FailedFraction < 0.005` at tolerance 4.
 
-- **🟡 DX12 PSO cache key omits template/bytecode content** — [DX12TechniqueCache.cs:34,48-55](Loom.DX12/DX12TechniqueCache.cs#L34) · contrast [TechniqueCache.cs:33-57](Loom.Vulkan/TechniqueCache.cs#L33) · *parity, conf: high*
-  DX12 `BuildKey` hashes only name + formats + depth flags; the template (bytecode, blend, layout, instance) is **not** keyed. Vulkan hashes the SPIR-V + all state. So a `Register(name, newTemplate)` re-bakes on Vulkan but returns the stale PSO on DX12. Masked today (hot-reload calls `Reset()` wholesale), but a latent divergence the moment a name is re-registered with new content.
-  *Fix:* fold a hash of the template's bytecode + blend/layout/instance into the DX12 key, mirroring Vulkan.
+- **🟡 DirectX12 PSO cache key omits template/bytecode content** — [DirectX12TechniqueCache.cs:34,48-55](Loom.DirectX12/DirectX12TechniqueCache.cs#L34) · contrast [TechniqueCache.cs:33-57](Loom.Vulkan/TechniqueCache.cs#L33) · *parity, conf: high*
+  DirectX12 `BuildKey` hashes only name + formats + depth flags; the template (bytecode, blend, layout, instance) is **not** keyed. Vulkan hashes the SPIR-V + all state. So a `Register(name, newTemplate)` re-bakes on Vulkan but returns the stale PSO on DirectX12. Masked today (hot-reload calls `Reset()` wholesale), but a latent divergence the moment a name is re-registered with new content.
+  *Fix:* fold a hash of the template's bytecode + blend/layout/instance into the DirectX12 key, mirroring Vulkan.
 
-- **🟡 Compute sampled-input filtering diverges: Vulkan hardcodes nearest, DX12 honors `LinearFilter`** — [RenderContext.cs:280](Loom.Vulkan/RenderContext.cs#L280) (vs [:397-409](Loom.Vulkan/RenderContext.cs#L397) which does it right) · [DX12Technique.cs:117](Loom.DX12/DX12Technique.cs#L117) · *parity, conf: high*
-  Vulkan's `Dispatch` binds a sampled input with a fixed nearest sampler, ignoring the technique's `LinearFilter`; DX12 bakes a static sampler from the flag. A `LinearFilter:true` compute technique would sample nearest on Vulkan, linear on DX12. Masked because the only shipped sampling-compute ("exposure") uses `LinearFilter:false`.
+- **🟡 Compute sampled-input filtering diverges: Vulkan hardcodes nearest, DirectX12 honors `LinearFilter`** — [RenderContext.cs:280](Loom.Vulkan/RenderContext.cs#L280) (vs [:397-409](Loom.Vulkan/RenderContext.cs#L397) which does it right) · [DirectX12Technique.cs:117](Loom.DirectX12/DirectX12Technique.cs#L117) · *parity, conf: high*
+  Vulkan's `Dispatch` binds a sampled input with a fixed nearest sampler, ignoring the technique's `LinearFilter`; DirectX12 bakes a static sampler from the flag. A `LinearFilter:true` compute technique would sample nearest on Vulkan, linear on DirectX12. Masked because the only shipped sampling-compute ("exposure") uses `LinearFilter:false`.
   *Fix:* select Vulkan's `Dispatch` sampler from `LinearFilter` exactly as `BindSampledInputs` does.
 
-- **🟡 Instance-from-buffer vertex stride differs between backends** — [DX12RenderContext.cs:422-444](Loom.DX12/DX12RenderContext.cs#L422) · vs [RenderContext.cs:335-344](Loom.Vulkan/RenderContext.cs#L335) · *parity, conf: low*
-  DX12 computes `StrideInBytes = byteSize / count`; Vulkan uses the pipeline's declared instance stride. If `byteSize/count != declared stride` (padding, or over-allocated buffer), the backends fetch per-instance attributes from different offsets. Unused by shipped demos (M15 GPU-driven territory).
-  *Fix:* DX12 should take the stride from `template.Instance.Stride`, matching Vulkan's source of truth.
+- **🟡 Instance-from-buffer vertex stride differs between backends** — [DirectX12RenderContext.cs:422-444](Loom.DirectX12/DirectX12RenderContext.cs#L422) · vs [RenderContext.cs:335-344](Loom.Vulkan/RenderContext.cs#L335) · *parity, conf: low*
+  DirectX12 computes `StrideInBytes = byteSize / count`; Vulkan uses the pipeline's declared instance stride. If `byteSize/count != declared stride` (padding, or over-allocated buffer), the backends fetch per-instance attributes from different offsets. Unused by shipped demos (M15 GPU-driven territory).
+  *Fix:* DirectX12 should take the stride from `template.Instance.Stride`, matching Vulkan's source of truth.
 
 - **⚪ Game-UI overlay seam exercised by only one demo despite a host comment implying all** — [CubeLightingDemo.cs:33](Loom.Sandbox/Demos/CubeLightingDemo.cs#L33) · [Program.cs:97-100](Loom.Sandbox/Program.cs#L97) · *parity, conf: medium*
   `DemoGraph.UI(...)` is called by exactly one demo; the MU0 "ui" pass + `ctx.DrawUI()` path is validated only on the simplest graph. Low risk (no-op renderer this phase, MU1 in flight).
@@ -220,11 +220,11 @@ WinUI-divergence bugs. The Grid Star collapse is the most impactful; the rest ar
 
 Several authoring enums are narrower than the features they'll need; some are consumed by non-exhaustive ternaries that *silently degrade* unknown members instead of failing loudly like `FormatMapping`/`StateMapping` do.
 
-- **🟡 `SamplerAddress` consumed as a binary ternary that silently degrades unknown modes to Clamp** — [SamplerAddress.cs:11-18](Loom.Core/SamplerAddress.cs#L11) · [DX12Technique.cs:118-120](Loom.DX12/DX12Technique.cs#L118) · [RenderContext.cs:435](Loom.Vulkan/RenderContext.cs#L435) · *enum, conf: high*
+- **🟡 `SamplerAddress` consumed as a binary ternary that silently degrades unknown modes to Clamp** — [SamplerAddress.cs:11-18](Loom.Core/SamplerAddress.cs#L11) · [DirectX12Technique.cs:118-120](Loom.DirectX12/DirectX12Technique.cs#L118) · [RenderContext.cs:435](Loom.Vulkan/RenderContext.cs#L435) · *enum, conf: high*
   `{ Clamp, Repeat }` consumed as `==Repeat ? Wrap : Clamp`. Missing `MirrorRepeat`, `ClampToBorder` (the conventional shadow-map / post-process-kernel mode), `MirrorClampToEdge`. Any future member silently maps to Clamp on both backends.
   *Fix:* grow to `{Clamp, Repeat, MirrorRepeat, ClampToBorder, MirrorClampToEdge}` + exhaustive switch that throws; plumb a border colour for `ClampToBorder`.
 
-- **🟡 `BlendMode` covers only None/AlphaOver/Additive; alpha blended with colour factors** — [BlendMode.cs:10-20](Loom.Core/BlendMode.cs#L10) · [Technique.cs:288-308](Loom.Vulkan/Technique.cs#L288) · [DX12Technique.cs:230-245](Loom.DX12/DX12Technique.cs#L230) · *enum, conf: high*
+- **🟡 `BlendMode` covers only None/AlphaOver/Additive; alpha blended with colour factors** — [BlendMode.cs:10-20](Loom.Core/BlendMode.cs#L10) · [Technique.cs:288-308](Loom.Vulkan/Technique.cs#L288) · [DirectX12Technique.cs:230-245](Loom.DirectX12/DirectX12Technique.cs#L230) · *enum, conf: high*
   No Premultiplied (the standard mode for correct UI/particle compositing — the in-flight UI track will likely need it), Multiply, screen, subtract. Both bakers reuse one `(src,dst)` tuple for *both* colour and alpha — wrong for premultiplied output and inexpressible.
   *Fix:* grow to ≥ `{None, AlphaOver, PremultipliedAlpha, Additive, Multiply}`; split colour-vs-alpha factors when the new modes land.
 
@@ -248,32 +248,32 @@ Several authoring enums are narrower than the features they'll need; some are co
 
 None affect runtime correctness.
 
-- **🟡 UI file names use lowercase `Ui` while the types inside are correctly `UI`-cased** — `Loom.Core/Ui{Vertex,DrawData,DrawCommand,PrimKind,Surface,SurfaceId}.cs`, [Loom.Vulkan/UiRenderer.cs](Loom.Vulkan/UiRenderer.cs), [Loom.DX12/DX12UiRenderer.cs](Loom.DX12/DX12UiRenderer.cs), [Loom.UI/IUiCompositor.cs](Loom.UI/IUiCompositor.cs), [Loom.UI/UiTrack.cs](Loom.UI/UiTrack.cs), [Loom.UI.Tests/UiDrawDataTests.cs](Loom.UI.Tests/UiDrawDataTests.cs) · *maintainability, conf: high*
+- **🟡 UI file names use lowercase `Ui` while the types inside are correctly `UI`-cased** — `Loom.Core/Ui{Vertex,DrawData,DrawCommand,PrimKind,Surface,SurfaceId}.cs`, [Loom.Vulkan/UiRenderer.cs](Loom.Vulkan/UiRenderer.cs), [Loom.DirectX12/DirectX12UiRenderer.cs](Loom.DirectX12/DirectX12UiRenderer.cs), [Loom.UI/IUiCompositor.cs](Loom.UI/IUiCompositor.cs), [Loom.UI/UiTrack.cs](Loom.UI/UiTrack.cs), [Loom.UI.Tests/UiDrawDataTests.cs](Loom.UI.Tests/UiDrawDataTests.cs) · *maintainability, conf: high*
   A grep for the identifier pattern `\bUi[A-Z]` returns **no** matches — every declared type is correctly `UI`-cased and CLAUDE.md's rule is honored *in code*. Only the file basenames carry lowercase `Ui` (likely from PlanningUI.md's spelling), diverging from the filename==type convention and inconsistent with the matching `UIElement.cs`/`UIRoot.cs`. Separately, **`UiTrack.cs` contains no type at all** — just an `[assembly: InternalsVisibleTo]` scaffold behind a misleading name.
-  *Fix:* `git mv` the files to match their types (`UIVertex.cs`, …, `DX12UIRenderer.cs`, `IUICompositor.cs`); rename `UiTrack.cs` → `AssemblyInfo.cs`; reconcile PlanningUI.md's spelling.
+  *Fix:* `git mv` the files to match their types (`UIVertex.cs`, …, `DirectX12UIRenderer.cs`, `IUICompositor.cs`); rename `UiTrack.cs` → `AssemblyInfo.cs`; reconcile PlanningUI.md's spelling.
 
-- **🟡 Dead config knobs: `PreferDiscreteGpu` and `GpuBasedValidation` declared but never consumed** — [VulkanEngineSettings.cs:21-22](Loom.Vulkan/VulkanEngineSettings.cs#L21) · [DX12EngineSettings.cs:25](Loom.DX12/DX12EngineSettings.cs#L25) · *correctness, conf: high*
-  `PickPhysicalDevice` unconditionally prefers the first discrete GPU; DX12 only calls `EnableDebugLayer()`, never `SetEnableGPUBasedValidation`. A host setting these gets silently-ignored behaviour. (Forcing the integrated GPU is useful for cross-backend adapter-matched diffing.)
+- **🟡 Dead config knobs: `PreferDiscreteGpu` and `GpuBasedValidation` declared but never consumed** — [VulkanEngineSettings.cs:21-22](Loom.Vulkan/VulkanEngineSettings.cs#L21) · [DirectX12EngineSettings.cs:25](Loom.DirectX12/DirectX12EngineSettings.cs#L25) · *correctness, conf: high*
+  `PickPhysicalDevice` unconditionally prefers the first discrete GPU; DirectX12 only calls `EnableDebugLayer()`, never `SetEnableGPUBasedValidation`. A host setting these gets silently-ignored behaviour. (Forcing the integrated GPU is useful for cross-backend adapter-matched diffing.)
   *Fix:* thread the flags through, or remove the properties until wired.
 
 - **🟡 CLAUDE.md "Current state" has drifted** — [CLAUDE.md:16,54,31](CLAUDE.md#L16) · *docs, conf: high*
   The Projects list omits the entire `Loom.UI`/`Loom.UI.SourceGen`/`Loom.UI.Tests` track; line 54 claims "no golden-image tests yet" although [GoldenImageTests.cs](Loom.Tests/GoldenImageTests.cs) + [tools/golden.ps1](tools/golden.ps1) + committed `Goldens/` ship a full PNG-comparison harness; line 54 references `LOOM_CAPTURE` although line 31 says there are no `LOOM_*` runtime vars (it's `--capture`).
   *Fix:* add the UI projects; update the golden-tests claim; replace `LOOM_CAPTURE` with `--capture`.
 
-- **🟡 Two independent reflection-JSON parsers with a divergent classification gate** — [ShaderReflection.cs](Loom.Vulkan/ShaderReflection.cs) · [DX12Shaders.cs:84-87,124-130](Loom.DX12/DX12Shaders.cs#L84) · *maintainability, conf: medium*
-  Vulkan gates on both `descriptorTableSlot` *and* `resource`; DX12's `ResolveComputeStorage` omits the `descriptorTableSlot` gate. Benign today, but a future resource form could be counted by one backend and not the other → mismatched layouts (a parity break the dual-parser structure makes easy to introduce).
+- **🟡 Two independent reflection-JSON parsers with a divergent classification gate** — [ShaderReflection.cs](Loom.Vulkan/ShaderReflection.cs) · [DirectX12Shaders.cs:84-87,124-130](Loom.DirectX12/DirectX12Shaders.cs#L84) · *maintainability, conf: medium*
+  Vulkan gates on both `descriptorTableSlot` *and* `resource`; DirectX12's `ResolveComputeStorage` omits the `descriptorTableSlot` gate. Benign today, but a future resource form could be counted by one backend and not the other → mismatched layouts (a parity break the dual-parser structure makes easy to introduce).
   *Fix:* extract one shared neutral reflection parser; at minimum align the gates.
 
 - **🟡 DXIL toolchain (DXC) resolved from the machine's Windows SDK — non-hermetic** — [Loom.Shaders.targets:61-69](build/Loom.Sdk/Loom.Shaders.targets#L61) · *future-proofing, conf: high*
-  `slangc` is bundled hermetically; DXC comes from whatever Windows SDK is installed, and a missing DXC only *Warns* (then DX12 silently runs stand-ins). Two machines can emit behaviour-different signed DXIL from identical source.
-  *Fix:* pin/vendor DXC to a known version; promote "no DXC found" to an Error when `UseDX12=true`.
+  `slangc` is bundled hermetically; DXC comes from whatever Windows SDK is installed, and a missing DXC only *Warns* (then DirectX12 silently runs stand-ins). Two machines can emit behaviour-different signed DXIL from identical source.
+  *Fix:* pin/vendor DXC to a known version; promote "no DXC found" to an Error when `UseDirectX12=true`.
 
 - **🟡 `GetCamera` receives a different time value than `ctx.Time` under frozen capture** — [Program.cs:203-214](Loom.Sandbox/Program.cs#L203) · [IDemo.cs:30-35](Loom.Sandbox/Demos/IDemo.cs#L30) · *correctness, conf: medium*
   Under capture, the camera-override time is `0.6f` while `ctx.Time` is `1.0f`, despite `GetCamera`'s doc saying its time is "exactly like the other per-frame inputs." No demo consumes it yet, but the moment a demo scrolls its camera from that arg (documented M14-6 intent), a frozen capture misaligns camera vs content — the same time/camera split CLAUDE.md says once cost a long false bug hunt.
   *Fix:* compute one `sceneTime` and pass it to `GetCamera`; keep a separate orbit angle only for the built-in perspective.
 
 - **⚪ `mesh.slang` is compiled but referenced by no technique — dead build output** — [mesh.slang](Loom.Sandbox/Shaders/mesh.slang) · *maintainability, conf: high* · its own comment says "M12 retires this." Delete or add to `$(LoomShaderExclude)`.
-- **⚪ Bootstrap `DX12Triangle` allocated for the engine's whole lifetime but only used by the dead legacy path** — [DX12Engine.cs:125,254](Loom.DX12/DX12Engine.cs#L125) · [DX12Triangle.cs](Loom.DX12/DX12Triangle.cs) · *maintainability, conf: high* · a permanent root-sig + PSO + runtime FXC dependency production never draws. Gate behind the legacy path or remove.
+- **⚪ Bootstrap `DirectX12Triangle` allocated for the engine's whole lifetime but only used by the dead legacy path** — [DirectX12Engine.cs:125,254](Loom.DirectX12/DirectX12Engine.cs#L125) · [DirectX12Triangle.cs](Loom.DirectX12/DirectX12Triangle.cs) · *maintainability, conf: high* · a permanent root-sig + PSO + runtime FXC dependency production never draws. Gate behind the legacy path or remove.
 - **⚪ `--smoke-frames` accepts non-positive values that silently never terminate** — [LaunchOptions.cs:151,158](Loom.Sandbox/LaunchOptions.cs#L151) · *correctness, conf: high* · `--smoke-frames 0`/negative disables smoke mode → the documented interactive hang, no diagnostic. (`--max-fps` also accepts negatives.) Reject non-positive values in `Parse`.
 
 ### 8 · Tests — coverage gaps
@@ -305,7 +305,7 @@ None affect runtime correctness.
 Recorded so the audit shows these dimensions were checked and *passed*:
 
 - **Backend isolation verified clean** across Core, Graph, Assets, and UI — grep for `Silk.NET`/`Vk*`/`D3D12`/`DllImport`/`Marshal.`/`stackalloc` in Core/Graph returns only doc-comments + benign `[StructLayout]` usings. The cardinal invariant holds in the actual code.
-- **Neutral matrix/NDC convention** (RH, +Y up, `System.Numerics`) with per-backend clip fix-up (Vulkan Y-flip, DX12 negative-height viewport) — keeps Metal/WebGPU/console's `[0,1]`-depth NDC open without touching authoring code. The hardest cross-API portability trap is already avoided.
+- **Neutral matrix/NDC convention** (RH, +Y up, `System.Numerics`) with per-backend clip fix-up (Vulkan Y-flip, DirectX12 negative-height viewport) — keeps Metal/WebGPU/console's `[0,1]`-depth NDC open without touching authoring code. The hardest cross-API portability trap is already avoided.
 - **`BarrierPlan`/`AliasPlan` are advisory backend inputs, not mandates** — a WebGPU backend can drop both (no explicit barriers / no aliasing control) while still using the `AttachmentAction` load/store ops WebGPU *does* require. This is the key reason WebGPU stays open.
 - **Derived per-attachment Load/Store actions** make tile-based (Adreno/Mali/Metal memoryless) on-chip load/store fully representable — the `.Writes`-vs-`.Blends` distinction carries exactly the load intent a tiler needs, for free.
 - **Opaque `object surface` + `EngineSettings` subclassing** is a clean backend-creation seam — a Metal `CAMetalLayer` / WebGPU canvas / console swapchain is just another `object` + settings subclass; no windowing/graphics-API type leaks into Core.
@@ -317,4 +317,4 @@ Recorded so the audit shows these dimensions were checked and *passed*:
 
 ## Appendix — how this was produced
 
-17 reviewers (Loom.Core, Loom.Graph, Vulkan core + pipeline, DX12 core + pipeline, Assets, Sandbox, UI, UI.SourceGen, tests, shaders+build; plus cross-cutting parity, invariants, forward-backends, forward-features, enums) each read the actual files and produced grounded findings. Every finding was handed to an independent adversarial verifier that re-opened the cited code and tried to refute it (defaulting to rejection for unconfirmable correctness claims). A synthesis pass deduped across reviewers, applied verifier severity adjustments, and ranked. 5 findings were rejected as false positives / misreadings and are not listed here.
+17 reviewers (Loom.Core, Loom.Graph, Vulkan core + pipeline, DirectX12 core + pipeline, Assets, Sandbox, UI, UI.SourceGen, tests, shaders+build; plus cross-cutting parity, invariants, forward-backends, forward-features, enums) each read the actual files and produced grounded findings. Every finding was handed to an independent adversarial verifier that re-opened the cited code and tried to refute it (defaulting to rejection for unconfirmable correctness claims). A synthesis pass deduped across reviewers, applied verifier severity adjustments, and ranked. 5 findings were rejected as false positives / misreadings and are not listed here.
