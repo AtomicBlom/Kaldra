@@ -1,5 +1,6 @@
 using Loom.Core.Animation;
 using Loom.Core.Geometry;
+using Loom.Core.UI;
 
 namespace Loom.Tests;
 
@@ -68,8 +69,27 @@ public class VertexLayoutTests
 
 	[Test]
 	[Arguments(VertexFormat.UInt4, 16)]
-	public void UInt4_byte_size(VertexFormat format, int expected) =>
+	[Arguments(VertexFormat.Half4, 8)]
+	public void Wide_format_byte_sizes(VertexFormat format, int expected) =>
 		format.ByteSize().ShouldBe(expected);
+
+	[Test]
+	public void Ui_layout_matches_the_UI_vertex()
+	{
+		var layout = VertexLayout.UI;
+
+		layout.InputRate.ShouldBe(VertexInputRate.PerVertex);
+		layout.Binding.ShouldBe(0);
+		// Position (Float2) + Uv (Float2) + premultiplied colour (Half4) + per-prim params (Float4) — the UI vertex.
+		layout.Stride.ShouldBe(40);
+		layout.Offsets.ToArray().ShouldBe(new[] { 0, 8, 16, 24 });
+		layout.Attributes.Select(a => a.Semantic).ToArray().ShouldBe(new[] { "POSITION", "TEXCOORD", "COLOR", "TEXCOORD" });
+		layout.Attributes.Select(a => a.Format).ToArray().ShouldBe(new[] { VertexFormat.Float2, VertexFormat.Float2, VertexFormat.Half4, VertexFormat.Float4 });
+	}
+
+	[Test]
+	public void Ui_vertex_struct_size_matches_the_layout() =>
+		System.Runtime.CompilerServices.Unsafe.SizeOf<UIVertex>().ShouldBe(VertexLayout.UI.Stride);
 
 	[Test]
 	public void Mesh_skinned_extends_the_standard_layout_with_joints_and_weights()
