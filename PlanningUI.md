@@ -34,17 +34,39 @@ interactive 3D quad), and drive it with mouse + keyboard + focus + gamepad + tou
 | Surfaces | **Screen-space overlay AND fully interactive in-world UI** (render-to-texture on a 3D quad; CPU ray→UV→hit-test). |
 | Input | Pointer (mouse+touch) + keyboard + text entry + focus/Tab + **gamepad/XYFocus spatial nav**, with WinUI routed-event (tunnel/bubble) semantics. |
 | Animation | Storyboards/keyframes/easing + `VisualStateManager`, in v1. |
+| Composition | **Retained `Visual` tree** behind the element tree, rendered by a pluggable **`IUiCompositor`** (Loom's default flattens to `UiDrawData`; a foreign engine substitutes its own). Enables independent animation, billboards, group-opacity/effects, and engine portability. |
+| Color / HDR | Authoring uses a **float `HdrColor`** (named for explicitness + to dodge the `System.Drawing.Color` clash): `0..1` = SDR/paper-white, `>1` = above paper white. UI is pinned to a configurable **paper-white reference** by default (never display peak — HUDs don't blow out); above-paper-white is opt-in. Composited vertex color is premultiplied **RGBA16F**. |
 | ImGui | **Coexists** — ImGui stays as the dev/debug HUD; this is the game-facing UI. |
+| Testability | **Headless-testable by construction** — every logic subsystem (DP, layout, routing, hit-test, focus, animation, draw-list build) is unit-tested on CPU with no GPU/window; only backend pixels use the capture loop. New tests live in `Loom.UI.Tests` (TUnit + Shouldly). |
 
 ## Architecture
 
-**The central pattern: clone the ImGui renderer path.** All three design passes independently landed on
-this. ImGui already proves, on both backends, exactly the seam this UI needs: a backend-private renderer
-fed neutral per-frame draw data through a neutral `IRenderContext` verb, recorded into the open pass scope.
-We mirror it for UI. This preserves the cardinal invariant — **no graphics-API type enters Core/Graph** —
-because the UI emits backend-neutral draw data and the backends turn it into GPU work.
+**Two retained trees and a pluggable compositor — the lower seam is the engine-portability boundary.** The UI is
+a retained **element tree** (DPs / layout / controls) that drives a separate retained **composition tree** of
+lightweight `Visual` nodes (transform / clip / opacity / brush / content), which a pluggable **`IUiCompositor`**
+turns into actual rendering. This is the WinUI element-tree-vs-composition-tree split, made into Loom's portability
+seam:
 
-Reference seam to mirror:
+- **Loom's default compositor** (`DrawListCompositor`) flattens the composition tree to backend-neutral
+  `UiDrawData` and hands it to a backend-private renderer through a neutral `IRenderContext.DrawUI` verb —
+  **cloning the proven ImGui renderer path** (all three design passes independently landed on this; ImGui already
+  proves the exact seam on both backends). This preserves the cardinal invariant: **no graphics-API type enters Core/Graph.**
+- **A foreign engine** implements its own `IUiCompositor`, consumes the `Visual` tree directly, and maps it onto
+  *their* scene graph — taking Loom's whole element / layout / input / animation half and substituting only the
+  compositor. That is the point: the composition tree is a neutral contract, like `UiDrawData` but one level up.
+
+The composition tree is what makes the rest cheap and correct: **independent** transform/opacity animation (mutate
+a `Visual`, recomposite only the dirty subtree — no relayout, no element walk), **billboarded non-interactive**
+surfaces (health bars, floating names), and true **group-opacity / effects** via render-to-texture (D2/D4).
+
+Both seams are **test seams**, by design. A second load-bearing invariant — **headless-testable by construction**
+— says all UI *logic* runs with no engine, backend, or window: neutral events in, a neutral `Visual` /
+`UiDrawData` tree out, so layout, composition, routing, focus and animation are asserted directly on CPU, the way
+the render graph's Describe/Execute layers already are. Testing is a design driver, not a later phase — it shapes
+the public API (pure tree/clock algorithms; `Dump()`/`DumpLayout()`/`DumpState()` snapshot surfaces; a mockable
+`IUiCompositor`; no engine handle in any logic type). The §Verification summary states the shape; D8 has the detail.
+
+Reference seam to mirror (the default compositor's backend path):
 - Neutral verb [`IRenderContext.DrawImGui()`](Loom.Core/IRenderContext.cs) → add `DrawUI(...)`.
 - Backend renderer [`Loom.Vulkan/ImGuiRenderer.cs`](Loom.Vulkan/ImGuiRenderer.cs) and
   [`Loom.DX12/DX12ImGuiRenderer.cs`](Loom.DX12/DX12ImGuiRenderer.cs) → add `UiRenderer` / `DX12UiRenderer`.
@@ -55,9 +77,10 @@ Reference seam to mirror:
 
 | Project | TFM | Role | References |
 |---|---|---|---|
-| **`Loom.UI`** | `net10.0` | Backend-neutral UI runtime: dependency-object model, controls, layout/visual tree, routed events, focus, hit-testing (2D + 3D ray), `UiHost`, draw-list builder, animation, text layout. | **`Loom.Core` + `Loom.Assets`** (both neutral) |
+| **`Loom.UI`** | `net10.0` | Backend-neutral UI runtime: dependency-object model, controls, layout/element tree, **composition `Visual` tree + `IUiCompositor` + default `DrawListCompositor`**, routed events, focus, hit-testing (2D + 3D ray), `UiHost`, animation, text layout. | **`Loom.Core` + `Loom.Assets`** (both neutral) |
 | **`Loom.UI.SourceGen`** | `netstandard2.0` | Roslyn `IIncrementalGenerator`: `.xaml` → typed control-tree builders + `x:Bind`/event/storyboard/visual-state glue. Ships as `<Analyzer>`. Build-time only. | `Microsoft.CodeAnalysis.CSharp` (host-pinned, `PrivateAssets=all`) |
 | **`Loom.UI.Text.Bake`** | `net10.0` | Build-time console tool (never shipped): font subset → MSDF atlas PNG + metrics JSON. Orchestrates `msdf-atlas-gen`. | — |
+| **`Loom.UI.Tests`** | `net10.0` | Headless unit + source-gen-snapshot tests (**TUnit + Shouldly**). **No GPU/backend ref** — asserts neutral draw output, layout, routing, focus, animation, and the generated C# (D8). | `Loom.UI` + `Loom.Core` + `Loom.Assets` + `Loom.UI.SourceGen` (snapshot harness) |
 | `build/Loom.Sdk/Loom.UI.{props,targets}` | — | Register `.xaml` as `AdditionalFiles` for the generator (+ `UpToDateCheck`); run the font bake + register atlas/JSON as Embedded/Content. Mirrors `Loom.Shaders.{props,targets}`. | — |
 
 `Loom.UI` depends on `Loom.Core` + `Loom.Assets` (both neutral, Core-only, no GPU types) and **must not**
@@ -71,14 +94,18 @@ Naming follows existing repo casing (`Loom.Core`, `Loom.DX12`): the project is `
 These are managed neutral data types, the same way [`Vertex`](Loom.Core/Vertex.cs),
 [`Mesh`](Loom.Core/Mesh.cs), and [`Camera`](Loom.Core/Camera.cs) already live in Core:
 
-- `UiVertex` (pos, uv, premultiplied RGBA8, params), `UiPrimKind` (Fill/RoundedRect/Border/Glyph/Image),
-  `UiDrawCommand` (kind, textureId, clipRect, index range), and `UiDrawData` (vertex/index/command spans +
-  surface size + `IsHdrSurface` flag + `Revision`).
+- `UiVertex` (pos, uv, premultiplied **RGBA16F** color [carries above-paper-white HDR + wide gamut, no banding],
+  params), `UiPrimKind` (Fill/RoundedRect/Border/Glyph/Image), `UiDrawCommand` (kind, textureId, clipRect, index
+  range), and `UiDrawData` (vertex/index/command spans + surface size + `IsHdrSurface` flag + `Revision`).
 - `IEngine.EnableUI()` — stand up the backend `UiRenderer` + upload baked atlas pages once.
 - `IRenderContext.DrawUI(UiSurfaceId)` — record a named surface's draw data into the open pass scope; no-op
   until enabled. (Multi-surface: overlay + N in-world quads each have an id.)
 - `FrameInputs.UiSurfaces` — the per-frame set of `(UiSurfaceId, UiDrawData)`; pulled in the closure, never
   captured (preserves the pure-closure invariant).
+
+`UiDrawData` is the output of Loom's **default** `DrawListCompositor`; the `Visual` composition tree it composites
+from lives in `Loom.UI` (neutral, no GPU types). A foreign engine swapping `IUiCompositor` consumes that tree and
+need not produce `UiDrawData` at all — so these Core additions are the *default-path* contract, not the only one.
 
 ### Shaders (under [Loom.Shaders/Shaders](Loom.Shaders/Shaders), embedded like `imgui.slang`)
 
@@ -105,7 +132,8 @@ in the `.xaml`. Styles/templates/resources compile to typed setter delegates and
 "create" is a `new`, every "set" a typed setter (the NAOT payoff).
 
 Commit to a **curated WinUI-syntax subset** published as a hard contract (see Risks); the generator errors
-clearly on anything outside the grammar.
+clearly on anything outside the grammar. Generated output is locked down by **snapshot tests** over
+representative `.xaml` (D8) — the build-time analog of the golden draw-list.
 
 ## Runtime object model + layout (`Loom.UI`)
 
@@ -122,6 +150,9 @@ clearly on anything outside the grammar.
 - **Element hierarchy:** `UIElement` → `FrameworkElement` → `Panel`(`Grid`/`StackPanel`/`Canvas`) /
   `Border` / `ContentPresenter` / `ItemsPresenter` / `TextBlock` / `Image` / `Control`(`ContentControl→Button`,
   `ItemsControl→ListView`).
+- **Element tree ↔ composition tree:** each `FrameworkElement` owns a `Visual` (transform/clip/opacity/brush/
+  content); layout writes the visual's offset/size, property setters write its transform/opacity/brush. The
+  element tree is the *authoring* model; the retained `Visual` tree is what the compositor renders (Rendering, D2).
 - **Two-pass measure/arrange** (WinUI semantics): `Measure` deflates Margin, clamps Min/Max/explicit,
   `MeasureOverride`, reinflates → `DesiredSize`; `Arrange` applies alignment + `ArrangeOverride`. `Grid` does
   Pixel/Auto/Star track resolution; `StackPanel`/`Canvas` straightforward. Invalidation via dirty flags +
@@ -129,15 +160,27 @@ clearly on anything outside the grammar.
   `UiDrawData.Revision`).
 - **DPI:** layout in DIPs; the render walk scales by `LayoutScale` (window DPI for overlay; author-chosen texel
   density for in-world). MSDF makes this resolution-independent — no per-DPI re-bake.
+- **Testability:** the DP precedence ladder, two-pass measure/arrange, and invalidation are pure tree algorithms,
+  exercised headlessly via `UiRoot.LayoutPass` + `DumpLayout()` with no engine — the same construct → derive →
+  assert shape the graph tests use on `BarrierPlan`/`AliasPlan` (D8).
 
 ## Rendering + text
 
-- **2D model:** retained tree, draw-list rebuilt only on dirty frames. The walk resolves transform/clip/opacity
-  stacks into a pre-transformed `UiVertex` stream + `UiDrawCommand`s. **Atlas-everything + state-run batching**
-  (white texel for fills; MSDF pages for glyphs; image atlas/in-world targets for images) → thousands of
-  rects/glyphs in one indexed draw; a new command only on clip/texture/kind change. GPU upload path is a clone
+- **Composition pipeline:** the element tree drives a retained **composition tree** of `Visual` nodes; a pluggable
+  **`IUiCompositor`** renders it. Loom's default `DrawListCompositor` walks the tree, resolving transform/clip/
+  opacity into a pre-transformed `UiVertex` stream + `UiDrawCommand`s, and **recomposites only dirty subtrees**
+  (each `Visual` carries a damage flag; clean subtrees reuse cached vertices). **Atlas-everything + state-run
+  batching** (white texel for fills; MSDF pages for glyphs; image atlas/in-world targets for images) → thousands
+  of rects/glyphs in one indexed draw; a new command only on clip/texture/kind change. GPU upload path is a clone
   of [`ImGuiRenderer`](Loom.Vulkan/ImGuiRenderer.cs) (per-frame-in-flight grown buffers, scissored
-  `CmdDrawIndexed`).
+  `CmdDrawIndexed`). Because `UiDrawData` is neutral, the whole pipeline up to GPU upload is the **primary test
+  seam**: assert the `Visual` tree, or the vertex/command stream (`Dump()`), on CPU; only upload + pixels need a backend (D8).
+- **Independent animation:** transform/opacity/brush animations mutate `Visual` properties directly and recomposite
+  the affected subtree **without re-running layout or the element walk** — the WinUI independent-animation win, and
+  what makes billboards and moving HUD elements cheap (a per-frame face-camera transform on the root `Visual`).
+- **Group opacity & effects:** a `Visual` with sub-1 group opacity (or an effect) composites to a transient render
+  target and blends back with one `AddImage` at the group alpha — reusing the in-world render-to-texture machinery
+  (D4.2). This is *true* WinUI group-opacity, not a per-vertex-alpha approximation.
 - **MSDF text — build time:** `Loom.UI.Text.Bake` reads a `*.fontset.json` (fonts + charset ranges/scripts +
   `pxRange`/`glyphSize`), drives `msdf-atlas-gen` (MIT, build-only, bundled hermetically like `slangc`), emits
   atlas PNG page(s) + a metrics JSON (per-glyph UV/plane/advance, font metrics, subset cmap) — the text analog
@@ -158,15 +201,26 @@ shipped in M11; StbImageSharp-backed) → neutral `TextureData`; the UI makes no
     ([ShadowsDemo.cs](Loom.Sandbox/Demos/ShadowsDemo.cs)) / bloom-pyramid
     ([BloomGraph.cs](Loom.Sandbox/Demos/BloomGraph.cs)) pattern. Transient by default, `Persistent` for
     slow-updating surfaces. **No new describe-layer resource concept** — only the `DrawUI` verb + the surface channel.
+  - *HDR* — UI authors `HdrColor` (float); under HDR, white is pinned to a configurable **paper-white reference**,
+    never the display peak, so HUDs don't blow out. Above-paper-white is opt-in (`HdrColor` component `>1`). The
+    composited vertex color is premultiplied **RGBA16F**, blended in the correct space (D4.4).
 
 ## Input, interaction, animation (`Loom.UI`)
 
-- **Pipeline:** the host (Sandbox, Silk.NET) translates raw mouse/keyboard/touch/gamepad into neutral
-  `PointerInput`/`KeyInput`/`GamepadInput`/text events and queues them on a persistent **`UiHost`**
-  (focus, pointer capture, animation clocks live here — *outside* the render graph). Once per frame
-  `UiHost.Tick(delta, time, camera, surfaces)` drains → hit-tests → routes → focus/spatial-nav → ticks
-  animation → lays out; `UiHost.Render()` produces the per-frame `UiDrawData` surfaces handed to the engine
-  via `FrameInputs.UiSurfaces`. Closures pull surfaces; nothing live is captured.
+- **Pipeline & hosts:** `UiHost` is **not a singleton** — you create one per window / input context, so
+  multi-window and multi-screen are first-class. Each host owns its surfaces' focus, pointer capture, and
+  animation clocks, *outside* the render graph. The host (Sandbox, Silk.NET) translates raw mouse/keyboard/touch/
+  gamepad into neutral `PointerInput`/`KeyInput`/`GamepadInput`/text events; once per frame
+  `UiHost.Tick(delta, time, camera, surfaces)` drains → hit-tests → routes → focus/spatial-nav → ticks animation →
+  lays out → recomposites, and `UiHost.Render()` produces the per-surface `UiDrawData` (via the compositor) handed
+  to the engine through `FrameInputs.UiSurfaces`. Closures pull surfaces; nothing live is captured. `UiHost` holds
+  **no engine handle**, so `Tick`+`Render` run headless in tests — queue neutral events, assert focus/routing/the
+  `Surfaces` output, no GPU (D8).
+- **Surfaces & roots:** `host.CreateRoot(placement)` returns a **`UiView` handle** you keep — it carries placement
+  (a screen-space layer with z-order, **or** an in-world quad with a world transform + optional `Billboard`), lets
+  you swap its content, and lets you tear it down. **Non-interactive views** (`interactive: false` — health bars,
+  floating names) skip hit-test/focus registration entirely: just a `RootVisual` + content + an optional billboard
+  transform, so they cost a composite and nothing more. Interactive views additionally join the host's input/focus routing.
 - **Routed events (NAOT-clean):** `RoutedEvent` with dense ids; per-element typed-delegate handler store
   (no dictionaries/`MethodInfo` in the hot path); tunnel(root→target) then bubble(target→root) with `Handled`
   gating + `handledEventsToo`; pooled route chains + pooled args (honor "0 GC in render loop"). Composite
@@ -183,43 +237,51 @@ shipped in M11; StbImageSharp-backed) → neutral `TextureData`; the UI makes no
 - **Text input:** `KeyDown` for editing keys + `CharacterReceived` for produced text; `TextBox` caret/selection.
   **IME deferred** — v1 accepts committed chars; define an `ITextInputProvider` host seam now so per-OS IME lands
   later without reworking `TextBox`.
-- **Animation:** `Storyboard`/`Timeline`/`DoubleAnimation`/keyframes/easing ticked by `FrameInputs.DeltaTime`,
-  pushing into the DP **animation layer** (animation > local). `VisualStateManager.GoToState` drives control
-  template states (`Normal`/`PointerOver`/`Pressed`) from routed pointer events. Storyboard target/property and
-  visual states are resolved by the generator to typed `ApplyValue` closures — no runtime reflection.
+- **Animation:** `Storyboard`/`Timeline`/`DoubleAnimation`/keyframes/easing ticked by `FrameInputs.DeltaTime`.
+  Transform/opacity/brush animations target the composition `Visual` directly — **independent** of layout and the
+  element walk (D2); other DP animations push the DP **animation layer** (animation > local).
+  `VisualStateManager.GoToState` drives control template states (`Normal`/`PointerOver`/`Pressed`) from routed
+  pointer events. Storyboard target/property and visual states are resolved by the generator to typed `ApplyValue`
+  closures — no runtime reflection.
 
 ## Milestone roadmap (each phase = a runnable, cross-backend-verified vertical slice)
 
 - **MU0 — Seam + skeleton (riskiest plumbing first).** Core neutral types + `DrawUI`/`EnableUI`/`UiSurfaces`;
   no-op `UiRenderer`/`DX12UiRenderer`; `Loom.UI` skeleton (DP model + precedence ladder incl. animation layer,
-  `UIElement`/`FrameworkElement`, Grid/TextBlock/Button, trivial layout); `Loom.UI.SourceGen` compiles a tiny
+  `UIElement`/`FrameworkElement`, Grid/TextBlock/Button, trivial layout, **composition `Visual` tree +
+  `IUiCompositor` + default `DrawListCompositor`** with rendering still no-op); `Loom.UI.SourceGen` compiles a tiny
   XAML subset → constructible tree + `x:Name` fields (no binds); SDK props/targets wire the generator +
   `UpToDateCheck`. **Exit:** a `.xaml` page compiles to a constructible tree; the no-op `DrawUI` seam runs clean
   on both backends. **Tests:** stand up `Loom.UI.Tests` (TUnit + Shouldly) + the NAOT gate (MU0 plumbing), plus
   DP precedence-ladder (incl. the animation rung), trivial-layout, and the first source-gen snapshot tests.
 - **MU1 — First pixels.** `ui.slang` (fill + MSDF) → SPIR-V + DXIL; bake one ASCII MSDF fontset; real `UiRenderer`
-  (atlas upload + grown buffers + batched scissored draw); `UiRoot` + `Border` + hardcoded `TextBlock`;
+  (atlas upload + grown buffers + batched scissored draw); the default `DrawListCompositor` flattens the `Visual`
+  tree → `UiDrawData`; `host.CreateRoot` (overlay) → `UiRoot` + `Border` + hardcoded `TextBlock`;
   `g.Pass("ui").Blends(screen)`. **Exit:** a rounded rect + crisp MSDF text over the world, pixel-matched
   Vulkan↔DX12 via `LOOM_CAPTURE`. **Tests:** draw-list build (fill + glyph emit, state-run batching, `TextureId`)
   + `FontAtlas`-from-fixture decode via `ImageLoader`.
 - **MU2 — Layout + x:Bind + clicks.** Full Grid/StackPanel/Canvas/Border/ContentPresenter + measure/arrange +
   invalidation/no-op; generator x:Bind OneTime/OneWay + event bindings + diagnostics; `UiHost`+pointer
-  InputManager, 2D hit-test, bubble pointer events, `Button.Click`. **Exit:** a clickable, data-bound button/list.
+  InputManager, 2D hit-test, bubble pointer events, `Button.Click`; **incremental dirty-subtree recomposition**;
+  multi-instance `UiHost`. **Exit:** a clickable, data-bound button/list.
   **Tests:** Grid star/auto/pixel + measure/arrange; 2D hit-test; bubble routing order; x:Bind OneWay snapshot.
 - **MU3 — Interaction depth + styles.** Tunnel+Handled; keyboard focus + Tab; pointer capture + drag; multiple
   screen layers + popup focus scopes; generator TwoWay/functions/converters/fallback; Styles + StaticResource +
   ResourceDictionary. **Exit:** focus-navigable, two-way-bound, styled form. **Tests:** tunnel + `Handled`
   order; Tab order; pointer capture; TwoWay/converter/fallback snapshots; style precedence rung.
 - **MU4 — Templates + animation.** ControlTemplate/DataTemplate + TemplateBinding (nested scoped Bindings +
-  generated factories); Storyboard/keyframe/easing on the animation layer; `VisualStateManager`;
-  ItemsControl/ListView with data templates. **Exit:** templated, animated controls; templated item list.
+  generated factories); Storyboard/keyframe/easing; **independent transform/opacity animation + group-opacity/
+  effects (render-to-texture) on the composition tree**; `VisualStateManager`; ItemsControl/ListView with data
+  templates. **Exit:** templated, animated controls; templated item list.
   **Tests:** storyboard interpolation/easing/`FillBehavior`; `VisualStateManager` transitions; template factory +
   nested `Bindings` snapshot.
 - **MU5 — Full v1.** HarfBuzz shaping + fallback + line-break + rich runs + tofu/warn + bake charset config;
-  in-world surface + camera-ray hit-testing; gamepad + XYFocus; touch; HDR-surface color correctness; IME seam
-  (committed chars). **Exit:** the reference UI demo — screen-space HUD + interactive in-world panel, mouse +
-  keyboard + gamepad + touch, animated + data-bound, pixel-matched across backends. **Tests:** text
-  shape/break/wrap + fallback/tofu (fixture); ray→UV hit-test; XYFocus candidate selection; HDR linearization math.
+  in-world surface + camera-ray hit-testing + **in-world `UiView` placement + billboard + non-interactive
+  (health-bar/name) views**; **multi-window/multi-screen hosts**; gamepad + XYFocus; touch; HDR-surface color
+  correctness; IME seam (committed chars). **Exit:** the reference UI demo — screen-space HUD + interactive
+  in-world panel + a billboarded non-interactive nameplate, mouse + keyboard + gamepad + touch, animated +
+  data-bound, pixel-matched across backends. **Tests:** text shape/break/wrap + fallback/tofu (fixture); ray→UV
+  hit-test; XYFocus candidate selection; billboard transform math; HDR linearization math.
 
 ## Verification
 
@@ -256,6 +318,10 @@ D8 is the detailed design; the shape:
   conditional XAML, custom markup extensions, `x:Uid`/localization markup.
 - **NAOT discipline** — guard against accidental reflection (enum attrs → typed `switch`, not `Enum.Parse`;
   converter factories, not `Activator`) and boxing in the DP store (the typed generic fast path is the mitigation).
+- **Composition-tree sync** is the complexity the retained `Visual` tree buys: the element tree must push layout/
+  property deltas into the visual tree and keep damage flags honest, or incremental recomposition drifts. Mitigated
+  by making both trees dumpable and asserting *element → visual → draw-data* as separate pure stages (D8), and by
+  keeping the `IUiCompositor` contract small. (Threading is deferred — D7.8.)
 - **Gamepad XYFocus** heuristic needs tuning (WinUI constants are private) — ship tunable weights + a debug overlay.
 - **In-world occlusion** — the analytic ray test ignores scene depth; v1 accepts "ghostly" UI behind geometry;
   opt-in `SamplePick` occlusion (1–2 frame latency) is a later escape hatch.
@@ -267,7 +333,9 @@ This is a new track comparable in size to the whole M11–M16 roadmap. When work
 the GitHub Projects board (#6, `AtomicBlom`) for the UI track (e.g. `MU0`…`MU5`, orange until shipped) and break
 each milestone into task cards, per the board conventions in [CLAUDE.md](CLAUDE.md). MU0 carries the SDK/generator
 plumbing + the NAOT gate + the `Loom.UI.Tests` scaffold (TUnit + Shouldly) + the MSDF font fixture + the
-headless-testable invariant (D8); treat the XAML-subset grammar as a `Decision` card to resolve and publish before MU2.
+headless-testable invariant (D8) + the composition `Visual` tree / `IUiCompositor` seam. Treat the XAML-subset
+grammar **and** the `IUiCompositor` contract (a public portability boundary) as `Decision` cards — the grammar
+before MU2, the compositor contract before MU1.
 
 ---
 
@@ -285,8 +353,9 @@ Loom.Core   (neutral, no GPU types)   UiVertex · UiPrimKind · UiDrawCommand ·
                                        + IEngine.EnableUI · IRenderContext.DrawUI · FrameInputs.UiSurfaces
    ▲
 Loom.UI     (neutral, refs Core+Assets) DependencyObject/Property · UIElement→FrameworkElement · controls ·
-                                       layout · UiRoot · UiDrawList builder · routed events · focus/XYFocus ·
-                                       hit-testing (2D + ray) · UiHost · animation · TextLayoutEngine · FontAtlas
+                                       layout · UiHost/UiView/UiRoot · Visual composition tree · IUiCompositor +
+                                       default DrawListCompositor · routed events · focus/XYFocus ·
+                                       hit-testing (2D + ray) · animation · TextLayoutEngine · FontAtlas
    ▲  (build-time only — analyzer + content; NOT a runtime ref)
 Loom.UI.SourceGen  (netstandard2.0 analyzer)   .xaml → .g.cs (tree) + .Bindings.g.cs (typed x:Bind/events/storyboards)
 Loom.UI.Text.Bake  (net10.0 build tool)         *.fontset.json → MSDF atlas PNG + metrics JSON
@@ -305,6 +374,11 @@ window** — input crosses in as neutral events, the product is neutral `UiDrawD
 only at the final `ctx.DrawUI` upload. Coupling layout / input / routing / animation / draw-list build to a
 live engine handle is a design violation; it is precisely what keeps nearly the whole engine unit-testable with
 no GPU, the way the Describe/Execute layers already are.
+
+Portability seam: the **composition `Visual` tree** is a neutral contract one level above `UiDrawData`. Loom's
+default `DrawListCompositor` flattens it to `UiDrawData` for the `UiRenderer`/`DX12UiRenderer` backends; a foreign
+engine implements its own `IUiCompositor` against the same tree and need never touch `UiDrawData` — taking the
+whole element/layout/input/animation half with it. Both the tree and `UiDrawData` are dumpable, so both are test seams (D8).
 
 ---
 
@@ -581,7 +655,7 @@ implicit data templates by type. The generator emits a clear "outside the Loom X
 
 ---
 
-## D2. Runtime: visual tree, layout, rendering
+## D2. Runtime: element & composition trees, layout, rendering
 
 ### D2.1 Element hierarchy
 
@@ -654,23 +728,63 @@ layout, content/items templating, and the three render-primitive families (fill,
 
 ### D2.4 Invalidation & UiRoot
 
-`UiRoot` is one per UI surface. Layout-affecting setters call `InvalidateMeasure()`; pixel-only setters
-(brush color, `Opacity`) call `InvalidateVisual()`. A **frame-level no-op** short-circuits a fully-clean frame.
+`UiRoot` is one per UI surface (an overlay layer or one in-world quad). It owns the element `Content` *and* the
+root of the composition tree (`RootVisual`, D2.5). Layout-affecting setters call `InvalidateMeasure()`; pixel-only
+setters (brush color, `Opacity`, transform) call `InvalidateVisual()` and mark the corresponding `Visual` dirty.
+A **frame-level no-op** short-circuits a fully-clean frame; a visual-only change skips layout and recomposites only
+the dirty subtree (D2.5).
 
 ```csharp
-public sealed class UiRoot
+public sealed class UiRoot                // no engine/backend handle — LayoutPass + Render run headless (D8)
 {
-	public UIElement? Content;
+	public UIElement?  Content;           // element (authoring) tree
+	public RootVisual  Visual { get; }    // composition tree this root composites (D2.5)
 	public float LayoutScale = 1f;        // DIP→pixel (window DPI, or in-world texel density)
-	public void      LayoutPass(Size availablePixels);  // re-measure/arrange highest dirty ancestors
-	public UiDrawData Render();           // walk tree → build neutral draw data (reuses last if clean)
+	public void       LayoutPass(Size availablePixels); // measure/arrange dirty ancestors + sync the Visual tree
+	public UiDrawData Render();           // default-path convenience: composite Visual via DrawListCompositor → UiDrawData
+	public string     DumpLayout();       // tree annotated with DesiredSize/LayoutRect — layout-test snapshot (D8)
 }
 ```
 
-### D2.5 2D render-data model (`Loom.Core` neutral types) + draw-list builder
+### D2.5 Composition tree, `IUiCompositor`, and the neutral draw-data model
 
-Retained tree, draw-list rebuilt **only on dirty frames**; the walk resolves transform/clip/opacity stacks into
-a pre-transformed vertex/command stream (the ImGui ergonomics without re-walking a clean tree).
+The element tree drives a retained **composition tree** of `Visual` nodes; a pluggable **`IUiCompositor`** renders
+it. This is the portability seam (Architecture): Loom ships the default `DrawListCompositor`; a foreign engine
+substitutes its own and consumes the same tree.
+
+```csharp
+namespace Loom.UI;   // neutral — no graphics-API types
+
+public abstract class Visual                 // retained composition node
+{
+	public Matrix3x2 Transform;              // animatable independently of layout (D5.7)
+	public float     Opacity = 1f;           // sub-1 on a container ⇒ group composite to an RT (below)
+	public Rect?     Clip;
+	public bool      IsDirty { get; }        // damage flag → incremental recomposition
+	public IReadOnlyList<Visual> Children { get; }
+	public string    Dump();                 // deterministic text form — composition-tree test snapshot (D8)
+}
+
+public sealed class ContainerVisual : Visual { /* children only */ }
+public sealed class SpriteVisual    : Visual { public VisualContent Content; } // rect/rounded/border/glyph-run/image
+public sealed class RootVisual      : ContainerVisual { public Vector2 SurfaceSize; public bool IsHdrSurface; }
+
+public readonly record struct HdrColor(float R, float G, float B, float A); // authoring color: 0..1 SDR, >1 above paper white
+
+public interface IUiCompositor               // the portability boundary — implement to target a foreign engine
+{
+	void Composite(RootVisual root, UiSurfaceId surface);   // turn one surface's visual tree into rendering
+}
+
+public sealed class DrawListCompositor : IUiCompositor      // Loom default → neutral UiDrawData
+{
+	public UiDrawData LastDraw(UiSurfaceId surface);         // result handed to FrameInputs.UiSurfaces
+}
+```
+
+`DrawListCompositor` walks the composition tree and flattens transform/clip/opacity into a pre-transformed
+vertex/command stream — the ImGui ergonomics, but recompositing **only dirty subtrees** (clean subtrees reuse
+their cached vertex range). Its output is the neutral draw-data model in `Loom.Core`:
 
 ```csharp
 namespace Loom.Core;   // neutral — no graphics-API types
@@ -679,7 +793,7 @@ namespace Loom.Core;   // neutral — no graphics-API types
 public readonly record struct UiVertex(
 	Vector2 Position,   // surface pixels (post-transform, post-DPI)
 	Vector2 Uv,         // atlas UV (glyph/image) or local rect-space for SDF rounding
-	uint    Color,      // premultiplied RGBA8
+	Half4   Color,      // premultiplied RGBA16F — carries >1 (above paper white) + wide gamut, no banding
 	Vector4 Params);    // per-prim: rounded-rect radii / border half-width / SDF range
 
 public enum UiPrimKind : byte { Fill, RoundedRect, Border, Glyph, Image }
@@ -696,12 +810,16 @@ public sealed class UiDrawData             // rebuilt per dirty frame; pooled bu
 	public Vector2 SurfaceSize;                        // for the pixel→clip push
 	public bool    IsHdrSurface;                       // drives color linearization (D2.8/§HDR)
 	public uint    Revision;                           // damage / no-op detection
+
+	public string  Dump();                             // deterministic text form of the draw stream — the
+	                                                   // "golden draw-list" snapshot target for CPU tests (D8)
 }
 
 public readonly record struct UiSurfaceId(int Value);  // overlay + N in-world quads each have one
 ```
 
-The `UiDrawList` builder (in `Loom.UI`) owns the transform/clip/opacity **stacks** and flattens them:
+Internally `DrawListCompositor` uses a pooled `UiDrawList` builder that owns the transform/clip/opacity **stacks**
+and flattens the visual tree into them:
 
 ```csharp
 public sealed class UiDrawList   // analog of ImDrawList; pooled across frames
@@ -716,10 +834,19 @@ public sealed class UiDrawList   // analog of ImDrawList; pooled across frames
 }
 ```
 
-**Opacity in v1 folds into vertex alpha** (correct for non-overlapping content, the common HUD case). True
-WinUI group-opacity (a subtree composited as one bitmap, then faded) reuses the in-world render-to-texture
-machinery (D4.2): render the subtree to a transient target, composite with one `AddImage` at the group alpha —
-designed-for, not built in v1.
+**Group opacity is true, not approximated.** A leaf `Visual.Opacity` folds into vertex alpha (the cheap common
+case); a *container* with sub-1 opacity (or an effect) is composited as one bitmap and then faded — the
+`DrawListCompositor` renders that subtree to a transient render target and blends it back with a single `AddImage`
+at the group alpha, reusing the in-world render-to-texture machinery (D4.2). Built in v1 (full compositor).
+
+**Incremental recomposition.** Each `Visual` carries a damage flag; a visual-only change (color/transform/opacity)
+marks its subtree and the compositor rebuilds only that vertex range, leaving clean siblings' cached vertices
+untouched. A fully-clean frame is the D2.4 no-op (re-submit the last `UiDrawData.Revision`).
+
+**Independent animation.** Because transform/opacity/brush live on the `Visual`, the animation clock mutates them
+and triggers a recomposite **without re-running layout or the element walk** (D5.7) — the same path billboards use.
+v1 composites synchronously inside `UiHost.Render`; running the compositor on its own thread is a later option
+behind `IUiCompositor` (D7), not a v1 requirement.
 
 ### D2.6 Batching — atlas-everything + state-run batching
 
@@ -738,10 +865,10 @@ One module: `vertexMain` + a `fragmentMain` that switches on a flat `uint kind` 
 - **Glyph (MSDF)** — `median(rgb)` distance, `screenPxRange`-scaled smoothstep coverage (D3.4). Samples a font page.
 - **Image** — sample atlas / in-world source with tint.
 
-Vertex push = the pixel→clip `scale+translate` ImGui uses, plus `float linearize` (HDR/sRGB) and the per-batch
-`screenPxRange`. Two pipelines per color space (alpha-over + optional additive for glow). Compiled to SPIR-V +
-signed DXIL by the existing dual-emit toolchain; driven by the bespoke `UiRenderer` (custom blend + dynamic
-scissor), like ImGui, rather than the generic technique path.
+Vertex push = the pixel→clip `scale+translate` ImGui uses, plus the `IsHdrSurface` flag + a **paper-white scale**
+(`UiPaperWhiteNits / 80`, D4.4) and the per-batch `screenPxRange`. Two pipelines per color space (alpha-over +
+optional additive for glow). Compiled to SPIR-V + signed DXIL by the existing dual-emit toolchain; driven by the
+bespoke `UiRenderer` (custom blend + dynamic scissor), like ImGui, rather than the generic technique path.
 
 ### D2.8 DPI / coordinate space
 
@@ -895,12 +1022,29 @@ the `ctx.DrawUI` verb + the per-frame `UiDrawData` surface channel.
 
 ### D4.4 HDR / sRGB correctness
 
-The backbuffer may be scRGB-HDR (`Swapchain.HdrActive` → `ctx.HdrOutput`). UI colors are authored sRGB but the
-overlay blends a post-tonemap native backbuffer that under HDR is extended-range scRGB, so naive sRGB8 vertices
-would blend wrong. `ui.slang` carries an `IsHdrSurface` flag (from `UiDrawData.IsHdrSurface`, set from
-`ctx.HdrOutput`); when set, the shader linearizes sRGB UI colors to scRGB and premultiplies so alpha-over is
-correct (mirrors how tonemap takes the HDR flag). In-world panels render into `Rgba8Srgb` and sample correctly
-regardless. Open: opt-in "above paper-white" (glowing HUD) brushes under HDR.
+The backbuffer may be scRGB-HDR (`Swapchain.HdrActive` → `ctx.HdrOutput`), where `(1,1,1)` linear = SDR reference
+white ≈ **80 nits** and values above `1.0` run brighter toward the display peak. Two things make HUDs blow out, and
+both are explicit design defaults here:
+
+- **Paper-white reference (don't push white to peak).** UI white must land at a comfortable reference, *not* the
+  display's peak luminance. A configurable **`UiPaperWhiteNits`** (default ~200, the rough "SDR content brightness"
+  analogue) sets where authored white sits: the shader scales linearized UI color by `UiPaperWhiteNits / 80`. So a
+  `#FFFFFF` HUD is bright-but-comfortable, never a 1000-nit retina-burner. This is the "HUD needs its own gamma"
+  instinct, stated precisely — a luminance *reference*, not a different curve.
+- **Above paper white is opt-in.** Because authoring is a float `HdrColor`, a brush can deliberately exceed `1.0`
+  (a warning glow, a reticle) — these and only these go above paper white, clamped/rolled off to the display peak.
+  Default content stays at/below paper white.
+
+Mechanics: `ui.slang` takes the `IsHdrSurface` flag (from `UiDrawData.IsHdrSurface` ← `ctx.HdrOutput`) and the
+paper-white scale (D2.7). When set, it linearizes the `HdrColor` to scRGB, applies the paper-white scale, and
+premultiplies so alpha-over against the extended-range scRGB backbuffer is correct (mirrors how tonemap takes the
+HDR flag). Carrying the composited color as premultiplied **RGBA16F** (not RGBA8) is what lets above-paper-white
+survive to the blend. In-world panels render into their own target (`Rgba8Srgb` for SDR panels, or an FP16 target
+when a panel itself needs HDR) and sample correctly regardless.
+
+The whole sRGB→scRGB→paper-white mapping is **pure math**, so it is unit-tested headlessly (D8): assert that white
+maps to `UiPaperWhiteNits`, not the peak, and that an `HdrColor` `>1` premultiplies correctly. Residual open part:
+the roll-off of above-peak brushes to the display's actual peak (hard clamp vs soft knee) — D7.6.
 
 ---
 
@@ -910,17 +1054,27 @@ regardless. Open: opt-in "above paper-white" (glowing HUD) brushes under HDR.
 
 Input is per-frame mutable host state, so it crosses to the engine through `FrameInputs` (immutable, pull-only —
 preserving the closure invariant). But UI also needs **persistent** state (focus, pointer capture, animation
-clocks) that a fresh-per-frame `FrameInputs` deliberately doesn't model. Resolution: persistent state lives in a
-host-owned **`UiHost`** *outside* the render graph; only the already-computed neutral draw data crosses in. This
-is exactly the ImGui split (persistent context host-side; only `ImDrawData*` crosses).
+clocks, the composition tree) that a fresh-per-frame `FrameInputs` deliberately doesn't model. Resolution:
+persistent state lives in a host-owned **`UiHost`** *outside* the render graph; only the already-composited neutral
+draw data crosses in. This is exactly the ImGui split (persistent context host-side; only `ImDrawData*` crosses).
+
+`UiHost` is **not a singleton** — you create one per window / input context, so multi-window and multi-screen are
+first-class. Each host owns its compositor, its focus/capture/clocks, and its set of roots. You add a root with
+`CreateRoot`, which returns a **`UiView` handle** describing *where* it renders (a screen-space layer, or an
+in-world quad with an optional billboard) and whether it is interactive:
 
 ```csharp
-public sealed class UiHost
+public sealed class UiHost                    // one per window / input context — NOT a singleton
 {
-	public UIElement? RootContent { get; set; }
-	public InputManager  Input { get; }     // routing, capture, over-tracking (persistent)
-	public FocusManager  Focus { get; }
-	public AnimationClock Clock { get; }     // ticks storyboards
+	public IUiCompositor Compositor { get; }  // default DrawListCompositor; swap for a foreign engine (D2.5)
+	public InputManager  Input  { get; }      // routing, capture, over-tracking (persistent)
+	public FocusManager  Focus  { get; }
+	public AnimationClock Clock  { get; }      // ticks storyboards + independent visual animations
+
+	// roots/surfaces — each CreateRoot returns a handle you keep:
+	public UiView CreateRoot(in UiPlacement placement, bool interactive = true);
+	public void   RemoveRoot(UiView view);
+	public IReadOnlyList<UiView> Views { get; }
 
 	// host pushes normalized events between frames:
 	public void QueuePointer(in PointerInput e);
@@ -928,14 +1082,33 @@ public sealed class UiHost
 	public void QueueText(ReadOnlySpan<char> utf16);
 	public void QueueGamepad(in GamepadInput e);
 
-	// once per frame, after queueing, before engine.Render:
-	public void   Tick(double deltaSeconds, float time, in Camera camera, in UiSurfaceSet surfaces);
-	public void   Render();                  // produce per-surface UiDrawData → FrameInputs.UiSurfaces
+	// once per frame, after queueing, before engine.Render — both run headless (no engine/backend; D8):
+	public void   Tick(double deltaSeconds, float time, in Camera camera, Vector2 framebufferSize);
+	public void   Render();                   // composite each view → Surfaces
+	public IReadOnlyList<(UiSurfaceId Id, UiDrawData Draw)> Surfaces { get; }  // last Render() output, handed to
+	                                          // FrameInputs.UiSurfaces; tests read it directly (no engine)
+	public string DumpState();                // focused element / capture / over-chains / active storyboards (D8)
+}
+
+public sealed class UiView                     // a root handle: content + placement + interactivity
+{
+	public UiRoot      Root { get; }           // element Content + composition RootVisual (D2.4)
+	public UiPlacement Placement { get; set; } // overlay z-layer, or in-world quad transform + Billboard
+	public bool        Interactive { get; }    // false ⇒ no hit-test/focus cost (health bars, floating names)
+	public UiSurfaceId Surface { get; }
+}
+
+public readonly record struct UiPlacement      // screen-space layer, or in-world quad
+{
+	public static UiPlacement Overlay(int zLayer, float layoutScale);
+	public static UiPlacement InWorld(in Matrix4x4 worldTransform, Vector2 sizeMeters, bool billboard, float texelDensity);
 }
 ```
 
-`Tick` drains the queue → hit-tests → routes → focus/spatial-nav → advances animation clocks → lays out.
-`camera` feeds the 3D ray; `UiSurfaceSet` enumerates screen-space layers + in-world quads (D5.4).
+`Tick` drains the queue → hit-tests (over the host's **interactive** views) → routes → focus/spatial-nav →
+advances clocks (storyboards **and** independent visual animations) → lays out → recomposites dirty subtrees.
+`camera` feeds the 3D ray and the per-frame billboard transforms; `framebufferSize` is the overlay layout extent
+(in-world extents come from each view's `Placement`). Non-interactive views skip the hit-test/focus work entirely.
 
 ### D5.2 Neutral input events + host call sequence
 
@@ -953,8 +1126,20 @@ Host (Sandbox) wiring, alongside the existing `window.CreateInput()`:
 
 ```csharp
 using var input = window.CreateInput();
-var uiHost = new UiHost { RootContent = BuildRootVisual() };
+var uiHost = new UiHost();                                       // one host per window
 engine.EnableUI();
+
+var hud = uiHost.CreateRoot(UiPlacement.Overlay(zLayer: 0, layoutScale: window.Dpi / 96f));
+hud.Root.Content = BuildHud();
+
+var panel = uiHost.CreateRoot(UiPlacement.InWorld(panelTransform, sizeMeters: new(1.6f, 0.9f),
+	billboard: false, texelDensity: 320));
+panel.Root.Content = BuildPanel();
+
+// cheap, non-interactive, billboarded — a floating health bar / nameplate:
+var nameplate = uiHost.CreateRoot(UiPlacement.InWorld(headTransform, sizeMeters: new(0.5f, 0.12f),
+	billboard: true, texelDensity: 256), interactive: false);
+nameplate.Root.Content = BuildNameplate();
 
 mouse.MouseMove += (_, p) => uiHost.QueuePointer(/* Mouse move … */);
 mouse.MouseDown += (_, b) => uiHost.QueuePointer(/* LeftButtonPressed … */);
@@ -963,9 +1148,8 @@ keyboard.KeyChar += (_, c) => uiHost.QueueText(stackalloc[] { c });      // text
 
 window.Render += delta =>
 {
-	var surfaces = new UiSurfaceSet(window.FramebufferSize, worldQuads);
-	uiHost.Tick(delta, elapsed, camera, surfaces);   // drain+route+focus+animate+layout
-	uiHost.Render();                                  // builds UiDrawData per surface
+	uiHost.Tick(delta, elapsed, camera, window.FramebufferSize);  // drain+route+focus+animate+layout+recomposite
+	uiHost.Render();                                              // composite each view → Surfaces
 	engine.Render(new FrameInputs { /* …existing… */ UiSurfaces = uiHost.Surfaces });
 };
 ```
@@ -1042,6 +1226,8 @@ internal static bool TryHitWorldQuad(in Ray ray, in UiWorldQuad q, out Vector2 u
 the captured chain regardless of hit (drag/slider/press-then-leave). Enter/Exit diff prior-vs-current "over"
 chains per `PointerId` (drives `:PointerOver` visual states). Surface priority: captured pointer > topmost screen
 layer (popups/menus over HUD) > nearest in-world quad by ray `t`. Keyboard/gamepad go to the global focused element.
+Both `TryHitWorldQuad` and the 2D walk are pure functions over neutral inputs (`Ray`, `UiWorldQuad`,
+`Camera.ViewProjection`), so hit-testing is unit-tested directly — no GPU, no readback (D8).
 
 ### D5.5 Focus & XYFocus (spatial nav)
 
@@ -1053,7 +1239,8 @@ layer (popups/menus over HUD) > nearest in-world quad by ray `t`. Keyboard/gamep
 - **XYFocus (gamepad/D-pad/arrows):** nearest-in-direction heuristic — explicit `XYFocus*` overrides win first;
   otherwise score candidates in the requested half-plane by primary-axis distance + weighted secondary offset,
   strongly preferring projection-overlap. WinUI's exact constants aren't public, so weights are exposed as
-  `XYFocusOptions` + a candidate-score **debug overlay** (the repo's "every feature ships with its debug view").
+  `XYFocusOptions` + a candidate-score **debug overlay** (the repo's "every feature ships with its debug view");
+  the weights are pinned by unit tests over fixed candidate layouts (D8).
 - **Gamepad mapping:** A = invoke focused element; B = `BackRequested` (close flyout/popup, else app-handled);
   D-pad/left-stick = `FocusNavigationDirection` (stick debounced to discrete steps with a repeat-delay timer).
 - **Across surfaces:** v1 keeps focus *contained per active surface*; switching surfaces is explicit (shoulder
@@ -1081,11 +1268,13 @@ EasingFunction : CubicEase, QuadraticEase, BackEase, … + EasingMode (In/Out/In
 
 `AnimationClock` (persistent in `UiHost`) advances each active storyboard by `Tick`'s `deltaSeconds` (sourced from
 `FrameInputs.DeltaSeconds` → `ctx.DeltaTime`): compute normalized progress (BeginTime/RepeatBehavior/AutoReverse),
-ease, interpolate, push into the target DP's **animation rung** (`SetAnimatedValue`, D1.2). `FillBehavior.Stop` →
-`ClearAnimatedValue` reverts to Local. `VisualStateManager.GoToState(control, "PointerOver", useTransitions)`
-stops the current group's storyboard and starts the target's; `Button` calls it from `OnPointerEntered`/
-`OnPointerPressed`/exit. Generated wiring resolves `TargetProperty="Opacity"` to a typed `ApplyValue` closure —
-no runtime reflection:
+ease, interpolate, then push to one of two targets. **Transform/opacity/brush** animations write the composition
+`Visual` directly and recomposite only the dirty subtree — **independent** of layout and the element walk (D2.5),
+the WinUI independent-animation win (and the same path billboards use). **All other** properties push the target
+DP's **animation rung** (`SetAnimatedValue`, D1.2). `FillBehavior.Stop` → `ClearAnimatedValue`/restore reverts to
+Local. `VisualStateManager.GoToState(control, "PointerOver", useTransitions)` stops the current group's storyboard
+and starts the target's; `Button` calls it from `OnPointerEntered`/`OnPointerPressed`/exit. Generated wiring
+resolves `TargetProperty="Opacity"` to a typed `ApplyValue` closure — no runtime reflection:
 
 ```csharp
 // GENERATED from <Storyboard><DoubleAnimation Storyboard.TargetName="Glow"
@@ -1100,6 +1289,9 @@ static Storyboard BuildHoverGlow(FrameworkElement glow) => new Storyboard
 };
 ```
 
+Because `AnimationClock` advances purely from the `deltaSeconds` handed to `Tick`, storyboard output is
+deterministic: tests tick synthetic deltas and assert the resolved DP value over time — no frame loop, no GPU (D8).
+
 > **Hard cross-cutting dependency:** storyboards are *incorrect* unless the DP precedence ladder has the animation
 > rung above Local (D1.2). It must exist from MU0, even though storyboards arrive at MU4.
 
@@ -1107,7 +1299,9 @@ static Storyboard BuildHoverGlow(FrameworkElement glow) => new Storyboard
 
 ## D6. Backend parity (Vulkan / DX12)
 
-Symmetric, the shape ImGui already proves on both backends:
+These backends sit *below* the compositor: they consume the **default `DrawListCompositor`'s** `UiDrawData`
+(D2.5) — a foreign `IUiCompositor` would replace this whole layer with its own. The two are symmetric, the shape
+ImGui already proves on both backends:
 
 | Piece | Vulkan | DX12 |
 |---|---|---|
@@ -1121,7 +1315,9 @@ Symmetric, the shape ImGui already proves on both backends:
 
 Core/Graph gain only the neutral `UiDrawData`/`UiSurfaceId` types + `IRenderContext.DrawUI` + `IEngine.EnableUI`
 + `FrameInputs.UiSurfaces`. Parity is verified by the established `LOOM_CAPTURE` + frozen-time cross-backend pixel
-diff — the surface is deterministic given identical `UiDrawData`.
+diff — the surface is deterministic given identical `UiDrawData`. Note the division of labour: the `UiDrawData`
+*itself* is asserted by CPU tests (D8), so this capture loop covers only what is genuinely GPU — atlas upload,
+buffer growth, scissored draw, and the final pixels — leaving the backend the one thin layer that needs a device.
 
 ---
 
@@ -1134,7 +1330,16 @@ diff — the surface is deterministic given identical `UiDrawData`.
    (1–2 frame latency) is the documented escape hatch.
 4. **Cross-surface focus & gamepad ownership (D5.5)** — v1 contains focus per active surface; design the hop later.
 5. **IME (D5.6)** — committed-chars-only in v1 behind `ITextInputProvider`; full per-OS IME is post-v1.
-6. **HDR "above paper-white" UI brushes (D4.4)** — opt-in glow under HDR; default is paper-white-clamped.
+6. **HDR color model (D4.4)** — *resolved:* float `HdrColor`; UI pinned to a configurable `UiPaperWhiteNits`
+   reference by default (never display peak); above-paper-white is opt-in; composited as premultiplied RGBA16F.
+   Residual: how to roll above-peak brushes off to the display's actual peak (hard clamp vs soft knee).
+7. **`IUiCompositor` contract (D2.5)** — the `Visual` tree + `IUiCompositor` are a **public portability boundary**;
+   ratify the surface as a `Decision` card *before MU1* and version it deliberately thereafter. — *resolved:* both
+   seams enumerated and frozen, with shape rules + a semver policy, in **D9**; enforcement is doc/policy-only (no
+   PublicAPI analyzer while the repo is private). `UIDrawList` made `internal` as part of the audit.
+8. **Compositor threading (D2.5)** — v1 composites synchronously inside `UiHost.Render`; independent transform/
+   opacity animation is decoupled from layout but still on-thread. Off-thread composition is a later option behind
+   the same `IUiCompositor` (sync with the engine's frames-in-flight model is the open part) — not a v1 requirement.
 
 ---
 
@@ -1145,9 +1350,11 @@ construction*. The Describe/Execute layers are fully unit-tested with no GPU —
 a plan, assert on it (`RenderGraph.Define(…) → GraphSchedule/BarrierPlan/AliasPlan/LifetimePlan.Derive → assert`,
 with a `GraphValidationException` for malformed input and a shared §6 reference-frame helper; see
 [Loom.Tests](Loom.Tests/)). `Loom.UI` is shaped identically: it references **Core + Assets only**, takes **neutral
-input** (events) and produces **neutral output** (`UiDrawData`). So everything *except* the backend
+input** (events) and produces a **neutral `Visual` tree → `UiDrawData`**. So everything *except* the backend
 `UiRenderer`/`DX12UiRenderer` and the literal pixels is exercisable by fast, deterministic CPU tests — no window,
-no engine, no Vulkan/DX12. The **headless-testable invariant** (Architecture §) is what guarantees this; protect it.
+no engine, no Vulkan/DX12. The composition seam *adds* test points: *element → visual* and *visual → draw-data* are
+two pure stages, and a foreign `IUiCompositor` is mockable. The **headless-testable invariant** (Architecture §)
+guarantees all this; protect it.
 
 ### D8.1 Inspection helpers as first-class API
 
@@ -1159,8 +1366,10 @@ equivalents, so tests assert on a stable text form rather than fiddly object gra
   rects, `TextureId`, kind, `Revision`). This is the **"golden draw-list"**: the UI analog of a golden image, but
   CPU-only — deterministic, fast, diffable, and cross-platform. It is the primary way the whole 2D pipeline up to
   GPU upload is tested.
-- `UiRoot.DumpLayout()` — the visual tree annotated with `DesiredSize` / `LayoutRect` after a layout pass.
-- A `UiHost` state dump (focused element, capture, over-chains, active storyboards) for input/focus tests.
+- `UiRoot.DumpLayout()` — the element tree annotated with `DesiredSize` / `LayoutRect` after a layout pass.
+- `Visual.Dump()` / `RootVisual.Dump()` — the composition tree (transform/clip/opacity/content + damage), so the
+  *element → visual* transform is asserted separately from *visual → `UiDrawData`* (two pure stages, two seams).
+- `UiHost.DumpState()` — focused element, capture, over-chains, active storyboards — for input/focus tests.
 
 Malformed trees/bindings raise a **`UiValidationException`** (the analog of `GraphValidationException`); tests
 cover happy-path *and* error-path, exactly as the graph tests do (e.g. "reading a transient before it is written
@@ -1172,7 +1381,11 @@ throws").
 |---|---|---|---|
 | DP model + precedence ladder | ✅ | resolved value across rungs (animation > local > style > inherited > default); change thunk fires only on *resolved* change; `InvalidationFlags` propagate up the tree | set rungs → `GetValue` + dirty flags |
 | Layout (measure/arrange) | ✅ | `DesiredSize`/`LayoutRect`: Grid star/auto/pixel, StackPanel, Canvas, Border, Margin/Min/Max/alignment | build tree → `LayoutPass(avail)` → assert (mirrors derivation tests) |
-| Draw-list build | ✅ (neutral output) | `UiVertex` stream; `UiDrawCommand` batching (new cmd only on clip/texture/kind change); transform/clip/opacity fold; `TextureId = 0` white texel; `Revision`/no-op | render tree → `UiDrawData` → assert / `Dump()` snapshot |
+| Composition + draw-list | ✅ (neutral output) | element→`Visual` tree, then `Visual`→`UiVertex`/`UiDrawCommand` batching (new cmd only on clip/texture/kind change); transform/clip/opacity fold; `TextureId = 0` white texel; incremental dirty-subtree reuse; `Revision`/no-op | build tree → `Dump()` the `Visual` tree *and* the `UiDrawData`; assert both stages |
+| `IUiCompositor` (foreign provider) | ✅ | the provider receives the exact `Visual` tree | a recording mock `IUiCompositor` captures the tree → assert (proves the portability seam, no backend) |
+| Independent animation / billboard | ✅ | transform/opacity mutate the `Visual` and recomposite *without* relayout; billboard = face-camera transform | tick clock / set camera → assert `Visual.Transform` and that layout did **not** run |
+| Group opacity / effects | ✅ (RT path on CPU) | a container with sub-1 opacity emits the render-to-texture composite (one `AddImage` at group alpha) | build subtree → assert the compositor emitted the RT composite |
+| HDR color mapping | ✅ (pure math) | sRGB→scRGB at `UiPaperWhiteNits` (white maps to paper white, **not** peak); `HdrColor` `>1` premultiplies correctly | feed `HdrColor` + paper-white → assert scRGB output |
 | Routed events | ✅ | tunnel→bubble order, `Handled` gating, `handledEventsToo`, pooled route chain | dispatch synthetic event → assert handler order |
 | Hit-test 2D | ✅ | element hit under a point; respects `IsHitTestVisible`/`Visibility`/clip/`RenderTransform` | build tree → `HitTest(point)` → assert |
 | Hit-test 3D ray | ✅ (pure geometry, neutral `Camera`) | `TryHitWorldQuad` ray→quad→UV→UI-local mapping | feed `Ray` + `UiWorldQuad` + `Camera.ViewProjection` → assert UV/local |
@@ -1195,10 +1408,87 @@ throws").
 - **Source-gen snapshot tests** live in `Loom.UI.Tests` via the `Microsoft.CodeAnalysis.*` testing harness; split
   into a sibling `Loom.UI.SourceGen.Tests` *only* if the Roslyn-harness dependencies prove awkward to host beside
   the runtime tests (a fallback, not the default).
+- **A recording `IUiCompositor`** test double (captures the `Visual` tree it is handed) is the portability-seam
+  test, and the simplest way to assert composition output without the `DrawListCompositor` or any backend.
 - **Committed fixtures (hermetic — no bake-tool run at test time):** a tiny MSDF fontset fixture (a handful of
   ASCII glyphs: atlas PNG + metrics JSON [+ subset `.ttf` for HarfBuzz]) for text-layout tests, plus a few small
   reusable reference UI trees — the UI analog of the §6 reference frame reused across the graph tests.
 
 Net effect: the "Headless?" column is the acceptance contract. Every ✅ row must be reachable in `Loom.UI.Tests`
 with no backend referenced; only the final ❌ row depends on the GPU and rides the existing capture loop.
+
+---
+
+## D9. Ratified UI portability boundary contract (resolves D7.7)
+
+This section ratifies the **public portability boundary** D7.7/D2.5 calls for: the exact shape a foreign engine
+depends on, and the discipline for changing it. It is the authority a reviewer checks a boundary change against.
+Type names use the repo's `UI` casing.
+
+### D9.1 The two seams
+
+**Seam 1 — foreign-engine boundary (`Loom.UI`).** What a foreign engine *implements* and *reads* to take over
+rendering while reusing Loom's element/layout/input/animation half:
+
+| Type | Surface | File |
+|---|---|---|
+| `IUICompositor` | `void Composite(RootVisual root, UISurfaceId surface)` | [Loom.UI/IUICompositor.cs](Loom.UI/IUICompositor.cs) |
+| `Visual` (abstract) | `Transform`, `Opacity`, `Clip`, `IsDirty` (read), `Children`, `Dump()` | [Loom.UI/Visual.cs](Loom.UI/Visual.cs) |
+| `ContainerVisual` | grouping node, no content | [Loom.UI/ContainerVisual.cs](Loom.UI/ContainerVisual.cs) |
+| `SpriteVisual` | `Content` | [Loom.UI/SpriteVisual.cs](Loom.UI/SpriteVisual.cs) |
+| `RootVisual` | `SurfaceSize`, `IsHdrSurface` | [Loom.UI/RootVisual.cs](Loom.UI/RootVisual.cs) |
+| `VisualContent` (abstract record) | content-kind base | [Loom.UI/VisualContent.cs](Loom.UI/VisualContent.cs) |
+| `RectContent` | `Size`, `Fill`, `CornerRadius`, `BorderBrush`, `BorderThickness` | [Loom.UI/RectContent.cs](Loom.UI/RectContent.cs) |
+| `HdrColor` | authoring color (carried on content) | [Loom.UI/HdrColor.cs](Loom.UI/HdrColor.cs) |
+| `DrawListCompositor` | the *default* `IUICompositor` (public; apps/tests construct it) | [Loom.UI/DrawListCompositor.cs](Loom.UI/DrawListCompositor.cs) |
+
+**Seam 2 — neutral default-path / backend seam (`Loom.Core`).** What `DrawListCompositor` emits and the backend
+`UIRenderer`s consume; a foreign compositor bypasses it entirely (it produces its own rendering):
+
+| Type | File |
+|---|---|
+| `UIDrawData` (`Vertices`/`Indices`/`Commands`/`SurfaceSize`/`IsHdrSurface`/`Revision`/`Dump()`) | [Loom.Core/UIDrawData.cs](Loom.Core/UIDrawData.cs) |
+| `UIVertex` (`Position`, `Uv`, `Color`, `Params`; `[StructLayout(Sequential)]`) | [Loom.Core/UIVertex.cs](Loom.Core/UIVertex.cs) |
+| `UIDrawCommand` (`Kind`, `TextureId`, `ClipRect`, `IndexOffset`, `IndexCount`, `VertexOffset`) | [Loom.Core/UIDrawCommand.cs](Loom.Core/UIDrawCommand.cs) |
+| `UIPrimKind` (`Fill`/`RoundedRect`/`Border`/`Glyph`/`Image`) | [Loom.Core/UIPrimKind.cs](Loom.Core/UIPrimKind.cs) |
+| `UISurfaceId`, `UISurface` | [Loom.Core/UISurfaceId.cs](Loom.Core/UISurfaceId.cs), [Loom.Core/UISurface.cs](Loom.Core/UISurface.cs) |
+
+**Transitively present in signatures, governed as general Core types (not under this UI policy):** `Rect`, `Half4`,
+`Point`, `Size`, and BCL `Matrix3x2`/`Vector2`/`Vector4`.
+
+**Explicitly *not* part of the boundary:** `UIDrawList` (now `internal` — `DrawListCompositor`'s private builder);
+the element-tree/DP API (`UIElement`, `FrameworkElement`, controls, `DependencyProperty`, …), a separate public
+surface governed elsewhere; and the `IEngine.EnableUI` / `IRenderContext.DrawUI` / `FrameInputs.UiSurfaces` engine
+seam.
+
+### D9.2 Shape rules
+
+- **The `Visual` node set is closed.** Foreign code *consumes* `ContainerVisual`/`SpriteVisual`/`RootVisual`; it
+  does not subclass `Visual`. New node kinds are an engine decision.
+- **`VisualContent` kinds are engine-owned and additive-only.** `RectContent` today; glyph-run and image content
+  arrive at MU1+. A foreign `IUICompositor` (and the default one) must **tolerate an unknown content kind** — skip
+  it, never throw — so a content-kind addition is non-breaking for existing compositors.
+- **The tree is read-only to a foreign compositor.** The mutators (`Visual.Add`/`Clear`/`MarkDirty`, the `set`
+  accessors) exist for Loom's element→visual sync; within `Composite`, a foreign compositor only reads.
+
+### D9.3 Versioning policy (semver)
+
+Treat both seams as a published contract. Until a mechanical gate exists, **any change to a type listed in D9.1
+must be reflected in this section in the same change** — that is the deliberate-versioning discipline.
+
+- **Breaking (major):** removing/renaming a listed type or member; changing `IUICompositor.Composite`'s signature;
+  changing a `Visual`/`RootVisual`/content member's type or semantics; reordering/retyping a `VisualContent`
+  record's positional parameters; changing `UIVertex`'s field order/types or its sequential layout (the backend
+  upload depends on it).
+- **Additive (minor, safe):** a new `VisualContent` kind; a new optional member with a default; a new `UIPrimKind`
+  value — provided the default compositor *and both backends* land it together (the cross-backend rule,
+  [CLAUDE.md](CLAUDE.md) §Goals & constraints).
+- **Deprecation:** mark `[Obsolete]` and keep for one cycle before removal.
+
+### D9.4 Enforcement
+
+Doc/policy-only for now: this section is the contract, review is the gate. A
+`Microsoft.CodeAnalysis.PublicApiAnalyzers` baseline (`PublicAPI.{Shipped,Unshipped}.txt` on `Loom.UI` +
+`Loom.Core`) is the clean mechanical drop-in for when the repo nears going public or boundary churn warrants it —
+this enumeration is its ready-made baseline source.
 
