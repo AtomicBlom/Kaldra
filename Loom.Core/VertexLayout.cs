@@ -153,6 +153,20 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		new VertexAttribute("IPARTICLE", VertexFormat.Float4),  // position.xyz, life (1 at spawn → 0 at death)
 		new VertexAttribute("IPARTICLE", VertexFormat.Float4)); // velocity.xyz, seed (per-particle random)
 
+	/// <summary>
+	/// The per-instance stream for foliage instancing (M15-5) — one plant per instance (2 × float4, 32 bytes) at
+	/// binding 1, paired with a blade/card per-vertex mesh (<see cref="MeshStandard"/>). The two rows carry the
+	/// plant's world position + uniform scale, and its yaw + a wind phase + bend stiffness. The instanced foliage
+	/// vertex shader rebuilds each plant's transform, sways it by the per-frame wind (height-weighted, offset by
+	/// the per-instance phase so the field doesn't move in lockstep), and alpha-tests the blade cutout. As with the
+	/// other per-instance layouts, the rows share one repeated semantic (<c>IFOLIAGE0..1</c>) for DX12's binding.
+	/// </summary>
+	public static VertexLayout Foliage { get; } = new(
+		VertexInputRate.PerInstance,
+		binding: 1,
+		new VertexAttribute("IFOLIAGE", VertexFormat.Float4),  // world position.xyz, uniform scale
+		new VertexAttribute("IFOLIAGE", VertexFormat.Float4)); // yaw, wind phase, bend stiffness, pad
+
 	public bool Equals(VertexLayout? other)
 	{
 		if (other is null)
