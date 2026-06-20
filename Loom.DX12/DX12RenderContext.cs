@@ -75,7 +75,10 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 	public uint HoverId { get; private set; }
 	public Camera SunView { get; private set; } = Camera.Identity;
 	public Camera Camera { get; private set; } = Camera.Identity;
+	public IReadOnlyList<Camera> Cascades { get; private set; } = [];
+	public IReadOnlyList<float> CascadeSplits { get; private set; } = [];
 	public bool HdrOutput { get; private set; }
+	private Camera[] _cascades = [];
 
 	public DX12RenderContext(DX12Context ctx, DX12TechniqueCache techniques, DX12DescriptorRing ring, DX12MeshStore meshes, DX12TextureStore textures, DX12MaterialStore materials, int frameCount)
 	{
@@ -132,6 +135,13 @@ internal sealed unsafe class DX12RenderContext : IRenderContext, IDisposable
 		HoverId = inputs.HoverId;
 		Camera = ClipSpace(inputs.Camera);
 		SunView = ClipSpace(inputs.SunView);
+		// Flip each cascade's clip space the same way as SunView (M15-3).
+		if (_cascades.Length != inputs.Cascades.Count)
+			_cascades = new Camera[inputs.Cascades.Count];
+		for (var i = 0; i < inputs.Cascades.Count; i++)
+			_cascades[i] = ClipSpace(inputs.Cascades[i]);
+		Cascades = _cascades;
+		CascadeSplits = inputs.CascadeSplits;
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
 		_uniformUpload.BeginFrame(slot);  // and its per-frame uniform staging (M15-0)

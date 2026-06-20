@@ -87,6 +87,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	private int _frameSlot;
 	private Camera _camera;
 	private Camera _sunView;
+	private IReadOnlyList<Camera> _cascades = [];
+	private IReadOnlyList<float> _cascadeSplits = [];
 	private uint _hoverId;
 
 	public float DeltaTime { get; private set; }
@@ -98,6 +100,10 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	public uint HoverId => _hoverId;
 
 	public Camera SunView => _sunView;
+
+	public IReadOnlyList<Camera> Cascades => _cascades;
+
+	public IReadOnlyList<float> CascadeSplits => _cascadeSplits;
 
 	public bool HdrOutput { get; private set; }
 
@@ -163,7 +169,7 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 	public void SetUI(UIRenderer renderer) => _ui = renderer;
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, HDR-output state, and composited UI surfaces before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, uint hoverId, nint imguiDrawData, IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> uiSurfaces, Extent2D fbExtent, bool hdrOutput)
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, IReadOnlyList<Camera> cascades, IReadOnlyList<float> cascadeSplits, uint hoverId, nint imguiDrawData, IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> uiSurfaces, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
@@ -171,6 +177,8 @@ internal sealed unsafe class RenderContext : IRenderContext, IDisposable
 		_frameSlot = frameSlot;
 		_camera = camera;
 		_sunView = sunView;
+		_cascades = cascades;
+		_cascadeSplits = cascadeSplits;
 		_hoverId = hoverId;
 		_imguiDrawData = imguiDrawData;
 		_uiSurfaces = uiSurfaces;

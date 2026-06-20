@@ -36,6 +36,18 @@ public interface IRenderContext
 	Camera SunView { get; }
 
 	/// <summary>
+	/// The sun's per-cascade views this frame (M15-3 — cascaded shadow maps), nearest cascade first. A per-cascade
+	/// depth pass draws the scene from <c>Cascades[i]</c> (as <see cref="SunView"/> drives the single shadow pass);
+	/// the deferred lighting pass packs these into its uniform buffer and selects a cascade per pixel by view
+	/// distance (<see cref="CascadeSplits"/>). Empty when the demo uses the single-map <see cref="SunView"/> path.
+	/// Per-frame host data, pulled not captured (§8).
+	/// </summary>
+	IReadOnlyList<Camera> Cascades { get; }
+
+	/// <summary>The far view-space distance each entry of <see cref="Cascades"/> covers — the split boundaries the lighting pass selects a cascade against (M15-3).</summary>
+	IReadOnlyList<float> CascadeSplits { get; }
+
+	/// <summary>
 	/// The camera to render from this frame (view + projection). Per-frame data the host supplies; a pass's
 	/// <c>.Draw</c> closure pulls it from here rather than capturing it, so the graph stays frame-independent
 	/// (§8). <see cref="Draw"/> uses it to transform geometry into clip space.

@@ -26,6 +26,18 @@ public sealed record FrameInputs
 	/// <summary>The sun's view + projection this frame; surfaced as <see cref="IRenderContext.SunView"/> for the shadow pass and the lighting shadow test.</summary>
 	public Camera SunView { get; init; } = Camera.Identity;
 
+	/// <summary>
+	/// The sun's per-cascade views this frame (M15-3 — cascaded shadow maps), nearest cascade first; surfaced as
+	/// <see cref="IRenderContext.Cascades"/>. Each is a neutral ortho <see cref="Camera"/> fitted to a slice of the
+	/// view frustum (the backend applies its clip-space fix-up per cascade, as for <see cref="SunView"/>). A
+	/// per-cascade depth pass renders from each; the deferred lighting pass selects a cascade by view distance.
+	/// Empty (the default) when a demo uses the single <see cref="SunView"/> shadow.
+	/// </summary>
+	public IReadOnlyList<Camera> Cascades { get; init; } = [];
+
+	/// <summary>The far view-space distance covered by each cascade in <see cref="Cascades"/> (the split boundaries), for the lighting pass's cascade selection (M15-3).</summary>
+	public IReadOnlyList<float> CascadeSplits { get; init; } = [];
+
 	/// <summary>The object id under the cursor (0 = nothing); surfaced as <see cref="IRenderContext.HoverId"/> to seed the JFA outline.</summary>
 	public uint HoverId { get; init; }
 

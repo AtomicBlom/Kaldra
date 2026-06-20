@@ -120,6 +120,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
 	private Camera _frameCamera = Camera.Identity;
 	private Camera _frameSun = Camera.Identity;
+	private Camera[] _frameCascades = [];
+	private IReadOnlyList<float> _frameCascadeSplits = [];
 	private float _frameTime;
 	private uint _frameHover;
 	private nint _frameImGui;
@@ -473,6 +475,12 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		_frameCamera = ClipSpace(inputs.Camera);
 		_frameSun = ClipSpace(inputs.SunView);
+		// Flip each cascade's clip space the same way (M15-3) — neutral matrices in, the backend's Y-flip applied.
+		if (_frameCascades.Length != inputs.Cascades.Count)
+			_frameCascades = new Camera[inputs.Cascades.Count];
+		for (var i = 0; i < inputs.Cascades.Count; i++)
+			_frameCascades[i] = ClipSpace(inputs.Cascades[i]);
+		_frameCascadeSplits = inputs.CascadeSplits;
 		_frameTime = inputs.Time;
 		_frameHover = inputs.HoverId;
 		_frameImGui = inputs.ImGuiDrawData;
@@ -603,7 +611,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameHover, _frameImGui, _frameUISurfaces, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameHover, _frameImGui, _frameUISurfaces, _swapchain.Extent, _swapchain.HdrActive);
 
 		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).
