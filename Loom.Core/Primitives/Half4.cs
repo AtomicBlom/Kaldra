@@ -1,15 +1,14 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
-using Loom.Core.UI;
 
 namespace Loom.Core.Primitives;
 
 /// <summary>
-/// A four-component 16-bit-float colour (RGBA16F), the neutral storage for a <see cref="UIVertex"/>'s
-/// <em>premultiplied</em> colour. Half precision is what lets the composited UI carry values above paper white
-/// (HDR) and a wide gamut without banding, while staying half the size of full floats in the vertex stream
-/// (PlanningUI.md §Color/HDR, §D2.5). Backend-neutral (<c>System.Half</c>, no graphics-API types); the backend's
-/// UI renderer uploads these eight bytes straight into its vertex buffer, the way ImGui uploads packed RGBA8.
+/// A four-component 16-bit-float colour (RGBA16F), the neutral storage for an <see cref="Geometry.OverlayVertex"/>'s
+/// <em>premultiplied</em> colour. Half precision is what lets a composited overlay carry values above paper white
+/// (HDR) and a wide gamut without banding, while staying half the size of full floats in the vertex stream.
+/// Backend-neutral (<c>System.Half</c>, no graphics-API types); the backend uploads these eight bytes straight into
+/// its vertex buffer, the way ImGui uploads packed RGBA8.
 /// </summary>
 /// <param name="R">Red, premultiplied by alpha. <c>0..1</c> is SDR/paper-white range; <c>&gt;1</c> is above paper white.</param>
 /// <param name="G">Green, premultiplied by alpha.</param>

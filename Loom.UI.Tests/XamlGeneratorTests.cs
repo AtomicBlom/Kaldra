@@ -1,4 +1,3 @@
-using Loom.Core.UI;
 using Loom.UI.Controls;
 using Loom.UI.Tests.Generated;
 

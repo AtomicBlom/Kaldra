@@ -1,7 +1,6 @@
 using System.Numerics;
 
-using Loom.Core;
-using Loom.Core.UI;
+using Loom.Core.Hosting;
 using Loom.UI.Controls;
 
 namespace Loom.UI.Tests;
@@ -16,7 +15,7 @@ public sealed class HitTestTests
 {
 	private static T Laid<T>(T content, float w = 200f, float h = 200f) where T : UIElement
 	{
-		var root = new UIRoot(new UISurfaceId(0)) { Content = content };
+		var root = new UIRoot(new DrawListId(0)) { Content = content };
 		root.LayoutPass(new Size(w, h));
 		return content;
 	}

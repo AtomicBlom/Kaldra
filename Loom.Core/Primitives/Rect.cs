@@ -1,14 +1,13 @@
 using System.Numerics;
 using Loom.Core.Geometry;
-using Loom.Core.UI;
 
 namespace Loom.Core.Primitives;
 
 /// <summary>
-/// An axis-aligned rectangle in surface pixels — neutral geometry (no graphics-API types), used by the UI seam
-/// for a draw command's scissor (<see cref="UIDrawCommand.ClipRect"/>) and reused by the <c>Loom.UI</c> layout/
-/// hit-test code. Stored as origin + size so a zero-size rect is unambiguous; <see cref="Right"/>/<see cref="Bottom"/>
-/// are derived. Lives in <c>Loom.Core</c> beside <see cref="Vertex"/> as managed value data (PlanningUI.md §D0).
+/// An axis-aligned rectangle in pixels — neutral geometry (no graphics-API types), used for a draw command's
+/// scissor (<see cref="Hosting.DrawCommand.ClipRect"/>) and reused by the <c>Loom.UI</c> layout/hit-test code.
+/// Stored as origin + size so a zero-size rect is unambiguous; <see cref="Right"/>/<see cref="Bottom"/> are
+/// derived. Lives in <c>Loom.Core</c> beside <see cref="Vertex"/> as managed value data.
 /// </summary>
 /// <param name="X">Left edge (surface pixels).</param>
 /// <param name="Y">Top edge (surface pixels).</param>

@@ -1,21 +1,19 @@
 using System.Numerics;
 
-using Loom.Core;
+using Loom.Core.Hosting;
 using Loom.Core.Primitives;
-using Loom.Core.UI;
 
 namespace Loom.UI;
 
 /// <summary>
-/// Loom's default <see cref="IUICompositor"/> (PlanningUI.md §D2.5): walks a surface's composition tree, folds
-/// transform/clip/opacity into a pre-transformed vertex/command stream, and exposes it as neutral
-/// <see cref="UIDrawData"/> for the backend's UI renderer. Phase B emits the rectangle family (fills + borders);
-/// glyphs/images arrive with MSDF text + images (MU1). Output is asserted on CPU via <see cref="UIDrawData.Dump"/>
-/// — the primary test seam, no backend needed.
+/// Loom's default <see cref="IUICompositor"/>: walks a surface's composition tree, folds transform/clip/opacity
+/// into a pre-transformed vertex/command stream, and exposes it as a neutral <see cref="DrawListData"/>. Emits the
+/// rectangle family (fills + borders) and MSDF glyph runs. Output is asserted on CPU via
+/// <see cref="DrawListData.Dump"/> — the primary test seam, no backend needed.
 /// </summary>
 public sealed class DrawListCompositor : IUICompositor
 {
-	private readonly Dictionary<int, UIDrawData> _surfaces = [];
+	private readonly Dictionary<int, DrawListData> _surfaces = [];
 	private readonly Dictionary<int, uint> _revisions = [];
 	private readonly FontAtlas _font;
 
@@ -29,7 +27,7 @@ public sealed class DrawListCompositor : IUICompositor
 	/// for the incremental-recomposition tests (PlanningUI.md §D8.2).</summary>
 	public int CompositeCount { get; private set; }
 
-	public void Composite(RootVisual root, UISurfaceId surface)
+	public void Composite(RootVisual root, DrawListId surface)
 	{
 		// Frame-level no-op (PlanningUI.md §D2.4/§D2.5): once a surface has been composited, a fully-clean visual
 		// tree re-submits the cached draw data with the same Revision — a static frame does zero compositing work
@@ -55,8 +53,8 @@ public sealed class DrawListCompositor : IUICompositor
 		return false;
 	}
 
-	/// <summary>The last <see cref="UIDrawData"/> produced for <paramref name="surface"/> (handed to FrameInputs.UISurfaces).</summary>
-	public UIDrawData LastDraw(UISurfaceId surface) => _surfaces.TryGetValue(surface.Value, out var d) ? d : UIDrawData.Empty;
+	/// <summary>The last <see cref="DrawListData"/> produced for <paramref name="surface"/> (handed to <see cref="FrameInputs.DrawLists"/>).</summary>
+	public DrawListData LastDraw(DrawListId surface) => _surfaces.TryGetValue(surface.Value, out var d) ? d : DrawListData.Empty;
 
 	private void Walk(UIDrawList list, Visual v, Matrix3x2 parent, float opacity, Rect clip)
 	{

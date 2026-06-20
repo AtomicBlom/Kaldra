@@ -1,29 +1,29 @@
 using System.Globalization;
 using System.Numerics;
 using System.Text;
+using Loom.Core.Hosting;
 using Loom.Core.Primitives;
-using Loom.Core.UI;
 
 namespace Loom.UI;
 
 /// <summary>
-/// One UI surface (PlanningUI.md §D2.4): owns the element <see cref="Content"/> tree and the composition
-/// <see cref="Visual"/> tree it composites through a pluggable <see cref="IUICompositor"/>. Holds <b>no</b> engine
-/// or backend handle, so <see cref="LayoutPass"/> + <see cref="Render"/> run to completion headless — input crosses
-/// in as a size, the product is neutral <see cref="UIDrawData"/> (the headless-testable invariant, §D0/§D8).
+/// One UI surface: owns the element <see cref="Content"/> tree and the composition <see cref="Visual"/> tree it
+/// composites through a pluggable <see cref="IUICompositor"/>. Holds <b>no</b> engine or backend handle, so
+/// <see cref="LayoutPass"/> + <see cref="Render"/> run to completion headless — input crosses in as a size, the
+/// product is a neutral <see cref="DrawListData"/> (the headless-testable invariant).
 /// </summary>
 public sealed class UIRoot
 {
 	private readonly IUICompositor _compositor;
 
-	public UIRoot(UISurfaceId surface, IUICompositor? compositor = null)
+	public UIRoot(DrawListId surface, IUICompositor? compositor = null)
 	{
 		Surface = surface;
 		_compositor = compositor ?? new DrawListCompositor();
 	}
 
 	/// <summary>The surface this root composites into.</summary>
-	public UISurfaceId Surface { get; }
+	public DrawListId Surface { get; }
 
 	/// <summary>The authoring (element) tree.</summary>
 	public UIElement? Content { get; set; }
@@ -77,12 +77,12 @@ public sealed class UIRoot
 		}
 	}
 
-	/// <summary>Composite the current visual tree to neutral <see cref="UIDrawData"/> (default-path convenience —
-	/// returns <see cref="UIDrawData.Empty"/> when a foreign compositor is in use).</summary>
-	public UIDrawData Render()
+	/// <summary>Composite the current visual tree to a neutral <see cref="DrawListData"/> (default-path convenience —
+	/// returns <see cref="DrawListData.Empty"/> when a foreign compositor is in use).</summary>
+	public DrawListData Render()
 	{
 		_compositor.Composite(Visual, Surface);
-		return _compositor is DrawListCompositor d ? d.LastDraw(Surface) : UIDrawData.Empty;
+		return _compositor is DrawListCompositor d ? d.LastDraw(Surface) : DrawListData.Empty;
 	}
 
 	/// <summary>The element tree annotated with <c>DesiredSize</c>/<c>LayoutRect</c> after a layout pass — the

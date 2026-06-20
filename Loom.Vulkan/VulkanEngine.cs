@@ -8,7 +8,6 @@ using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
-using Loom.Core.UI;
 using Loom.Graph;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Vulkan;
@@ -74,7 +73,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 #if LOOM_IMGUI
 	private VulkanImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
-	private bool _uiEnabled; // set when the host calls EnableUI: the "ui" technique + textures are registered
 
 	// Engine-owned shaders (tonemap/blit/fullscreen/exposure/imgui/debugview) ship embedded in THIS assembly
 	// under the manifest prefix "<assembly>.Shaders." (the Loom SDK's Embed mode sets the same prefix from
@@ -131,7 +129,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private float _frameTime;
 	private uint _frameHover;
 	private nint _frameImGui;
-	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _frameUISurfaces = [];
+	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _frameDrawLists = [];
 
 	private int _currentFrame;
 	private bool _framebufferResized;
@@ -412,22 +410,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
 	}
 
-	public void EnableUI(TextureData? fontAtlas = null)
-	{
-		if (_uiEnabled)
-			return; // idempotent — enabling twice keeps the first call's technique + textures (pass the atlas then)
-
-		// The game UI renders through the public draw-list path: a "ui" technique baked from ui.slang like any
-		// other, plus engine-owned textures (a 1×1 white texel for fills/borders, the optional MTSDF atlas for
-		// glyphs — both linear/UNORM, never sRGB-decoded). DrawUI feeds these into ctx.DrawList.
-		DefineTechnique("ui", new TechniqueDescriptor("ui", HasVertexInput: true, Blend: BlendMode.PremultipliedAlpha,
-			LinearFilter: true, Layout: VertexLayout.UI, HasListPush: true));
-		var white = CreateTexture(TextureData.FromRgba8(1, 1, [255, 255, 255, 255], TextureFormat.Rgba8Unorm, generateMips: false));
-		var font = fontAtlas is not null ? CreateTexture(fontAtlas) : (Texture?)null;
-		_context.SetUITextures(white, font);
-		_uiEnabled = true;
-	}
-
 	public float SamplePick(int x, int y)
 	{
 		if (_readbackId < 0 || (uint)x >= (uint)_readbackWidth || (uint)y >= (uint)_readbackHeight)
@@ -496,7 +478,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_frameTime = inputs.Time;
 		_frameHover = inputs.HoverId;
 		_frameImGui = inputs.ImGuiDrawData;
-		_frameUISurfaces = inputs.UISurfaces;
+		_frameDrawLists = inputs.DrawLists;
 		DrawFrame((float)inputs.DeltaSeconds);
 	}
 
@@ -623,7 +605,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameHover, _frameImGui, _frameUISurfaces, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameHover, _frameImGui, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
 
 		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).

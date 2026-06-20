@@ -1,5 +1,4 @@
-using Loom.Core;
-using Loom.Core.UI;
+using Loom.Core.Hosting;
 
 namespace Loom.UI;
 
@@ -26,6 +25,6 @@ public sealed class UIView
 	/// <summary>When false, the view is never hit-tested or focused — a pure composite.</summary>
 	public bool Interactive { get; }
 
-	/// <summary>The surface id this view composites into (handed to <see cref="FrameInputs.UISurfaces"/>).</summary>
-	public UISurfaceId Surface => Root.Surface;
+	/// <summary>The draw-list id this view composites into (handed to <see cref="FrameInputs.DrawLists"/>).</summary>
+	public DrawListId Surface => Root.Surface;
 }

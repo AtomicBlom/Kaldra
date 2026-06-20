@@ -48,7 +48,6 @@ public sealed unsafe class DirectX12Engine : IEngine
 #if LOOM_IMGUI
 	private DirectX12ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
-	private bool _uiEnabled; // set when the host calls EnableUI: the "ui" technique + textures are registered
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -1064,22 +1063,6 @@ public sealed unsafe class DirectX12Engine : IEngine
 		_context.SetImGui(_imgui);
 #endif
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
-	}
-
-	public void EnableUI(TextureData? fontAtlas = null)
-	{
-		if (_uiEnabled)
-			return; // idempotent — enabling twice keeps the first call's technique + textures (pass the atlas then)
-
-		// The game UI renders through the public draw-list path: a "ui" technique baked from ui.slang like any
-		// other, plus engine-owned textures (a 1×1 white texel for fills/borders, the optional MTSDF atlas for
-		// glyphs — both linear/UNORM, never sRGB-decoded). DrawUI feeds these into ctx.DrawList.
-		DefineTechnique("ui", new TechniqueDescriptor("ui", HasVertexInput: true, Blend: BlendMode.PremultipliedAlpha,
-			LinearFilter: true, Layout: VertexLayout.UI, HasListPush: true));
-		var white = CreateTexture(TextureData.FromRgba8(1, 1, [255, 255, 255, 255], TextureFormat.Rgba8Unorm, generateMips: false));
-		var font = fontAtlas is not null ? CreateTexture(fontAtlas) : (Texture?)null;
-		_context.SetUITextures(white, font);
-		_uiEnabled = true;
 	}
 
 	/// <summary>

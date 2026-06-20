@@ -1,5 +1,4 @@
 using Loom.Core.Geometry;
-using Loom.Core.UI;
 
 namespace Loom.Core.Hosting;
 
@@ -52,11 +51,10 @@ public sealed record FrameInputs
 	public nint ImGuiDrawData { get; init; }
 
 	/// <summary>
-	/// This frame's composited game-UI surfaces — each <see cref="UISurfaceId"/> paired with the neutral
-	/// <see cref="UIDrawData"/> the host's compositor produced for it (PlanningUI.md §Core surface additions). A
-	/// pass names one with <c>ctx.DrawUI(id)</c>; the backend looks it up here and records it. Empty (the default)
-	/// draws no UI. Meaningful only after <see cref="IEngine.EnableUI"/>. Pulled in the pass closure, never
-	/// captured, so the graph stays frame-independent (Planning.md §8).
+	/// This frame's draw lists — each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a
+	/// producer composited for it. Surfaced as <see cref="IRenderContext.DrawLists"/>; a pass pulls one out by id and
+	/// submits it (the game UI does so via <c>Loom.UI</c>'s painter). Empty (the default) renders no lists. Pulled in
+	/// the pass closure, never captured, so the graph stays frame-independent (Planning.md §8).
 	/// </summary>
-	public IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> UISurfaces { get; init; } = [];
+	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists { get; init; } = [];
 }

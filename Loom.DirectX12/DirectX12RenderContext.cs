@@ -3,7 +3,6 @@ using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
-using Loom.Core.UI;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 
@@ -50,17 +49,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	// ctx.DrawImGui() forwards this frame's draw data to it. Null when EnableImGui hasn't been called.
 	private DirectX12ImGuiRenderer? _imgui;
 #endif
-	// The engine-created UI textures the "ui" draw-list technique samples (white texel at index 0, optional font
-	// atlas at index 1) — set on EnableUI, used by DrawUI to feed DrawList. _uiEnabled gates DrawUI (a default
-	// Texture handle is indistinguishable from a real one, so the flag, not the handle, says UI is set up).
-	private Texture _uiWhite;
-	private Texture? _uiFont;
-	private bool _uiEnabled;
-	// Reused scratch for translating the compositor's UIDrawCommands into neutral DrawCommands each frame (0 GC).
-	private DrawCommand[] _uiCommandScratch = [];
-	// Paper-white luminance reference for an HDR surface: UIPaperWhiteNits / 80 (§D4.4). SDR surfaces pass 1.0.
-	private const float HdrPaperWhiteScale = 200f / 80f;
-
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
 	// M13 resource viewer: resources to show as thumbnails this frame (the engine draws the images; ImGui.Image
@@ -73,8 +61,9 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 													 // This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
 													 // DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
 	private nint _imguiDrawData;
-	// This frame's composited UI surfaces, pulled from FrameInputs.UISurfaces; ctx.DrawUI looks one up by id.
-	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _uiSurfaces = [];
+	// This frame's draw lists, pulled from FrameInputs.DrawLists and surfaced as ctx.DrawLists; a producer (the UI
+	// painter) looks one up by id and submits it through DrawList.
+	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _drawLists = [];
 	private uint _fbWidth;
 	private uint _fbHeight;
 	private DxgiFormat[] _colorFormats = [];
@@ -90,6 +79,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	public IReadOnlyList<Camera> Cascades { get; private set; } = [];
 	public IReadOnlyList<float> CascadeSplits { get; private set; } = [];
 	public bool HdrOutput { get; private set; }
+	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists => _drawLists;
 	private Camera[] _cascades = [];
 
 	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, DirectX12MaterialStore materials, int frameCount)
@@ -133,21 +123,12 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	public void SetImGui(DirectX12ImGuiRenderer renderer) => _imgui = renderer;
 #endif
 
-	/// <summary>The engine-created UI textures (1×1 white texel + optional font atlas) the "ui" draw-list technique
-	/// samples — a command's <c>TextureIndex</c> selects between them. Wired in by the engine on EnableUI.</summary>
-	public void SetUITextures(Texture white, Texture? font)
-	{
-		_uiWhite = white;
-		_uiFont = font;
-		_uiEnabled = true;
-	}
-
 	public void BeginFrame(ComPtr<ID3D12GraphicsCommandList> cmd, FrameInputs inputs, bool hdrOutput, uint slot, uint fbWidth, uint fbHeight)
 	{
 		_cmd = cmd;
 		_slot = slot;
 		_imguiDrawData = inputs.ImGuiDrawData;
-		_uiSurfaces = inputs.UISurfaces;
+		_drawLists = inputs.DrawLists;
 		_fbWidth = fbWidth;
 		_fbHeight = fbHeight;
 		DeltaTime = (float)inputs.DeltaSeconds;
@@ -787,62 +768,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		if (_debugLineCount > 0)
 			_imgui.DrawLines(_cmd, _debugLines.AsSpan(0, _debugLineCount), DebugLineColor, 2f, _fbWidth, _fbHeight, _slot);
 #endif
-	}
-
-	// Forward this frame's composited UI surface to the backend renderer, recording into the already-bound render
-	// target — the twin of DrawImGui for the XAML UI engine. No-op when UI isn't enabled, the host supplied no
-	// draw data for this surface, or the surface is empty. MU0 Phase A: the renderer itself no-ops.
-	public void DrawUI(UISurfaceId surface)
-	{
-		if (!_uiEnabled)
-			return;
-
-		// Indexed loop, not foreach/LINQ: avoids an enumerator allocation on the per-frame render path (§8: 0 GC).
-		UIDrawData? draw = null;
-		for (var i = 0; i < _uiSurfaces.Count; i++)
-		{
-			if (_uiSurfaces[i].Id == surface)
-			{
-				draw = _uiSurfaces[i].Draw;
-				break;
-			}
-		}
-
-		if (draw is null || draw.Commands.IsEmpty)
-			return;
-
-		// Translate the compositor's UIDrawCommands into neutral DrawCommands (the kind becomes the per-command tag,
-		// the texture id the texture index) in a reused scratch buffer, then submit through the public draw-list verb.
-		var commands = draw.Commands.Span;
-		if (_uiCommandScratch.Length < commands.Length)
-			_uiCommandScratch = new DrawCommand[commands.Length];
-		for (var i = 0; i < commands.Length; i++)
-		{
-			var c = commands[i];
-			_uiCommandScratch[i] = new DrawCommand(c.ClipRect, c.TextureId, c.IndexOffset, c.IndexCount, c.VertexOffset, (uint)c.Kind);
-		}
-
-		// The UI textures: white texel at index 0, optional font atlas at index 1 (a command's TextureIndex selects).
-		Span<Texture> textures = stackalloc Texture[2];
-		textures[0] = _uiWhite;
-		var texCount = 1;
-		if (_uiFont is { } font)
-		{
-			textures[1] = font;
-			texCount = 2;
-		}
-
-		// The shared per-list push: surface-pixel → clip scale/translate, then the HDR paper-white lift. isHdr is a
-		// uint flag the shader tests against 0, so its exact bits ride the float slot. The per-command kind is the tag.
-		Span<float> push = stackalloc float[6];
-		push[0] = 2.0f / draw.SurfaceSize.X;
-		push[1] = 2.0f / draw.SurfaceSize.Y;
-		push[2] = -1.0f;
-		push[3] = -1.0f;
-		push[4] = draw.IsHdrSurface ? HdrPaperWhiteScale : 1.0f;
-		push[5] = BitConverter.UInt32BitsToSingle(draw.IsHdrSurface ? 1u : 0u);
-
-		DrawList<UIVertex>("ui", textures[..texCount], draw.Vertices.Span, draw.Indices.Span, _uiCommandScratch.AsSpan(0, commands.Length), push);
 	}
 
 	// M13 resource viewer: GetDebugTextureId returns (resourceId + DebugTextureBase) — a non-zero id the host uses to

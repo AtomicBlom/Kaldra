@@ -1,6 +1,5 @@
-using Loom.Core;
+using Loom.Core.Hosting;
 using Loom.Core.Primitives;
-using Loom.Core.UI;
 using Loom.UI.Controls;
 
 namespace Loom.UI.Tests;
@@ -13,7 +12,7 @@ public sealed class LayoutMU2Tests
 {
 	private static void Layout(UIElement content, float w = 300f, float h = 100f)
 	{
-		var root = new UIRoot(new UISurfaceId(0)) { Content = content };
+		var root = new UIRoot(new DrawListId(0)) { Content = content };
 		root.LayoutPass(new Size(w, h));
 	}
 

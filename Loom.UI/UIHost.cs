@@ -1,20 +1,18 @@
 using System.Numerics;
 using System.Text;
 
-using Loom.Core;
 using Loom.Core.Geometry;
-using Loom.Core.UI;
+using Loom.Core.Hosting;
 
 namespace Loom.UI;
 
 /// <summary>
-/// A per-window UI host (PlanningUI.md §D5.1) — <b>not</b> a singleton, so multi-window/multi-surface is first-class.
-/// It owns the input routing and the set of roots <i>outside</i> the render graph, holds <b>no</b> engine/backend
-/// handle, and exposes the per-frame split the engine consumes: queue neutral events between frames, then once per
-/// frame <see cref="Tick"/> (drain → hit-test → route → lay out) and <see cref="Render"/> (composite each view →
-/// <see cref="Surfaces"/>), handed to <see cref="FrameInputs.UISurfaces"/>. Both run headless (no GPU), so the whole
-/// pipeline is unit-tested by queuing events and asserting <see cref="Surfaces"/>/<see cref="DumpState"/> (§D8).
-/// Focus + animation clocks slot in at MU3/MU4.
+/// A per-window UI host — <b>not</b> a singleton, so multi-window/multi-surface is first-class. It owns the input
+/// routing and the set of roots <i>outside</i> the render graph, holds <b>no</b> engine/backend handle, and exposes
+/// the per-frame split the engine consumes: queue neutral events between frames, then once per frame
+/// <see cref="Tick"/> (drain → hit-test → route → lay out) and <see cref="Render"/> (composite each view →
+/// <see cref="DrawLists"/>), handed to <see cref="FrameInputs.DrawLists"/>. Both run headless (no GPU), so the whole
+/// pipeline is unit-tested by queuing events and asserting <see cref="DrawLists"/>/<see cref="DumpState"/>.
 /// </summary>
 public sealed class UIHost
 {
@@ -22,7 +20,7 @@ public sealed class UIHost
 	private readonly Queue<PointerInput> _pointerQueue = new();
 	private readonly List<PointerInput> _drain = [];
 	private readonly InputManager _input = new();
-	private readonly List<(UISurfaceId Id, UIDrawData Draw)> _surfaces = [];
+	private readonly List<(DrawListId Id, DrawListData Data)> _drawLists = [];
 	private int _nextSurface;
 	private Size _framebufferSize = new(1f, 1f);
 
@@ -32,14 +30,14 @@ public sealed class UIHost
 	/// <summary>The roots this host owns.</summary>
 	public IReadOnlyList<UIView> Views => _views;
 
-	/// <summary>The last <see cref="Render"/> output — the surfaces handed to <see cref="FrameInputs.UISurfaces"/>.</summary>
-	public IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> Surfaces => _surfaces;
+	/// <summary>The last <see cref="Render"/> output — the draw lists handed to <see cref="FrameInputs.DrawLists"/>.</summary>
+	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists => _drawLists;
 
 	/// <summary>Add a root at <paramref name="placement"/>; returns the handle to keep. The first overlay gets
-	/// <see cref="UISurface.Hud"/> (surface 0); subsequent views take higher ids.</summary>
+	/// <see cref="UISurface.Hud"/> (list 0); subsequent views take higher ids.</summary>
 	public UIView CreateRoot(in UIPlacement placement, bool interactive = true)
 	{
-		var root = new UIRoot(new UISurfaceId(_nextSurface++)) { LayoutScale = placement.LayoutScale };
+		var root = new UIRoot(new DrawListId(_nextSurface++)) { LayoutScale = placement.LayoutScale };
 		var view = new UIView(root, placement, interactive);
 		_views.Add(view);
 		return view;
@@ -66,12 +64,12 @@ public sealed class UIHost
 		DrainPointers();
 	}
 
-	/// <summary>Composite each view's visual tree → <see cref="Surfaces"/> (PlanningUI.md §D5.1).</summary>
+	/// <summary>Composite each view's visual tree → <see cref="DrawLists"/>.</summary>
 	public void Render()
 	{
-		_surfaces.Clear();
+		_drawLists.Clear();
 		foreach (var view in _views)
-			_surfaces.Add((view.Surface, view.Root.Render()));
+			_drawLists.Add((view.Surface, view.Root.Render()));
 	}
 
 	/// <summary>Focus / capture / over-chains for input + focus tests (PlanningUI.md §D8.1). Focus is MU3.</summary>

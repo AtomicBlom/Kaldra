@@ -26,7 +26,7 @@ internal static class XamlGeneratorHarness
 			.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
 			.ToList();
 		refs.Add(MetadataReference.CreateFromFile(typeof(Loom.UI.Controls.Button).Assembly.Location));
-		refs.Add(MetadataReference.CreateFromFile(typeof(Loom.Core.UI.UISurfaceId).Assembly.Location));
+		refs.Add(MetadataReference.CreateFromFile(typeof(Loom.Core.Hosting.DrawListId).Assembly.Location));
 		return [.. refs];
 	}
 

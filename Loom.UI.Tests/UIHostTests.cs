@@ -1,15 +1,13 @@
 using System.Numerics;
 
-using Loom.Core;
-using Loom.Core.UI;
 using Loom.UI.Controls;
 
 namespace Loom.UI.Tests;
 
 /// <summary>
-/// MU2 host end-to-end (PlanningUI.md §D5.1 / §D8): queue neutral pointer events, <see cref="UIHost.Tick"/> headless
-/// (no engine/backend), and assert the routed result — a click fires its handler, <see cref="UIHost.DumpState"/>
-/// reflects the over-chain, <see cref="UIHost.Render"/> yields one surface per view, and two hosts are independent.
+/// Host end-to-end: queue neutral pointer events, <see cref="UIHost.Tick"/> headless (no engine/backend), and assert
+/// the routed result — a click fires its handler, <see cref="UIHost.DumpState"/> reflects the over-chain,
+/// <see cref="UIHost.Render"/> yields one draw list per view, and two hosts are independent.
 /// </summary>
 public sealed class UIHostTests
 {
@@ -54,9 +52,9 @@ public sealed class UIHostTests
 		host.Tick(0.016, 0f, default, new Vector2(100f, 100f));
 		host.Render();
 
-		host.Surfaces.Count.ShouldBe(1);
-		host.Surfaces[0].Id.ShouldBe(UISurface.Hud);
-		host.Surfaces[0].Draw.Commands.Length.ShouldBeGreaterThan(0);
+		host.DrawLists.Count.ShouldBe(1);
+		host.DrawLists[0].Id.ShouldBe(UISurface.Hud);
+		host.DrawLists[0].Data.Commands.Length.ShouldBeGreaterThan(0);
 	}
 
 	[Test]

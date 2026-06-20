@@ -1,45 +1,46 @@
 using System.Numerics;
+using Loom.Core.Geometry;
+using Loom.Core.Hosting;
 using Loom.Core.Primitives;
-using Loom.Core.UI;
 
 namespace Loom.UI.Tests;
 
 /// <summary>
-/// MU0 Phase A coverage for the neutral UI draw-data contract (PlanningUI.md §D8.1). <see cref="UIDrawData.Dump"/>
-/// is the "golden draw-list" — the UI analog of asserting <c>BarrierPlan</c>/<c>AliasPlan</c>: a deterministic,
-/// CPU-only text snapshot of the whole vertex/command stream, so the compositor pipeline up to GPU upload is
-/// tested with no backend. These tests pin its format + determinism and the premultiplied-colour contract; the
-/// DP-precedence, layout, and compositor tests arrive with MU0 Phase B.
+/// Coverage for the neutral draw-list contract. <see cref="DrawListData.Dump"/> is the "golden draw-list" — the
+/// analog of asserting <c>BarrierPlan</c>/<c>AliasPlan</c>: a deterministic, CPU-only text snapshot of the whole
+/// vertex/command stream, so the compositor pipeline up to GPU upload is tested with no backend. These tests pin
+/// its format + determinism and the premultiplied-colour contract.
 /// </summary>
-public sealed class UIDrawDataTests
+public sealed class DrawListDataTests
 {
 	[Test]
-	public void Empty_draw_data_dumps_a_stable_deterministic_snapshot()
+	public void Empty_draw_list_dumps_a_stable_deterministic_snapshot()
 	{
 		const string nl = "\n";
 		var expected =
-			"UIDrawData (rev 0, surface 0x0, hdr=False)" + nl +
+			"DrawListData (rev 0, coords 0x0, hdr=False)" + nl +
 			"  Vertices (0):" + nl +
 			"  Indices (0):" + nl +
 			"  Commands (0):" + nl;
 
-		UIDrawData.Empty.Dump().ReplaceLineEndings("\n").ShouldBe(expected);
+		DrawListData.Empty.Dump().ReplaceLineEndings("\n").ShouldBe(expected);
 		// Deterministic: the same instance dumps identically every call (feeds the no-op/Revision diffing).
-		UIDrawData.Empty.Dump().ShouldBe(UIDrawData.Empty.Dump());
+		DrawListData.Empty.Dump().ShouldBe(DrawListData.Empty.Dump());
 	}
 
 	[Test]
-	public void A_built_draw_stream_dumps_the_expected_golden_list()
+	public void A_built_draw_list_dumps_the_expected_golden_list()
 	{
 		var draw = BuildQuad(revision: 7);
 		var dump = draw.Dump().ReplaceLineEndings("\n");
 
-		dump.ShouldContain("UIDrawData (rev 7, surface 1920x1080, hdr=False)");
+		dump.ShouldContain("DrawListData (rev 7, coords 1920x1080, hdr=False)");
 		dump.ShouldContain("Vertices (4):");
 		// State-run batching collapses the quad to one index run; the index stream dumps in submission order.
 		dump.ShouldContain("Indices (6): 0 1 2 0 2 3");
 		dump.ShouldContain("Commands (1):");
-		dump.ShouldContain("[0] Fill tex=0 clip=(0,0 10x20) idx=0+6 vtx=0");
+		// tag=0 is the Fill primitive kind the compositor encodes; tex=0 is the white texel.
+		dump.ShouldContain("[0] tag=0 tex=0 clip=(0,0 10x20) idx=0+6 vtx=0");
 		// The first vertex carries its premultiplied colour + position (red, opaque, top-left).
 		dump.ShouldContain("[0] pos=(0,0) uv=(0,0) col=(1,0,0,1)");
 	}
@@ -67,11 +68,11 @@ public sealed class UIDrawDataTests
 		new Rect(0, 0, 10, 10).Intersect(new Rect(20, 20, 5, 5)).IsEmpty.ShouldBeTrue();
 	}
 
-	// A unit quad as one Fill draw: 4 verts, 6 indices, 1 command — the minimal non-empty draw stream.
-	private static UIDrawData BuildQuad(uint revision)
+	// A unit quad as one Fill draw: 4 verts, 6 indices, 1 command — the minimal non-empty draw list.
+	private static DrawListData BuildQuad(uint revision)
 	{
 		var red = Half4.FromStraight(1f, 0f, 0f, 1f);
-		var verts = new UIVertex[]
+		var verts = new OverlayVertex[]
 		{
 			new(new Vector2(0, 0), new Vector2(0, 0), red, Vector4.Zero),
 			new(new Vector2(10, 0), new Vector2(1, 0), red, Vector4.Zero),
@@ -79,13 +80,13 @@ public sealed class UIDrawDataTests
 			new(new Vector2(0, 20), new Vector2(0, 1), red, Vector4.Zero),
 		};
 		var indices = new ushort[] { 0, 1, 2, 0, 2, 3 };
-		var commands = new UIDrawCommand[] { new(UIPrimKind.Fill, 0, new Rect(0, 0, 10, 20), 0, 6, 0) };
-		return new UIDrawData
+		var commands = new DrawCommand[] { new(new Rect(0, 0, 10, 20), 0, 0, 6, 0, (uint)UIPrimKind.Fill) };
+		return new DrawListData
 		{
 			Vertices = verts,
 			Indices = indices,
 			Commands = commands,
-			SurfaceSize = new Vector2(1920, 1080),
+			CoordinateSize = new Vector2(1920, 1080),
 			Revision = revision,
 		};
 	}

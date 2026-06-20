@@ -89,13 +89,13 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		new VertexAttribute("WEIGHTS", VertexFormat.Float4));
 
 	/// <summary>
-	/// The game-UI per-vertex layout — <c>Position</c> (float2, surface pixels) + <c>Uv</c> (float2) +
-	/// <c>Color</c> (<see cref="VertexFormat.Half4"/>, premultiplied RGBA16F) + <c>Params</c> (float4, per-primitive
-	/// SDF/corner/border data), 40 bytes, mirroring the UI vertex. The two <c>TEXCOORD</c> attributes share one
-	/// repeated semantic (so they bind as <c>TEXCOORD0</c>/<c>TEXCOORD1</c>) exactly like the instanced layouts'
-	/// repeated rows — DirectX12 binds by semantic name + index. A draw-list technique declares this layout.
+	/// The 2D overlay per-vertex layout — <c>Position</c> (float2, target pixels) + <c>Uv</c> (float2) +
+	/// <c>Color</c> (<see cref="VertexFormat.Half4"/>, premultiplied RGBA16F) + <c>Custom</c> (float4, per-vertex
+	/// technique-defined data), 40 bytes, mirroring <see cref="OverlayVertex"/>. The two <c>TEXCOORD</c> attributes
+	/// share one repeated semantic (so they bind as <c>TEXCOORD0</c>/<c>TEXCOORD1</c>) exactly like the instanced
+	/// layouts' repeated rows — DirectX12 binds by semantic name + index. A draw-list technique declares this layout.
 	/// </summary>
-	public static VertexLayout UI { get; } = new(
+	public static VertexLayout Overlay { get; } = new(
 		new VertexAttribute("POSITION", VertexFormat.Float2),
 		new VertexAttribute("TEXCOORD", VertexFormat.Float2),
 		new VertexAttribute("COLOR", VertexFormat.Half4),

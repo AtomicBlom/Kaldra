@@ -1,7 +1,6 @@
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Materials;
-using Loom.Core.UI;
 
 namespace Loom.Core.Hosting;
 
@@ -261,13 +260,12 @@ public interface IRenderContext
 	void DrawImGui();
 
 	/// <summary>
-	/// Render the host's game UI surface <paramref name="surface"/> into the current pass's target — the
-	/// counterpart to <see cref="DrawImGui"/> for the XAML UI engine (PlanningUI.md §Core surface additions). The
-	/// host composites each surface to a neutral <see cref="UIDrawData"/> off the render graph and hands the set in
-	/// via <see cref="FrameInputs.UISurfaces"/>; this verb is the neutral hand-off so <c>Loom.Core</c> stays
-	/// UI-agnostic — the backend's UI renderer translates it into GPU work. Used from the screen-space overlay pass
-	/// that <c>.Blends</c> the backbuffer (the "ui" pass) or an in-world pass that <c>.Writes</c> a quad target. A
-	/// no-op if the host hasn't enabled UI or supplied that surface this frame.
+	/// This frame's draw lists, each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a
+	/// producer composited for it — the per-frame channel behind overlay/UI-style rendering. The host fills it via
+	/// <see cref="FrameInputs.DrawLists"/> off the render graph; a pass closure pulls a list out by id and submits it
+	/// with <see cref="DrawList{TVertex}"/> (the UI does this through <c>Loom.UI</c>'s painter). Engine-provided frame
+	/// context like <see cref="Camera"/> — pulled, not captured (§8), so the graph stays frame-independent. Empty
+	/// (the default) when the host supplied no lists.
 	/// </summary>
-	void DrawUI(UISurfaceId surface);
+	IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists { get; }
 }
