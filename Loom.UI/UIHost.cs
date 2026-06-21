@@ -3,6 +3,7 @@ using System.Text;
 
 using Loom.Core.Geometry;
 using Loom.Core.Hosting;
+using Loom.UI.Input;
 
 namespace Loom.UI;
 
@@ -16,16 +17,25 @@ namespace Loom.UI;
 /// </summary>
 public sealed class UIHost
 {
-	private readonly List<UIView> _views = [];
+	private readonly List<UIView>        _views        = [];
 	private readonly Queue<PointerInput> _pointerQueue = new();
-	private readonly List<PointerInput> _drain = [];
-	private readonly InputManager _input = new();
+	private readonly Queue<KeyInput>     _keyQueue     = new();
+	private readonly Queue<string>       _textQueue    = new();
+	private readonly List<PointerInput>  _drain        = [];
+	private readonly KeyRoutedEventArgs               _keyArgs  = new();
+	private readonly CharacterReceivedRoutedEventArgs _charArgs = new();
 	private readonly List<(DrawListId Id, DrawListData Data)> _drawLists = [];
-	private int _nextSurface;
+	private int  _nextSurface;
 	private Size _framebufferSize = new(1f, 1f);
 
+	public UIHost() =>
+		Input.OnPress = el => Focus.TrySetFocus(el, FocusState.Pointer);
+
 	/// <summary>Pointer routing + over-tracking + press-capture (persistent host state).</summary>
-	public InputManager Input => _input;
+	public InputManager Input { get; } = new();
+
+	/// <summary>Keyboard focus state machine.</summary>
+	public FocusManager Focus { get; } = new();
 
 	/// <summary>The roots this host owns.</summary>
 	public IReadOnlyList<UIView> Views => _views;
@@ -37,7 +47,11 @@ public sealed class UIHost
 	/// <see cref="UISurface.Hud"/> (list 0); subsequent views take higher ids.</summary>
 	public UIView CreateRoot(in UIPlacement placement, bool interactive = true)
 	{
-		var root = new UIRoot(new DrawListId(_nextSurface++)) { LayoutScale = placement.LayoutScale };
+		var root = new UIRoot(new DrawListId(_nextSurface++))
+		{
+			LayoutScale  = placement.LayoutScale,
+			InputManager = Input
+		};
 		var view = new UIView(root, placement, interactive);
 		_views.Add(view);
 		return view;
@@ -45,23 +59,28 @@ public sealed class UIHost
 
 	public void RemoveRoot(UIView view) => _views.Remove(view);
 
-	/// <summary>Queue a neutral pointer event for the next <see cref="Tick"/> (the host translates raw input to this).</summary>
+	/// <summary>Queue a neutral pointer event for the next <see cref="Tick"/>.</summary>
 	public void QueuePointer(in PointerInput e) => _pointerQueue.Enqueue(e);
 
+	/// <summary>Queue a keyboard key event for the next <see cref="Tick"/>.</summary>
+	public void QueueKey(in KeyInput e) => _keyQueue.Enqueue(e);
+
+	/// <summary>Queue a text string for the next <see cref="Tick"/> (translates to
+	/// <see cref="UIElement.CharacterReceivedEvent"/> on the focused element).</summary>
+	public void QueueText(ReadOnlySpan<char> utf16) => _textQueue.Enqueue(utf16.ToString());
+
 	/// <summary>
-	/// Once per frame, after queueing: lay out each root, then drain the pointer queue (coalescing consecutive moves
-	/// per pointer) → hit-test over interactive views → route pointer events (bubble) + synthesize <c>Click</c>.
-	/// Layout runs first so input hit-tests this frame's geometry (and works on the very first frame); input-driven
-	/// changes recomposite via the dirty flags and lay out next frame. <paramref name="deltaSeconds"/>/
-	/// <paramref name="time"/>/<paramref name="camera"/> are accepted now for signature stability (animation = MU4,
-	/// the 3D ray = MU5).
+	/// Once per frame: lay out each root, drain pointer queue (coalescing moves) → hit-test → route events,
+	/// then drain keyboard queue → Tab intercepts focus → remaining keys route to the focused element.
+	/// Layout runs first so input hit-tests this frame's geometry.
 	/// </summary>
 	public void Tick(double deltaSeconds, float time, in Camera camera, Vector2 framebufferSize)
 	{
 		_framebufferSize = new Size(framebufferSize.X, framebufferSize.Y);
 		foreach (var view in _views)
-			view.Root.LayoutPass(_framebufferSize); // overlay = framebuffer; in-world extents arrive in MU5
+			view.Root.LayoutPass(_framebufferSize);
 		DrainPointers();
+		DrainKeyboard();
 	}
 
 	/// <summary>Composite each view's visual tree → <see cref="DrawLists"/>.</summary>
@@ -72,12 +91,12 @@ public sealed class UIHost
 			_drawLists.Add((view.Surface, view.Root.Render()));
 	}
 
-	/// <summary>Focus / capture / over-chains for input + focus tests (PlanningUI.md §D8.1). Focus is MU3.</summary>
+	/// <summary>Focus / capture / over-chains for input + focus tests.</summary>
 	public string DumpState()
 	{
 		var sb = new StringBuilder();
-		sb.Append("focus=none\n");
-		_input.DumpState(sb);
+		Focus.DumpState(sb);
+		Input.DumpState(sb);
 		return sb.ToString();
 	}
 
@@ -98,7 +117,57 @@ public sealed class UIHost
 				if (n.Update == PointerUpdateKind.None && n.PointerId == e.PointerId)
 					continue; // coalesce a run of moves to the latest
 			}
-			_input.Process(e, _views);
+			Input.Process(e, _views);
+		}
+	}
+
+	private void DrainKeyboard()
+	{
+		while (_keyQueue.Count > 0)
+		{
+			var e = _keyQueue.Dequeue();
+
+			// Tab / Shift-Tab: intercept before the focused element sees the key.
+			if (e is { Down: true, Key: VirtualKey.Tab })
+			{
+				var dir = (e.Modifiers & ModifierKeys.Shift) != 0
+					? FocusNavigationDirection.Previous
+					: FocusNavigationDirection.Next;
+				Focus.MoveFocus(dir, _views);
+				continue;
+			}
+
+			var focused = Focus.FocusedElement;
+			if (focused is null)
+				continue;
+
+			// Tunnel Preview → if unhandled → bubble main event.
+			var previewEvt = e.Down ? UIElement.PreviewKeyDownEvent : UIElement.PreviewKeyUpEvent;
+			var mainEvt    = e.Down ? UIElement.KeyDownEvent        : UIElement.KeyUpEvent;
+
+			_keyArgs.Reset(previewEvt, focused, e);
+			focused.RaiseEvent(previewEvt, _keyArgs);
+			if (_keyArgs.Handled)
+				continue;
+
+			_keyArgs.Reset(mainEvt, focused, e);
+			focused.RaiseEvent(mainEvt, _keyArgs);
+		}
+
+		var focusedForText = Focus.FocusedElement;
+		if (focusedForText is null)
+		{
+			_textQueue.Clear();
+			return;
+		}
+
+		while (_textQueue.Count > 0)
+		{
+			foreach (var ch in _textQueue.Dequeue())
+			{
+				_charArgs.Reset(UIElement.CharacterReceivedEvent, focusedForText, ch);
+				focusedForText.RaiseEvent(UIElement.CharacterReceivedEvent, _charArgs);
+			}
 		}
 	}
 }

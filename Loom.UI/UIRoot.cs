@@ -25,8 +25,23 @@ public sealed class UIRoot
 	/// <summary>The surface this root composites into.</summary>
 	public DrawListId Surface { get; }
 
-	/// <summary>The authoring (element) tree.</summary>
-	public UIElement? Content { get; set; }
+	/// <summary>The authoring (element) tree. Propagates this root reference down through the element tree so
+	/// children can reach <see cref="InputManager"/> for pointer capture.</summary>
+	public UIElement? Content
+	{
+		get;
+		set
+		{
+			if (ReferenceEquals(field, value)) return;
+			field?.SetAttachedRoot(null);
+			field = value;
+			field?.SetAttachedRoot(this);
+		}
+	}
+
+	/// <summary>The host's <see cref="InputManager"/>, set by <see cref="UIHost"/> so elements can call
+	/// <see cref="UIElement.CapturePointer"/>.</summary>
+	internal InputManager? InputManager { get; set; }
 
 	/// <summary>The composition tree this root renders (PlanningUI.md §D2.5).</summary>
 	public RootVisual Visual { get; } = new();

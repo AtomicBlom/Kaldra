@@ -76,6 +76,9 @@ public abstract class DependencyObject
 	/// <summary>Push the <b>Style</b> rung (applied by a Style; below Local) — MU3.</summary>
 	internal void SetStyleValue(DependencyProperty dp, object? value) => SetRung(dp, Rung.Style, value, hasValue: true);
 
+	/// <summary>Clear the <b>Style</b> rung (called when a new style replaces an old one so stale setters are removed).</summary>
+	internal void ClearStyleValue(DependencyProperty dp) => SetRung(dp, Rung.Style, null, hasValue: false);
+
 	/// <summary>Push the <b>Inherited</b> rung (property-value inheritance; below Style) — MU2+.</summary>
 	internal void SetInheritedValue(DependencyProperty dp, object? value) => SetRung(dp, Rung.Inherited, value, hasValue: true);
 

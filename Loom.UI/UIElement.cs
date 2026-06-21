@@ -5,23 +5,50 @@ namespace Loom.UI;
 
 /// <summary>
 /// The base of every visual element (PlanningUI.md §D2.1): two-pass measure/arrange, layout invalidation, the
-/// owned composition <see cref="Visual"/>, and the render-affecting dependency properties (<see cref="Opacity"/>,
-/// <see cref="Visibility"/>, <see cref="IsHitTestVisible"/>). The WinUI <c>MeasureCore</c>/<c>ArrangeCore</c> seam
-/// lets <see cref="FrameworkElement"/> layer Margin/Min/Max/alignment on top of the element's intrinsic sizing.
+/// owned composition <see cref="Visual"/>, render-affecting DPs, routed events (pointer + keyboard + focus),
+/// hit-testing, and focus/capture queries. The WinUI <c>MeasureCore</c>/<c>ArrangeCore</c> seam lets
+/// <see cref="FrameworkElement"/> layer Margin/Min/Max/alignment on top of the element's intrinsic sizing.
 /// </summary>
 public abstract class UIElement : DependencyObject
 {
+	// --- Dependency properties ---
+
 	public static readonly DependencyProperty<UIElement, float> OpacityProperty =
-		DependencyProperty.Register<UIElement, float>(nameof(Opacity),
+		DependencyProperty.Register(nameof(Opacity),
 			new PropertyMetadata<UIElement, float> { DefaultValue = 1f, Invalidates = InvalidationFlags.Render });
 
 	public static readonly DependencyProperty<UIElement, Visibility> VisibilityProperty =
-		DependencyProperty.Register<UIElement, Visibility>(nameof(Visibility),
+		DependencyProperty.Register(nameof(Visibility),
 			new PropertyMetadata<UIElement, Visibility> { DefaultValue = Visibility.Visible, Invalidates = InvalidationFlags.Measure });
 
 	public static readonly DependencyProperty<UIElement, bool> IsHitTestVisibleProperty =
-		DependencyProperty.Register<UIElement, bool>(nameof(IsHitTestVisible),
+		DependencyProperty.Register(nameof(IsHitTestVisible),
 			new PropertyMetadata<UIElement, bool> { DefaultValue = true });
+
+	/// <summary>Whether this element participates in Tab/keyboard focus navigation. Default false; overridden to
+	/// true by <see cref="Controls.Control"/>.</summary>
+	public static readonly DependencyProperty<UIElement, bool> IsTabStopProperty =
+		DependencyProperty.Register(nameof(IsTabStop),
+			new PropertyMetadata<UIElement, bool> { DefaultValue = false });
+
+	/// <summary>When false the element is skipped by <see cref="FocusManager"/> and rejects
+	/// <see cref="FocusManager.TrySetFocus"/>.</summary>
+	public static readonly DependencyProperty<UIElement, bool> IsEnabledProperty =
+		DependencyProperty.Register(nameof(IsEnabled),
+			new PropertyMetadata<UIElement, bool> { DefaultValue = true });
+
+	/// <summary>Tab-order index within a focus scope. Lower values tab first; equal values use document order.</summary>
+	public static readonly DependencyProperty<UIElement, int> TabIndexProperty =
+		DependencyProperty.Register(nameof(TabIndex),
+			new PropertyMetadata<UIElement, int> { DefaultValue = int.MaxValue });
+
+	/// <summary>When true, this element acts as a focus scope boundary: Tab navigation wraps within it rather than
+	/// escaping to the parent scope (e.g. a dialog or popup).</summary>
+	public static readonly DependencyProperty<UIElement, bool> IsFocusScopeProperty =
+		DependencyProperty.Register(nameof(IsFocusScope),
+			new PropertyMetadata<UIElement, bool> { DefaultValue = false });
+
+	public bool IsFocusScope { get => GetValue(IsFocusScopeProperty); set => SetValue(IsFocusScopeProperty, value); }
 
 	/// <summary>Group opacity (animatable — drives the composition <see cref="Visual.Opacity"/>).</summary>
 	public float Opacity { get => GetValue(OpacityProperty); set => SetValue(OpacityProperty, value); }
@@ -32,19 +59,58 @@ public abstract class UIElement : DependencyObject
 	/// <summary>When false, this element (and its subtree, by the walk) is skipped by hit-testing.</summary>
 	public bool IsHitTestVisible { get => GetValue(IsHitTestVisibleProperty); set => SetValue(IsHitTestVisibleProperty, value); }
 
-	// --- Routed events (PlanningUI.md §D5.3). Pointer events bubble; enter/exit are direct (per-element). ---
+	public bool IsTabStop { get => GetValue(IsTabStopProperty); set => SetValue(IsTabStopProperty, value); }
+	public bool IsEnabled { get => GetValue(IsEnabledProperty); set => SetValue(IsEnabledProperty, value); }
+	public int  TabIndex  { get => GetValue(TabIndexProperty);  set => SetValue(TabIndexProperty,  value); }
 
-	public static readonly RoutedEvent PointerPressedEvent = RoutedEvent.Register(nameof(PointerPressed), RoutingStrategy.Bubble);
-	public static readonly RoutedEvent PointerReleasedEvent = RoutedEvent.Register(nameof(PointerReleased), RoutingStrategy.Bubble);
-	public static readonly RoutedEvent PointerMovedEvent = RoutedEvent.Register(nameof(PointerMoved), RoutingStrategy.Bubble);
-	public static readonly RoutedEvent PointerEnteredEvent = RoutedEvent.Register(nameof(PointerEntered), RoutingStrategy.Direct);
-	public static readonly RoutedEvent PointerExitedEvent = RoutedEvent.Register(nameof(PointerExited), RoutingStrategy.Direct);
+	// --- Pointer routed events (PlanningUI.md §D5.3) ---
+	// Preview events tunnel root→target; the paired bubble events fire after if Preview is unhandled.
 
-	public event RoutedEventHandler PointerPressed { add => AddHandler(PointerPressedEvent, value); remove => RemoveHandler(PointerPressedEvent, value); }
-	public event RoutedEventHandler PointerReleased { add => AddHandler(PointerReleasedEvent, value); remove => RemoveHandler(PointerReleasedEvent, value); }
-	public event RoutedEventHandler PointerMoved { add => AddHandler(PointerMovedEvent, value); remove => RemoveHandler(PointerMovedEvent, value); }
-	public event RoutedEventHandler PointerEntered { add => AddHandler(PointerEnteredEvent, value); remove => RemoveHandler(PointerEnteredEvent, value); }
-	public event RoutedEventHandler PointerExited { add => AddHandler(PointerExitedEvent, value); remove => RemoveHandler(PointerExitedEvent, value); }
+	public static readonly RoutedEvent PreviewPointerPressedEvent  = RoutedEvent.Register(nameof(PreviewPointerPressed),  RoutingStrategy.Tunnel);
+	public static readonly RoutedEvent PreviewPointerReleasedEvent = RoutedEvent.Register(nameof(PreviewPointerReleased), RoutingStrategy.Tunnel);
+	public static readonly RoutedEvent PreviewPointerMovedEvent    = RoutedEvent.Register(nameof(PreviewPointerMoved),    RoutingStrategy.Tunnel);
+	public static readonly RoutedEvent PointerPressedEvent         = RoutedEvent.Register(nameof(PointerPressed),         RoutingStrategy.Bubble);
+	public static readonly RoutedEvent PointerReleasedEvent        = RoutedEvent.Register(nameof(PointerReleased),        RoutingStrategy.Bubble);
+	public static readonly RoutedEvent PointerMovedEvent           = RoutedEvent.Register(nameof(PointerMoved),           RoutingStrategy.Bubble);
+	public static readonly RoutedEvent PointerEnteredEvent         = RoutedEvent.Register(nameof(PointerEntered),         RoutingStrategy.Direct);
+	public static readonly RoutedEvent PointerExitedEvent          = RoutedEvent.Register(nameof(PointerExited),          RoutingStrategy.Direct);
+	public static readonly RoutedEvent PointerCaptureLostEvent     = RoutedEvent.Register(nameof(PointerCaptureLost),     RoutingStrategy.Direct);
+
+	public event RoutedEventHandler PreviewPointerPressed  { add => AddHandler(PreviewPointerPressedEvent,  value); remove => RemoveHandler(PreviewPointerPressedEvent,  value); }
+	public event RoutedEventHandler PreviewPointerReleased { add => AddHandler(PreviewPointerReleasedEvent, value); remove => RemoveHandler(PreviewPointerReleasedEvent, value); }
+	public event RoutedEventHandler PreviewPointerMoved    { add => AddHandler(PreviewPointerMovedEvent,    value); remove => RemoveHandler(PreviewPointerMovedEvent,    value); }
+	public event RoutedEventHandler PointerPressed         { add => AddHandler(PointerPressedEvent,         value); remove => RemoveHandler(PointerPressedEvent,         value); }
+	public event RoutedEventHandler PointerReleased        { add => AddHandler(PointerReleasedEvent,        value); remove => RemoveHandler(PointerReleasedEvent,        value); }
+	public event RoutedEventHandler PointerMoved           { add => AddHandler(PointerMovedEvent,           value); remove => RemoveHandler(PointerMovedEvent,           value); }
+	public event RoutedEventHandler PointerEntered         { add => AddHandler(PointerEnteredEvent,         value); remove => RemoveHandler(PointerEnteredEvent,         value); }
+	public event RoutedEventHandler PointerExited          { add => AddHandler(PointerExitedEvent,          value); remove => RemoveHandler(PointerExitedEvent,          value); }
+	public event RoutedEventHandler PointerCaptureLost     { add => AddHandler(PointerCaptureLostEvent,     value); remove => RemoveHandler(PointerCaptureLostEvent,     value); }
+
+	// --- Keyboard routed events ---
+
+	public static readonly RoutedEvent PreviewKeyDownEvent    = RoutedEvent.Register(nameof(PreviewKeyDown),    RoutingStrategy.Tunnel);
+	public static readonly RoutedEvent PreviewKeyUpEvent      = RoutedEvent.Register(nameof(PreviewKeyUp),      RoutingStrategy.Tunnel);
+	public static readonly RoutedEvent KeyDownEvent           = RoutedEvent.Register(nameof(KeyDown),           RoutingStrategy.Bubble);
+	public static readonly RoutedEvent KeyUpEvent             = RoutedEvent.Register(nameof(KeyUp),             RoutingStrategy.Bubble);
+	public static readonly RoutedEvent CharacterReceivedEvent = RoutedEvent.Register(nameof(CharacterReceived), RoutingStrategy.Bubble);
+
+	public event RoutedEventHandler PreviewKeyDown    { add => AddHandler(PreviewKeyDownEvent,    value); remove => RemoveHandler(PreviewKeyDownEvent,    value); }
+	public event RoutedEventHandler PreviewKeyUp      { add => AddHandler(PreviewKeyUpEvent,      value); remove => RemoveHandler(PreviewKeyUpEvent,      value); }
+	public event RoutedEventHandler KeyDown           { add => AddHandler(KeyDownEvent,           value); remove => RemoveHandler(KeyDownEvent,           value); }
+	public event RoutedEventHandler KeyUp             { add => AddHandler(KeyUpEvent,             value); remove => RemoveHandler(KeyUpEvent,             value); }
+	public event RoutedEventHandler CharacterReceived { add => AddHandler(CharacterReceivedEvent, value); remove => RemoveHandler(CharacterReceivedEvent, value); }
+
+	// --- Focus routed events ---
+
+	public static readonly RoutedEvent GettingFocusEvent = RoutedEvent.Register(nameof(GettingFocus), RoutingStrategy.Tunnel);
+	public static readonly RoutedEvent LosingFocusEvent  = RoutedEvent.Register(nameof(LosingFocus),  RoutingStrategy.Tunnel);
+	public static readonly RoutedEvent GotFocusEvent     = RoutedEvent.Register(nameof(GotFocus),     RoutingStrategy.Bubble);
+	public static readonly RoutedEvent LostFocusEvent    = RoutedEvent.Register(nameof(LostFocus),    RoutingStrategy.Bubble);
+
+	public event RoutedEventHandler GettingFocus { add => AddHandler(GettingFocusEvent, value); remove => RemoveHandler(GettingFocusEvent, value); }
+	public event RoutedEventHandler LosingFocus  { add => AddHandler(LosingFocusEvent,  value); remove => RemoveHandler(LosingFocusEvent,  value); }
+	public event RoutedEventHandler GotFocus     { add => AddHandler(GotFocusEvent,     value); remove => RemoveHandler(GotFocusEvent,     value); }
+	public event RoutedEventHandler LostFocus    { add => AddHandler(LostFocusEvent,    value); remove => RemoveHandler(LostFocusEvent,    value); }
 
 	/// <summary>A local render transform, composed under layout placement (animatable later).</summary>
 	public Matrix3x2 RenderTransform { get; set; } = Matrix3x2.Identity;
@@ -61,6 +127,17 @@ public abstract class UIElement : DependencyObject
 	private Rect? _lastFinal;
 
 	internal UIElement? Parent { get; set; }
+
+	/// <summary>The UIRoot this element is currently attached to (null when detached). Set by UIRoot when Content
+	/// is assigned and propagated through AdoptChild/DropChild. Provides access to the InputManager for capture.</summary>
+	internal UIRoot? AttachedRoot { get; private set; }
+
+	internal void SetAttachedRoot(UIRoot? root)
+	{
+		AttachedRoot = root;
+		foreach (var child in VisualChildren)
+			child.SetAttachedRoot(root);
+	}
 
 	/// <summary>The composition node this element owns (PlanningUI.md §D2.1). Layout writes its transform/size;
 	/// property setters write its opacity/brush. The retained visual tree mirrors the element tree.</summary>
@@ -160,7 +237,7 @@ public abstract class UIElement : DependencyObject
 			InvalidateVisual();
 	}
 
-	// --- Element -> composition sync (full rebuild in Phase B; incremental dirty-subtree is MU2) ---
+	// --- Element -> composition sync ---
 
 	internal void SyncVisual()
 	{
@@ -173,41 +250,65 @@ public abstract class UIElement : DependencyObject
 		Visual.MarkDirty();
 	}
 
-	/// <summary>The drawn content for this element's visual (a Border/Panel returns a <see cref="RectContent"/>;
-	/// leaves without a background return null). Glyph/image content arrives with MSDF text + images (MU1).</summary>
 	private protected virtual VisualContent? BuildContent() => null;
+
+	// --- Explicit pointer capture ---
+
+	/// <summary>Request exclusive routing of all pointer events for <paramref name="pointerId"/> to this element,
+	/// regardless of where the pointer moves (drag support). Returns false when not attached to a live host.</summary>
+	public bool CapturePointer(uint pointerId)
+	{
+		var im = AttachedRoot?.InputManager;
+		return im is not null && im.RequestCapture(pointerId, this);
+	}
+
+	/// <summary>Release explicit capture for <paramref name="pointerId"/>; raises
+	/// <see cref="PointerCaptureLostEvent"/> on this element.</summary>
+	public void ReleasePointerCapture(uint pointerId) =>
+		AttachedRoot?.InputManager?.RequestRelease(pointerId, this);
 
 	// --- Routed-event handler store + dispatch (PlanningUI.md §D5.3) ---
 
-	private Dictionary<ushort, RoutedEventHandler>? _handlers;
+	private struct HandlerSlot
+	{
+		public RoutedEventHandler? Normal;     // invoked only when !args.Handled
+		public RoutedEventHandler? HandledToo; // invoked regardless of Handled
+	}
 
+	private Dictionary<ushort, HandlerSlot>? _handlers;
 	[ThreadStatic] private static Stack<List<UIElement>>? _routePool;
 
-	/// <summary>Attach a typed handler for <paramref name="evt"/> (no <c>MethodInfo</c>; a direct combined delegate).</summary>
-	public void AddHandler(RoutedEvent evt, RoutedEventHandler handler)
+	/// <summary>Attach a typed handler for <paramref name="evt"/>. If <paramref name="handledEventsToo"/> is true
+	/// the handler fires even after a previous handler has set <see cref="RoutedEventArgs.Handled"/>.</summary>
+	public void AddHandler(RoutedEvent evt, RoutedEventHandler handler, bool handledEventsToo = false)
 	{
 		_handlers ??= [];
-		_handlers[evt.Id] = _handlers.TryGetValue(evt.Id, out var existing)
-			? (RoutedEventHandler)Delegate.Combine(existing, handler)
-			: handler;
+		_handlers.TryGetValue(evt.Id, out var slot);
+		if (handledEventsToo)
+			slot.HandledToo = (RoutedEventHandler?)Delegate.Combine(slot.HandledToo, handler);
+		else
+			slot.Normal = (RoutedEventHandler?)Delegate.Combine(slot.Normal, handler);
+		_handlers[evt.Id] = slot;
 	}
 
 	/// <summary>Detach a handler previously added with <see cref="AddHandler"/>.</summary>
 	public void RemoveHandler(RoutedEvent evt, RoutedEventHandler handler)
 	{
-		if (_handlers is null || !_handlers.TryGetValue(evt.Id, out var existing))
+		if (_handlers is null || !_handlers.TryGetValue(evt.Id, out var slot))
 			return;
-		var remaining = (RoutedEventHandler?)Delegate.Remove(existing, handler);
-		if (remaining is null)
+		slot.Normal     = (RoutedEventHandler?)Delegate.Remove(slot.Normal, handler);
+		slot.HandledToo = (RoutedEventHandler?)Delegate.Remove(slot.HandledToo, handler);
+		if (slot.Normal is null && slot.HandledToo is null)
 			_handlers.Remove(evt.Id);
 		else
-			_handlers[evt.Id] = remaining;
+			_handlers[evt.Id] = slot;
 	}
 
 	/// <summary>
 	/// Raise <paramref name="evt"/> on this element as the original source and route it (PlanningUI.md §D5.3):
-	/// tunnel root→target, bubble target→root, or direct. <see cref="RoutedEventArgs.Handled"/> short-circuits the
-	/// route. The ancestor chain is built into a pooled, re-entrancy-safe buffer (a handler may raise another event).
+	/// tunnel root→target, bubble target→root, or direct. <see cref="RoutedEventArgs.Handled"/> prevents
+	/// <c>Normal</c> handlers from firing at subsequent positions, but <c>handledEventsToo</c> handlers always fire.
+	/// The ancestor chain is built into a pooled, re-entrancy-safe buffer (a handler may raise another event).
 	/// </summary>
 	internal void RaiseEvent(RoutedEvent evt, RoutedEventArgs args)
 	{
@@ -221,14 +322,14 @@ public abstract class UIElement : DependencyObject
 		switch (evt.Routing)
 		{
 			case RoutingStrategy.Tunnel:
-				for (var i = route.Count - 1; i >= 0 && !args.Handled; i--)
+				for (var i = route.Count - 1; i >= 0; i--)
 					route[i].InvokeHandlers(args);
 				break;
 			case RoutingStrategy.Direct:
 				InvokeHandlers(args);
 				break;
 			default: // Bubble
-				for (var i = 0; i < route.Count && !args.Handled; i++)
+				for (var i = 0; i < route.Count; i++)
 					route[i].InvokeHandlers(args);
 				break;
 		}
@@ -239,10 +340,12 @@ public abstract class UIElement : DependencyObject
 
 	private void InvokeHandlers(RoutedEventArgs args)
 	{
-		if (_handlers is null || args.RoutedEvent is null || !_handlers.TryGetValue(args.RoutedEvent.Id, out var h))
+		if (_handlers is null || args.RoutedEvent is null || !_handlers.TryGetValue(args.RoutedEvent.Id, out var slot))
 			return;
 		args.Source = this;
-		h(this, args);
+		if (!args.Handled)
+			slot.Normal?.Invoke(this, args);
+		slot.HandledToo?.Invoke(this, args);
 	}
 
 	// --- 2D hit-testing (PlanningUI.md §D5.4): reverse-z, respects IsHitTestVisible/Visibility/RenderTransform ---
@@ -275,6 +378,18 @@ public abstract class UIElement : DependencyObject
 		return bounds.Contains(local) && Visual.Content is not null ? this : null;
 	}
 
-	internal void AdoptChild(UIElement child) => child.Parent = this;
-	internal void DropChild(UIElement child) { if (child.Parent == this) child.Parent = null; }
+	internal void AdoptChild(UIElement child)
+	{
+		child.Parent = this;
+		child.SetAttachedRoot(AttachedRoot);
+	}
+
+	internal void DropChild(UIElement child)
+	{
+		if (child.Parent == this)
+		{
+			child.Parent = null;
+			child.SetAttachedRoot(null);
+		}
+	}
 }
