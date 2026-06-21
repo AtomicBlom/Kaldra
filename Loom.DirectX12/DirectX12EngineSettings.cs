@@ -20,9 +20,16 @@ public sealed class DirectX12EngineSettings : EngineSettings
 
 	/// <summary>
 	/// Request the D3D12 GPU-based validation layer in addition to the basic debug layer when
-	/// <see cref="EngineSettings.EnableValidation"/> is set. Far more thorough (and far slower) — off by default.
+	/// <see cref="EngineSettings.EnableValidation"/> is set. Far more thorough — it patches shaders to validate
+	/// resource access, descriptors, and aliasing on the GPU — at a real runtime cost. Defaults on in Debug builds
+	/// (strict validation while iterating) and off in Release builds.
 	/// </summary>
-	public bool GpuBasedValidation { get; set; }
+	public bool GpuBasedValidation { get; set; } =
+#if DEBUG
+		true;
+#else
+		false;
+#endif
 
 	/// <summary>
 	/// Directory of loose shader assets (the Loom SDK's <c>shaders\</c> output): the DirectX12 backend resolves a
