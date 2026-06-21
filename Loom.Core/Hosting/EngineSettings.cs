@@ -51,4 +51,21 @@ public class EngineSettings
 	/// (on-disk) shaders are watchable — embedded engine shaders can't change at runtime.
 	/// </summary>
 	public bool WatchShaderDirectory { get; set; }
+
+	/// <summary>
+	/// Copy every base setting onto <paramref name="target"/> — used by a backend when the host passed the neutral
+	/// base type rather than the backend's own settings subclass, so the backend builds its subclass and inherits
+	/// all the base knobs. Centralised so a newly-added base setting can't be silently dropped by a backend's
+	/// hand-written field-by-field copy.
+	/// </summary>
+	public void CopyBaseSettingsTo(EngineSettings target)
+	{
+		ArgumentNullException.ThrowIfNull(target);
+		target.EnableValidation = EnableValidation;
+		target.VSync = VSync;
+		target.MaxFramesPerSecond = MaxFramesPerSecond;
+		target.HdrOutput = HdrOutput;
+		target.PreferredBackend = PreferredBackend;
+		target.WatchShaderDirectory = WatchShaderDirectory;
+	}
 }

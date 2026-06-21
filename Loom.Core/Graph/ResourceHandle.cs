@@ -61,5 +61,25 @@ public abstract class ResourceHandle
 	/// <summary>The pixel dimensions of this resource, resolving <see cref="Scale"/> against its domain.</summary>
 	public (int Width, int Height) Resolve() => Domain.Resolve(Scale);
 
+	/// <summary>
+	/// The pixel dimensions of this resource against a live swapchain extent. A backbuffer-domain resource follows
+	/// the swapchain scaled by its own <see cref="Scale"/> — so a fractional mip sibling (e.g. a bloom pyramid level)
+	/// shrinks while a full-resolution target stays native; a backbuffer-relative domain follows a fraction of the
+	/// swapchain; a fixed-size domain uses its declared size. Clamped to at least 1×1. The parameterless
+	/// <see cref="Resolve()"/> uses the domain's bake-time size; this overload re-resolves against the current
+	/// swapchain, which is what a backend's transient-resource sizing needs after a resize.
+	/// </summary>
+	public (int Width, int Height) Resolve(int swapWidth, int swapHeight)
+	{
+		if (Domain.IsBackbuffer)
+			return (ScaleDimension(swapWidth, Scale), ScaleDimension(swapHeight, Scale));
+		if (Domain.RelativeScale > 0f)
+			return (ScaleDimension(swapWidth, Domain.RelativeScale * Scale), ScaleDimension(swapHeight, Domain.RelativeScale * Scale));
+		var (w, h) = Domain.Resolve(Scale);
+		return (Math.Max(1, w), Math.Max(1, h));
+	}
+
+	private static int ScaleDimension(int value, float scale) => Math.Max(1, (int)MathF.Round(value * scale));
+
 	public override string ToString() => $"{Name}:{Kind}<{Format}>";
 }

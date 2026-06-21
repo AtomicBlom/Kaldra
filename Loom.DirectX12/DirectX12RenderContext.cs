@@ -3,6 +3,7 @@ using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 
@@ -31,7 +32,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	private readonly DirectX12DescriptorRing _ring;
 	private readonly DirectX12MeshStore _meshes;
 	private readonly DirectX12TextureStore _textures;
-	private readonly DirectX12MaterialStore _materials;
+	private readonly MaterialStore _materials;
 	private readonly DirectX12InstanceUploadBuffer _instanceUpload;
 	// M15-0: per-frame UPLOAD-heap ring for the uniform seam (CSM matrices, lighting params, wind), 256-aligned
 	// so each block is a valid CBV base. Bound as a root CBV at b1 on a technique that reflects a constant buffer.
@@ -67,7 +68,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists => _drawLists;
 	private Camera[] _cascades = [];
 
-	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, DirectX12MaterialStore materials, int frameCount)
+	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, MaterialStore materials, int frameCount)
 	{
 		_ctx = ctx;
 		_techniques = techniques;
@@ -119,12 +120,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	// geometry stays upright. The host supplies a neutral +Y-up projection in FrameInputs (M7-B5); both backends
 	// flip it the same way here. (Earlier "identity ingest, no Y-flip" rendered mesh upright but left every
 	// fullscreen pass vertically mirrored vs Vulkan — one mesh→fullscreen→backbuffer hop = upside down.)
-	private static Camera ClipSpace(Camera camera)
-	{
-		var projection = camera.Projection;
-		projection.M22 *= -1f;
-		return new Camera(camera.View, projection);
-	}
+	private static Camera ClipSpace(Camera camera) => camera.FlipClipY();
 
 	/// <summary>
 	/// Tell the context the current pass's colour-target formats + depth format (or <c>FormatUnknown</c> for no
@@ -253,12 +249,12 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	// debug overlay can preview live graph contents through the resource's sampleable format (R32_FLOAT for depth).
 	private void WriteListTextureSrv(int id, CpuDescriptorHandle dest)
 	{
-		if (id < DebugTextureBase || _transients is null)
+		if (id < InspectableResource.DebugTextureBase || _transients is null)
 		{
 			WriteTextureSrv(id, dest);
 			return;
 		}
-		var rid = id - DebugTextureBase;
+		var rid = id - InspectableResource.DebugTextureBase;
 		var srv = new ShaderResourceViewDesc
 		{
 			Format = _transients.SrvFormat(_slot, rid),
@@ -732,19 +728,15 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	}
 
 	/// <summary>Resolve an inspectable graph resource to a draw-list-bindable texture handle for this frame (resource
-	/// viewer). The id is offset by <see cref="DebugTextureBase"/> so <see cref="DrawList{TVertex}"/> samples the live
+	/// viewer). The id is offset by <see cref="InspectableResource.DebugTextureBase"/> so <see cref="DrawList{TVertex}"/> samples the live
 	/// transient image rather than a loaded texture; the dimensions are the resource's current size.</summary>
 	public Texture? ResolveInspectable(int resourceId)
 	{
 		if (_transients is null || resourceId < 0)
 			return null;
 		var (w, h) = _transients.Extent(resourceId);
-		return new Texture(resourceId + DebugTextureBase, (int)w, (int)h);
+		return new Texture(resourceId + InspectableResource.DebugTextureBase, (int)w, (int)h);
 	}
-
-	// An inspectable graph resource the resource viewer previews is handed to a draw list as a Texture whose id is
-	// offset by this base, so DrawList samples this frame's live transient image instead of a loaded texture-store entry.
-	internal const int DebugTextureBase = 0x10000;
 
 	public void Dispose()
 	{

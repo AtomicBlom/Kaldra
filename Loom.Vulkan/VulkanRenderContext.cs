@@ -7,6 +7,7 @@ using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Vulkan;
 using VkFormat = Silk.NET.Vulkan.Format;
 
@@ -32,7 +33,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	private readonly VulkanDescriptorAllocator _descriptors;
 	private readonly VulkanMeshStore _meshes;
 	private readonly VulkanTextureStore _textures;
-	private readonly VulkanMaterialStore _materials;
+	private readonly MaterialStore _materials;
 	private readonly VulkanInstanceUploadBuffer _instanceUpload;
 	// M15-0: per-frame host-visible ring for the uniform seam (CSM matrices, lighting params, wind) — the same
 	// retire-not-free ring as the instance stream, but created UniformBufferBit and aligned to 256 (≥ any
@@ -53,9 +54,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	// (Wrap + MinMagMip{Linear,Point}). The existing nearest/linear samplers above clamp (post passes never tile).
 	private readonly Sampler _repeatLinearSampler;
 	private readonly Sampler _repeatNearestSampler;
-	// An inspectable graph resource the resource viewer previews is handed to a draw list as a Texture whose id is
-	// offset by this base, so DrawList samples this frame's live transient image instead of a loaded texture-store entry.
-	internal const int DebugTextureBase = 0x10000;
 
 	// This frame's draw lists, pulled from FrameInputs.DrawLists and surfaced as ctx.DrawLists; a producer (the UI
 	// painter) looks one up by id and submits it through DrawList.
@@ -107,7 +105,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		VulkanDescriptorAllocator descriptors,
 		VulkanMeshStore meshes,
 		VulkanTextureStore textures,
-		VulkanMaterialStore materials,
+		MaterialStore materials,
 		VMASharp.VulkanMemoryAllocator allocator,
 		int framesInFlight)
 	{
@@ -533,8 +531,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
 			// An id offset by DebugTextureBase is an inspectable graph resource (the resource viewer): sample this
 			// frame's live transient image instead of a loaded texture-store entry.
-			var view = texId >= DebugTextureBase
-				? _resources.Get(_frameSlot, texId - DebugTextureBase).View
+			var view = texId >= InspectableResource.DebugTextureBase
+				? _resources.Get(_frameSlot, texId - InspectableResource.DebugTextureBase).View
 				: _textures.View(texId);
 			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 			var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
@@ -558,14 +556,14 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	}
 
 	/// <summary>Resolve an inspectable graph resource to a draw-list-bindable texture handle for this frame (resource
-	/// viewer). The id is offset by <see cref="DebugTextureBase"/> so <see cref="DrawList{TVertex}"/> samples the live
+	/// viewer). The id is offset by <see cref="InspectableResource.DebugTextureBase"/> so <see cref="DrawList{TVertex}"/> samples the live
 	/// transient image rather than a loaded texture; the dimensions are the resource's current size.</summary>
 	public Texture? ResolveInspectable(int resourceId)
 	{
 		if (resourceId < 0)
 			return null;
 		ref var image = ref _resources.Get(_frameSlot, resourceId);
-		return new Texture(resourceId + DebugTextureBase, (int)image.Extent.Width, (int)image.Extent.Height);
+		return new Texture(resourceId + InspectableResource.DebugTextureBase, (int)image.Extent.Width, (int)image.Extent.Height);
 	}
 
 	// Bind sampled graph resources (transients) as combined image samplers at bindings 0..N-1 — the path

@@ -75,14 +75,12 @@ public sealed class DirectX12Backend : IRenderBackend
 		if (hwnd == 0)
 			throw new ArgumentException("The DirectX12 backend was given a null HWND.", nameof(surface));
 
-		var dx12Settings = settings as DirectX12EngineSettings ?? new DirectX12EngineSettings
+		var dx12Settings = settings as DirectX12EngineSettings;
+		if (dx12Settings is null)
 		{
-			EnableValidation = settings.EnableValidation,
-			VSync = settings.VSync,
-			MaxFramesPerSecond = settings.MaxFramesPerSecond,
-			HdrOutput = settings.HdrOutput,
-			PreferredBackend = settings.PreferredBackend
-		};
+			dx12Settings = new DirectX12EngineSettings();
+			settings.CopyBaseSettingsTo(dx12Settings);
+		}
 
 		return new DirectX12Engine(hwnd, width, height, dx12Settings);
 	}

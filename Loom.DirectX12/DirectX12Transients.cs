@@ -288,18 +288,13 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		return clear;
 	}
 
+	// Marshal the neutral resource sizing to D3D12's unsigned extent. The scaling rules (backbuffer × own scale,
+	// relative-domain fraction, fixed size) live on ResourceHandle so both backends size identically.
 	private static (uint W, uint H) Size(ResourceHandle resource, uint swapWidth, uint swapHeight)
 	{
-		var domain = resource.Domain;
-		if (domain.IsBackbuffer)
-			return (Scale(swapWidth, resource.Scale), Scale(swapHeight, resource.Scale));
-		if (domain.RelativeScale > 0f)
-			return (Scale(swapWidth, domain.RelativeScale * resource.Scale), Scale(swapHeight, domain.RelativeScale * resource.Scale));
-		var (w, h) = domain.Resolve(resource.Scale);
-		return ((uint)Math.Max(1, w), (uint)Math.Max(1, h));
+		var (w, h) = resource.Resolve((int)swapWidth, (int)swapHeight);
+		return ((uint)w, (uint)h);
 	}
-
-	private static uint Scale(uint value, float scale) => (uint)Math.Max(1, (int)MathF.Round(value * scale));
 
 	// A device-local (Default-heap) buffer the compute writes via a root UAV and a draw reads as a vertex
 	// stream — created with AllowUnorderedAccess, starting in COMMON (the executor transitions it per the plan).

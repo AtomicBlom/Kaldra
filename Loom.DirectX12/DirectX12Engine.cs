@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
@@ -30,7 +29,7 @@ namespace Loom.DirectX12;
 /// <see cref="GraphSchedule"/>/<see cref="BarrierPlan"/>/<c>AliasPlan</c> are consumed here exactly as the
 /// Vulkan engine consumes them.
 /// </summary>
-public sealed unsafe class DirectX12Engine : IEngine
+public sealed unsafe class DirectX12Engine : EngineBase
 {
 	private const uint BufferCount = 2; // matches the Vulkan backend's 2 frames in flight
 
@@ -42,7 +41,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 	private readonly DirectX12DescriptorRing _ring;
 	private readonly DirectX12MeshStore _meshes;
 	private readonly DirectX12TextureStore _textures;
-	private readonly DirectX12MaterialStore _materials;
+	private readonly MaterialStore _materials;
 	private readonly DirectX12RenderContext _context;
 	private DirectX12Transients? _transients;
 
@@ -65,7 +64,6 @@ public sealed unsafe class DirectX12Engine : IEngine
 	// barrier before its first (re)activation each frame (the hand-off from whatever member last used the memory).
 	private readonly HashSet<int> _aliasBarriered = [];
 
-	private string? _capturePath;
 	private ComPtr<ID3D12Resource> _readback;
 	private ulong _readbackSize;
 
@@ -82,23 +80,17 @@ public sealed unsafe class DirectX12Engine : IEngine
 	// GPU per-pass timing (§12 M13 profiler): one TIMESTAMP query heap with 2 queries (begin/end) per pass and a
 	// per-slot sub-range, plus a per-slot READBACK buffer ResolveQueryData writes into. Decoded after the slot's
 	// fence (like the pick readback) — a frame or two stale. Runtime-toggled (off by default).
-	private bool _gpuTimingEnabled;
 	private ComPtr<ID3D12QueryHeap> _timingHeap;
 	private readonly ComPtr<ID3D12Resource>[] _timingReadback = new ComPtr<ID3D12Resource>[BufferCount];
 	private readonly bool[] _timingValid = new bool[BufferCount];
 	private int _timingPassCount;
 	private ulong _timestampFrequency; // ticks per second, from the graphics queue (0 ⇒ timing unavailable)
-	private PassTiming[] _timings = [];
-	private double _frameGpuMs;
 
 	// M13 resource viewer: the active graph's colour/depth resources the host can preview. Rebuilt each SetGraph.
 	private readonly List<InspectableResource> _inspectable = [];
 
-	// Shader hot-reload (M13): shader name → techniques using it, each technique's descriptor, and a queue the
-	// background watcher posts to (drained on the render thread). Mirrors the Vulkan backend.
-	private readonly Dictionary<string, List<string>> _techniquesByShader = [];
-	private readonly Dictionary<string, TechniqueDescriptor> _descriptorsByName = [];
-	private readonly ConcurrentQueue<string> _reloadQueue = new();
+	// Shader hot-reload (M13), opt-in. The watcher maps a changed artifact to a logical shader name; the base's
+	// reload registry queues it and the render thread drains it (fence-safe).
 	private AssetWatcher? _shaderWatcher;
 
 	public DirectX12Engine(nint hwnd, int width, int height, DirectX12EngineSettings settings)
@@ -129,7 +121,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 		_ring = new DirectX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the M13 resource viewer's debug SRVs
 		_meshes = new DirectX12MeshStore(_ctx);
 		_textures = new DirectX12TextureStore(_ctx);
-		_materials = new DirectX12MaterialStore();
+		_materials = new MaterialStore();
 		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, _materials, (int)BufferCount);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
@@ -160,49 +152,21 @@ public sealed unsafe class DirectX12Engine : IEngine
 		var name = Path.GetFileNameWithoutExtension(leaf); // "gbuffer.ps.dxil" → "gbuffer.ps"; "gbuffer.json" → "gbuffer"
 		if (name.EndsWith(".vs", StringComparison.Ordinal) || name.EndsWith(".ps", StringComparison.Ordinal) || name.EndsWith(".cs", StringComparison.Ordinal))
 			name = name[..^3];
-		if (_techniquesByShader.ContainsKey(name))
-			_reloadQueue.Enqueue(name);
+		QueueShaderReload(name);
 	}
 
-	// Drain queued shader reloads on the render thread (M13): drain the GPU once, rebuild affected templates, evict
-	// the baked PSOs — the next frame re-bakes from the new bytecode. Called at the top of the graph frame.
-	private void DrainShaderReloads()
-	{
-		if (_reloadQueue.IsEmpty)
-			return;
+	// Evict the baked PSOs after a hot-reload so the next GetOrBake rebuilds from the re-registered templates.
+	protected override void ResetPipelineCaches() => _techniques.Reset();
 
-		var shaders = new HashSet<string>();
-		while (_reloadQueue.TryDequeue(out var shader))
-			shaders.Add(shader);
-		if (shaders.Count == 0)
-			return;
+	public override string BackendName => "DirectX12";
+	public override string DeviceName => _ctx.DeviceName;
 
-		WaitIdle(); // no PSO in flight before we drop them
-		foreach (var shader in shaders)
-		{
-			if (!_techniquesByShader.TryGetValue(shader, out var techniques))
-				continue;
-			foreach (var name in techniques)
-				DefineTechnique(name, _descriptorsByName[name]); // re-resolve DXIL + reflection, re-register the template
-			Console.WriteLine($"[loom] reloaded shader '{shader}' → {string.Join(", ", techniques)}");
-		}
-		_techniques.Reset(); // dispose stale PSOs; next GetOrBake rebuilds from the re-registered templates
-	}
+	// 0 timestamp frequency ⇒ the queue can't timestamp, so the profiler stays permanently unavailable.
+	protected override bool CanEnableGpuTiming => _timestampFrequency != 0;
 
-	public string BackendName => "DirectX12";
-	public string DeviceName => _ctx.DeviceName;
+	public override IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
 
-	public bool GpuTimingEnabled
-	{
-		get => _gpuTimingEnabled;
-		set => _gpuTimingEnabled = value && _timestampFrequency != 0;
-	}
-	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
-	public double LastFrameGpuMilliseconds => _frameGpuMs;
-
-	public IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
-
-	public void Render(FrameInputs inputs)
+	public override void Render(FrameInputs inputs)
 	{
 		if (_graph is not null)
 			RenderGraphFrame(inputs);
@@ -238,7 +202,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 
 		// When capturing, copy the rendered backbuffer into a readback buffer in the same submission, then
 		// present; otherwise just transition straight to PRESENT.
-		var capturing = _capturePath is not null;
+		var capturing = CapturePath is not null;
 		var rowPitch = capturing ? RecordCapture(backbuffer) : 0u;
 		if (!capturing)
 			Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.Present);
@@ -258,8 +222,8 @@ public sealed unsafe class DirectX12Engine : IEngine
 		if (capturing)
 		{
 			WaitForFrame(index); // block until this frame's copy finished, then map + encode
-			WriteCapture(_capturePath!, rowPitch);
-			_capturePath = null;
+			WriteCapture(CapturePath!, rowPitch);
+			CapturePath = null;
 		}
 	}
 
@@ -291,7 +255,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 
 		// GPU timing (M13): bracket each pass's own work (after its pre-barriers) with a begin/end timestamp into this
 		// slot's sub-range of the heap. Timestamp queries use EndQuery only (no BeginQuery).
-		var timing = _gpuTimingEnabled && _timingHeap.Handle is not null;
+		var timing = GpuTimingEnabled && _timingHeap.Handle is not null;
 		var timingBase = (uint)(2 * _timingPassCount) * index;
 		var passIndex = 0;
 
@@ -329,7 +293,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 
 		// Optional capture: copy the present target before the final present transition (which then runs from
 		// COPY_SOURCE, since EmitGraphTransition tracks the real state).
-		var capturing = _capturePath is not null;
+		var capturing = CapturePath is not null;
 		uint rowPitch = 0;
 		if (capturing)
 		{
@@ -358,8 +322,8 @@ public sealed unsafe class DirectX12Engine : IEngine
 		if (capturing)
 		{
 			WaitForFrame(index);
-			WriteCapture(_capturePath!, rowPitch);
-			_capturePath = null;
+			WriteCapture(CapturePath!, rowPitch);
+			CapturePath = null;
 		}
 	}
 
@@ -603,7 +567,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 			new ReadOnlySpan<byte>(src + (long)y * rowPitch, width * 4).CopyTo(rgba.AsSpan(y * width * 4));
 		_readback.Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 
-		DirectX12PngWriter.WriteRgba(path, width, height, rgba);
+		PngWriter.WriteRgba(path, width, height, rgba);
 		Console.WriteLine($"[loom] DirectX12 captured {width}x{height} -> {path}");
 	}
 
@@ -664,26 +628,18 @@ public sealed unsafe class DirectX12Engine : IEngine
 		_pickReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 	}
 
-	// Decode this slot's resolved timestamps (begin/end per pass) into _timings + the frame total (M13). Called after
-	// the slot's fence, so the resolve is complete. The readback buffer is tightly-packed UINT64 (no row pitch).
-	// ticks / frequency = seconds; ×1000 = ms. Guard end>=begin against any non-monotonic driver oddity (Adreno).
+	// Read this slot's resolved timestamps and decode them into _timings + the frame total. Called after the slot's
+	// fence, so the resolve is complete. The readback buffer is tightly-packed UINT64 (no row pitch); the timestamp
+	// frequency is ticks per second, so 1000/frequency is the milliseconds-per-tick the decoder needs.
 	private void DownloadTiming(uint index)
 	{
-		if (!_gpuTimingEnabled || _timingHeap.Handle is null || _timingPassCount == 0 || !_timingValid[index])
+		if (!GpuTimingEnabled || _timingHeap.Handle is null || _timingPassCount == 0 || !_timingValid[index])
 			return;
 
 		void* mapped;
 		SilkMarshal.ThrowHResult(_timingReadback[index].Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
 		var t = new ReadOnlySpan<ulong>(mapped, 2 * _timingPassCount);
-		if (_timings.Length != _timingPassCount)
-			_timings = new PassTiming[_timingPassCount];
-		for (var i = 0; i < _timingPassCount; i++)
-		{
-			var ticks = t[2 * i + 1] >= t[2 * i] ? t[2 * i + 1] - t[2 * i] : 0UL;
-			_timings[i] = new PassTiming(_barrierPlan!.Passes[i].Pass.Name, ticks * 1000.0 / _timestampFrequency);
-		}
-		var span = t[^1] >= t[0] ? t[^1] - t[0] : 0UL;
-		_frameGpuMs = span * 1000.0 / _timestampFrequency;
+		DecodeTimings(t, _barrierPlan!, 1000.0 / _timestampFrequency);
 		_timingReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 	}
 
@@ -748,7 +704,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 		_commandList.ResourceBarrier(1, &barrier);
 	}
 
-	public void Resize(int width, int height)
+	public override void Resize(int width, int height)
 	{
 		WaitIdle();
 		_swapchain.Resize(width, height);
@@ -765,7 +721,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 		}
 	}
 
-	public void WaitIdle()
+	public override void WaitIdle()
 	{
 		_fenceValue++;
 		SilkMarshal.ThrowHResult(_ctx.GraphicsQueue.Signal(_fence, _fenceValue));
@@ -776,7 +732,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 		}
 	}
 
-	public void Dispose()
+	public override void Dispose()
 	{
 		if (_disposed)
 			return;
@@ -826,10 +782,13 @@ public sealed unsafe class DirectX12Engine : IEngine
 	/// backend's built-in stand-in, so the real-shader pipeline can be adopted shader-by-shader without breaking
 	/// a demo mid-port.
 	/// </summary>
-	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
+	protected override void BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		var dir = _settings.ShaderDirectory;
 		var shader = descriptor.Shader;
+		// The descriptor-bound resource counts come from the shader's reflection sidecar (the author states only
+		// pipeline intent); a built-in stand-in with no sidecar reflects as empty.
+		var reflection = DirectX12Shaders.ResolveReflection(dir, shader);
 
 		// Prefer the build-emitted SIGNED DXIL (offline, shipped like the Vulkan .spv — no runtime compiler):
 		// compute resolves <name>.cs.dxil; graphics resolves <name>.vs.dxil + <name>.ps.dxil. A shader with no
@@ -842,9 +801,9 @@ public sealed unsafe class DirectX12Engine : IEngine
 		var storageBufferStride = 0;
 		// M15-0: descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
 		// as a root CBV at b1 (0 for a built-in stand-in, which has no UBO).
-		var uniformBuffers = DirectX12Shaders.ResolveUniformBufferCount(dir, shader);
+		var uniformBuffers = reflection.UniformBufferCount;
 		// M15-2: read-only structured-buffer compute inputs (skin's bind-pose verts + bone palette) — root SRVs.
-		var inputBuffers = descriptor.IsCompute ? DirectX12Shaders.ResolveComputeInputBuffers(dir, shader) : 0;
+		var inputBuffers = descriptor.IsCompute ? reflection.InputBufferCount : 0;
 		string source;
 
 		if (descriptor.IsCompute)
@@ -853,10 +812,14 @@ public sealed unsafe class DirectX12Engine : IEngine
 			if (cs is not null)
 			{
 				(vertexBytecode, fragmentBytecode) = ([], cs);
-				inputCount = DirectX12Shaders.ResolveSampledInputCount(dir, shader);
+				inputCount = reflection.SampleCount;
 				// Compute storage shape from reflection: a RW texture (exposure) / RW structured buffer (particles)
 				// → UAV table (the stride lets the shader's GetDimensions work); a raw buffer (stride 0) → root UAV.
-				(storageImages, storageBuffers, storageBufferStride) = DirectX12Shaders.ResolveComputeStorage(dir, shader);
+				// RW structured/byte buffers = all storage buffers minus the read-only inputs; the stride lets the
+				// shader's GetDimensions work (a UAV descriptor), else a raw buffer (stride 0) rides a root UAV.
+				storageImages = reflection.StorageImageCount;
+				storageBuffers = reflection.StorageBufferCount - reflection.InputBufferCount;
+				storageBufferStride = reflection.StorageBufferStride;
 				source = $"{shader}.cs.dxil (Slang→signed DXIL)";
 			}
 			else if (DirectX12Shaders.Builtins.TryGetValue(shader, out var builtin))
@@ -878,7 +841,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 			if (vs is not null && ps is not null)
 			{
 				(vertexBytecode, fragmentBytecode) = (vs, ps);
-				inputCount = DirectX12Shaders.ResolveSampledInputCount(dir, shader);
+				inputCount = reflection.SampleCount;
 				source = $"{shader}.{{vs,ps}}.dxil (Slang→signed DXIL)";
 			}
 			else if (DirectX12Shaders.Builtins.TryGetValue(shader, out var builtin))
@@ -904,22 +867,16 @@ public sealed unsafe class DirectX12Engine : IEngine
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush));
 
-		// Hot-reload bookkeeping (M13): one shader → many techniques; remember the descriptor so a reload rebuilds it.
-		_descriptorsByName[name] = descriptor;
-		if (!_techniquesByShader.TryGetValue(descriptor.Shader, out var users))
-			_techniquesByShader[descriptor.Shader] = users = [];
-		if (!users.Contains(name))
-			users.Add(name);
 	}
 
-	public bool ResourceInspectionEnabled { get; set; }
+	public override bool ResourceInspectionEnabled { get; set; }
 
 	/// <summary>
 	/// Make <paramref name="graph"/> the active graph: derive its schedule + barrier plan (the backend-neutral
 	/// Execute-layer products, identical to what the Vulkan engine consumes) and route <see cref="Render"/>
 	/// through the executor. Transient-resource allocation (aliasing, the sample/blit path) lands next slice.
 	/// </summary>
-	public void SetGraph(RenderGraph graph)
+	public override void SetGraph(RenderGraph graph)
 	{
 		ArgumentNullException.ThrowIfNull(graph);
 		if (_graph is not null)
@@ -970,8 +927,7 @@ public sealed unsafe class DirectX12Engine : IEngine
 		foreach (ref var buffer in _timingReadback.AsSpan())
 			if (buffer.Handle is not null) { buffer.Dispose(); buffer = default; }
 		Array.Clear(_timingValid);
-		_timings = [];
-		_frameGpuMs = 0;
+		ResetTimings();
 		_timingPassCount = _barrierPlan!.Passes.Length;
 		if (_timestampFrequency == 0 || _timingPassCount == 0)
 			return;
@@ -1004,9 +960,9 @@ public sealed unsafe class DirectX12Engine : IEngine
 			_pickReadback[i] = CreateReadbackBuffer((ulong)_pickRowPitch * _pickHeight);
 	}
 
-	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
-	public Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged
+	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
 	{
 		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
 		if (stride != layout.Stride)
@@ -1014,26 +970,23 @@ public sealed unsafe class DirectX12Engine : IEngine
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
-	public Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
+	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
-	public Texture CreateTexture(TextureData data) => _textures.Create(data);
+	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
 
-	public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
+	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	/// <summary>
 	/// The object id at picking-domain pixel (<paramref name="x"/>, <paramref name="y"/>) — read from the CPU copy
 	/// of the graph's first readback target, a few frames stale (invisible for hover). 0 when out of bounds, before
 	/// the first copy lands, or when the active graph declares no readback target. The DirectX12 twin of Vulkan's SamplePick.
 	/// </summary>
-	public float SamplePick(int x, int y)
+	public override float SamplePick(int x, int y)
 	{
 		if (_pickId < 0 || (uint)x >= _pickWidth || (uint)y >= _pickHeight)
 			return 0f;
 		return _pickCpu[y * _pickWidth + x];
 	}
-
-	/// <summary>Capture the next rendered frame to a PNG at <paramref name="path"/> (Planning.md §12 M10 verification).</summary>
-	public void RequestCapture(string path) => _capturePath = path;
 
 	[DllImport("kernel32", SetLastError = true)]
 	private static extern nint CreateEventW(nint lpEventAttributes, int bManualReset, int bInitialState, nint lpName);
