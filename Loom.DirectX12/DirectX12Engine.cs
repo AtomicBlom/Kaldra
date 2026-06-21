@@ -392,6 +392,11 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		_commandList.RSSetScissorRects(1, &scissor);
 
 		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly);
+
+		// Hand the context this pass's render-target handles + extent so a draw-list group-opacity layer can rebind
+		// the pass scope after detouring through an offscreen target.
+		_context.SetColorScope(new ReadOnlySpan<CpuDescriptorHandle>(rtv, colorCount), width, height);
+
 		pass.Pass.Record?.Invoke(_context);
 	}
 
