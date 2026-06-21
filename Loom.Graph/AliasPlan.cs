@@ -49,6 +49,20 @@ public sealed class AliasPlan
 	}
 
 	/// <summary>
+	/// The ids of bucket members that reuse memory an earlier member used this frame — every member after the first
+	/// in each bucket. Their birth (Undefined→…) transition must wait on all prior work to that shared memory (the
+	/// aliasing barrier); the first member of a bucket is the original user, covered by the per-frame fence instead.
+	/// </summary>
+	public IReadOnlySet<int> AliasedMemberIds()
+	{
+		var ids = new HashSet<int>();
+		foreach (var bucket in Buckets)
+			for (var i = 1; i < bucket.Members.Length; i++)
+				ids.Add(bucket.Members[i].Id);
+		return ids;
+	}
+
+	/// <summary>
 	/// Derive the aliasing plan: first-fit interval partitioning. Aliasable lifetimes are taken in
 	/// (start, end, id) order; each is placed in the first existing bucket whose last member ends strictly
 	/// before this one starts (so they never coexist), else a new bucket is opened. Sorting by start makes

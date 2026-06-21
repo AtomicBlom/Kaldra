@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.Json;
 
+using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D.Compilers;
 
@@ -61,190 +61,22 @@ internal static unsafe class DirectX12Shaders
 	}
 
 	/// <summary>
-	/// The number of sampled inputs (combined image samplers) a shader binds, read from its
-	/// <c>slangc -reflection-json</c> sidecar — the DirectX12 counterpart of <c>Loom.Vulkan.ShaderReflection</c>. Drives
-	/// the SRV-table size in the root signature so the app states only pipeline intent (M7-B4). 0 if no sidecar.
+	/// The descriptor-bound resource shape of a shader, read from its <c>slangc -reflection-json</c> sidecar — the
+	/// counts that size the root signature (SRV table, UAV table, root CBV/SRVs) so the app states only pipeline
+	/// intent. Tries the engine sidecar embedded in this backend assembly first, then the app sidecar loose beside
+	/// the <c>.dxil</c>. <see cref="ShaderReflection.Empty"/> when there's no sidecar (a built-in stand-in).
 	/// </summary>
-	public static int ResolveSampledInputCount(string shaderDir, string name)
-	{
-		// Engine shaders embed their reflection JSON; app shaders keep it loose beside the .dxil.
-		var json = TryReadEmbedded(name + ".json");
-		if (json is null)
-		{
-			var path = Path.Combine(shaderDir, name + ".json");
-			if (!File.Exists(path))
-				return 0;
-			json = File.ReadAllBytes(path);
-		}
-		using var doc = JsonDocument.Parse(json);
-		var count = 0;
-		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
-			foreach (var p in parameters.EnumerateArray())
-			{
-				if (!p.TryGetProperty("binding", out var binding) || !binding.TryGetProperty("kind", out var bk) || bk.GetString() != "descriptorTableSlot")
-					continue;
-				if (!p.TryGetProperty("type", out var type) || !type.TryGetProperty("kind", out var tk) || tk.GetString() != "resource")
-					continue;
-				var baseShape = type.TryGetProperty("baseShape", out var shape) ? shape.GetString() : null;
-				var readWrite = type.TryGetProperty("access", out var access) && access.GetString() == "readWrite";
-				// Count only sampled textures (combined image samplers); structured/byte buffers and RW textures
-				// are storage, not SRV-table entries (they ride a root UAV / a later slice on DirectX12).
-				if (baseShape is not ("structuredBuffer" or "byteAddressBuffer") && !readWrite)
-					count++;
-			}
-		return count;
-	}
-
-	/// <summary>
-	/// Count the descriptor-bound constant buffers a shader reads (M15-0 — the per-frame uniform seam), from its
-	/// reflection sidecar: a <c>descriptorTableSlot</c> parameter of type <c>constantBuffer</c> (distinct from a
-	/// <c>pushConstantBuffer</c> push, which never reaches the descriptor heap). 0 or 1 in practice; the backend
-	/// binds it as a root CBV at register b1. (0 when there's no sidecar.)
-	/// </summary>
-	public static int ResolveUniformBufferCount(string shaderDir, string name)
+	public static ShaderReflection ResolveReflection(string shaderDir, string name)
 	{
 		var json = TryReadEmbedded(name + ".json");
 		if (json is null)
 		{
 			var path = Path.Combine(shaderDir, name + ".json");
 			if (!File.Exists(path))
-				return 0;
+				return ShaderReflection.Empty;
 			json = File.ReadAllBytes(path);
 		}
-		using var doc = JsonDocument.Parse(json);
-		var count = 0;
-		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
-			foreach (var p in parameters.EnumerateArray())
-			{
-				if (!p.TryGetProperty("binding", out var binding) || !binding.TryGetProperty("kind", out var bk) || bk.GetString() != "descriptorTableSlot")
-					continue;
-				if (p.TryGetProperty("type", out var type) && type.TryGetProperty("kind", out var tk) && tk.GetString() == "constantBuffer")
-					count++;
-			}
-		return count;
-	}
-
-	/// <summary>
-	/// Count the read-only structured/byte-address buffers a compute shader binds (M15-2 — the skin compute's
-	/// bind-pose verts + bone palette), from its reflection sidecar. These are neither SRV-table textures (counted
-	/// by <see cref="ResolveSampledInputCount"/>) nor RW storage (counted by <see cref="ResolveComputeStorage"/>),
-	/// so they need their own count; the backend binds each as a structured-buffer root SRV (t0..) by GPU address.
-	/// </summary>
-	public static int ResolveComputeInputBuffers(string shaderDir, string name)
-	{
-		var json = TryReadEmbedded(name + ".json");
-		if (json is null)
-		{
-			var path = Path.Combine(shaderDir, name + ".json");
-			if (!File.Exists(path))
-				return 0;
-			json = File.ReadAllBytes(path);
-		}
-		using var doc = JsonDocument.Parse(json);
-		var count = 0;
-		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
-			foreach (var p in parameters.EnumerateArray())
-			{
-				if (!p.TryGetProperty("type", out var type) || !type.TryGetProperty("kind", out var tk) || tk.GetString() != "resource")
-					continue;
-				var baseShape = type.TryGetProperty("baseShape", out var shape) ? shape.GetString() : null;
-				var readWrite = type.TryGetProperty("access", out var access) && access.GetString() == "readWrite";
-				if (baseShape is "structuredBuffer" or "byteAddressBuffer" && !readWrite)
-					count++;
-			}
-		return count;
-	}
-
-	/// <summary>
-	/// The compute storage resources a shader binds, from its reflection sidecar: how many read-write TEXTURES
-	/// (storage images — bound via a UAV descriptor table on DirectX12, e.g. the auto-exposure 1×1 image), how many
-	/// read-write BUFFERS (e.g. the GPU-particle buffer), and a structured buffer's element STRIDE in bytes.
-	/// <para>
-	/// The stride matters: Slang lowers <c>RWStructuredBuffer&lt;T&gt;</c> to a <c>descriptorTableSlot</c> UAV, and
-	/// the DXIL's <c>GetDimensions</c> (which the particle update uses to bound its loop) only returns a non-zero
-	/// element count when the buffer is bound as a real UAV <em>descriptor</em> carrying <c>StructureByteStride</c>
-	/// + <c>NumElements</c> — NOT as a root UAV (a raw GPU address with no metadata, where GetDimensions yields 0
-	/// and every thread early-outs, so nothing is written). A non-zero stride tells <c>BakeCompute</c> to bind a
-	/// structured-buffer UAV descriptor; stride 0 (a raw <c>ByteAddressBuffer</c>, or the FXC built-in with no
-	/// sidecar) keeps the root-UAV path. (0,0,0) when there's no sidecar.
-	/// </para>
-	/// </summary>
-	public static (int Images, int Buffers, int BufferStride) ResolveComputeStorage(string shaderDir, string name)
-	{
-		var json = TryReadEmbedded(name + ".json");
-		if (json is null)
-		{
-			var path = Path.Combine(shaderDir, name + ".json");
-			if (!File.Exists(path))
-				return (0, 0, 0);
-			json = File.ReadAllBytes(path);
-		}
-		using var doc = JsonDocument.Parse(json);
-		int images = 0, buffers = 0, bufferStride = 0;
-		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
-			foreach (var p in parameters.EnumerateArray())
-			{
-				if (!p.TryGetProperty("type", out var type) || !type.TryGetProperty("kind", out var tk) || tk.GetString() != "resource")
-					continue;
-				if (!type.TryGetProperty("access", out var access) || access.GetString() != "readWrite")
-					continue; // sampled (read-only) resources are SRV-table entries, counted by ResolveSampledInputCount
-				var baseShape = type.TryGetProperty("baseShape", out var shape) ? shape.GetString() : null;
-				if (baseShape is "structuredBuffer" or "byteAddressBuffer")
-				{
-					buffers++;
-					if (baseShape == "structuredBuffer" && type.TryGetProperty("resultType", out var resultType))
-						bufferStride = Math.Max(bufferStride, TypeByteSize(resultType)); // element size → the UAV's StructureByteStride
-				}
-				else
-				{
-					images++; // a read-write texture (RWTexture2D) — a storage image bound via a UAV descriptor
-				}
-			}
-		return (images, buffers, bufferStride);
-	}
-
-	// The byte size of a Slang reflection type (scalar / vector / matrix) — used to derive a structured buffer's
-	// element stride. Returns 0 for an unsizeable type (a struct element), which falls back to the root-UAV path.
-	private static int TypeByteSize(JsonElement type)
-	{
-		var kind = type.TryGetProperty("kind", out var k) ? k.GetString() : null;
-		switch (kind)
-		{
-			case "scalar":
-				var scalar = type.TryGetProperty("scalarType", out var s) ? s.GetString() : null;
-				return scalar switch
-				{
-					"float16" or "int16" or "uint16" => 2,
-					"float64" or "int64" or "uint64" => 8,
-					_ => 4, // float32/int32/uint32 and friends
-				};
-			case "vector":
-				var count = type.TryGetProperty("elementCount", out var e) ? e.GetInt32() : 0;
-				return count * (type.TryGetProperty("elementType", out var et) ? TypeByteSize(et) : 0);
-			case "matrix":
-				var rows = type.TryGetProperty("rowCount", out var r) ? r.GetInt32() : 0;
-				var cols = type.TryGetProperty("columnCount", out var c) ? c.GetInt32() : 0;
-				return rows * cols * (type.TryGetProperty("elementType", out var met) ? TypeByteSize(met) : 4);
-			case "struct":
-				// A user struct element (e.g. the generalized particle's two-float4 Particle, M14-4): the element
-				// stride is the extent of its last field, max(field.offset + field.size) over the laid-out fields.
-				// Without this a structured buffer of a struct sizes to 0 and falls back to the root-UAV path, where
-				// GetDimensions returns 0 and the compute writes nothing — the trap that left DirectX12 particles blank.
-				var size = 0;
-				if (type.TryGetProperty("fields", out var fields) && fields.ValueKind == JsonValueKind.Array)
-				{
-					foreach (var field in fields.EnumerateArray())
-					{
-						if (field.TryGetProperty("binding", out var fb) && fb.TryGetProperty("offset", out var fo) && fb.TryGetProperty("size", out var fs))
-							size = Math.Max(size, fo.GetInt32() + fs.GetInt32());
-						else if (field.TryGetProperty("type", out var ft))
-							size += TypeByteSize(ft); // no per-field layout: tight-pack as a fallback
-					}
-				}
-				return size;
-			default:
-				return 0; // unknown — can't size generically
-		}
+		return ShaderReflection.FromBytes(json);
 	}
 
 	/// <summary>Built-in HLSL + sampled-input count, keyed by the logical shader name a <c>TechniqueDescriptor</c> carries.</summary>
