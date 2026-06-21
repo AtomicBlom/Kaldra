@@ -288,9 +288,52 @@ public static class GltfLoader
 
 		var baseColor = DecodeChannel(material, "BaseColor", TextureFormat.Rgba8Srgb);
 		var normal = DecodeChannel(material, "Normal", TextureFormat.Rgba8Unorm);
-		var result = baseColor is null && normal is null ? null : new ModelMaterial { BaseColor = baseColor, Normal = normal };
+		// glTF packs roughness (G) + metallic (B) in one linear texture; occlusion (R) often shares that image.
+		var metallicRoughness = DecodeChannel(material, "MetallicRoughness", TextureFormat.Rgba8Unorm);
+		var occlusion = DecodeChannel(material, "Occlusion", TextureFormat.Rgba8Unorm);
+		var emissive = DecodeChannel(material, "Emissive", TextureFormat.Rgba8Srgb);
+
+		// Emit a material only when it carries at least one texture, preserving the texture-bundle contract earlier
+		// consumers rely on (a factor-only material still produces null). The scalar factors ride along with the
+		// textures so the PBR path can multiply texel × factor and fall back to the factor where a texture is absent.
+		var anyTexture = baseColor is not null || normal is not null || metallicRoughness is not null
+			|| occlusion is not null || emissive is not null;
+		if (!anyTexture)
+		{
+			cache[material] = null;
+			return null;
+		}
+
+		var emissiveColor = material.FindChannel("Emissive")?.Color ?? Vector4.Zero;
+		var result = new ModelMaterial
+		{
+			BaseColor = baseColor,
+			Normal = normal,
+			MetallicRoughness = metallicRoughness,
+			Occlusion = occlusion,
+			Emissive = emissive,
+			BaseColorFactor = material.FindChannel("BaseColor")?.Color ?? Vector4.One,
+			MetallicFactor = Factor(material, "MetallicRoughness", "MetallicFactor", 1f),
+			RoughnessFactor = Factor(material, "MetallicRoughness", "RoughnessFactor", 1f),
+			EmissiveFactor = new Vector3(emissiveColor.X, emissiveColor.Y, emissiveColor.Z),
+			OcclusionStrength = Factor(material, "Occlusion", "OcclusionStrength", 1f),
+			NormalScale = Factor(material, "Normal", "NormalScale", 1f),
+		};
 		cache[material] = result;
 		return result;
+	}
+
+	// Read a named scalar factor from a material channel's parameter list (glTF metallic-roughness factors:
+	// "MetallicFactor"/"RoughnessFactor" on the MetallicRoughness channel, "OcclusionStrength" on Occlusion,
+	// "NormalScale" on Normal). Returns the glTF default when the channel or named float parameter is absent.
+	private static float Factor(GltfMaterial material, string channelKey, string paramName, float fallback)
+	{
+		if (material.FindChannel(channelKey) is not { } channel)
+			return fallback;
+		foreach (var parameter in channel.Parameters)
+			if (parameter.Name == paramName && parameter.Value is float value)
+				return value;
+		return fallback;
 	}
 
 	// Pull a channel's bound texture, open its encoded bytes (SharpGLTF resolves embedded or external URIs), and

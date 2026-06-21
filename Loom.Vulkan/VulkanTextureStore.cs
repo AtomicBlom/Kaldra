@@ -42,18 +42,28 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 	/// <summary>Upload a texture + its mip chain and return a handle a material can bundle.</summary>
 	public Texture Create(TextureData data)
 	{
-		var format = data.Format == TextureFormat.Rgba8Srgb ? VkFormat.R8G8B8A8Srgb : VkFormat.R8G8B8A8Unorm;
-		var mipLevels = (uint)data.Levels.Count;
+		var format = data.Format switch
+		{
+			TextureFormat.Rgba8Srgb => VkFormat.R8G8B8A8Srgb,
+			TextureFormat.Rgba8Unorm => VkFormat.R8G8B8A8Unorm,
+			TextureFormat.Rgba16F => VkFormat.R16G16B16A16Sfloat,
+			_ => throw new VulkanException($"No Vulkan texture format mapping for {data.Format}."),
+		};
+		// A cube map is six array layers created CUBE_COMPATIBLE and viewed as a cube; a 2D texture is one layer.
+		// MipsPerFace is the per-layer mip count (== Levels.Count for a 2D image, since it has one layer).
+		var mipLevels = (uint)data.MipsPerFace;
+		var layerCount = (uint)data.LayerCount;
 
 		// Device-local sampled image with the full mip chain.
 		ImageCreateInfo imageInfo = new()
 		{
 			SType = StructureType.ImageCreateInfo,
+			Flags = data.IsCube ? ImageCreateFlags.CreateCubeCompatibleBit : ImageCreateFlags.None,
 			ImageType = ImageType.Type2D,
 			Format = format,
 			Extent = new Extent3D((uint)data.Width, (uint)data.Height, 1),
 			MipLevels = mipLevels,
-			ArrayLayers = 1,
+			ArrayLayers = layerCount,
 			Samples = SampleCountFlags.Count1Bit,
 			Tiling = ImageTiling.Optimal,
 			Usage = ImageUsageFlags.SampledBit | ImageUsageFlags.TransferDstBit,
@@ -70,13 +80,13 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 		{
 			SType = StructureType.ImageViewCreateInfo,
 			Image = image,
-			ViewType = ImageViewType.Type2D,
+			ViewType = data.IsCube ? ImageViewType.TypeCube : ImageViewType.Type2D,
 			Format = format,
-			SubresourceRange = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, mipLevels, 0, 1),
+			SubresourceRange = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, mipLevels, 0, layerCount),
 		};
 		_vk.CreateImageView(_ctx.Device, in viewInfo, null, out var view).Check("vkCreateImageView");
 
-		UploadLevels(image, data, mipLevels);
+		UploadLevels(image, data);
 
 		var id = _textures.Count;
 		_textures.Add(new StoredTexture { Image = image, Allocation = allocation, View = view });
@@ -86,10 +96,15 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 	/// <summary>The sampled image view a material binding points at.</summary>
 	public ImageView View(int textureId) => _textures[textureId].View;
 
-	// Stage every mip level (tightly packed, concatenated) in one host-visible buffer, transition the whole mip
-	// range Undefined→TransferDst, copy each level, then transition the whole range to ShaderReadOnly.
-	private void UploadLevels(Image image, TextureData data, uint mipLevels)
+	// Stage every level (tightly packed, concatenated) in one host-visible buffer, transition the whole
+	// mip/layer range Undefined→TransferDst, copy each level, then transition the whole range to ShaderReadOnly.
+	// Levels are face-major (Levels[face*mipsPerFace + mip]); a 2D image is one layer, so the loop degenerates to
+	// the plain mip chain.
+	private void UploadLevels(Image image, TextureData data)
 	{
+		var mipsPerFace = (uint)data.MipsPerFace;
+		var layerCount = (uint)data.LayerCount;
+
 		ulong total = 0;
 		foreach (var level in data.Levels)
 			total += (ulong)level.Pixels.Length;
@@ -104,7 +119,7 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 		var staging = _allocator.CreateBuffer(in stagingInfo, new AllocationCreateInfo { Usage = MemoryUsage.CPU_Only }, out var stagingAllocation);
 
 		var mapped = (byte*)stagingAllocation.Map();
-		var copies = new BufferImageCopy[mipLevels];
+		var copies = new BufferImageCopy[data.Levels.Count];
 		ulong offset = 0;
 		for (var i = 0; i < data.Levels.Count; i++)
 		{
@@ -113,21 +128,27 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 			copies[i] = new BufferImageCopy
 			{
 				BufferOffset = offset,
-				ImageSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.ColorBit, MipLevel = (uint)i, LayerCount = 1 },
+				ImageSubresource = new ImageSubresourceLayers
+				{
+					AspectMask = ImageAspectFlags.ColorBit,
+					MipLevel = (uint)i % mipsPerFace,
+					BaseArrayLayer = (uint)i / mipsPerFace,
+					LayerCount = 1,
+				},
 				ImageExtent = new Extent3D((uint)level.Width, (uint)level.Height, 1),
 			};
 			offset += (ulong)level.Pixels.Length;
 		}
 		stagingAllocation.Unmap();
 
-		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, mipLevels, 0, 1);
+		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, mipsPerFace, 0, layerCount);
 		var cmd = BeginOneTime();
 		TransitionImage(cmd, image, range,
 			ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
 			PipelineStageFlags2.TopOfPipeBit, AccessFlags2.None,
 			PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferWriteBit);
 		fixed (BufferImageCopy* pCopies = copies)
-			_vk.CmdCopyBufferToImage(cmd, staging, image, ImageLayout.TransferDstOptimal, mipLevels, pCopies);
+			_vk.CmdCopyBufferToImage(cmd, staging, image, ImageLayout.TransferDstOptimal, (uint)copies.Length, pCopies);
 		TransitionImage(cmd, image, range,
 			ImageLayout.TransferDstOptimal, ImageLayout.ShaderReadOnlyOptimal,
 			PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferWriteBit,
