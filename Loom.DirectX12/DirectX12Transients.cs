@@ -45,7 +45,6 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 										  // and never aliased. Stored in slot 0; the accessors redirect persistent ids there so state is shared (a
 										  // transition this frame must see where last frame left it), exactly as the Vulkan backend shares one image.
 	private readonly bool[] _isPersistent; // by resourceId
-	private readonly HashSet<int> _aliasedMemberIds = []; // ids in a multi-member bucket — need an aliasing barrier
 	private readonly List<ComPtr<ID3D12Heap>> _heaps = []; // per-bucket-per-slot placed-resource heaps
 	private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
 	private ComPtr<ID3D12DescriptorHeap> _dsvHeap;
@@ -119,13 +118,6 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 
 		AllocateBuffers(ctx, bufferTargets, bufferCount);
 		AllocatePersistent(ctx, persistentTargets);
-
-		// A resource that shares a bucket with at least one other resource reuses memory mid-frame, so the
-		// executor must aliasing-barrier it before each (re)activation. Singletons need no barrier.
-		foreach (var bucket in aliasPlan.Buckets)
-			if (bucket.Members.Length > 1)
-				foreach (var member in bucket.Members)
-					_aliasedMemberIds.Add(member.Id);
 	}
 
 	// Group the aliasable (colour/depth) resources by their AliasPlan bucket, back each bucket with one placed-
@@ -244,7 +236,6 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 	private uint SlotOf(uint slot, int id) => _isPersistent[id] ? 0u : slot;
 
 	public bool IsTransient(int id) => _isTransient[id];
-	public bool IsAliasedMember(int id) => _aliasedMemberIds.Contains(id);
 	public (uint W, uint H) Extent(int id) => _extents[id];
 	public uint ByteSize(int id) => _byteSizes[id];
 	public DxgiFormat Format(uint slot, int id) => _targets[SlotOf(slot, id)][id].Format;

@@ -57,9 +57,10 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	// Per-buffer backbuffer state is tracked because D3D12 transition barriers need the resource's exact current
 	// state (see DirectX12StateMapping). The active graph + its derived plan live on EngineBase.
 	private readonly ResourceStates[] _backbufferState = new ResourceStates[BufferCount];
-	// Aliased transients re-barriered this frame: a bucket member that shares memory needs one D3D12 aliasing
-	// barrier before its first (re)activation each frame (the hand-off from whatever member last used the memory).
-	private readonly HashSet<int> _aliasBarriered = [];
+	// Bucket members that reuse an earlier member's memory (AliasPlan.AliasedMemberIds — the same set the Vulkan
+	// backend consumes), rebuilt per graph; each needs one D3D12 aliasing barrier before its first use this frame.
+	private IReadOnlySet<int> _aliasedHandoffIds = new HashSet<int>();
+	private readonly HashSet<int> _aliasBarriered = []; // of those, the ones already barriered this frame
 
 	private ComPtr<ID3D12Resource> _readback;
 	private ulong _readbackSize;
@@ -440,18 +441,20 @@ public sealed unsafe class DirectX12Engine : EngineBase
 			return;
 		}
 
+		var transients = _transients!; // non-null throughout recording (SetGraph built it)
+
 		// An aliased transient reuses memory another bucket member held — before its first (re)activation this
 		// frame, an aliasing barrier orders this use after whatever last touched the shared memory (and marks its
 		// contents undefined, which the pass's clear/full-write then initialises). The DirectX12 analogue of the
 		// Vulkan backend's widened-source-scope birth barrier; once per resource per frame.
-		if (_transients!.IsAliasedMember(id) && _aliasBarriered.Add(id))
-			EmitAliasingBarrier(_transients.Resource(index, id));
+		if (_aliasedHandoffIds.Contains(id) && _aliasBarriered.Add(id))
+			EmitAliasingBarrier(transients.Resource(index, id));
 
-		var current = _transients.State(index, id);
+		var current = transients.State(index, id);
 		if (current == target)
 			return;
-		Transition(_transients.Resource(index, id), current, target);
-		_transients.SetState(index, id, target);
+		Transition(transients.Resource(index, id), current, target);
+		transients.SetState(index, id, target);
 	}
 
 	// A D3D12 aliasing barrier handing the bucket's shared memory to <paramref name="after"/> (before = null:
@@ -870,6 +873,9 @@ public sealed unsafe class DirectX12Engine : EngineBase
 
 	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed)
 	{
+		// Members after a bucket's first reuse an earlier member's memory mid-frame and need an aliasing barrier on
+		// first use; the first member is the original user (its first use is a full write, fence-ordered across frames).
+		_aliasedHandoffIds = Aliases.AliasedMemberIds();
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present;
 
