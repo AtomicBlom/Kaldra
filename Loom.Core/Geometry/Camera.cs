@@ -28,4 +28,16 @@ public readonly record struct Camera(Matrix4x4 View, Matrix4x4 Projection)
 	/// normalized and oriented inside-positive — see <see cref="Frustum"/>.
 	/// </summary>
 	public Frustum ExtractFrustum() => ViewProjection.ToFrustum();
+
+	/// <summary>
+	/// This camera with its projection's Y axis flipped (negated <c>M22</c>) — the clip-space fix-up a backend
+	/// applies on ingest so a host-supplied +Y-up projection renders upright. Shared so every backend that needs
+	/// the flip negates identically rather than hand-rolling the same matrix tweak.
+	/// </summary>
+	public Camera FlipClipY()
+	{
+		var projection = Projection;
+		projection.M22 *= -1f;
+		return this with { Projection = projection };
+	}
 }

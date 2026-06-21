@@ -1,15 +1,15 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 
-namespace Loom.DirectX12;
+namespace Loom.Graph;
 
 /// <summary>
-/// Minimal, dependency-free PNG encoder (8-bit RGBA) for debug framebuffer captures — the DirectX12 backend's own
-/// copy of the encoder the Vulkan backend ships (kept local so Loom.DirectX12 doesn't reference Loom.Vulkan). Uses
-/// the built-in <see cref="ZLibStream"/> for the IDAT stream and a hand-rolled CRC-32; filter type 0 on every
-/// scanline. Not optimized — fine for validation grabs.
+/// Minimal, dependency-free PNG encoder (8-bit RGBA) for debug framebuffer captures. Uses the built-in
+/// <see cref="ZLibStream"/> for the IDAT zlib stream and a hand-rolled CRC-32 — no image library needed. Not
+/// optimized (filter type 0 on every scanline); fine for validation grabs. Pure CPU work over a byte span, so it
+/// is shared by every backend rather than copied into each.
 /// </summary>
-internal static class DirectX12PngWriter
+public static class PngWriter
 {
 	private static readonly byte[] Signature = [137, 80, 78, 71, 13, 10, 26, 10];
 	private static readonly uint[] CrcTable = BuildCrcTable();
@@ -29,12 +29,13 @@ internal static class DirectX12PngWriter
 		ihdr[12] = 0; // no interlace
 		WriteChunk(stream, "IHDR"u8, ihdr);
 
+		// Raw image data: each scanline prefixed with a filter byte (0 = none).
 		var stride = width * 4;
 		var raw = new byte[height * (1 + stride)];
 		for (var y = 0; y < height; y++)
 		{
 			var dst = y * (1 + stride);
-			raw[dst] = 0; // filter byte: none
+			raw[dst] = 0;
 			rgba.Slice(y * stride, stride).CopyTo(raw.AsSpan(dst + 1));
 		}
 

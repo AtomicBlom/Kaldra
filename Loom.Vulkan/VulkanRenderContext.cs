@@ -7,6 +7,7 @@ using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Vulkan;
 using VkFormat = Silk.NET.Vulkan.Format;
 
@@ -32,7 +33,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	private readonly VulkanDescriptorAllocator _descriptors;
 	private readonly VulkanMeshStore _meshes;
 	private readonly VulkanTextureStore _textures;
-	private readonly VulkanMaterialStore _materials;
+	private readonly MaterialStore _materials;
 	private readonly VulkanInstanceUploadBuffer _instanceUpload;
 	// M15-0: per-frame host-visible ring for the uniform seam (CSM matrices, lighting params, wind) — the same
 	// retire-not-free ring as the instance stream, but created UniformBufferBit and aligned to 256 (≥ any
@@ -53,24 +54,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	// (Wrap + MinMagMip{Linear,Point}). The existing nearest/linear samplers above clamp (post passes never tile).
 	private readonly Sampler _repeatLinearSampler;
 	private readonly Sampler _repeatNearestSampler;
-#if LOOM_IMGUI
-	// The host's ImGui renderer (backend-specific), set by the executor when the host enables ImGui. The HUD
-	// pass's ctx.DrawImGui() forwards this frame's draw data to it. Null when ImGui is not in use.
-	private VulkanImGuiRenderer? _imgui;
-#endif
-	// M13 resource viewer: GetDebugTextureId returns (resourceId + DebugTextureBase) — a non-zero id the host uses to
-	// gate "inspectable?" — and records the resource for this frame's thumbnail grid (the engine draws the images;
-	// ImGui.Image can't be used on win-arm64). Cleared after each HUD pass draws them.
-	internal const int DebugTextureBase = 0x10000;
-	private readonly List<int> _thumbRequests = [];
-	// M13 frustum-freeze wireframe: screen-space line segments (x0,y0,x1,y1 in pixels) the host sets each frame.
-	private Vector4[] _debugLines = [];
-	private int _debugLineCount;
-	private const uint DebugLineColor = 0xFF00FFFFu; // IM_COL32 yellow
-
-	// The native ImDrawData* the host produced this frame; stays a plain nint so the field (and the neutral
-	// ctx.DrawImGui() seam) exist even when the engine is built without ImGui (UseImGui=false).
-	private nint _imguiDrawData;
 
 	// This frame's draw lists, pulled from FrameInputs.DrawLists and surfaced as ctx.DrawLists; a producer (the UI
 	// painter) looks one up by id and submits it through DrawList.
@@ -122,7 +105,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		VulkanDescriptorAllocator descriptors,
 		VulkanMeshStore meshes,
 		VulkanTextureStore textures,
-		VulkanMaterialStore materials,
+		MaterialStore materials,
 		VMASharp.VulkanMemoryAllocator allocator,
 		int framesInFlight)
 	{
@@ -152,31 +135,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	/// The VulkanTechnique objects are owned by the VulkanTechniqueCache; the engine resets that separately after draining.</summary>
 	public void ClearBaked() => _baked.Clear();
 
-	/// <summary>Request that <paramref name="resourceId"/> be shown as a thumbnail in this frame's resource-viewer
-	/// grid (M13). Called by the engine's GetDebugTextureId as the host enumerates resources to display.</summary>
-	public void RequestThumbnail(int resourceId)
-	{
-		if (!_thumbRequests.Contains(resourceId))
-			_thumbRequests.Add(resourceId);
-	}
-
-	/// <summary>Set this frame's debug line segments (screen pixels, x0,y0,x1,y1) — the frustum-freeze wireframe the
-	/// HUD pass draws as an overlay (M13). Pass an empty span to clear. Overwritten each frame by the host.</summary>
-	public void SetDebugLines(ReadOnlySpan<Vector4> segments)
-	{
-		if (_debugLines.Length < segments.Length)
-			_debugLines = new Vector4[segments.Length];
-		segments.CopyTo(_debugLines);
-		_debugLineCount = segments.Length;
-	}
-
-#if LOOM_IMGUI
-	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
-	public void SetImGui(VulkanImGuiRenderer renderer) => _imgui = renderer;
-#endif
-
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, hover, timing, HDR-output state, and draw lists before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, IReadOnlyList<Camera> cascades, IReadOnlyList<float> cascadeSplits, uint hoverId, nint imguiDrawData, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists, Extent2D fbExtent, bool hdrOutput)
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, IReadOnlyList<Camera> cascades, IReadOnlyList<float> cascadeSplits, uint hoverId, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
@@ -187,7 +147,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_cascades = cascades;
 		_cascadeSplits = cascadeSplits;
 		_hoverId = hoverId;
-		_imguiDrawData = imguiDrawData;
 		_drawLists = drawLists;
 		_fbExtent = fbExtent;
 		HdrOutput = hdrOutput;
@@ -569,7 +528,12 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			*(uint*)(block + pushLen) = c.Tag;
 			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, block);
 
-			var view = _textures.View(textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id);
+			var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
+			// An id offset by DebugTextureBase is an inspectable graph resource (the resource viewer): sample this
+			// frame's live transient image instead of a loaded texture-store entry.
+			var view = texId >= InspectableResource.DebugTextureBase
+				? _resources.Get(_frameSlot, texId - InspectableResource.DebugTextureBase).View
+				: _textures.View(texId);
 			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 			var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
 			var write = new WriteDescriptorSet
@@ -589,6 +553,17 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 
 			_vk.CmdDrawIndexed(_cmd, (uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
 		}
+	}
+
+	/// <summary>Resolve an inspectable graph resource to a draw-list-bindable texture handle for this frame (resource
+	/// viewer). The id is offset by <see cref="InspectableResource.DebugTextureBase"/> so <see cref="DrawList{TVertex}"/> samples the live
+	/// transient image rather than a loaded texture; the dimensions are the resource's current size.</summary>
+	public Texture? ResolveInspectable(int resourceId)
+	{
+		if (resourceId < 0)
+			return null;
+		ref var image = ref _resources.Get(_frameSlot, resourceId);
+		return new Texture(resourceId + InspectableResource.DebugTextureBase, (int)image.Extent.Width, (int)image.Extent.Height);
 	}
 
 	// Bind sampled graph resources (transients) as combined image samplers at bindings 0..N-1 — the path
@@ -710,43 +685,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(data);
 		var (buffer, offset) = _uniformUpload.Upload(_frameSlot, bytes);
 		return new UniformBinding(buffer, offset, (ulong)bytes.Length);
-	}
-
-	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
-	// rendering scope. No-op when ImGui isn't enabled or the host produced no draw data this frame — and a
-	// compiled-out no-op entirely when the engine is built without ImGui (UseImGui=false).
-	public void DrawImGui()
-	{
-#if LOOM_IMGUI
-		if (_imgui is null)
-			return;
-
-		// The ImGui UI (menu, windows, the resource-viewer's name list) first.
-		_imgui.Render(_cmd, _imguiDrawData, _fbExtent, _frameSlot);
-
-		// M13 resource viewer: draw the requested resources as a thumbnail grid (engine-drawn — ImGui.Image no-ops on
-		// win-arm64). The engine injected a HUD .Samples edge for each inspectable resource, so they're live and in
-		// ShaderRead here — sampling a real image, not an aliased corpse. Laid out to the right of the name list.
-		if (_thumbRequests.Count > 0)
-		{
-			const float x0 = 300f, y0 = 30f, w = 200f, h = 112f, gap = 10f;
-			var cols = Math.Max(1, (int)((_fbExtent.Width - x0 - 10f) / (w + gap)));
-			var thumbs = new VulkanImGuiRenderer.Thumbnail[_thumbRequests.Count];
-			for (var i = 0; i < _thumbRequests.Count; i++)
-			{
-				ref var image = ref _resources.Get(_frameSlot, _thumbRequests[i]);
-				var gx = x0 + i % cols * (w + gap);
-				var gy = y0 + i / cols * (h + gap);
-				thumbs[i] = new VulkanImGuiRenderer.Thumbnail(image.View, gx, gy, w, h);
-			}
-			_imgui.DrawThumbnails(_cmd, thumbs, _fbExtent, _frameSlot);
-			_thumbRequests.Clear();
-		}
-
-		// M13 frustum-freeze wireframe: the host projected the frozen frustum's edges to screen pixels; draw them.
-		if (_debugLineCount > 0)
-			_imgui.DrawLines(_cmd, _debugLines.AsSpan(0, _debugLineCount), DebugLineColor, 2f, _fbExtent, _frameSlot);
-#endif
 	}
 
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;

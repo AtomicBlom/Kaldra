@@ -12,6 +12,7 @@ public static class VertexFormatExtensions
 		VertexFormat.Float4 => 4 * sizeof(float),
 		VertexFormat.UInt4 => 4 * sizeof(uint),
 		VertexFormat.Half4 => 4 * sizeof(ushort),
+		VertexFormat.UNorm4 => 4 * sizeof(byte),
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 
@@ -24,6 +25,7 @@ public static class VertexFormatExtensions
 		VertexFormat.Float4 => 4,
 		VertexFormat.UInt4 => 4,
 		VertexFormat.Half4 => 4,
+		VertexFormat.UNorm4 => 1, // one packed 32-bit word, unpacked to four channels by the input assembler
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 }

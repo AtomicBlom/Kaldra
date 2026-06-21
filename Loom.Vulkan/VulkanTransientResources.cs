@@ -263,26 +263,11 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 			}
 	}
 
-	// Backbuffer-domain resources follow the native swapchain extent — scaled by the resource's OWN scale, so a
-	// fractional sibling declared in g.Screen (the bloom mip chain: scale 1/2..1/32) shrinks while a full-res
-	// target (scale 1) stays native. Backbuffer-relative domains follow a fraction of it; fixed domains use their
-	// declared size. (This branch previously returned _swapExtent unconditionally, dropping resource.Scale — so
-	// the bloom mips were created FULL-resolution and the "downsample" chain became a no-op 1:1 copy with no glow
-	// spread, i.e. no bloom halo. DirectX12's DirectX12Transients had this right via Scale(swap, resource.Scale).)
+	// Marshal the neutral resource sizing to a Vulkan extent. The scaling rules (backbuffer × own scale,
+	// relative-domain fraction, fixed size) live on ResourceHandle so both backends size identically.
 	private Extent2D ExtentOf(ResourceHandle resource)
 	{
-		if (resource.Domain.IsBackbuffer)
-			return new Extent2D(
-				Math.Max(1u, (uint)MathF.Round(_swapExtent.Width * resource.Scale)),
-				Math.Max(1u, (uint)MathF.Round(_swapExtent.Height * resource.Scale)));
-		if (resource.Domain.RelativeScale > 0f)
-		{
-			var f = resource.Domain.RelativeScale * resource.Scale; // domain fraction × the resource's own (mip) scale
-			return new Extent2D(
-				Math.Max(1u, (uint)MathF.Round(_swapExtent.Width * f)),
-				Math.Max(1u, (uint)MathF.Round(_swapExtent.Height * f)));
-		}
-		var (w, h) = resource.Resolve();
+		var (w, h) = resource.Resolve((int)_swapExtent.Width, (int)_swapExtent.Height);
 		return new Extent2D((uint)w, (uint)h);
 	}
 

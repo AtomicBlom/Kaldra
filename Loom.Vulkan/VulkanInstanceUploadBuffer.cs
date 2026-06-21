@@ -7,9 +7,9 @@ namespace Loom.Vulkan;
 
 /// <summary>
 /// A per-frame-in-flight host-visible vertex buffer for CPU-driven instancing (M12) — the place
-/// <c>ctx.DrawInstanced(mesh, technique, span)</c> stages its per-instance data each frame. Modeled on
-/// <c>VulkanImGuiRenderer</c>'s dynamic upload path: one mappable buffer per slot, grown with headroom, written
-/// map→copy→unmap, no fence wait (the executor waited the slot's fence before re-recording it).
+/// <c>ctx.DrawInstanced(mesh, technique, span)</c> stages its per-instance data each frame: one mappable buffer
+/// per slot, grown with headroom, written map→copy→unmap, no fence wait (the executor waited the slot's fence
+/// before re-recording it).
 /// <para>
 /// Multiple instanced draws in one frame append at successive (16-aligned) offsets into the slot's buffer. A
 /// growth mid-frame preserves the bytes already written and <em>retires</em> the old buffer rather than freeing
@@ -81,7 +81,7 @@ internal sealed unsafe class VulkanInstanceUploadBuffer : IDisposable
 		if (_sizes[slot] >= needed)
 			return;
 
-		var grown = needed + needed / 2; // 50% headroom, like VulkanImGuiRenderer
+		var grown = needed + needed / 2; // 50% headroom so a frame's growth doesn't reallocate next frame
 		BufferCreateInfo info = new()
 		{
 			SType = StructureType.BufferCreateInfo,

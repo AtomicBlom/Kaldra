@@ -100,14 +100,12 @@ public sealed class VulkanBackend : IRenderBackend
 				$"The Vulkan backend needs the window's {nameof(IVkSurface)}; got {surface.GetType().Name}.",
 				nameof(surface));
 
-		var vulkanSettings = settings as VulkanEngineSettings ?? new VulkanEngineSettings
+		var vulkanSettings = settings as VulkanEngineSettings;
+		if (vulkanSettings is null)
 		{
-			EnableValidation = settings.EnableValidation,
-			VSync = settings.VSync,
-			MaxFramesPerSecond = settings.MaxFramesPerSecond,
-			HdrOutput = settings.HdrOutput,
-			PreferredBackend = settings.PreferredBackend,
-		};
+			vulkanSettings = new VulkanEngineSettings();
+			settings.CopyBaseSettingsTo(vulkanSettings);
+		}
 
 		return new VulkanEngine(vkSurface, width, height, vulkanSettings);
 	}

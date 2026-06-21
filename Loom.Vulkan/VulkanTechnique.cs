@@ -80,7 +80,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 	// then <paramref name="storageImages"/> storage images (a compute's .ReadWrites of an image), then
 	// <paramref name="storageBuffers"/> storage buffers (a compute's .ReadWrites of a buffer — GPU particles),
 	// then <paramref name="uniformBuffers"/> uniform buffers (M15-0 — the per-frame uniform seam, fed from the
-	// uniform ring), visible to the given stage. The reflection (VulkanShaderReflection) derives these counts; the
+	// uniform ring), visible to the given stage. The shader reflection derives these counts; the
 	// shaders declare the matching [[vk::binding(n,0)]] in the same category order.
 	private DescriptorSetLayout CreateSetLayout(int sampleCount, int storageImages, int storageBuffers, int uniformBuffers, ShaderStageFlags stage)
 	{
@@ -218,6 +218,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		VertexFormat.Float4 => Format.R32G32B32A32Sfloat,
 		VertexFormat.UInt4 => Format.R32G32B32A32Uint,
 		VertexFormat.Half4 => Format.R16G16B16A16Sfloat,
+		VertexFormat.UNorm4 => Format.R8G8B8A8Unorm,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 
