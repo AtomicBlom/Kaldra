@@ -39,4 +39,5 @@ public readonly record struct VulkanTechniqueDescription(
 	VertexLayout? Layout = null,
 	VertexLayout? Instance = null,
 	int UniformBufferCount = 0,
-	bool HasListPush = false);
+	bool HasListPush = false,
+	CullMode Cull = CullMode.None);

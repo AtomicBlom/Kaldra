@@ -5,6 +5,7 @@ using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 using Format = Silk.NET.DXGI.Format;
+using D3DCullMode = Silk.NET.Direct3D12.CullMode;
 
 namespace Loom.DirectX12;
 
@@ -315,7 +316,10 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				PS = new ShaderBytecode { PShaderBytecode = pPs, BytecodeLength = (nuint)template.FragmentBytecode.Length },
 				BlendState = blend,
 				SampleMask = uint.MaxValue,
-				RasterizerState = new RasterizerDesc { FillMode = FillMode.Solid, CullMode = CullMode.None, FrontCounterClockwise = false, DepthClipEnable = true },
+				// Counter-clockwise winding is the front face (the glTF convention: triangles wound CCW when viewed
+				// from outside face the camera), matching the Vulkan backend, so Cull.Back discards the same
+				// away-facing triangles on either backend. D3D12 defaults to clockwise-front, hence the explicit flag.
+				RasterizerState = new RasterizerDesc { FillMode = FillMode.Solid, CullMode = ToD3DCull(template.Cull), FrontCounterClockwise = true, DepthClipEnable = true },
 				DepthStencilState = new DepthStencilDesc
 				{
 					DepthEnable = hasDepth,
@@ -432,6 +436,16 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			}
 		}
 	}
+
+	// Exhaustive so a new CullMode member fails loud here instead of silently disabling culling. The Core enum is
+	// fully qualified because Silk's Direct3D12.CullMode (aliased D3DCullMode) shares the name in this file.
+	private static D3DCullMode ToD3DCull(Loom.Core.Graph.CullMode cull) => cull switch
+	{
+		Loom.Core.Graph.CullMode.None => D3DCullMode.None,
+		Loom.Core.Graph.CullMode.Back => D3DCullMode.Back,
+		Loom.Core.Graph.CullMode.Front => D3DCullMode.Front,
+		_ => throw new NotSupportedException($"DirectX12: CullMode '{cull}' is not mapped to a D3D12 cull mode."),
+	};
 
 	// Exhaustive so a new SamplerAddress member fails loud here instead of silently mapping to Clamp.
 	private static TextureAddressMode ToTextureAddress(SamplerAddress address) => address switch

@@ -202,7 +202,8 @@ internal sealed unsafe class VulkanEngine : EngineBase
 			layout,
 			descriptor.Instance,
 			reflection.UniformBufferCount,
-			descriptor.HasListPush);
+			descriptor.HasListPush,
+			descriptor.Cull);
 
 	}
 

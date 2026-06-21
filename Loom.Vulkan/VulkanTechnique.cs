@@ -297,7 +297,16 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		{
 			SType = StructureType.PipelineRasterizationStateCreateInfo,
 			PolygonMode = PolygonMode.Fill,
-			CullMode = CullModeFlags.None,
+			CullMode = description.Cull switch
+			{
+				CullMode.None => CullModeFlags.None,
+				CullMode.Back => CullModeFlags.BackBit,
+				CullMode.Front => CullModeFlags.FrontBit,
+				_ => throw new NotSupportedException($"Vulkan: CullMode '{description.Cull}' is not mapped to cull flags."),
+			},
+			// Counter-clockwise winding is the front face (the glTF convention: triangles wound CCW when viewed from
+			// outside face the camera), so Cull.Back discards the away-facing triangles. The DX12 backend uses the
+			// same convention, so a technique's CullMode discards the same triangles on either backend.
 			FrontFace = FrontFace.CounterClockwise,
 			LineWidth = 1.0f,
 		});

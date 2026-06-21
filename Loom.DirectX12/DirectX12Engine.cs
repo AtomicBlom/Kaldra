@@ -860,7 +860,8 @@ public sealed unsafe class DirectX12Engine : EngineBase
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
-			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush));
+			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
+			descriptor.Cull));
 
 	}
 
