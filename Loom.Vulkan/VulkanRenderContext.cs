@@ -708,7 +708,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			template.Spirv, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
 			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
-			StorageBufferCount: template.StorageBufferCount, ParticleInput: template.ParticleInput,
+			StorageBufferCount: template.StorageBufferCount,
 			Layout: template.Layout, Instance: template.Instance, UniformBufferCount: template.UniformBufferCount,
 			HasListPush: template.HasListPush, Cull: template.Cull), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and

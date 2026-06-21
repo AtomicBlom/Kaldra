@@ -36,7 +36,6 @@ public readonly record struct VulkanTechniqueTemplate(
 	bool IsCompute = false,
 	int StorageCount = 0,
 	int StorageBufferCount = 0,
-	bool ParticleInput = false,
 	SamplerAddress Address = SamplerAddress.Clamp,
 	VertexLayout? Layout = null,
 	VertexLayout? Instance = null,

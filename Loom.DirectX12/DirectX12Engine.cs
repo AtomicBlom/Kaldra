@@ -859,7 +859,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		_techniques.Register(name, new DirectX12TechniqueTemplate(
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
-			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
+			descriptor.IsCompute, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
 			descriptor.Cull));
 

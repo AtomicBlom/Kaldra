@@ -197,7 +197,6 @@ internal sealed unsafe class VulkanEngine : EngineBase
 			descriptor.IsCompute,
 			reflection.StorageImageCount,
 			reflection.StorageBufferCount,
-			descriptor.ParticleInput,
 			descriptor.Address,
 			layout,
 			descriptor.Instance,

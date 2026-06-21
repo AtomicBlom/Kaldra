@@ -35,7 +35,6 @@ public readonly record struct VulkanTechniqueDescription(
 	bool IsCompute = false,
 	int StorageCount = 0,
 	int StorageBufferCount = 0,
-	bool ParticleInput = false,
 	VertexLayout? Layout = null,
 	VertexLayout? Instance = null,
 	int UniformBufferCount = 0,
