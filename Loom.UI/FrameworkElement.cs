@@ -1,4 +1,3 @@
-using Loom.Core;
 using Loom.Core.Primitives;
 
 namespace Loom.UI;
@@ -25,6 +24,33 @@ public abstract class FrameworkElement : UIElement
 
 	/// <summary>Optional name (the <c>x:Name</c> the generator assigns; diagnostics for now).</summary>
 	public string? Name { get; set; }
+
+	public static readonly DependencyProperty<FrameworkElement, Style?> StyleProperty =
+		DependencyProperty.Register(nameof(Style),
+			new PropertyMetadata<FrameworkElement, Style?>
+			{
+				PropertyChanged = static (o, old, @new) => { old?.Clear(o); @new?.Apply(o); }
+			});
+
+	/// <summary>The style applied to this element. Writing clears the previous style's setters before applying the
+	/// new one (Style rung; below Local, above Default — §D1.6).</summary>
+	public Style? Style { get => GetValue(StyleProperty); set => SetValue(StyleProperty, value); }
+
+	/// <summary>Per-element resource dictionary (the lookup root for <c>{StaticResource}</c> at runtime).</summary>
+	public ResourceDictionary? Resources { get; set; }
+
+	/// <summary>Walk the element tree from this element to the root, returning the first resource with
+	/// <paramref name="key"/>, or null. Used by the generated <c>InitializeComponent</c> for
+	/// <c>{StaticResource key}</c> references.</summary>
+	public object? FindResource(string key)
+	{
+		for (UIElement? el = this; el is not null; el = el.Parent)
+		{
+			if (el is FrameworkElement fe && fe.Resources?.TryFind(key, out var v) == true)
+				return v;
+		}
+		return null;
+	}
 
 	// NaN-safe equality so re-assigning Auto (NaN) doesn't read as a change.
 	private static bool Same(float a, float b) => a.Equals(b);
@@ -73,7 +99,7 @@ public abstract class FrameworkElement : UIElement
 	// position it within the slot by alignment. alignmentIndex: 0=near, 1=center, 2=far, 3=stretch.
 	private static (float pos, float size) ArrangeAxis(int alignmentIndex, float slotStart, float slotSize, float desired, float explicitSize, float min, float max)
 	{
-		float size = alignmentIndex == 3 && float.IsNaN(explicitSize)
+		var size = alignmentIndex == 3 && float.IsNaN(explicitSize)
 			? slotSize
 			: Clamp(float.IsNaN(explicitSize) ? desired : explicitSize, min, max);
 		size = MathF.Min(size, slotSize);

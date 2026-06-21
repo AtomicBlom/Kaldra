@@ -1,10 +1,11 @@
+using Loom.UI.Input;
+
 namespace Loom.UI.Controls;
 
 /// <summary>
 /// A clickable <see cref="ContentControl"/> with a default background (PlanningUI.md §D2.1/§D5.3). <see cref="Click"/>
-/// is a bubbling routed event synthesized from a pointer press + release over the button: the button listens to its
-/// own (bubbled) pointer events, tracks the pressed state, and raises <see cref="Click"/> on release — unless the
-/// pointer left the button first (press-then-leave does not click).
+/// is a bubbling routed event synthesized from a pointer press + release over the button, or from Enter/Space when
+/// the button has keyboard focus.
 /// </summary>
 public sealed class Button : ContentControl
 {
@@ -16,15 +17,16 @@ public sealed class Button : ContentControl
 	public Button()
 	{
 		Background = HdrColor.FromRgb(60, 60, 70);
-		AddHandler(PointerPressedEvent, OnPointerPressed);
+		AddHandler(PointerPressedEvent,  OnPointerPressed);
 		AddHandler(PointerReleasedEvent, OnPointerReleased);
-		AddHandler(PointerExitedEvent, OnPointerExited);
+		AddHandler(PointerExitedEvent,   OnPointerExited);
+		AddHandler(KeyDownEvent,         OnKeyDown);
 	}
 
 	/// <summary>Raised when the button is clicked. Wired by the generator (<c>btn.Click += OnClick</c>) — bubbles.</summary>
 	public event RoutedEventHandler Click
 	{
-		add => AddHandler(ClickEvent, value);
+		add    => AddHandler(ClickEvent, value);
 		remove => RemoveHandler(ClickEvent, value);
 	}
 
@@ -42,5 +44,12 @@ public sealed class Button : ContentControl
 			return;
 		_isPressed = false;
 		PerformClick();
+	}
+
+	private void OnKeyDown(object sender, RoutedEventArgs e)
+	{
+		if (e is not KeyRoutedEventArgs key) return;
+		if (key.Key is VirtualKey.Enter or VirtualKey.Space)
+			PerformClick();
 	}
 }
