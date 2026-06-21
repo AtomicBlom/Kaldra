@@ -449,6 +449,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		VertexFormat.Float4 => Format.FormatR32G32B32A32Float,
 		VertexFormat.UInt4 => Format.FormatR32G32B32A32Uint,
 		VertexFormat.Half4 => Format.FormatR16G16B16A16Float,
+		VertexFormat.UNorm4 => Format.FormatR8G8B8A8Unorm,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 

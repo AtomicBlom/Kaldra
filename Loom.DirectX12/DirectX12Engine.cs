@@ -45,9 +45,6 @@ public sealed unsafe class DirectX12Engine : IEngine
 	private readonly DirectX12MaterialStore _materials;
 	private readonly DirectX12RenderContext _context;
 	private DirectX12Transients? _transients;
-#if LOOM_IMGUI
-	private DirectX12ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
-#endif
 
 	private readonly ComPtr<ID3D12CommandAllocator>[] _allocators = new ComPtr<ID3D12CommandAllocator>[BufferCount];
 	private ComPtr<ID3D12GraphicsCommandList> _commandList;
@@ -204,25 +201,6 @@ public sealed unsafe class DirectX12Engine : IEngine
 	public double LastFrameGpuMilliseconds => _frameGpuMs;
 
 	public IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
-
-	public nint GetDebugTextureId(int resourceId)
-	{
-#if LOOM_IMGUI
-		if (_imgui is not null && resourceId >= 0 && _inspectable.Exists(r => r.Id == resourceId))
-		{
-			_context.RequestThumbnail(resourceId); // engine draws the image in the HUD pass (ImGui.Image no-ops on arm64)
-			return (nint)(resourceId + DirectX12RenderContext.DebugTextureBase);
-		}
-#endif
-		return 0;
-	}
-
-	public void SetDebugLines(ReadOnlySpan<System.Numerics.Vector4> segments)
-	{
-#if LOOM_IMGUI
-		_context.SetDebugLines(segments);
-#endif
-	}
 
 	public void Render(FrameInputs inputs)
 	{
@@ -825,9 +803,6 @@ public sealed unsafe class DirectX12Engine : IEngine
 		foreach (ref var buffer in _timingReadback.AsSpan())
 			if (buffer.Handle is not null)
 				buffer.Dispose();
-#if LOOM_IMGUI
-		_imgui?.Dispose();
-#endif
 		_transients?.Dispose();
 		_context.Dispose();
 		_meshes.Dispose();
@@ -937,6 +912,8 @@ public sealed unsafe class DirectX12Engine : IEngine
 			users.Add(name);
 	}
 
+	public bool ResourceInspectionEnabled { get; set; }
+
 	/// <summary>
 	/// Make <paramref name="graph"/> the active graph: derive its schedule + barrier plan (the backend-neutral
 	/// Execute-layer products, identical to what the Vulkan engine consumes) and route <see cref="Render"/>
@@ -950,21 +927,19 @@ public sealed unsafe class DirectX12Engine : IEngine
 
 		_graph = graph;
 
-		// M13 resource viewer: enumerate the colour/depth resources the host can preview, and (with the debug UI
-		// live) inject HUD .Samples edges so the Execute layer derives their keep-alive + PixelShaderResource
-		// transition — the viewer samples live images, not aliased corpses. Graphs set before EnableImGui (the DirectX12
-		// aliasing diagnostics) keep their exact aliasing. The author's graph is untouched; we execute `executed`.
+		// Resource viewer: enumerate the colour/depth resources the host can preview, and (when inspection is enabled)
+		// inject HUD .Samples edges so the Execute layer derives their keep-alive + PixelShaderResource transition —
+		// the viewer samples live images, not aliased corpses. Graphs set with inspection off (the DirectX12 aliasing
+		// diagnostics) keep their exact aliasing. The author's graph is untouched; we execute `executed`.
 		_inspectable.Clear();
 		var executed = graph;
-#if LOOM_IMGUI
-		if (_imgui is not null)
+		if (ResourceInspectionEnabled)
 		{
 			foreach (var resource in graph.Resources)
 				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
 					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
 			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
 		}
-#endif
 
 		// Derive once — the graph is immutable, so order/barriers/lifetimes/aliasing are frame-invariant. The
 		// AliasPlan (the §8/M4 transient-memory partition) is the SAME backend-neutral product the Vulkan engine
@@ -1044,26 +1019,6 @@ public sealed unsafe class DirectX12Engine : IEngine
 	public Texture CreateTexture(TextureData data) => _textures.Create(data);
 
 	public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
-
-	/// <summary>
-	/// Stand up the backend's Dear ImGui renderer (the <c>imgui_impl_dx12</c> equivalent) and wire it to the
-	/// render context, so the graph's "hud" pass <c>ctx.DrawImGui()</c> draws the host's UI. Resolves the
-	/// build-emitted signed DXIL for the engine's imgui shader (embedded, like every engine shader). When the
-	/// engine is built without ImGui (UseImGui=false) this is a compiled-out no-op and ctx.DrawImGui() draws
-	/// nothing — exactly as the Vulkan backend behaves.
-	/// </summary>
-	public void EnableImGui()
-	{
-#if LOOM_IMGUI
-		var vs = DirectX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "imgui", "vs")
-			?? throw new NotSupportedException("DirectX12: the ImGui shader DXIL (imgui.vs.dxil) was not found — build with UseImGui=true so it is emitted + embedded.");
-		var ps = DirectX12Shaders.TryResolveStageDxil(_settings.ShaderDirectory, "imgui", "ps")
-			?? throw new NotSupportedException("DirectX12: the ImGui shader DXIL (imgui.ps.dxil) was not found — build with UseImGui=true so it is emitted + embedded.");
-		_imgui = new DirectX12ImGuiRenderer(_ctx, _ring, vs, ps, _swapchain.RenderTargetFormat, (int)BufferCount);
-		_context.SetImGui(_imgui);
-#endif
-		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
-	}
 
 	/// <summary>
 	/// The object id at picking-domain pixel (<paramref name="x"/>, <paramref name="y"/>) — read from the CPU copy

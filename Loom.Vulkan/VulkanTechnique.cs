@@ -218,6 +218,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		VertexFormat.Float4 => Format.R32G32B32A32Sfloat,
 		VertexFormat.UInt4 => Format.R32G32B32A32Uint,
 		VertexFormat.Half4 => Format.R16G16B16A16Sfloat,
+		VertexFormat.UNorm4 => Format.R8G8B8A8Unorm,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 

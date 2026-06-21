@@ -251,13 +251,15 @@ public interface IRenderContext
 		ReadOnlySpan<float> push) where TVertex : unmanaged;
 
 	/// <summary>
-	/// Render the host's Dear ImGui draw data into the current pass's target — the screen-space HUD/debug
-	/// overlay (Planning.md §6/§9: a native-resolution UI layer on top of the pixelated world). The host owns
-	/// the ImGui context and produces the draw data each frame (<c>ImGui.Render()</c>); this verb is the neutral
-	/// hand-off so Loom.Core stays UI-agnostic — the backend translates it into GPU work. Used from a pass that
-	/// <c>.Blends</c> the backbuffer (the "hud" pass). A no-op if the host hasn't enabled ImGui.
+	/// Resolve an inspectable graph resource (an <see cref="InspectableResource.Id"/> from
+	/// <see cref="IEngine.InspectableResources"/>) to a <see cref="Texture"/> bindable in a
+	/// <see cref="DrawList{TVertex}"/> this frame — the neutral hook a debug overlay uses to preview a live transient
+	/// image (the resource viewer). Returns null if the id is not an inspectable resource or inspection was not enabled
+	/// (<see cref="IEngine.ResourceInspectionEnabled"/>). The handle samples the resource's current contents and is valid
+	/// for the current frame's draw lists only; with inspection enabled the engine keeps the resource alive and in a
+	/// sampleable layout through the final pass, so binding it is safe.
 	/// </summary>
-	void DrawImGui();
+	Texture? ResolveInspectable(int resourceId);
 
 	/// <summary>
 	/// This frame's draw lists, each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a

@@ -69,6 +69,7 @@ public class VertexLayoutTests
 	[Test]
 	[Arguments(VertexFormat.UInt4, 16)]
 	[Arguments(VertexFormat.Half4, 8)]
+	[Arguments(VertexFormat.UNorm4, 4)]
 	public void Wide_format_byte_sizes(VertexFormat format, int expected) =>
 		format.ByteSize().ShouldBe(expected);
 

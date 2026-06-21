@@ -44,13 +44,6 @@ public sealed record FrameInputs
 	public uint HoverId { get; init; }
 
 	/// <summary>
-	/// This frame's Dear ImGui draw data (the native <c>ImDrawData*</c> from <c>ImGui.Render()</c>), forwarded by
-	/// the HUD pass's <c>ctx.DrawImGui()</c>. <see cref="nint.Zero"/> (the default) draws no UI. Meaningful only
-	/// after <see cref="IEngine.EnableImGui"/>. The pointer is the UI-agnostic hand-off (Planning.md §8).
-	/// </summary>
-	public nint ImGuiDrawData { get; init; }
-
-	/// <summary>
 	/// This frame's draw lists — each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a
 	/// producer composited for it. Surfaced as <see cref="IRenderContext.DrawLists"/>; a pass pulls one out by id and
 	/// submits it (the game UI does so via <c>SUIsei</c>'s painter). Empty (the default) renders no lists. Pulled in
