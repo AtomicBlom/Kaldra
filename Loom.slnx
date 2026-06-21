@@ -10,6 +10,7 @@
   <Project Path="Loom.Graph/Loom.Graph.csproj" />
   <Project Path="Loom.Sandbox/Loom.Sandbox.csproj" />
   <Project Path="Loom.Tests/Loom.Tests.csproj" />
+  <Project Path="Loom.UI.ImGui/Loom.UI.ImGui.csproj" />
   <Project Path="Loom.UI.SUIsei/Loom.UI.SUIsei.csproj" />
   <Project Path="Loom.Vulkan/Loom.Vulkan.csproj" />
   <Folder Name="/SUIsei/">

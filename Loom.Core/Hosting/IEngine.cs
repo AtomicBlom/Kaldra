@@ -77,14 +77,6 @@ public interface IEngine : IDisposable
 	/// </summary>
 	void SetGraph(RenderGraph graph);
 
-	/// <summary>
-	/// Stand up the backend's Dear ImGui renderer and upload the current ImGui context's font atlas, so a pass
-	/// that <c>.Blends</c> the backbuffer can call <c>ctx.DrawImGui()</c>. Call once after creation; the host
-	/// must have created and configured the ImGui context first, then feeds draw data via
-	/// <see cref="FrameInputs.ImGuiDrawData"/> each frame.
-	/// </summary>
-	void EnableImGui();
-
 	/// <summary>Render one frame of the active graph from <paramref name="inputs"/> (Planning.md §5 <c>graph.Render</c>).</summary>
 	void Render(FrameInputs inputs);
 
@@ -123,27 +115,19 @@ public interface IEngine : IDisposable
 	double LastFrameGpuMilliseconds { get; }
 
 	/// <summary>
+	/// Enable previewing the active graph's intermediate images (the resource viewer). When set, <see cref="SetGraph"/>
+	/// populates <see cref="InspectableResources"/> and keeps each colour/depth resource alive and in a sampleable
+	/// layout through the final pass (it injects the read edges the Execute layer needs), so a debug overlay can bind a
+	/// resource via <see cref="IRenderContext.ResolveInspectable"/>. Off by default — a graph that never inspects keeps
+	/// its exact aliasing and pays nothing. Set it before <see cref="SetGraph"/>; a change takes effect on the next swap.
+	/// </summary>
+	bool ResourceInspectionEnabled { get; set; }
+
+	/// <summary>
 	/// The active graph's image resources the debug viewer can preview (colour + depth; M13). Empty until
-	/// <see cref="SetGraph"/>, rebuilt on each swap, and empty in a build without the ImGui debug UI. Neutral types.
+	/// <see cref="SetGraph"/>, rebuilt on each swap, and empty unless <see cref="ResourceInspectionEnabled"/>. Neutral types.
 	/// </summary>
 	IReadOnlyList<InspectableResource> InspectableResources { get; }
-
-	/// <summary>
-	/// An opaque per-frame ImGui texture id (<c>ImTextureID</c>) for the resource, to pass to <c>ImGui.Image</c>;
-	/// the backend maps it back to a GPU binding when it records the HUD (M13 resource viewer). Returns 0 if the id
-	/// is not inspectable or the ImGui debug UI is not built/enabled. Call during the frame's ImGui build; the id is
-	/// valid for that frame's draw list only. <c>nint</c> is the same opaque currency as
-	/// <see cref="FrameInputs.ImGuiDrawData"/> — no graphics-API type leaks.
-	/// </summary>
-	nint GetDebugTextureId(int resourceId);
-
-	/// <summary>
-	/// Set the debug overlay's line segments for the next frame (M13 detached-camera frustum freeze): each
-	/// <see cref="System.Numerics.Vector4"/> is a screen-space segment <c>(x0, y0, x1, y1)</c> in framebuffer pixels,
-	/// drawn over the HUD. The host projects world-space geometry (e.g. a frozen frustum's edges) to pixels and calls
-	/// this each frame; an empty span clears it. A no-op in a build without the ImGui debug UI.
-	/// </summary>
-	void SetDebugLines(ReadOnlySpan<System.Numerics.Vector4> segments);
 
 	/// <summary>Block until the GPU is idle — call before disposing host-owned resources the engine may still be using.</summary>
 	void WaitIdle();

@@ -44,23 +44,8 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	private readonly DirectX12InstanceUploadBuffer _listVtx;
 	private readonly DirectX12InstanceUploadBuffer _listIdx;
 	private DirectX12Transients? _transients;
-#if LOOM_IMGUI
-	// The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled. The HUD pass's
-	// ctx.DrawImGui() forwards this frame's draw data to it. Null when EnableImGui hasn't been called.
-	private DirectX12ImGuiRenderer? _imgui;
-#endif
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
-	// M13 resource viewer: resources to show as thumbnails this frame (the engine draws the images; ImGui.Image
-	// no-ops on win-arm64). Populated by RequestThumbnail as the host enumerates resources, drawn + cleared each HUD pass.
-	private readonly List<int> _thumbRequests = [];
-	// M13 frustum-freeze wireframe: screen-space line segments (x0,y0,x1,y1 in pixels) the host sets each frame.
-	private Vector4[] _debugLines = [];
-	private int _debugLineCount;
-	private const uint DebugLineColor = 0xFF00FFFFu; // IM_COL32 yellow
-													 // This frame's ImGui draw data (ImDrawData*) + the framebuffer extent, captured in BeginFrame and consumed by
-													 // DrawImGui. Stored unconditionally (cheap values) so the seam exists even when built without ImGui.
-	private nint _imguiDrawData;
 	// This frame's draw lists, pulled from FrameInputs.DrawLists and surfaced as ctx.DrawLists; a producer (the UI
 	// painter) looks one up by id and submits it through DrawList.
 	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _drawLists = [];
@@ -100,34 +85,10 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
 	public void SetTransients(DirectX12Transients transients) => _transients = transients;
 
-	/// <summary>Request that <paramref name="resourceId"/> be shown as a thumbnail in this frame's resource-viewer
-	/// grid (M13). Called by the engine's GetDebugTextureId as the host enumerates resources to display.</summary>
-	public void RequestThumbnail(int resourceId)
-	{
-		if (!_thumbRequests.Contains(resourceId))
-			_thumbRequests.Add(resourceId);
-	}
-
-	/// <summary>Set this frame's debug line segments (screen pixels, x0,y0,x1,y1) — the frustum-freeze wireframe the
-	/// HUD pass draws as an overlay (M13). Pass an empty span to clear. Overwritten each frame by the host.</summary>
-	public void SetDebugLines(ReadOnlySpan<Vector4> segments)
-	{
-		if (_debugLines.Length < segments.Length)
-			_debugLines = new Vector4[segments.Length];
-		segments.CopyTo(_debugLines);
-		_debugLineCount = segments.Length;
-	}
-
-#if LOOM_IMGUI
-	/// <summary>The host's ImGui renderer (backend-specific), wired in by the engine when ImGui is enabled.</summary>
-	public void SetImGui(DirectX12ImGuiRenderer renderer) => _imgui = renderer;
-#endif
-
 	public void BeginFrame(ComPtr<ID3D12GraphicsCommandList> cmd, FrameInputs inputs, bool hdrOutput, uint slot, uint fbWidth, uint fbHeight)
 	{
 		_cmd = cmd;
 		_slot = slot;
-		_imguiDrawData = inputs.ImGuiDrawData;
 		_drawLists = inputs.DrawLists;
 		_fbWidth = fbWidth;
 		_fbHeight = fbHeight;
@@ -285,6 +246,30 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 			};
 		}
 		_ctx.Device.CreateShaderResourceView(_textures.Resource(textureId), &srv, dest);
+	}
+
+	// Bind a draw-list texture: a loaded texture (full mip chain) by id, or — for an inspectable graph resource (id
+	// offset by DebugTextureBase, the resource viewer) — a single-mip SRV over this frame's transient image, so a
+	// debug overlay can preview live graph contents through the resource's sampleable format (R32_FLOAT for depth).
+	private void WriteListTextureSrv(int id, CpuDescriptorHandle dest)
+	{
+		if (id < DebugTextureBase || _transients is null)
+		{
+			WriteTextureSrv(id, dest);
+			return;
+		}
+		var rid = id - DebugTextureBase;
+		var srv = new ShaderResourceViewDesc
+		{
+			Format = _transients.SrvFormat(_slot, rid),
+			Shader4ComponentMapping = DefaultShader4ComponentMapping,
+			ViewDimension = SrvDimension.Texture2D,
+			Anonymous = new ShaderResourceViewDescUnion
+			{
+				Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f },
+			},
+		};
+		_ctx.Device.CreateShaderResourceView(_transients.Resource(_slot, rid), &srv, dest);
 	}
 
 	// Push a scalar block to the pass's root constants (the per-pass channel: JFA step, exposure rate, a
@@ -736,7 +721,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 			if (baked.TableParam >= 0)
 			{
 				var (cpu, gpu) = _ring.Allocate(1);
-				WriteTextureSrv(textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id, cpu);
+				WriteListTextureSrv(textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id, cpu);
 				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
 			}
 
@@ -746,45 +731,19 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		}
 	}
 
-	// Forward this frame's ImGui draw data to the backend renderer, recording into the (already-open) HUD-pass
-	// scope (the engine has bound the backbuffer RTV + negative-height viewport). No-op when ImGui isn't enabled
-	// or the host produced no draw data this frame — and a compiled-out no-op when built without ImGui.
-	public void DrawImGui()
+	/// <summary>Resolve an inspectable graph resource to a draw-list-bindable texture handle for this frame (resource
+	/// viewer). The id is offset by <see cref="DebugTextureBase"/> so <see cref="DrawList{TVertex}"/> samples the live
+	/// transient image rather than a loaded texture; the dimensions are the resource's current size.</summary>
+	public Texture? ResolveInspectable(int resourceId)
 	{
-#if LOOM_IMGUI
-		if (_imgui is null)
-			return;
-
-		// The ImGui UI (menu, windows, the resource-viewer name list) first.
-		_imgui.Render(_cmd, _imguiDrawData, _fbWidth, _fbHeight, _slot);
-
-		// M13 resource viewer: draw the requested resources as a thumbnail grid (engine-drawn — ImGui.Image no-ops on
-		// win-arm64). The injected HUD .Samples edge put each in PixelShaderResource — sampling a live image. Laid
-		// out to the right of the name list.
-		if (_thumbRequests.Count > 0 && _transients is not null)
-		{
-			const float x0 = 300f, y0 = 30f, w = 200f, h = 112f, gap = 10f;
-			var cols = Math.Max(1, (int)((_fbWidth - x0 - 10f) / (w + gap)));
-			var thumbs = new DirectX12ImGuiRenderer.Thumbnail[_thumbRequests.Count];
-			for (var i = 0; i < _thumbRequests.Count; i++)
-			{
-				var id = _thumbRequests[i];
-				var gx = x0 + i % cols * (w + gap);
-				var gy = y0 + i / cols * (h + gap);
-				thumbs[i] = new DirectX12ImGuiRenderer.Thumbnail(_transients.Resource(_slot, id), _transients.SrvFormat(_slot, id), gx, gy, w, h);
-			}
-			_imgui.DrawThumbnails(_cmd, thumbs, _fbWidth, _fbHeight, _slot);
-			_thumbRequests.Clear();
-		}
-
-		// M13 frustum-freeze wireframe: the host projected the frozen frustum's edges to screen pixels; draw them.
-		if (_debugLineCount > 0)
-			_imgui.DrawLines(_cmd, _debugLines.AsSpan(0, _debugLineCount), DebugLineColor, 2f, _fbWidth, _fbHeight, _slot);
-#endif
+		if (_transients is null || resourceId < 0)
+			return null;
+		var (w, h) = _transients.Extent(resourceId);
+		return new Texture(resourceId + DebugTextureBase, (int)w, (int)h);
 	}
 
-	// M13 resource viewer: GetDebugTextureId returns (resourceId + DebugTextureBase) — a non-zero id the host uses to
-	// gate "inspectable?". The engine draws the matching thumbnail grid in the HUD pass.
+	// An inspectable graph resource the resource viewer previews is handed to a draw list as a Texture whose id is
+	// offset by this base, so DrawList samples this frame's live transient image instead of a loaded texture-store entry.
 	internal const int DebugTextureBase = 0x10000;
 
 	public void Dispose()

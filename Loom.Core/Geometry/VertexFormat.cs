@@ -29,4 +29,7 @@ public enum VertexFormat
 
 	/// <summary>Four 16-bit floats (8 bytes) — a half-precision colour or other packed four-channel attribute (the UI vertex's premultiplied RGBA16F).</summary>
 	Half4,
+
+	/// <summary>Four 8-bit unsigned-normalized channels packed into one 32-bit word (4 bytes) — a packed RGBA8 colour the GPU unpacks to a float4 in [0,1] (a compact per-vertex colour, e.g. Dear ImGui's vertex colour).</summary>
+	UNorm4,
 }

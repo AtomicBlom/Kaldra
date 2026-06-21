@@ -70,9 +70,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private readonly Dictionary<string, TechniqueDescriptor> _descriptorsByName = [];
 	private readonly ConcurrentQueue<string> _reloadQueue = new();
 	private AssetWatcher? _shaderWatcher;
-#if LOOM_IMGUI
-	private VulkanImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
-#endif
 
 	// Engine-owned shaders (tonemap/blit/fullscreen/exposure/imgui/debugview) ship embedded in THIS assembly
 	// under the manifest prefix "<assembly>.Shaders." (the Loom SDK's Embed mode sets the same prefix from
@@ -128,7 +125,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private IReadOnlyList<float> _frameCascadeSplits = [];
 	private float _frameTime;
 	private uint _frameHover;
-	private nint _frameImGui;
 	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _frameDrawLists = [];
 
 	private int _currentFrame;
@@ -148,25 +144,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 	public double LastFrameGpuMilliseconds => _frameGpuMs;
 
 	public IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
-
-	public nint GetDebugTextureId(int resourceId)
-	{
-#if LOOM_IMGUI
-		if (_imgui is not null && resourceId >= 0 && _inspectable.Exists(r => r.Id == resourceId))
-		{
-			_context.RequestThumbnail(resourceId); // engine draws the image in the HUD pass (ImGui.Image no-ops on arm64)
-			return (nint)(resourceId + VulkanRenderContext.DebugTextureBase);
-		}
-#endif
-		return 0;
-	}
-
-	public void SetDebugLines(ReadOnlySpan<System.Numerics.Vector4> segments)
-	{
-#if LOOM_IMGUI
-		_context.SetDebugLines(segments);
-#endif
-	}
 
 	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
 	{
@@ -303,6 +280,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 	public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
+	public bool ResourceInspectionEnabled { get; set; }
+
 	public void SetGraph(RenderGraph graph)
 	{
 		ArgumentNullException.ThrowIfNull(graph);
@@ -317,22 +296,19 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		_graph = graph;
 
-		// M13 resource viewer: enumerate the colour/depth resources the host can preview, and (in an ImGui build)
+		// Resource viewer: enumerate the colour/depth resources the host can preview, and (when inspection is enabled)
 		// inject HUD .Samples edges for them so the Execute layer derives their keep-alive + ShaderRead transition —
-		// the viewer samples live images, not aliased corpses. The author's graph is untouched; we execute `executed`.
+		// the viewer samples live images, not aliased corpses. Graphs set with inspection off (e.g. the DirectX12
+		// aliasing diagnostics) keep their exact aliasing. The author's graph is untouched; we execute `executed`.
 		_inspectable.Clear();
 		var executed = graph;
-#if LOOM_IMGUI
-		// Gate on ImGui being live: graphs set before EnableImGui (the DirectX12 aliasing diagnostics) keep their exact
-		// aliasing; gallery graphs (set/switched with the UI up) get the inspection edges.
-		if (_imgui is not null)
+		if (ResourceInspectionEnabled)
 		{
 			foreach (var resource in graph.Resources)
 				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
 					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
 			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
 		}
-#endif
 
 		// Derive once — the graph is immutable, so order/barriers/load-store/lifetimes are frame-invariant.
 		var schedule = GraphSchedule.Derive(executed);
@@ -398,16 +374,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 			for (var i = 0; i < MaxFramesInFlight; i++)
 				_vk.CreateQueryPool(_ctx.Device, in info, null, out _timingPools[i]).Check("vkCreateQueryPool");
 		}
-	}
-
-	public void EnableImGui()
-	{
-#if LOOM_IMGUI
-		var spirv = ResolveShaderAsset("imgui", ".spv");
-		_imgui = new VulkanImGuiRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight);
-		_context.SetImGui(_imgui);
-#endif
-		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
 	}
 
 	public float SamplePick(int x, int y)
@@ -477,7 +443,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_frameCascadeSplits = inputs.CascadeSplits;
 		_frameTime = inputs.Time;
 		_frameHover = inputs.HoverId;
-		_frameImGui = inputs.ImGuiDrawData;
 		_frameDrawLists = inputs.DrawLists;
 		DrawFrame((float)inputs.DeltaSeconds);
 	}
@@ -605,7 +570,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameHover, _frameImGui, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameHover, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
 
 		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).
@@ -1128,9 +1093,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 		DisposeGraphResources();    // transients + readback staging (graph-level)
 		_context.Dispose();
-#if LOOM_IMGUI
-		_imgui?.Dispose(); // before the allocator — it holds VMA font/vertex/index allocations
-#endif
 		_descriptors.Dispose();
 		_meshes.Dispose();
 		_textures.Dispose(); // before the allocator — it holds VMA image allocations
