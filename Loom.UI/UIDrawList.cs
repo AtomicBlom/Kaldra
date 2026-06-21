@@ -1,18 +1,20 @@
 using System.Numerics;
-using Loom.Core;
+using Loom.Core.Geometry;
+using Loom.Core.Hosting;
+using Loom.Core.Primitives;
 
 namespace Loom.UI;
 
 /// <summary>
-/// A pooled builder for the neutral draw stream — the analog of ImGui's <c>ImDrawList</c> (PlanningUI.md §D2.5).
-/// Bakes the composed transform into vertex positions and merges consecutive primitives that share
-/// <c>(kind, textureId, clip)</c> into one indexed draw command (atlas-everything + state-run batching, §D2.6).
+/// A pooled builder for the neutral draw list — the analog of ImGui's <c>ImDrawList</c>. Bakes the composed
+/// transform into vertex positions and merges consecutive primitives that share <c>(kind, textureId, clip)</c>
+/// into one indexed draw command (atlas-everything + state-run batching).
 /// </summary>
 internal sealed class UIDrawList
 {
-	private readonly List<UIVertex> _verts = [];
+	private readonly List<OverlayVertex> _verts = [];
 	private readonly List<ushort> _indices = [];
-	private readonly List<UIDrawCommand> _commands = [];
+	private readonly List<DrawCommand> _commands = [];
 	private readonly Vector2 _surfaceSize;
 
 	// Open run state — extended while (kind, tex, clip) match; flushed into a command otherwise.
@@ -47,7 +49,7 @@ internal sealed class UIDrawList
 	/// Lay out a text run as MTSDF glyph quads (PlanningUI.md §D3): advance-based LTR, no shaping (MU5). The run's
 	/// local origin <c>(0,0)</c> is the text block's top-left; the baseline drops by the ascent so the first line's
 	/// ascenders sit at the top. Each visible glyph emits a quad with its atlas UV and the shared per-run
-	/// <c>screenPxRange</c> in <see cref="UIVertex.Params"/>.x; all glyphs share <c>(Glyph, atlas, clip)</c> so they
+	/// <c>screenPxRange</c> in <see cref="OverlayVertex.Custom"/>.x; all glyphs share <c>(Glyph, atlas, clip)</c> so they
 	/// batch into one indexed draw.
 	/// </summary>
 	public void AddGlyphRun(string text, float fontSizePx, Half4 color, FontAtlas font, in Matrix3x2 matrix, in Rect clip, int textureId = 1)
@@ -85,7 +87,7 @@ internal sealed class UIDrawList
 	}
 
 	private void AddVertex(Vector2 local, Vector2 uv, in Matrix3x2 matrix, Half4 color, Vector4 @params) =>
-		_verts.Add(new UIVertex(Vector2.Transform(local, matrix), uv, color, @params));
+		_verts.Add(new OverlayVertex(Vector2.Transform(local, matrix), uv, color, @params));
 
 	private void EnsureRun(UIPrimKind kind, int tex, in Rect clip)
 	{
@@ -102,21 +104,22 @@ internal sealed class UIDrawList
 
 	private void Flush()
 	{
+		// The compositor's primitive kind becomes the command's neutral Tag; the atlas/source id its texture index.
 		if (_open && _runIdxCount > 0)
-			_commands.Add(new UIDrawCommand(_runKind, _runTex, _runClip, _runIdxStart, _runIdxCount, 0));
+			_commands.Add(new DrawCommand(_runClip, _runTex, _runIdxStart, _runIdxCount, 0, (uint)_runKind));
 		_open = false;
 	}
 
-	public UIDrawData Build(bool hdr, uint revision)
+	public DrawListData Build(bool hdr, uint revision)
 	{
 		Flush();
-		return new UIDrawData
+		return new DrawListData
 		{
 			Vertices = _verts.ToArray(),
 			Indices = _indices.ToArray(),
 			Commands = _commands.ToArray(),
-			SurfaceSize = _surfaceSize,
-			IsHdrSurface = hdr,
+			CoordinateSize = _surfaceSize,
+			IsHdrTarget = hdr,
 			Revision = revision,
 		};
 	}

@@ -3,7 +3,7 @@ namespace Loom.UI.Controls;
 /// <summary>
 /// A run of text (PlanningUI.md §D2.1 / §D3). MU1 measures + emits glyphs against the engine's default MTSDF font
 /// (<see cref="FontAtlas.Default"/>): an advance-based width (no HarfBuzz shaping — that is MU5) and a
-/// <see cref="GlyphRunContent"/> the compositor lays out into <see cref="UIPrimKind.Glyph"/> draws.
+/// <see cref="GlyphRunContent"/> the compositor lays out into <see cref="Glyph"/> draws.
 /// </summary>
 public sealed class TextBlock : FrameworkElement
 {
@@ -15,7 +15,7 @@ public sealed class TextBlock : FrameworkElement
 		DependencyProperty.Register<TextBlock, float>(nameof(FontSize),
 			new PropertyMetadata<TextBlock, float> { DefaultValue = 14f, Invalidates = InvalidationFlags.Measure });
 
-	/// <summary>The text to lay out (placeholder metrics until MSDF shaping, MU1).</summary>
+	/// <summary>The text to lay out and render as MTSDF glyphs (advance-based width; no HarfBuzz shaping).</summary>
 	public string Text { get => GetValue(TextProperty); set => SetValue(TextProperty, value); }
 
 	/// <summary>Font size in DIPs.</summary>

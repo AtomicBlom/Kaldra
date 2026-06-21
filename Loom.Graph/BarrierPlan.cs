@@ -1,14 +1,13 @@
 using System.Collections.Immutable;
 using System.Text;
-
-using Loom.Core;
+using Loom.Core.Graph;
 
 namespace Loom.Graph;
 
 /// <summary>
 /// The second half of the Execute layer: from a <see cref="GraphSchedule"/>, derive the image-layout
 /// transitions and attachment load/store actions for every pass — the barriers the user never writes
-/// (Planning.md §2). Backend-neutral, so the same plan can drive Vulkan today or DX12 later.
+/// Backend-neutral, so the same plan drives both the Vulkan and DirectX12 backends.
 /// <para>
 /// It walks each resource's <see cref="ResourceState"/> timeline in execution order. A transition is
 /// emitted before a pass whenever the required state differs from the resource's current state (a layout
@@ -149,6 +148,14 @@ public sealed class BarrierPlan
 			.OrderBy(f => f.Res.Id)
 			.Select(f =>
 			{
+				// A handle both sampled and colour-written by the SAME pass is a GPU feedback hazard Loom does not
+				// model (the priority below would silently drop the read). Reject it at derive time rather than
+				// mis-deriving the barrier — use two passes, or a ping-pong handle pair.
+				if (f.Sample && (f.Write || f.Blend))
+				{
+					throw new GraphValidationException(
+						$"Resource '{f.Res.Name}' is both sampled and written (.Writes/.Blends) by the same pass — an unsupported in-pass feedback hazard.");
+				}
 				if (f.WriteDepth)
 					return new Use(f.Res, ResourceState.DepthAttachment, IsAttachment: true, IsBlend: false, IsReadOnlyAttachment: false);
 				if (f.ReadDepth)

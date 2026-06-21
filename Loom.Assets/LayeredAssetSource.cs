@@ -18,16 +18,23 @@ public sealed class LayeredAssetSource : IAssetSource
 
 	public bool TryResolve(string logicalName, out string fullPath)
 	{
+		fullPath = string.Empty;
+		// Logical names are leaf-relative. Reject a rooted/absolute name, and (after Path.GetFullPath resolves any
+		// "..") require the result to stay under the root — so a name like "..\..\secret" can't escape the layered
+		// roots and read an arbitrary file, silently defeating layering priority.
+		if (string.IsNullOrEmpty(logicalName) || Path.IsPathRooted(logicalName))
+			return false;
 		foreach (var root in _roots)
 		{
-			var candidate = Path.Combine(root, logicalName);
+			var candidate = Path.GetFullPath(Path.Combine(root, logicalName));
+			if (!candidate.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+				continue; // escaped this root via traversal — skip it
 			if (File.Exists(candidate))
 			{
 				fullPath = candidate;
 				return true;
 			}
 		}
-		fullPath = string.Empty;
 		return false;
 	}
 }

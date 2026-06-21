@@ -1,14 +1,13 @@
 using System.Numerics;
 
-using Loom.Core;
 using Loom.UI.Controls;
 
 namespace Loom.UI.Tests;
 
 /// <summary>
-/// MU2 host end-to-end (PlanningUI.md §D5.1 / §D8): queue neutral pointer events, <see cref="UIHost.Tick"/> headless
-/// (no engine/backend), and assert the routed result — a click fires its handler, <see cref="UIHost.DumpState"/>
-/// reflects the over-chain, <see cref="UIHost.Render"/> yields one surface per view, and two hosts are independent.
+/// Host end-to-end: queue neutral pointer events, <see cref="UIHost.Tick"/> headless (no engine/backend), and assert
+/// the routed result — a click fires its handler, <see cref="UIHost.DumpState"/> reflects the over-chain,
+/// <see cref="UIHost.Render"/> yields one draw list per view, and two hosts are independent.
 /// </summary>
 public sealed class UIHostTests
 {
@@ -22,8 +21,9 @@ public sealed class UIHostTests
 		btn.Click += (_, _) => clicks++;
 		view.Root.Content = btn;
 
-		host.QueuePointer(PointerInput.Press(new Vector2(50f, 20f)));
-		host.QueuePointer(PointerInput.Release(new Vector2(50f, 20f)));
+		// The button has an explicit size and default (Stretch) alignment, so it is centred in the 200x200 surface.
+		host.QueuePointer(PointerInput.Press(new Vector2(100f, 100f)));
+		host.QueuePointer(PointerInput.Release(new Vector2(100f, 100f)));
 		host.Tick(0.016, 0f, default, new Vector2(200f, 200f));
 
 		clicks.ShouldBe(1);
@@ -36,7 +36,7 @@ public sealed class UIHostTests
 		var view = host.CreateRoot(UIPlacement.Overlay(0, 1f));
 		view.Root.Content = new Button { Width = 100f, Height = 40f };
 
-		host.QueuePointer(PointerInput.Move(new Vector2(50f, 20f)));
+		host.QueuePointer(PointerInput.Move(new Vector2(100f, 100f))); // over the centred button
 		host.Tick(0.016, 0f, default, new Vector2(200f, 200f));
 
 		host.DumpState().ShouldContain("Button");
@@ -52,9 +52,9 @@ public sealed class UIHostTests
 		host.Tick(0.016, 0f, default, new Vector2(100f, 100f));
 		host.Render();
 
-		host.Surfaces.Count.ShouldBe(1);
-		host.Surfaces[0].Id.ShouldBe(UISurface.Hud);
-		host.Surfaces[0].Draw.Commands.Length.ShouldBeGreaterThan(0);
+		host.DrawLists.Count.ShouldBe(1);
+		host.DrawLists[0].Id.ShouldBe(UISurface.Hud);
+		host.DrawLists[0].Data.Commands.Length.ShouldBeGreaterThan(0);
 	}
 
 	[Test]
@@ -71,8 +71,9 @@ public sealed class UIHostTests
 		h1.CreateRoot(UIPlacement.Overlay(0, 1f)).Root.Content = b1;
 		h2.CreateRoot(UIPlacement.Overlay(0, 1f)).Root.Content = b2;
 
-		h1.QueuePointer(PointerInput.Press(new Vector2(50f, 20f)));
-		h1.QueuePointer(PointerInput.Release(new Vector2(50f, 20f)));
+		// Each button is centred in its 200x200 surface (explicit size + default Stretch); click h1's centre.
+		h1.QueuePointer(PointerInput.Press(new Vector2(100f, 100f)));
+		h1.QueuePointer(PointerInput.Release(new Vector2(100f, 100f)));
 		h1.Tick(0.016, 0f, default, new Vector2(200f, 200f));
 		h2.Tick(0.016, 0f, default, new Vector2(200f, 200f)); // no input queued on h2
 

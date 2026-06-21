@@ -1,5 +1,5 @@
 using System.Numerics;
-using Loom.Core;
+using Loom.Core.Primitives;
 
 namespace Loom.UI.Controls;
 
@@ -17,6 +17,10 @@ public class ContentControl : Control
 		get;
 		set
 		{
+			// Re-hosting rebuilds the child and invalidates layout, discarding its state — skip it when the content
+			// is unchanged (value equality, so a binding refresh that pushes an equal string does not rebuild).
+			if (Equals(field, value))
+				return;
 			field = value;
 			if (_hosted is not null)
 				DropChild(_hosted);

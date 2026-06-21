@@ -4,8 +4,8 @@ namespace Loom.Graph;
 /// The logical state a resource is in at a point in the frame — the backend-neutral stand-in for an
 /// image layout plus its associated pipeline-stage/access scope. Barrier derivation reasons purely in
 /// these states; the backend maps each to a concrete <c>(VkImageLayout, VkPipelineStageFlags2,
-/// VkAccessFlags2)</c> triple. Keeping the mapping in the backend is what lets a future DX12 backend
-/// reinterpret the same transitions (CLAUDE.md backend-isolation invariant).
+/// VkAccessFlags2)</c> triple. Keeping the mapping in the backend is what lets the Vulkan and DirectX12 backends
+/// reinterpret the same transitions independently — the backend-isolation invariant.
 /// </summary>
 public enum ResourceState
 {

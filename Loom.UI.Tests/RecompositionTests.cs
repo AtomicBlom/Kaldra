@@ -1,11 +1,11 @@
-using Loom.Core;
+using Loom.Core.Hosting;
 using Loom.UI.Controls;
 
 namespace Loom.UI.Tests;
 
 /// <summary>
-/// MU2 incremental recomposition (PlanningUI.md §D2.4/§D2.5 / §D8): a fully-clean frame is a no-op — the compositor
-/// re-submits the cached <c>UIDrawData</c> with the same <c>Revision</c> and does not recomposite — while a
+/// Incremental recomposition: a fully-clean frame is a no-op — the compositor re-submits the cached
+/// <c>DrawListData</c> with the same <c>Revision</c> and does not recomposite — while a
 /// visual-only change marks the tree dirty and forces exactly one rebuild. (Output stays byte-identical; the
 /// subtree-granular vertex-range reuse the design also describes is a deferred compositor-internal optimization.)
 /// </summary>
@@ -15,7 +15,7 @@ public sealed class RecompositionTests
 	public void A_clean_frame_is_a_no_op_with_the_same_revision()
 	{
 		var compositor = new DrawListCompositor();
-		var root = new UIRoot(new UISurfaceId(0), compositor)
+		var root = new UIRoot(new DrawListId(0), compositor)
 		{
 			Content = new Border { Width = 50f, Height = 50f, Background = HdrColor.FromRgb(255, 0, 0) },
 		};
@@ -37,7 +37,7 @@ public sealed class RecompositionTests
 	{
 		var compositor = new DrawListCompositor();
 		var border = new Border { Width = 50f, Height = 50f, Background = HdrColor.FromRgb(255, 0, 0) };
-		var root = new UIRoot(new UISurfaceId(0), compositor) { Content = border };
+		var root = new UIRoot(new DrawListId(0), compositor) { Content = border };
 
 		root.LayoutPass(new Size(100f, 100f));
 		root.Render();

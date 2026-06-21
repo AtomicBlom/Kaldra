@@ -16,10 +16,10 @@
   <PropertyGroup>
     <LoomShaderOutputMode Condition="'$(LoomShaderOutputMode)' == ''">None</LoomShaderOutputMode>
 
-    <!-- Also emit SIGNED DXIL beside the SPIR-V (for the DX12 backend, which loads the blob — no runtime
-         compiler, like the Vulkan .spv). On by default whenever the DX12 backend is in the build. Slang's HLSL/
+    <!-- Also emit SIGNED DXIL beside the SPIR-V (for the DirectX12 backend, which loads the blob — no runtime
+         compiler, like the Vulkan .spv). On by default whenever the DirectX12 backend is in the build. Slang's HLSL/
          DXIL target is per-entry-point, so the build emits one signed-DXIL module per stage (vs/ps/cs). -->
-    <LoomEmitDxil Condition="'$(LoomEmitDxil)' == '' And '$(UseDX12)' == 'true'">true</LoomEmitDxil>
+    <LoomEmitDxil Condition="'$(LoomEmitDxil)' == '' And '$(UseDirectX12)' == 'true'">true</LoomEmitDxil>
     <LoomEmitDxil Condition="'$(LoomEmitDxil)' == ''">false</LoomEmitDxil>
 
     <!-- slangc emits DXIL by handing off to DXC, which it loads only from its own module dir or a path we give

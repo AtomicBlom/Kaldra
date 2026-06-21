@@ -3,6 +3,7 @@ using System.Text.Json;
 
 using Loom.Assets;
 using Loom.Core;
+using Loom.Core.Materials;
 
 namespace Loom.UI;
 
@@ -36,7 +37,7 @@ public sealed class FontAtlas
 		_glyphs = glyphs;
 	}
 
-	/// <summary>The decoded MTSDF page as neutral <see cref="TextureData"/> (linear RGBA8 / UNORM, no mips) — hand to <c>EnableUI</c>.</summary>
+	/// <summary>The decoded MTSDF page as neutral <see cref="TextureData"/> (linear RGBA8 / UNORM, no mips) — hand to <see cref="UIPainter.Create"/>.</summary>
 	public TextureData Texture { get; }
 
 	/// <summary>Atlas page dimensions in texels.</summary>
@@ -125,11 +126,11 @@ public sealed class FontAtlas
 	}
 
 	/// <summary>
-	/// The engine's single default font for MU1 — the embedded <c>ui-default</c> (Cascadia Code MTSDF), loaded once
-	/// on first use. This is the MU1 "font store": <see cref="Controls.TextBlock"/> measures against it and the
-	/// default <see cref="DrawListCompositor"/> lays glyphs out against it, so the atlas the renderer uploads
-	/// (<c>EnableUI(Default.Texture)</c>) is guaranteed to match what was composited. Per-element font families /
-	/// weights are MU5. (UI runs on one thread, so the lazy init needs no lock.)
+	/// The engine's single default font — the embedded <c>ui-default</c> (Cascadia Code MTSDF), loaded once on first
+	/// use. This is the default "font store": <see cref="Controls.TextBlock"/> measures against it and the default
+	/// <see cref="DrawListCompositor"/> lays glyphs out against it, so the atlas the painter uploads
+	/// (<c>UIPainter.Create(engine, Default.Texture)</c>) is guaranteed to match what was composited. (UI runs on one
+	/// thread, so the lazy init needs no lock.)
 	/// </summary>
 	public static FontAtlas Default => field ??= LoadEmbeddedDefault();
 

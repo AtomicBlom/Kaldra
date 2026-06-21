@@ -14,7 +14,7 @@
 
 Loom today is a mature **render-graph + effects** engine. What's shipped and proven:
 
-- **Three-layer architecture intact** (Planning.md §2): Describe (`Loom.Core`) → Execute (`Loom.Graph`) → Bake+record (`Loom.Vulkan`, `Loom.DX12`). Core/Graph carry no graphics-API types.
+- **Three-layer architecture intact** (Planning.md §2): Describe (`Loom.Core`) → Execute (`Loom.Graph`) → Bake+record (`Loom.Vulkan`, `Loom.DirectX12`). Core/Graph carry no graphics-API types.
 - **Two backends at pixel parity** — Vulkan (dynamic rendering, sync2, timeline semaphores) and DX12 (fences, PSOs, placed-resource aliasing). Identical graphs + shaders produce byte-identical output (time-driven effects within a small tolerance).
 - **Describe layer:** `GraphBuilder`/`PassBuilder` (`.Writes`/`.Blends`/`.Samples`/`.ReadWrites`/`.WritesDepth`/`.ReadsDepth`/`.ReadsVertex`), typed handles (`ColorHandle`/`DepthHandle`/`BufferHandle`), fixed + backbuffer-relative domains, persistent + buffer resources, present/readback. Immutable, hashable, drives the bake cache.
 - **Execute layer:** topological scheduling, derived barriers/layout transitions, transient memory aliasing, lifetime analysis — all backend-neutral.
@@ -190,7 +190,7 @@ Recorded here and on the board as `DECIDE`/`DECISION` cards; resolve each before
 
 Phase 1 layout (Planning.md §11) gains:
 - `Loom.Assets` (proposed) — image + glTF loaders producing neutral descriptions; **no graphics-API reference**. (Alternatively these live app-side in `Loom.Sandbox` until a second consumer appears.)
-- `Loom.Vulkan` / `Loom.DX12` each gain a `TextureStore` (mirroring `MeshStore`), and instancing/indirect + (later) GPU-culling/virtual-texturing machinery.
+- `Loom.Vulkan` / `Loom.DirectX12` each gain a `TextureStore` (mirroring `MeshStore`), and instancing/indirect + (later) GPU-culling/virtual-texturing machinery.
 - `Loom.Core` gains `Material`, `Scene`, generalized vertex layouts, and animation/skeleton types.
 - `Loom.Tests` gains golden-image regression (M13).
 

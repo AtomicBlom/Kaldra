@@ -69,7 +69,7 @@ the public API (pure tree/clock algorithms; `Dump()`/`DumpLayout()`/`DumpState()
 Reference seam to mirror (the default compositor's backend path):
 - Neutral verb [`IRenderContext.DrawImGui()`](Loom.Core/IRenderContext.cs) → add `DrawUI(...)`.
 - Backend renderer [`Loom.Vulkan/ImGuiRenderer.cs`](Loom.Vulkan/ImGuiRenderer.cs) and
-  [`Loom.DX12/DX12ImGuiRenderer.cs`](Loom.DX12/DX12ImGuiRenderer.cs) → add `UiRenderer` / `DX12UiRenderer`.
+  [`Loom.DirectX12/DX12ImGuiRenderer.cs`](Loom.DirectX12/DX12ImGuiRenderer.cs) → add `UiRenderer` / `DX12UiRenderer`.
 - Per-frame hand-off via [`FrameInputs`](Loom.Core/FrameInputs.cs) (like `ImGuiDrawData`) → add `UiSurfaces`.
 - Wire-in via `EnableImGui()` in [`VulkanEngine.cs`](Loom.Vulkan/VulkanEngine.cs) → add `EnableUI()`.
 
@@ -87,7 +87,7 @@ Reference seam to mirror (the default compositor's backend path):
 reference Graph/Vulkan/DX12 — it reaches the GPU solely through the neutral seams (`RenderGraph.Define`,
 `IEngine`, `IRenderContext`), exactly as an app does. The `Loom.Assets` reference is what lets the runtime
 `FontAtlas` decode baked MSDF pages via `ImageLoader.Decode` (shipped M11) rather than re-wrapping StbImageSharp.
-Naming follows existing repo casing (`Loom.Core`, `Loom.DX12`): the project is `Loom.UI`.
+Naming follows existing repo casing (`Loom.Core`, `Loom.DirectX12`): the project is `Loom.UI`.
 
 ### Core surface additions (the only changes to Core — all neutral, no GPU types)
 
@@ -365,7 +365,7 @@ Loom.UI     (neutral, refs Core+Assets) DependencyObject/Property · UIElement�
 Loom.UI.SourceGen  (netstandard2.0 analyzer)   .xaml → .g.cs (tree) + .Bindings.g.cs (typed x:Bind/events/storyboards)
 Loom.UI.Text.Bake  (net10.0 build tool)         *.fontset.json → MSDF atlas PNG + metrics JSON
    ▲
-Loom.Vulkan / Loom.DX12  (backends)    UiRenderer / DX12UiRenderer (clones of the ImGui renderers)
+Loom.Vulkan / Loom.DirectX12  (backends)    UiRenderer / DX12UiRenderer (clones of the ImGui renderers)
    ▲
 Loom.Sandbox  (host)                   Silk.NET input → neutral events → UiHost; declares the ui pass(es)
 ```
@@ -1313,7 +1313,7 @@ ImGui already proves on both backends:
 
 | Piece | Vulkan | DX12 |
 |---|---|---|
-| Backend renderer | `Loom.Vulkan/UiRenderer.cs` (twin of `ImGuiRenderer.cs`) | `Loom.DX12/DX12UiRenderer.cs` (twin of `DX12ImGuiRenderer.cs`) |
+| Backend renderer | `Loom.Vulkan/UiRenderer.cs` (twin of `ImGuiRenderer.cs`) | `Loom.DirectX12/DX12UiRenderer.cs` (twin of `DX12ImGuiRenderer.cs`) |
 | Pipeline / PSO | alpha-over, dynamic viewport/scissor, dynamic rendering | alpha-over PSO, RTV bound by executor, negative-height viewport |
 | Atlas upload | staging → device-local image, combined-image-sampler | upload → default-heap texture, SRV in the frame descriptor ring |
 | Per-frame buffers | host-visible, grown per slot | UPLOAD-heap, grown per slot |

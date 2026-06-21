@@ -1,6 +1,5 @@
 using System.Text.Json;
-
-using Loom.Core;
+using Loom.Core.Graph;
 using Loom.Graph;
 
 namespace Loom.Tests;

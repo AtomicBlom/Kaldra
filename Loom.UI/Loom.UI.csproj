@@ -14,7 +14,7 @@
   </PropertyGroup>
 
   <!-- Neutral UI runtime: references Loom.Core + Loom.Assets only (both Core-only, no graphics-API types). It
-       must NOT reference Loom.Graph / Loom.Vulkan / Loom.DX12 — it reaches the GPU solely through the neutral
+       must NOT reference Loom.Graph / Loom.Vulkan / Loom.DirectX12 — it reaches the GPU solely through the neutral
        seams (RenderGraph.Define / IEngine / IRenderContext), exactly as a demo does (PlanningUI.md §Architecture). -->
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />

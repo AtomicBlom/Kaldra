@@ -12,7 +12,7 @@
     This is equivalent to declaring Sdk="Loom.Sdk" once the SDK is packaged (the nested Sdk/ folder mirrors
     a real MSBuild SDK package, so the promotion is import-line-only).
 
-    It brings in the shared shader-compile machinery (here) and the UseVulkan/UseDX12 backend-reference
+    It brings in the shared shader-compile machinery (here) and the UseVulkan/UseDirectX12 backend-reference
     selection (in Sdk.targets). The engine feature flags + their compile constants are NOT here — they live
     in the repo-root Directory.Build.props because they must also reach the engine assembly's own compile.
   -->

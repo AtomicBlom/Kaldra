@@ -3,6 +3,11 @@ using System.Diagnostics;
 
 using Loom.Assets;
 using Loom.Core;
+using Loom.Core.Animation;
+using Loom.Core.Geometry;
+using Loom.Core.Graph;
+using Loom.Core.Hosting;
+using Loom.Core.Materials;
 using Loom.Graph;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Vulkan;
@@ -33,7 +38,7 @@ namespace Loom.Vulkan;
 /// <para>
 /// <b>Frames in flight (§12 M4).</b> Runs 2 frames in flight, paced on a per-frame fence. The safety this
 /// needs — a frame's writes to a transient must not clobber a still-executing earlier frame's reads of the
-/// same image — comes from <see cref="TransientResources"/> giving each transient one physical image per
+/// same image — comes from <see cref="VulkanTransientResources"/> giving each transient one physical image per
 /// frame slot; each frame records against its own slot (<see cref="_currentFrame"/>). The swapchain supplies
 /// distinct backbuffer images itself, and recording is serial on the CPU (the image handle is baked into the
 /// command buffer), so the backbuffer needs no extra buffering.
@@ -47,16 +52,16 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
-	private readonly Swapchain _swapchain;
+	private readonly VulkanSwapchain _swapchain;
 	private readonly string _shaderDir;
 	private readonly VulkanMemoryAllocator _allocator;
-	private readonly TechniqueCache _techniques;
-	private readonly MeshStore _meshes;
-	private readonly TextureStore _textures;
-	private readonly MaterialStore _materials;
-	private readonly DescriptorAllocator _descriptors;
-	private readonly RenderContext _context;
-	private readonly Dictionary<string, TechniqueTemplate> _registry = []; // logical name → backend baked-input form
+	private readonly VulkanTechniqueCache _techniques;
+	private readonly VulkanMeshStore _meshes;
+	private readonly VulkanTextureStore _textures;
+	private readonly VulkanMaterialStore _materials;
+	private readonly VulkanDescriptorAllocator _descriptors;
+	private readonly VulkanRenderContext _context;
+	private readonly Dictionary<string, VulkanTechniqueTemplate> _registry = []; // logical name → backend baked-input form
 
 	// Shader hot-reload (M13): reverse map shader name → the techniques that use it, plus each technique's original
 	// descriptor (so a reload can rebuild the template). The watcher fires on a background thread → it enqueues the
@@ -66,9 +71,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private readonly ConcurrentQueue<string> _reloadQueue = new();
 	private AssetWatcher? _shaderWatcher;
 #if LOOM_IMGUI
-	private ImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
+	private VulkanImGuiRenderer? _imgui; // created on demand when the host calls EnableImGui
 #endif
-	private UIRenderer? _ui; // created when the host calls EnableUI (MU0 Phase A: a no-op renderer)
 
 	// Engine-owned shaders (tonemap/blit/fullscreen/exposure/imgui/debugview) ship embedded in THIS assembly
 	// under the manifest prefix "<assembly>.Shaders." (the Loom SDK's Embed mode sets the same prefix from
@@ -83,7 +87,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private HashSet<int> _persistentIds = [];     // resources whose contents survive across frames
 	private readonly Dictionary<int, ResourceState> _persistentState = []; // last state, carried across frames
 	private HashSet<int> _bufferIds = [];          // storage/vertex buffer resources (emit buffer barriers, not image)
-	private TransientResources? _transients;
+	private VulkanTransientResources? _transients;
 
 	private CommandPool _commandPool;
 	private CommandBuffer[] _commandBuffers = [];
@@ -125,7 +129,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 	private float _frameTime;
 	private uint _frameHover;
 	private nint _frameImGui;
-	private IReadOnlyList<(UISurfaceId Id, UIDrawData Draw)> _frameUISurfaces = [];
+	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _frameDrawLists = [];
 
 	private int _currentFrame;
 	private bool _framebufferResized;
@@ -151,7 +155,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		if (_imgui is not null && resourceId >= 0 && _inspectable.Exists(r => r.Id == resourceId))
 		{
 			_context.RequestThumbnail(resourceId); // engine draws the image in the HUD pass (ImGui.Image no-ops on arm64)
-			return (nint)(resourceId + RenderContext.DebugTextureBase);
+			return (nint)(resourceId + VulkanRenderContext.DebugTextureBase);
 		}
 #endif
 		return 0;
@@ -166,7 +170,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 
 	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
 	{
-		_ctx = new VulkanContext(surface, settings.EnableValidation);
+		_ctx = new VulkanContext(surface, settings.EnableValidation, settings.PreferDiscreteGpu);
 		_vk = _ctx.Vk;
 		_shaderDir = settings.ShaderDirectory;
 
@@ -177,7 +181,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		if (_timestampValidBits == 0)
 			Console.WriteLine("[loom] GPU timing unavailable: the graphics queue reports 0 timestamp valid bits.");
 		_windowExtent = new Extent2D((uint)width, (uint)height);
-		_swapchain = new Swapchain(_ctx, _windowExtent, settings.VSync, settings.HdrOutput);
+		_swapchain = new VulkanSwapchain(_ctx, _windowExtent, settings.VSync, settings.HdrOutput);
 
 		// One VMA allocator backs both transients and meshes. The command pool must exist before the mesh
 		// store (geometry uploads use a one-time copy command), so create it up front.
@@ -185,12 +189,12 @@ internal sealed unsafe class VulkanEngine : IEngine
 			Vk.Version13, _vk, _ctx.Instance, _ctx.PhysicalDevice, _ctx.Device));
 		CreateCommandPool();
 
-		_techniques = new TechniqueCache(_ctx);
-		_meshes = new MeshStore(_ctx, _allocator, _commandPool);
-		_textures = new TextureStore(_ctx, _allocator, _commandPool);
-		_materials = new MaterialStore();
-		_descriptors = new DescriptorAllocator(_ctx, MaxFramesInFlight);
-		_context = new RenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, _materials, _allocator, MaxFramesInFlight);
+		_techniques = new VulkanTechniqueCache(_ctx);
+		_meshes = new VulkanMeshStore(_ctx, _allocator, _commandPool);
+		_textures = new VulkanTextureStore(_ctx, _allocator, _commandPool);
+		_materials = new VulkanMaterialStore();
+		_descriptors = new VulkanDescriptorAllocator(_ctx, MaxFramesInFlight);
+		_context = new VulkanRenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, _materials, _allocator, MaxFramesInFlight);
 
 		CreateCommandBuffers();
 		CreateSyncObjects();
@@ -223,12 +227,12 @@ internal sealed unsafe class VulkanEngine : IEngine
 		// The descriptor-binding counts come from the shader's reflection, not the app (M7-B4): the author states
 		// only the pipeline intent (geometry/blend/filter/compute), and Slang's reflection says how many things
 		// the shader binds.
-		var reflection = ShaderReflection.FromBytes(ResolveShaderAsset(descriptor.Shader, ".json"));
+		var reflection = VulkanShaderReflection.FromBytes(ResolveShaderAsset(descriptor.Shader, ".json"));
 		// Resolve the per-vertex layout: an explicit one, else the canonical pos/normal/uv when the technique
 		// reads geometry, else none (a fullscreen/compute technique). A non-null Instance marks it instanced
 		// (a second per-instance stream at binding 1). (M12 — per-technique vertex layouts.)
 		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
-		_registry[name] = new TechniqueTemplate(
+		_registry[name] = new VulkanTechniqueTemplate(
 			ResolveShaderAsset(descriptor.Shader, ".spv"),
 			descriptor.VertexEntry,
 			descriptor.FragmentEntry,
@@ -244,7 +248,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 			descriptor.Address,
 			layout,
 			descriptor.Instance,
-			reflection.UniformBufferCount);
+			reflection.UniformBufferCount,
+			descriptor.HasListPush);
 
 		// Hot-reload bookkeeping (M13): remember which techniques a shader backs (one shader → many techniques, e.g.
 		// bloom_sample → bloom.down + bloom.up) and each technique's descriptor, so a reload can rebuild the template.
@@ -318,7 +323,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_inspectable.Clear();
 		var executed = graph;
 #if LOOM_IMGUI
-		// Gate on ImGui being live: graphs set before EnableImGui (the DX12 aliasing diagnostics) keep their exact
+		// Gate on ImGui being live: graphs set before EnableImGui (the DirectX12 aliasing diagnostics) keep their exact
 		// aliasing; gallery graphs (set/switched with the UI up) get the inspection edges.
 		if (_imgui is not null)
 		{
@@ -357,7 +362,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 			Console.WriteLine($"[loom] transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
 		// Build transients from `executed` so the injected debug-sample edges add SampledBit to inspected resources.
-		_transients = new TransientResources(_ctx, executed, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
+		_transients = new VulkanTransientResources(_ctx, executed, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
 		_context.SetTransients(_transients);
 
 		// Readback staging (§7.4): one host-visible buffer per frame slot for the first g.Readback target.
@@ -399,21 +404,10 @@ internal sealed unsafe class VulkanEngine : IEngine
 	{
 #if LOOM_IMGUI
 		var spirv = ResolveShaderAsset("imgui", ".spv");
-		_imgui = new ImGuiRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight);
+		_imgui = new VulkanImGuiRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight);
 		_context.SetImGui(_imgui);
 #endif
 		// UseImGui=false: the engine is built without ImGui, so this is a no-op and ctx.DrawImGui() draws nothing.
-	}
-
-	public void EnableUI(TextureData? fontAtlas = null)
-	{
-		if (_ui is not null)
-			return; // idempotent — enabling twice keeps the existing renderer (pass the atlas on the first call)
-
-		// MU1: stand up the real ui.slang renderer (white-texel + optional MTSDF atlas) and wire it to the context.
-		var spirv = ResolveShaderAsset("ui", ".spv");
-		_ui = new UIRenderer(_ctx, _allocator, _commandPool, _swapchain.ImageFormat, spirv, MaxFramesInFlight, fontAtlas);
-		_context.SetUI(_ui);
 	}
 
 	public float SamplePick(int x, int y)
@@ -484,7 +478,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_frameTime = inputs.Time;
 		_frameHover = inputs.HoverId;
 		_frameImGui = inputs.ImGuiDrawData;
-		_frameUISurfaces = inputs.UISurfaces;
+		_frameDrawLists = inputs.DrawLists;
 		DrawFrame((float)inputs.DeltaSeconds);
 	}
 
@@ -611,7 +605,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameHover, _frameImGui, _frameUISurfaces, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameHover, _frameImGui, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
 
 		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).
@@ -784,7 +778,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 				{
 					SType = StructureType.RenderingAttachmentInfo,
 					ImageView = image.View,
-					ImageLayout = StateMapping.For(attachment.State).Layout,
+					ImageLayout = VulkanStateMapping.For(attachment.State).Layout,
 					LoadOp = ToLoadOp(attachment.Load),
 					StoreOp = ToStoreOp(attachment.Store),
 					ClearValue = ClearDepth,
@@ -866,7 +860,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		// compute(StorageWrite) → vertex-input(VertexAttributeRead) hand-off for GPU particles (§7.6).
 		if (_bufferIds.Contains(id))
 		{
-			EmitBufferBarrier(cmd, _transients!.GetBuffer(_currentFrame, id), StateMapping.For(transition.From), StateMapping.For(transition.To));
+			EmitBufferBarrier(cmd, _transients!.GetBuffer(_currentFrame, id), VulkanStateMapping.For(transition.From), VulkanStateMapping.For(transition.To));
 			return;
 		}
 
@@ -884,8 +878,8 @@ internal sealed unsafe class VulkanEngine : IEngine
 		if (_persistentIds.Contains(id))
 			_persistentState[id] = transition.To;
 
-		var src = StateMapping.For(fromState);
-		var dst = StateMapping.For(transition.To);
+		var src = VulkanStateMapping.For(fromState);
+		var dst = VulkanStateMapping.For(transition.To);
 		var srcStage = src.Stage;
 		var srcAccess = src.Access;
 
@@ -935,7 +929,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 	}
 
 	// A buffer memory barrier (no layout) for the storage→vertex hand-off of a GPU-particle buffer.
-	private void EmitBufferBarrier(CommandBuffer cmd, Buffer buffer, StateMapping.Scope from, StateMapping.Scope to)
+	private void EmitBufferBarrier(CommandBuffer cmd, Buffer buffer, VulkanStateMapping.Scope from, VulkanStateMapping.Scope to)
 	{
 		BufferMemoryBarrier2 barrier = new()
 		{
@@ -1005,7 +999,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		_vk.MapMemory(_ctx.Device, memory, 0, size, 0, &mapped).Check("vkMapMemory");
 		var src = new ReadOnlySpan<byte>(mapped, (int)size);
 
-		// Swapchain is typically B8G8R8A8; PNG wants RGBA, so swap R/B for those formats.
+		// VulkanSwapchain is typically B8G8R8A8; PNG wants RGBA, so swap R/B for those formats.
 		var swizzle = _swapchain.ImageFormat is VkFormat.B8G8R8A8Srgb or VkFormat.B8G8R8A8Unorm;
 		var rgba = new byte[(int)size];
 		for (var i = 0; i < (int)(width * height); i++)
@@ -1018,7 +1012,7 @@ internal sealed unsafe class VulkanEngine : IEngine
 		}
 		_vk.UnmapMemory(_ctx.Device, memory);
 
-		PngWriter.WriteRgba(path, (int)width, (int)height, rgba);
+		VulkanPngWriter.WriteRgba(path, (int)width, (int)height, rgba);
 	}
 
 	private void CreateCommandPool()
@@ -1137,7 +1131,6 @@ internal sealed unsafe class VulkanEngine : IEngine
 #if LOOM_IMGUI
 		_imgui?.Dispose(); // before the allocator — it holds VMA font/vertex/index allocations
 #endif
-		_ui?.Dispose(); // likewise before the allocator — the UI renderer holds VMA atlas/vertex/index allocations
 		_descriptors.Dispose();
 		_meshes.Dispose();
 		_textures.Dispose(); // before the allocator — it holds VMA image allocations

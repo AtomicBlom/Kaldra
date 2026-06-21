@@ -20,6 +20,7 @@ public sealed class AssetWatcher : IDisposable
 	private readonly HashSet<string> _extensions;
 	private readonly HashSet<string> _pending = new(StringComparer.OrdinalIgnoreCase);
 	private readonly Lock _gate = new();
+	private bool _disposed;
 
 	/// <summary>Raised after the debounce window with the logical leaf name of each distinct changed file.</summary>
 	public event Action<string>? Changed;
@@ -68,7 +69,7 @@ public sealed class AssetWatcher : IDisposable
 		string[] batch;
 		lock (_gate)
 		{
-			if (_pending.Count == 0)
+			if (_disposed || _pending.Count == 0)
 				return;
 			batch = [.. _pending];
 			_pending.Clear();
@@ -79,6 +80,10 @@ public sealed class AssetWatcher : IDisposable
 
 	public void Dispose()
 	{
+		// Mark disposed under the gate first so a debounce callback already queued sees it and bails in Flush,
+		// rather than raising Changed against state the consumer has begun tearing down.
+		lock (_gate)
+			_disposed = true;
 		foreach (var watcher in _watchers)
 			watcher.Dispose();
 		_debounce.Dispose();

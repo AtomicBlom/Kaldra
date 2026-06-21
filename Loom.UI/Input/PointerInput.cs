@@ -6,7 +6,7 @@ namespace Loom.UI;
 /// One device-neutral pointer event the host queues into a <see cref="UIHost"/> between frames (PlanningUI.md §D5.2).
 /// WinUI-shaped so mouse, pen and touch share one struct; the host (Sandbox/Silk.NET) translates raw input into
 /// this, keeping graphics/windowing types out of <c>Loom.UI</c>. <see cref="Position"/> is in surface pixels
-/// (the same space as <c>UIDrawData</c> / the framebuffer); the host hit-tests and routes it in <see cref="UIHost.Tick"/>.
+/// (the same space as the composited <c>DrawListData</c> / the framebuffer); the host hit-tests and routes it in <see cref="UIHost.Tick"/>.
 /// </summary>
 /// <param name="PointerId">Distinguishes simultaneous pointers (multi-touch); mouse is a single stable id.</param>
 /// <param name="Device">Mouse / pen / touch (MU2 drives mouse only).</param>

@@ -1,9 +1,8 @@
 using System.Collections.Immutable;
 using System.Numerics;
-
-using Loom.Core;
-
-using SharpGLTF.Animations;
+using Loom.Core.Animation;
+using Loom.Core.Geometry;
+using Loom.Core.Materials;
 using SharpGLTF.Schema2;
 
 using GltfMaterial = SharpGLTF.Schema2.Material;
@@ -29,26 +28,49 @@ public static class GltfLoader
 		var materialCache = new Dictionary<GltfMaterial, ModelMaterial?>();
 
 		// Skinning (M15): a single-character model has one skin. Build the neutral skeleton from the first skin
-		// and a node→joint-index map; the same map says which meshes are skinned and retargets animation channels.
+		// and a node→joint-index map; the map retargets animation channels and tells which nodes are skinned.
 		var gltfSkin = model.LogicalSkins.Count > 0 ? model.LogicalSkins[0] : null;
 		var nodeToJoint = new Dictionary<Node, int>();
 		var skeleton = gltfSkin is not null ? BuildSkeleton(gltfSkin, nodeToJoint) : null;
 
-		// A mesh is skinned iff a node references it together with our skin. (glTF puts the skin on the node, not
-		// the mesh; the bind-pose geometry lives in the mesh's accessors regardless.)
-		var skinnedMeshes = new HashSet<GltfMesh>();
-		if (gltfSkin is not null)
-			foreach (var node in model.LogicalNodes)
-				if (node.Mesh is not null && node.Skin == gltfSkin)
-					skinnedMeshes.Add(node.Mesh);
-
-		foreach (var mesh in model.LogicalMeshes)
+		// Place geometry by walking the scene graph. A node's WorldMatrix positions its STATIC mesh, baked into
+		// the vertices here — so a mesh authored away from the origin (rotated/scaled), or instanced by several
+		// nodes, lands correctly; iterating the mesh table alone would collapse every mesh to the origin and load
+		// a multiply-referenced mesh only once. A SKINNED mesh is positioned by its skin's joints, so per the
+		// glTF spec the node transform is ignored and its bind-pose geometry stays mesh-local; emit it once.
+		var emittedSkinned = new HashSet<GltfMesh>();
+		foreach (var node in model.LogicalNodes)
 		{
-			var meshSkinned = skinnedMeshes.Contains(mesh);
+			if (node.Mesh is not { } mesh)
+				continue;
+
+			if (gltfSkin is not null && node.Skin == gltfSkin)
+			{
+				if (emittedSkinned.Add(mesh))
+					AddMeshPrimitives(mesh, skinned: true, world: null);
+			}
+			else
+			{
+				AddMeshPrimitives(mesh, skinned: false, world: node.WorldMatrix);
+			}
+		}
+
+		return new LoadedModel
+		{
+			Primitives = primitives,
+			Skeleton = skeleton,
+			Clips = skeleton is not null ? BuildClips(model, nodeToJoint) : [],
+		};
+
+		// Flatten one mesh into drawable primitives. For a static mesh, world != null bakes the node placement
+		// into the vertices; for a skinned mesh, world is null (joints place it) and JOINTS_0/WEIGHTS_0 are
+		// interleaved with the bind-pose verts.
+		void AddMeshPrimitives(GltfMesh mesh, bool skinned, Matrix4x4? world)
+		{
 			foreach (var prim in mesh.Primitives)
 			{
-				// M11 draws triangle lists; skip points/lines/strips/fans rather than reinterpret their
-				// vertices as a triangle list (which would produce scrambled geometry).
+				// Draw triangle lists only; skip points/lines/strips/fans rather than reinterpret their vertices
+				// as a triangle list (which would produce scrambled geometry).
 				if (prim.DrawPrimitiveType != PrimitiveType.TRIANGLES)
 					continue;
 
@@ -68,6 +90,11 @@ public static class GltfLoader
 					var tan = tangents is not null ? tangents[i] : new Vector4(1, 0, 0, 1);
 					vertices[i] = new Vertex(positions[i], n, uv, tan);
 				}
+
+				// Bake the node's world placement into a static mesh's vertices BEFORE tangents are computed, so
+				// any computed tangents match the world-space positions.
+				if (world is { } m && m != Matrix4x4.Identity)
+					BakeTransform(vertices, m);
 
 				var indexList = prim.GetIndices();
 				uint[] indices;
@@ -90,7 +117,7 @@ public static class GltfLoader
 
 				// Skinned geometry (M15): pull JOINTS_0/WEIGHTS_0 and interleave with the bind-pose verts. Both the
 				// static Vertices and the SkinnedVertices are kept, so a consumer can draw either.
-				var skinnedVertices = meshSkinned ? BuildSkinnedVertices(prim, vertices) : null;
+				var skinnedVertices = skinned ? BuildSkinnedVertices(prim, vertices) : null;
 
 				primitives.Add(new ModelPrimitive
 				{
@@ -101,14 +128,27 @@ public static class GltfLoader
 				});
 			}
 		}
-
-		return new LoadedModel
-		{
-			Primitives = primitives,
-			Skeleton = skeleton,
-			Clips = skeleton is not null ? BuildClips(model, nodeToJoint) : [],
-		};
 	}
+
+	// Bake a node's world transform into a static mesh's vertices: positions by the full matrix, normals by its
+	// inverse-transpose (so non-uniform scale keeps them perpendicular to the surface), tangents by its linear
+	// part. The tangent handedness (Tangent.W) is preserved.
+	private static void BakeTransform(Vertex[] vertices, Matrix4x4 world)
+	{
+		if (!Matrix4x4.Invert(world, out var inverse))
+			inverse = Matrix4x4.Identity;
+		var normalMatrix = Matrix4x4.Transpose(inverse);
+		for (var i = 0; i < vertices.Length; i++)
+		{
+			var v = vertices[i];
+			var position = Vector3.Transform(v.Position, world);
+			var normal = SafeNormalize(Vector3.TransformNormal(v.Normal, normalMatrix));
+			var tangent = SafeNormalize(Vector3.TransformNormal(new Vector3(v.Tangent.X, v.Tangent.Y, v.Tangent.Z), world));
+			vertices[i] = new Vertex(position, normal, v.Uv, new Vector4(tangent, v.Tangent.W));
+		}
+	}
+
+	private static Vector3 SafeNormalize(Vector3 v) => v.LengthSquared() > 1e-12f ? Vector3.Normalize(v) : v;
 
 	// Build the neutral Skeleton from a glTF skin: each joint's parent index (within the joint set, -1 for a
 	// root), inverse bind matrix, bind-pose local transform, and name. Also fills <paramref name="nodeToJoint"/>

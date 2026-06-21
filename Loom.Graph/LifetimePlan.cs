@@ -1,14 +1,13 @@
 using System.Collections.Immutable;
 using System.Text;
-
-using Loom.Core;
+using Loom.Core.Graph;
 
 namespace Loom.Graph;
 
 /// <summary>
 /// Per-transient lifetime analysis derived from a <see cref="GraphSchedule"/>: for each resource, the
 /// execution-order span over which it is live (first touch to last touch). This is the input the backend's
-/// transient aliaser needs to recycle memory across non-overlapping lifetimes (Planning.md §8, §12 M4) —
+/// transient aliaser needs to recycle memory across non-overlapping lifetimes —
 /// the classic "the G-buffer's memory is reused by the bloom mips once the G-buffer is consumed" case.
 /// <para>
 /// Backend-neutral by design: it yields abstract <see cref="ResourceLifetime"/> spans and an overlap/alias
@@ -54,7 +53,7 @@ public sealed class LifetimePlan
 		// A g.Readback target is copied to the host AFTER every pass (end of frame), but that copy is not a
 		// pass, so the walk above stopped its lifetime at its last graph use. Extend it past the final pass so
 		// the aliaser never recycles its memory before the copy-out — otherwise the readback samples whatever
-		// later transient aliased into it (picking reads garbage; the hover outline flickers). §7.4.
+		// later transient aliased into it (picking reads garbage; the hover outline flickers).
 		var endOfFrame = schedule.Passes.Length; // pass orders are 0..n-1, so n is strictly after them all
 		foreach (var target in schedule.Graph.ReadbackTargets)
 			if (last.ContainsKey(target.Id))

@@ -29,7 +29,7 @@
     <UpToDateCheckInput Include="@(LoomXaml)" />
   </ItemGroup>
 
-  <!-- The generator is inert until the analyzer project exists (mirrors the _LoomWarnInertDX12 pattern in
+  <!-- The generator is inert until the analyzer project exists (mirrors the _LoomWarnInertDirectX12 pattern in
        Sdk.targets): reference it only when the file is present, so the flag can be on without breaking a build
        that lacks the generator. -->
   <ItemGroup Condition="'$(LoomXamlEnable)' == 'true' And Exists('$(_LoomUISourceGen)')">

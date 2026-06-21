@@ -1,19 +1,19 @@
-using Loom.Core;
+using Loom.Core.Hosting;
 using Loom.UI.Controls;
 
 namespace Loom.UI.Tests;
 
 /// <summary>
-/// Glyph-run composition coverage (PlanningUI.md §D3 / §D8.1): a <see cref="TextBlock"/> drives the element→visual
-/// pipeline through the default <see cref="DrawListCompositor"/> (which lays out against the embedded
-/// <see cref="FontAtlas.Default"/>) into neutral <see cref="UIDrawData"/>. Asserts the emitted draw stream on CPU
-/// — glyph kind, atlas texture binding, quad/index counts, batching, the screenPxRange ride-along — with no backend.
+/// Glyph-run composition coverage: a <see cref="TextBlock"/> drives the element→visual pipeline through the default
+/// <see cref="DrawListCompositor"/> (which lays out against the embedded <see cref="FontAtlas.Default"/>) into a
+/// neutral <see cref="DrawListData"/>. Asserts the emitted draw list on CPU — glyph kind, atlas texture binding,
+/// quad/index counts, batching, the screenPxRange ride-along — with no backend.
 /// </summary>
 public sealed class GlyphCompositionTests
 {
 	private static UIRoot Root(UIElement content, float w = 400f, float h = 100f)
 	{
-		var root = new UIRoot(new UISurfaceId(0)) { Content = content };
+		var root = new UIRoot(new DrawListId(0)) { Content = content };
 		root.LayoutPass(new Size(w, h));
 		return root;
 	}
@@ -25,8 +25,8 @@ public sealed class GlyphCompositionTests
 
 		draw.Commands.Length.ShouldBe(1);
 		var cmd = draw.Commands.Span[0];
-		cmd.Kind.ShouldBe(UIPrimKind.Glyph);
-		cmd.TextureId.ShouldBe(1); // the atlas page, not the white texel (0)
+		cmd.Tag.ShouldBe((uint)UIPrimKind.Glyph);
+		cmd.TextureIndex.ShouldBe(1); // the atlas page, not the white texel (0)
 
 		// Two visible glyphs ⇒ two quads ⇒ 8 vertices / 12 indices, all collapsed into the one command.
 		draw.Vertices.Length.ShouldBe(8);
@@ -58,7 +58,7 @@ public sealed class GlyphCompositionTests
 	public void ScreenPxRange_rides_the_glyph_vertices()
 	{
 		var draw = Root(new TextBlock { Text = "M", FontSize = 48f }).Render();
-		// Params.x carries the per-run screenPxRange (§D3.4) — the shader's smoothstep scale.
-		draw.Vertices.Span[0].Params.X.ShouldBe(FontAtlas.Default.ScreenPxRange(48f), 1e-2f);
+		// Custom.x carries the per-run screenPxRange — the shader's smoothstep scale.
+		draw.Vertices.Span[0].Custom.X.ShouldBe(FontAtlas.Default.ScreenPxRange(48f), 1e-2f);
 	}
 }

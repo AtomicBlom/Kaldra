@@ -64,4 +64,57 @@ public sealed class DependencyPropertyTests
 		p.ClearAnimatedValue(Probe.ValueProperty);
 		p.Value.ShouldBe(5); // Local, never clobbered by the animation
 	}
+
+	[Test]
+	public void Every_precedence_transition_that_changes_the_resolved_value_fires_the_callback()
+	{
+		var p = new Probe();
+		p.SetInheritedValue(Probe.ValueProperty, 1);  // default(-1) -> 1
+		p.SetStyleValue(Probe.ValueProperty, 2);      // 1 -> 2 (Style outranks Inherited)
+		p.Value = 3;                                  // 2 -> 3 (Local outranks Style)
+		p.SetAnimatedValue(Probe.ValueProperty, 4);   // 3 -> 4 (Animation outranks Local)
+		p.ClearAnimatedValue(Probe.ValueProperty);    // 4 -> 3 (revert to Local)
+
+		// The callback fires once per resolved change, with the right (old, new) — for every rung, not just Local.
+		p.Log.ShouldBe([(-1, 1), (1, 2), (2, 3), (3, 4), (4, 3)]);
+	}
+
+	[Test]
+	public void A_lower_precedence_change_masked_by_a_higher_rung_does_not_fire()
+	{
+		var p = new Probe { Value = 5 };              // Local 5
+		p.SetAnimatedValue(Probe.ValueProperty, 9);   // Animation 9 outranks Local
+		p.Log.Clear();
+
+		// Style sits below the active Animation, so the resolved value stays 9 — no callback must fire.
+		p.SetStyleValue(Probe.ValueProperty, 2);
+		p.Value.ShouldBe(9);
+		p.Log.ShouldBeEmpty();
+	}
+
+	private sealed class CoerceProbe : DependencyObject
+	{
+		public static readonly DependencyProperty<CoerceProbe, int> MaxProperty =
+			DependencyProperty.Register<CoerceProbe, int>("Max", new PropertyMetadata<CoerceProbe, int> { DefaultValue = 100 });
+
+		public static readonly DependencyProperty<CoerceProbe, int> ValueProperty =
+			DependencyProperty.Register<CoerceProbe, int>("Value",
+				new PropertyMetadata<CoerceProbe, int> { Coerce = static (o, v) => Math.Min(v, o.Max) });
+
+		public int Max { get => GetValue(MaxProperty); set => SetValue(MaxProperty, value); }
+		public int Value { get => GetValue(ValueProperty); set => SetValue(ValueProperty, value); }
+	}
+
+	[Test]
+	public void Coercion_applies_to_the_resolved_value_and_reflects_a_dependency_on_read()
+	{
+		var p = new CoerceProbe();
+		p.Value = 50;
+		p.Value.ShouldBe(50); // under the default Max=100, uncoerced
+
+		// Lower Max below the stored Value: coercion runs against the resolved value on read, so Value follows Max —
+		// it is not frozen at the value coerced when it was written (which would still read 50).
+		p.Max = 30;
+		p.Value.ShouldBe(30);
+	}
 }

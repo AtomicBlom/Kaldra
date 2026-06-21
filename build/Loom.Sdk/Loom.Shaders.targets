@@ -9,11 +9,11 @@
       Content -> loose <Content> copied to the output under shaders\  (an app, e.g. Loom.Sandbox)
       Embed   -> <EmbeddedResource> with a stable manifest name        (the engine, Loom.Vulkan)
 
-    When $(LoomEmitHlsl) is set (the DX12 backend is in the build) it ALSO emits per-stage HLSL beside the
+    When $(LoomEmitHlsl) is set (the DirectX12 backend is in the build) it ALSO emits per-stage HLSL beside the
     SPIR-V — <name>.vs.hlsl / <name>.ps.hlsl / <name>.cs.hlsl. Slang's HLSL target is per-entry-point (a
     combined multi-entry module duplicates the shared structs and won't compile), so each stage is emitted
     on its own; the stages are the fixed vs/fragment/compute set, so no per-shader entry enumeration is
-    needed. The DX12 backend resolves the stage files it needs and compiles each.
+    needed. The DirectX12 backend resolves the stage files it needs and compiles each.
   -->
 
   <PropertyGroup>
@@ -51,13 +51,14 @@
          the descriptor-binding layout, so the app states only pipeline intent. -->
     <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target spirv -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).spv&quot; -reflection-json &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).json&quot;" />
 
-    <!-- DX12: also emit SIGNED DXIL here (same target as SPIR-V, so the single LoomCompileShaders dependency
+    <!-- DirectX12: also emit SIGNED DXIL here (same target as SPIR-V, so the single LoomCompileShaders dependency
          covers BOTH and the registration below always sees every produced stage — a separate emit target
          ordered before/after caused register to snapshot mid-emit and miss .ps/.cs). Resolve the architecture-
          matched Windows SDK dxc dir for slangc's -dxc-path (forward slashes so a trailing "\" doesn't escape the
-         quote in cmd). One Exec per fixed stage; a shader lacking a stage just produces no file (the
-         '|| exit /b 0' swallows slangc's "entry not found", so the build stays warning-free — real shader errors
-         are still caught by the un-swallowed SPIR-V compile above). -->
+         quote in cmd). One Exec per stage, run ONLY for the entry points the shader actually declares
+         (detected from its source). A missing stage is skipped — no error to swallow — and a stage that IS
+         declared but fails to compile to DXIL HARD-FAILS the build, instead of being silently dropped and
+         leaving DirectX12 to fall back to a stand-in (the exact cross-backend break this layer guards against). -->
     <ItemGroup Condition="'$(LoomEmitDxil)' == 'true' And '$(LoomDxcPath)' == ''">
       <_LoomDxcDll Include="$(MSBuildProgramFiles32)\Windows Kits\10\bin\**\$(LoomDxcArch)\dxcompiler.dll" />
     </ItemGroup>
@@ -66,11 +67,18 @@
       <LoomDxcPath>$(LoomDxcPath.Replace('\','/'))</LoomDxcPath>
     </PropertyGroup>
     <Warning Condition="'$(LoomEmitDxil)' == 'true' And '$(LoomDxcPath)' == ''"
-             Text="LoomEmitDxil is on but no DXC found (Windows SDK '$(LoomDxcArch)' bin). DX12 will fall back to built-in shaders; install the Windows SDK or set $(LoomDxcPath)." />
+             Text="LoomEmitDxil is on but no DXC found (Windows SDK '$(LoomDxcArch)' bin). DirectX12 will fall back to built-in shaders; install the Windows SDK or set $(LoomDxcPath)." />
     <Message Condition="'$(LoomEmitDxil)' == 'true'" Importance="high" Text="Slang -&gt; signed DXIL (per stage): %(LoomSlangEntry.Filename).slang" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true'" Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry vertexMain -stage vertex -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).vs.dxil&quot; 2&gt;nul || exit /b 0" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true'" Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry fragmentMain -stage fragment -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).ps.dxil&quot; 2&gt;nul || exit /b 0" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true'" Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry computeMain -stage compute -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).cs.dxil&quot; 2&gt;nul || exit /b 0" />
+    <ItemGroup Condition="'$(LoomEmitDxil)' == 'true'">
+      <_LoomDxilEntry Include="@(LoomSlangEntry)">
+        <HasVertex>$([System.IO.File]::ReadAllText('%(FullPath)').Contains('vertexMain'))</HasVertex>
+        <HasFragment>$([System.IO.File]::ReadAllText('%(FullPath)').Contains('fragmentMain'))</HasFragment>
+        <HasCompute>$([System.IO.File]::ReadAllText('%(FullPath)').Contains('computeMain'))</HasCompute>
+      </_LoomDxilEntry>
+    </ItemGroup>
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry vertexMain -stage vertex -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).vs.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry fragmentMain -stage fragment -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).ps.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry computeMain -stage compute -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).cs.dxil&quot;" />
   </Target>
 
   <!-- No Inputs/Outputs => ALWAYS runs (even when the compile targets are up to date), so the outputs are

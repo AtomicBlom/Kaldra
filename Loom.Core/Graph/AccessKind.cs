@@ -1,0 +1,34 @@
+namespace Loom.Core.Graph;
+
+/// <summary>
+/// How a single pass touches a single resource. These edges are the <em>entire</em> input to the
+/// Execute layer: ordering, barriers, layout transitions and aliasing are all derived from them
+/// (Planning.md §8). The <see cref="Write"/> vs <see cref="Blend"/> distinction is load-bearing —
+/// it tells the barrier-deriver whether the contents are produced (clearable) or accumulated onto.
+/// </summary>
+public enum AccessKind
+{
+	/// <summary>Colour output. The pass produces this; the engine may clear it. (<c>.Writes</c>)</summary>
+	Write,
+
+	/// <summary>
+	/// Colour read-modify-write: the existing contents are loaded (preserved), then the technique's blend
+	/// accumulates onto them. The pass is simultaneously the last reader and the next writer. (<c>.Blends</c>)
+	/// </summary>
+	Blend,
+
+	/// <summary>Sampled (shader-read) input. (<c>.Samples</c>)</summary>
+	Sample,
+
+	/// <summary>Depth write. (<c>.WritesDepth</c>)</summary>
+	WriteDepth,
+
+	/// <summary>Depth test, no write. (<c>.ReadsDepth</c>)</summary>
+	ReadDepth,
+
+	/// <summary>General read-modify-write — read-write storage resources (images/buffers), used by compute. (<c>.ReadWrites</c>)</summary>
+	ReadWrite,
+
+	/// <summary>A buffer read as vertex-attribute data by a draw (GPU particles, §7.6). (<c>.ReadsVertex</c>)</summary>
+	ReadVertex,
+}

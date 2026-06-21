@@ -1,18 +1,18 @@
-using Loom.Core;
+using Loom.Core.Hosting;
 using Loom.UI.Controls;
 
 namespace Loom.UI.Tests;
 
 /// <summary>
-/// MU0 Phase B composition coverage (PlanningUI.md §D2.5 / §D8): the element tree drives a <see cref="Visual"/>
-/// tree, and the default <see cref="DrawListCompositor"/> flattens it to neutral <see cref="UIDrawData"/>. Both
-/// stages are asserted on CPU via their <c>Dump()</c> forms (the two pure test seams) — no backend.
+/// Composition coverage: the element tree drives a <see cref="Visual"/> tree, and the default
+/// <see cref="DrawListCompositor"/> flattens it to a neutral <see cref="DrawListData"/>. Both stages are asserted
+/// on CPU via their <c>Dump()</c> forms (the two pure test seams) — no backend.
 /// </summary>
 public sealed class CompositionTests
 {
 	private static UIRoot Root(UIElement content, float w = 200f, float h = 200f)
 	{
-		var root = new UIRoot(new UISurfaceId(0)) { Content = content };
+		var root = new UIRoot(new DrawListId(0)) { Content = content };
 		root.LayoutPass(new Size(w, h));
 		return root;
 	}
@@ -26,7 +26,7 @@ public sealed class CompositionTests
 		draw.Commands.Length.ShouldBe(1);
 		var dump = draw.Dump();
 		dump.ShouldContain("Commands (1)");
-		dump.ShouldContain("Fill tex=0");
+		dump.ShouldContain("tag=0 tex=0"); // tag 0 = the Fill primitive kind, white texel
 		dump.ShouldContain("pos=(100,50)"); // bottom-right corner of the 100x50 fill
 	}
 

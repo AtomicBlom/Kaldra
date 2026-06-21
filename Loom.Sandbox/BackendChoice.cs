@@ -4,5 +4,5 @@ namespace Loom.Sandbox;
 internal enum BackendChoice
 {
 	Vulkan,
-	Dx12,
+	DirectX12,
 }
