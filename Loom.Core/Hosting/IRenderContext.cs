@@ -263,7 +263,7 @@ public interface IRenderContext
 	/// This frame's draw lists, each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a
 	/// producer composited for it — the per-frame channel behind overlay/UI-style rendering. The host fills it via
 	/// <see cref="FrameInputs.DrawLists"/> off the render graph; a pass closure pulls a list out by id and submits it
-	/// with <see cref="DrawList{TVertex}"/> (the UI does this through <c>Loom.UI</c>'s painter). Engine-provided frame
+	/// with <see cref="DrawList{TVertex}"/> (the UI does this through <c>SUIsei</c>'s painter). Engine-provided frame
 	/// context like <see cref="Camera"/> — pulled, not captured (§8), so the graph stays frame-independent. Empty
 	/// (the default) when the host supplied no lists.
 	/// </summary>

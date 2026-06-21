@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Glue between the standalone SUIsei UI runtime and the Loom render graph. References both sides;
+       neither SUIsei nor Loom.Core reference each other. -->
+  <ItemGroup>
+    <ProjectReference Include="..\external\SUIsei\SUIsei\SUIsei.csproj" />
+    <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
+    <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
+  </ItemGroup>
+
+</Project>

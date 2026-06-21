@@ -5,7 +5,7 @@ namespace Loom.Core.Primitives;
 
 /// <summary>
 /// An axis-aligned rectangle in pixels — neutral geometry (no graphics-API types), used for a draw command's
-/// scissor (<see cref="Hosting.DrawCommand.ClipRect"/>) and reused by the <c>Loom.UI</c> layout/hit-test code.
+/// scissor (<see cref="Hosting.DrawCommand.ClipRect"/>) and reused by the <c>SUIsei</c> layout/hit-test code.
 /// Stored as origin + size so a zero-size rect is unambiguous; <see cref="Right"/>/<see cref="Bottom"/> are
 /// derived. Lives in <c>Loom.Core</c> beside <see cref="Vertex"/> as managed value data.
 /// </summary>

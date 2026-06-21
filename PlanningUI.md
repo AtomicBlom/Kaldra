@@ -37,7 +37,7 @@ interactive 3D quad), and drive it with mouse + keyboard + focus + gamepad + tou
 | Composition | **Retained `Visual` tree** behind the element tree, rendered by a pluggable **`IUiCompositor`** (Loom's default flattens to `UiDrawData`; a foreign engine substitutes its own). Enables independent animation, billboards, group-opacity/effects, and engine portability. |
 | Color / HDR | Authoring uses a **float `HdrColor`** (named for explicitness + to dodge the `System.Drawing.Color` clash): `0..1` = SDR/paper-white, `>1` = above paper white. UI is pinned to a configurable **paper-white reference** by default (never display peak — HUDs don't blow out); above-paper-white is opt-in. Composited vertex color is premultiplied **RGBA16F**. |
 | ImGui | **Coexists** — ImGui stays as the dev/debug HUD; this is the game-facing UI. |
-| Testability | **Headless-testable by construction** — every logic subsystem (DP, layout, routing, hit-test, focus, animation, draw-list build) is unit-tested on CPU with no GPU/window; only backend pixels use the capture loop. New tests live in `Loom.UI.Tests` (TUnit + Shouldly). |
+| Testability | **Headless-testable by construction** — every logic subsystem (DP, layout, routing, hit-test, focus, animation, draw-list build) is unit-tested on CPU with no GPU/window; only backend pixels use the capture loop. New tests live in `SUIsei.Tests` (TUnit + Shouldly). |
 
 ## Architecture
 
@@ -77,17 +77,17 @@ Reference seam to mirror (the default compositor's backend path):
 
 | Project | TFM | Role | References |
 |---|---|---|---|
-| **`Loom.UI`** | `net10.0` | Backend-neutral UI runtime: dependency-object model, controls, layout/element tree, **composition `Visual` tree + `IUiCompositor` + default `DrawListCompositor`**, routed events, focus, hit-testing (2D + 3D ray), `UiHost`, animation, text layout. | **`Loom.Core` + `Loom.Assets`** (both neutral) |
-| **`Loom.UI.SourceGen`** | `netstandard2.0` | Roslyn `IIncrementalGenerator`: `.xaml` → typed control-tree builders + `x:Bind`/event/storyboard/visual-state glue. Ships as `<Analyzer>`. Build-time only. | `Microsoft.CodeAnalysis.CSharp` (host-pinned, `PrivateAssets=all`) |
-| **`Loom.UI.Text.Bake`** | `net10.0` | Build-time console tool (never shipped): font subset → MSDF atlas PNG + metrics JSON. Orchestrates `msdf-atlas-gen`. | — |
-| **`Loom.UI.Tests`** | `net10.0` | Headless unit + source-gen-snapshot tests (**TUnit + Shouldly**). **No GPU/backend ref** — asserts neutral draw output, layout, routing, focus, animation, and the generated C# (D8). | `Loom.UI` + `Loom.Core` + `Loom.Assets` + `Loom.UI.SourceGen` (snapshot harness) |
-| `build/Loom.Sdk/Loom.UI.{props,targets}` | — | Register `.xaml` as `AdditionalFiles` for the generator (+ `UpToDateCheck`); run the font bake + register atlas/JSON as Embedded/Content. Mirrors `Loom.Shaders.{props,targets}`. | — |
+| **`SUIsei`** | `net10.0` | Backend-neutral UI runtime: dependency-object model, controls, layout/element tree, **composition `Visual` tree + `IUiCompositor` + default `DrawListCompositor`**, routed events, focus, hit-testing (2D + 3D ray), `UiHost`, animation, text layout. | **`Loom.Core` + `Loom.Assets`** (both neutral) |
+| **`SUIsei.SourceGen`** | `netstandard2.0` | Roslyn `IIncrementalGenerator`: `.xaml` → typed control-tree builders + `x:Bind`/event/storyboard/visual-state glue. Ships as `<Analyzer>`. Build-time only. | `Microsoft.CodeAnalysis.CSharp` (host-pinned, `PrivateAssets=all`) |
+| **`SUIsei.Text.Bake`** | `net10.0` | Build-time console tool (never shipped): font subset → MSDF atlas PNG + metrics JSON. Orchestrates `msdf-atlas-gen`. | — |
+| **`SUIsei.Tests`** | `net10.0` | Headless unit + source-gen-snapshot tests (**TUnit + Shouldly**). **No GPU/backend ref** — asserts neutral draw output, layout, routing, focus, animation, and the generated C# (D8). | `SUIsei` + `Loom.Core` + `Loom.Assets` + `SUIsei.SourceGen` (snapshot harness) |
+| `build/Loom.Sdk/SUIsei.{props,targets}` | — | Register `.xaml` as `AdditionalFiles` for the generator (+ `UpToDateCheck`); run the font bake + register atlas/JSON as Embedded/Content. Mirrors `Loom.Shaders.{props,targets}`. | — |
 
-`Loom.UI` depends on `Loom.Core` + `Loom.Assets` (both neutral, Core-only, no GPU types) and **must not**
+`SUIsei` depends on `Loom.Core` + `Loom.Assets` (both neutral, Core-only, no GPU types) and **must not**
 reference Graph/Vulkan/DX12 — it reaches the GPU solely through the neutral seams (`RenderGraph.Define`,
 `IEngine`, `IRenderContext`), exactly as an app does. The `Loom.Assets` reference is what lets the runtime
 `FontAtlas` decode baked MSDF pages via `ImageLoader.Decode` (shipped M11) rather than re-wrapping StbImageSharp.
-Naming follows existing repo casing (`Loom.Core`, `Loom.DirectX12`): the project is `Loom.UI`.
+Naming follows existing repo casing (`Loom.Core`, `Loom.DirectX12`): the project is `SUIsei`.
 
 ### Core surface additions (the only changes to Core — all neutral, no GPU types)
 
@@ -104,7 +104,7 @@ These are managed neutral data types, the same way [`Vertex`](Loom.Core/Vertex.c
   captured (preserves the pure-closure invariant).
 
 `UiDrawData` is the output of Loom's **default** `DrawListCompositor`; the `Visual` composition tree it composites
-from lives in `Loom.UI` (neutral, no GPU types). A foreign engine swapping `IUiCompositor` consumes that tree and
+from lives in `SUIsei` (neutral, no GPU types). A foreign engine swapping `IUiCompositor` consumes that tree and
 need not produce `UiDrawData` at all — so these Core additions are the *default-path* contract, not the only one.
 
 ### Shaders (under [Loom.Shaders/Shaders](Loom.Shaders/Shaders), embedded like `imgui.slang`)
@@ -115,9 +115,9 @@ pipelines per color space (alpha-over + optional additive for glow). Compiled to
 DXIL (DX12) by the existing dual-emit toolchain. Like ImGui, it's driven by a bespoke `UiRenderer` (custom
 blend + dynamic scissor) rather than the generic technique path.
 
-## The source generator (`Loom.UI.SourceGen`)
+## The source generator (`SUIsei.SourceGen`)
 
-`IIncrementalGenerator`; `.xaml` arrives as `AdditionalFiles` (registered by `Loom.UI.props`). For each
+`IIncrementalGenerator`; `.xaml` arrives as `AdditionalFiles` (registered by `SUIsei.props`). For each
 page/template it emits a `partial` of `x:Class` with: typed `x:Name` fields; `InitializeComponent()` that
 builds the tree with generated `new` (**never `Activator.CreateInstance`**); literal/attached/`StaticResource`
 value assignment; typed event wiring (`btn.AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler(this.OnClick))`,
@@ -135,7 +135,7 @@ Commit to a **curated WinUI-syntax subset** published as a hard contract (see Ri
 clearly on anything outside the grammar. Generated output is locked down by **snapshot tests** over
 representative `.xaml` (D8) — the build-time analog of the golden draw-list.
 
-## Runtime object model + layout (`Loom.UI`)
+## Runtime object model + layout (`SUIsei`)
 
 - **DependencyObject / `DependencyProperty<TOwner,TValue>`**, reflection-free: dense `GlobalIndex` slots
   assigned at registration via `[ModuleInitializer]` (the [`VulkanBackend`](Loom.Vulkan/VulkanBackend.cs)
@@ -181,7 +181,7 @@ representative `.xaml` (D8) — the build-time analog of the golden draw-list.
 - **Group opacity & effects:** a `Visual` with sub-1 group opacity (or an effect) composites to a transient render
   target and blends back with one `AddImage` at the group alpha — reusing the in-world render-to-texture machinery
   (D4.2). This is *true* WinUI group-opacity, not a per-vertex-alpha approximation.
-- **MSDF text — build time:** `Loom.UI.Text.Bake` reads a `*.fontset.json` (fonts + charset ranges/scripts +
+- **MSDF text — build time:** `SUIsei.Text.Bake` reads a `*.fontset.json` (fonts + charset ranges/scripts +
   `pxRange`/`glyphSize`), drives `msdf-atlas-gen` (MIT, build-only, bundled hermetically like `slangc`), emits
   atlas PNG page(s) + a metrics JSON (per-glyph UV/plane/advance, font metrics, subset cmap) — the text analog
   of the Slang reflection sidecar. An MSBuild target (`LoomCompile/RegisterFonts`) mirrors
@@ -205,7 +205,7 @@ shipped in M11; StbImageSharp-backed) → neutral `TextureData`; the UI makes no
     never the display peak, so HUDs don't blow out. Above-paper-white is opt-in (`HdrColor` component `>1`). The
     composited vertex color is premultiplied **RGBA16F**, blended in the correct space (D4.4).
 
-## Input, interaction, animation (`Loom.UI`)
+## Input, interaction, animation (`SUIsei`)
 
 - **Pipeline & hosts:** `UiHost` is **not a singleton** — you create one per window / input context, so
   multi-window and multi-screen are first-class. Each host owns its surfaces' focus, pointer capture, and
@@ -247,12 +247,12 @@ shipped in M11; StbImageSharp-backed) → neutral `TextureData`; the UI makes no
 ## Milestone roadmap (each phase = a runnable, cross-backend-verified vertical slice)
 
 - **MU0 — Seam + skeleton (riskiest plumbing first).** Core neutral types + `DrawUI`/`EnableUI`/`UiSurfaces`;
-  no-op `UiRenderer`/`DX12UiRenderer`; `Loom.UI` skeleton (DP model + precedence ladder incl. animation layer,
+  no-op `UiRenderer`/`DX12UiRenderer`; `SUIsei` skeleton (DP model + precedence ladder incl. animation layer,
   `UIElement`/`FrameworkElement`, Grid/TextBlock/Button, trivial layout, **composition `Visual` tree +
-  `IUiCompositor` + default `DrawListCompositor`** with rendering still no-op); `Loom.UI.SourceGen` compiles a tiny
+  `IUiCompositor` + default `DrawListCompositor`** with rendering still no-op); `SUIsei.SourceGen` compiles a tiny
   XAML subset → constructible tree + `x:Name` fields (no binds); SDK props/targets wire the generator +
   `UpToDateCheck`. **Exit:** a `.xaml` page compiles to a constructible tree; the no-op `DrawUI` seam runs clean
-  on both backends. **Tests:** stand up `Loom.UI.Tests` (TUnit + Shouldly) + the NAOT gate (MU0 plumbing), plus
+  on both backends. **Tests:** stand up `SUIsei.Tests` (TUnit + Shouldly) + the NAOT gate (MU0 plumbing), plus
   DP precedence-ladder (incl. the animation rung), trivial-layout, and the first source-gen snapshot tests.
 - **MU1 — First pixels.** `ui.slang` (fill + MSDF) → SPIR-V + DXIL; bake one ASCII MSDF fontset; real `UiRenderer`
   (atlas upload + grown buffers + batched scissored draw); the default `DrawListCompositor` flattens the `Visual`
@@ -294,20 +294,20 @@ The strategy is **graphics-framework-free by design** — the headless-testable 
 whole engine is exercised by fast, deterministic CPU tests; only the backend renderer's *pixels* need the GPU.
 D8 is the detailed design; the shape:
 
-- **Unit tests** in a new **`Loom.UI.Tests`** project (`net10.0`, **TUnit + Shouldly**; references `Loom.UI` +
+- **Unit tests** in a new **`SUIsei.Tests`** project (`net10.0`, **TUnit + Shouldly**; references `SUIsei` +
   `Loom.Core` + `Loom.Assets`, **no backend ref** — mirroring the [Loom.Tests](Loom.Tests/Loom.Tests.csproj)
   no-Vulkan/DX12 rule). Coverage: DP value precedence (animation > local); Grid star-sizing & measure/arrange
   math; the **draw-list seam** (assert the neutral `UiDrawData` vertex/command stream — the UI analog of asserting
   `BarrierPlan`/`AliasPlan`); 2D + ray→UV hit-testing; routed-event tunnel/bubble ordering + `Handled`; XYFocus
   candidate selection; storyboard interpolation; text shape/break/wrap against a committed font fixture.
-- **Source-generator snapshot tests** (Roslyn testing harness, in `Loom.UI.Tests`) asserting the emitted C# for
+- **Source-generator snapshot tests** (Roslyn testing harness, in `SUIsei.Tests`) asserting the emitted C# for
   representative `.xaml` (the `x:Bind` page, a styled/templated control, a storyboard); diagnostics carry the XAML
   `file:line`.
 - **Per milestone (GPU pixels only):** a focused `Loom.Sandbox` demo + a `LOOM_CAPTURE` deterministic frame
   (frozen time/delta) + cross-backend pixel diff (the established loop; [CLAUDE.md](CLAUDE.md) §Agent Behaviour —
   use a subagent to judge captures). This now covers *only* the backend `UiRenderer`/`DX12UiRenderer` — everything
   above it is the deterministic CPU tests above.
-- **NativeAOT gate (new):** mark `Loom.UI` `IsAotCompatible`; add a CI `PublishAot` smoke-publish of
+- **NativeAOT gate (new):** mark `SUIsei` `IsAotCompatible`; add a CI `PublishAot` smoke-publish of
   `Loom.Sandbox` treating trim/AOT warnings as errors. No NAOT settings exist in any csproj today — establishing
   this gate is itself an MU0 deliverable.
 
@@ -337,7 +337,7 @@ D8 is the detailed design; the shape:
 This is a new track comparable in size to the whole M11–M16 roadmap. When work starts, add a new **Stage** to
 the GitHub Projects board (#6, `AtomicBlom`) for the UI track (e.g. `MU0`…`MU5`, orange until shipped) and break
 each milestone into task cards, per the board conventions in [CLAUDE.md](CLAUDE.md). MU0 carries the SDK/generator
-plumbing + the NAOT gate + the `Loom.UI.Tests` scaffold (TUnit + Shouldly) + the MSDF font fixture + the
+plumbing + the NAOT gate + the `SUIsei.Tests` scaffold (TUnit + Shouldly) + the MSDF font fixture + the
 headless-testable invariant (D8) + the composition `Visual` tree / `IUiCompositor` seam. Treat the XAML-subset
 grammar **and** the `IUiCompositor` contract (a public portability boundary) as `Decision` cards — the grammar
 before MU2, the compositor contract before MU1.
@@ -357,13 +357,13 @@ signatures are *indicative* — they show shape and intent, not a frozen API. Al
 Loom.Core   (neutral, no GPU types)   UiVertex · UiPrimKind · UiDrawCommand · UiDrawData · UiSurfaceId
                                        + IEngine.EnableUI · IRenderContext.DrawUI · FrameInputs.UiSurfaces
    ▲
-Loom.UI     (neutral, refs Core+Assets) DependencyObject/Property · UIElement→FrameworkElement · controls ·
+SUIsei     (neutral, refs Core+Assets) DependencyObject/Property · UIElement→FrameworkElement · controls ·
                                        layout · UiHost/UiView/UiRoot · Visual composition tree · IUiCompositor +
                                        default DrawListCompositor · routed events · focus/XYFocus ·
                                        hit-testing (2D + ray) · animation · TextLayoutEngine · FontAtlas
    ▲  (build-time only — analyzer + content; NOT a runtime ref)
-Loom.UI.SourceGen  (netstandard2.0 analyzer)   .xaml → .g.cs (tree) + .Bindings.g.cs (typed x:Bind/events/storyboards)
-Loom.UI.Text.Bake  (net10.0 build tool)         *.fontset.json → MSDF atlas PNG + metrics JSON
+SUIsei.SourceGen  (netstandard2.0 analyzer)   .xaml → .g.cs (tree) + .Bindings.g.cs (typed x:Bind/events/storyboards)
+SUIsei.Text.Bake  (net10.0 build tool)         *.fontset.json → MSDF atlas PNG + metrics JSON
    ▲
 Loom.Vulkan / Loom.DirectX12  (backends)    UiRenderer / DX12UiRenderer (clones of the ImGui renderers)
    ▲
@@ -371,7 +371,7 @@ Loom.Sandbox  (host)                   Silk.NET input → neutral events → UiH
 ```
 
 Cardinal invariant restated: the only Core additions are **neutral managed data** (no `Vk*`/`D3D12*` types);
-`Loom.UI` reaches the GPU only through `RenderGraph.Define` / `IEngine` / `IRenderContext`, exactly as a demo does.
+`SUIsei` reaches the GPU only through `RenderGraph.Define` / `IEngine` / `IRenderContext`, exactly as a demo does.
 
 Second invariant — **headless-testable by construction** (load-bearing; see D8): `UiHost.Tick(...)`,
 `UiRoot.LayoutPass(...)` and `UiRoot.Render()` must run to completion with **no `IEngine`, no backend, no
@@ -396,7 +396,7 @@ string-named, and reflection-dispatched. We keep the *semantics* and replace the
 slots, typed delegates, no `MethodInfo`, boxing-free value-type fast path.
 
 ```csharp
-namespace Loom.UI;
+namespace SUIsei;
 
 public abstract class DependencyProperty
 {
@@ -487,10 +487,10 @@ to avoid any map lookup during measure/arrange.
 ### D1.4 The generator pipeline
 
 A **single** `IIncrementalGenerator`. `.xaml` files arrive as `AdditionalFiles` (registered by
-`Loom.UI.props`); the generator parses each and emits two partial files per `x:Class`:
+`SUIsei.props`); the generator parses each and emits two partial files per `x:Class`:
 
 ```
- .xaml  ──(AdditionalText)──►  Loom.UI.SourceGen (IIncrementalGenerator)
+ .xaml  ──(AdditionalText)──►  SUIsei.SourceGen (IIncrementalGenerator)
                                    │  uses Compilation.GetTypeByMetadataName(x:DataType)
                                    ▼
               foo.g.cs                         foo.Bindings.g.cs
@@ -575,10 +575,10 @@ Principle: **every XAML construct becomes C#; instantiation is `new` / a generat
 **Emitted — `MainPage.g.cs` (tree construction):**
 
 ```csharp
-// <auto-generated/> by Loom.UI.SourceGen
+// <auto-generated/> by SUIsei.SourceGen
 #nullable enable
 namespace Loom.Sandbox.UI;
-using Loom.UI; using Loom.UI.Controls;
+using SUIsei; using SUIsei.Controls;
 
 partial class MainPage
 {
@@ -602,10 +602,10 @@ partial class MainPage
 **Emitted — `MainPage.Bindings.g.cs` (typed glue):**
 
 ```csharp
-// <auto-generated/> by Loom.UI.SourceGen
+// <auto-generated/> by SUIsei.SourceGen
 #nullable enable
 namespace Loom.Sandbox.UI;
-using System.ComponentModel; using Loom.UI;
+using System.ComponentModel; using SUIsei;
 
 internal sealed class MainPage_Bindings
 {
@@ -758,7 +758,7 @@ it. This is the portability seam (Architecture): Loom ships the default `DrawLis
 substitutes its own and consumes the same tree.
 
 ```csharp
-namespace Loom.UI;   // neutral — no graphics-API types
+namespace SUIsei;   // neutral — no graphics-API types
 
 public abstract class Visual                 // retained composition node
 {
@@ -899,7 +899,7 @@ Mid-session per-monitor DPI changes set `LayoutScale` + invalidate the root.
 
 ### D3.1 Build-time bake tool & `*.fontset.json`
 
-`Loom.UI.Text.Bake` is a build-time console tool (never shipped) sitting beside the Slang toolchain in
+`SUIsei.Text.Bake` is a build-time console tool (never shipped) sitting beside the Slang toolchain in
 `build/Loom.Sdk/`. An MSBuild target (`LoomCompile/RegisterFonts`) mirrors `LoomCompileShaders`/`LoomRegisterShaders`:
 inputs = font files + a charset config; outputs = atlas PNG page(s) + metrics JSON; registered `EmbeddedResource`
 (engine default font) or `Content` (app fonts).
@@ -1120,7 +1120,7 @@ advances clocks (storyboards **and** independent visual animations) → lays out
 
 ### D5.2 Neutral input events + host call sequence
 
-Device-neutral, WinUI-shaped (no Silk types leak into `Loom.UI`):
+Device-neutral, WinUI-shaped (no Silk types leak into `SUIsei`):
 
 ```csharp
 public readonly record struct PointerInput(uint PointerId, PointerDeviceType Device, Vector2 Position,
@@ -1357,7 +1357,7 @@ buffer growth, scissored draw, and the final pixels — leaving the backend the 
 construction*. The Describe/Execute layers are fully unit-tested with no GPU — build an immutable graph, derive
 a plan, assert on it (`RenderGraph.Define(…) → GraphSchedule/BarrierPlan/AliasPlan/LifetimePlan.Derive → assert`,
 with a `GraphValidationException` for malformed input and a shared §6 reference-frame helper; see
-[Loom.Tests](Loom.Tests/)). `Loom.UI` is shaped identically: it references **Core + Assets only**, takes **neutral
+[Loom.Tests](Loom.Tests/)). `SUIsei` is shaped identically: it references **Core + Assets only**, takes **neutral
 input** (events) and produces a **neutral `Visual` tree → `UiDrawData`**. So everything *except* the backend
 `UiRenderer`/`DX12UiRenderer` and the literal pixels is exercisable by fast, deterministic CPU tests — no window,
 no engine, no Vulkan/DX12. The composition seam *adds* test points: *element → visual* and *visual → draw-data* are
@@ -1408,13 +1408,13 @@ throws").
 
 ### D8.3 Test infrastructure
 
-- **New `Loom.UI.Tests`** project (`net10.0`, **TUnit + Shouldly**) referencing `Loom.UI` (+ `Loom.Core`,
+- **New `SUIsei.Tests`** project (`net10.0`, **TUnit + Shouldly**) referencing `SUIsei` (+ `Loom.Core`,
   `Loom.Assets`) and **no backend** — the same "neutral layers only, never Vulkan/DX12" rule that
   [Loom.Tests](Loom.Tests/Loom.Tests.csproj) follows. New UI-track tests are authored here directly in TUnit
   (`[Test]` / `[Arguments]` / data sources) with Shouldly assertions (`value.ShouldBe(…)`). *(The existing
   `Loom.Tests` has since been migrated to TUnit as well, so both projects share one test framework.)*
-- **Source-gen snapshot tests** live in `Loom.UI.Tests` via the `Microsoft.CodeAnalysis.*` testing harness; split
-  into a sibling `Loom.UI.SourceGen.Tests` *only* if the Roslyn-harness dependencies prove awkward to host beside
+- **Source-gen snapshot tests** live in `SUIsei.Tests` via the `Microsoft.CodeAnalysis.*` testing harness; split
+  into a sibling `SUIsei.SourceGen.Tests` *only* if the Roslyn-harness dependencies prove awkward to host beside
   the runtime tests (a fallback, not the default).
 - **A recording `IUiCompositor`** test double (captures the `Visual` tree it is handed) is the portability-seam
   test, and the simplest way to assert composition output without the `DrawListCompositor` or any backend.
@@ -1422,7 +1422,7 @@ throws").
   ASCII glyphs: atlas PNG + metrics JSON [+ subset `.ttf` for HarfBuzz]) for text-layout tests, plus a few small
   reusable reference UI trees — the UI analog of the §6 reference frame reused across the graph tests.
 
-Net effect: the "Headless?" column is the acceptance contract. Every ✅ row must be reachable in `Loom.UI.Tests`
+Net effect: the "Headless?" column is the acceptance contract. Every ✅ row must be reachable in `SUIsei.Tests`
 with no backend referenced; only the final ❌ row depends on the GPU and rides the existing capture loop.
 
 ---
@@ -1435,20 +1435,20 @@ Type names use the repo's `UI` casing.
 
 ### D9.1 The two seams
 
-**Seam 1 — foreign-engine boundary (`Loom.UI`).** What a foreign engine *implements* and *reads* to take over
+**Seam 1 — foreign-engine boundary (`SUIsei`).** What a foreign engine *implements* and *reads* to take over
 rendering while reusing Loom's element/layout/input/animation half:
 
 | Type | Surface | File |
 |---|---|---|
-| `IUICompositor` | `void Composite(RootVisual root, UISurfaceId surface)` | [Loom.UI/IUICompositor.cs](Loom.UI/IUICompositor.cs) |
-| `Visual` (abstract) | `Transform`, `Opacity`, `Clip`, `IsDirty` (read), `Children`, `Dump()` | [Loom.UI/Visual.cs](Loom.UI/Visual.cs) |
-| `ContainerVisual` | grouping node, no content | [Loom.UI/ContainerVisual.cs](Loom.UI/ContainerVisual.cs) |
-| `SpriteVisual` | `Content` | [Loom.UI/SpriteVisual.cs](Loom.UI/SpriteVisual.cs) |
-| `RootVisual` | `SurfaceSize`, `IsHdrSurface` | [Loom.UI/RootVisual.cs](Loom.UI/RootVisual.cs) |
-| `VisualContent` (abstract record) | content-kind base | [Loom.UI/VisualContent.cs](Loom.UI/VisualContent.cs) |
-| `RectContent` | `Size`, `Fill`, `CornerRadius`, `BorderBrush`, `BorderThickness` | [Loom.UI/RectContent.cs](Loom.UI/RectContent.cs) |
-| `HdrColor` | authoring color (carried on content) | [Loom.UI/HdrColor.cs](Loom.UI/HdrColor.cs) |
-| `DrawListCompositor` | the *default* `IUICompositor` (public; apps/tests construct it) | [Loom.UI/DrawListCompositor.cs](Loom.UI/DrawListCompositor.cs) |
+| `IUICompositor` | `void Composite(RootVisual root, UISurfaceId surface)` | [SUIsei/IUICompositor.cs](SUIsei/IUICompositor.cs) |
+| `Visual` (abstract) | `Transform`, `Opacity`, `Clip`, `IsDirty` (read), `Children`, `Dump()` | [SUIsei/Visual.cs](SUIsei/Visual.cs) |
+| `ContainerVisual` | grouping node, no content | [SUIsei/ContainerVisual.cs](SUIsei/ContainerVisual.cs) |
+| `SpriteVisual` | `Content` | [SUIsei/SpriteVisual.cs](SUIsei/SpriteVisual.cs) |
+| `RootVisual` | `SurfaceSize`, `IsHdrSurface` | [SUIsei/RootVisual.cs](SUIsei/RootVisual.cs) |
+| `VisualContent` (abstract record) | content-kind base | [SUIsei/VisualContent.cs](SUIsei/VisualContent.cs) |
+| `RectContent` | `Size`, `Fill`, `CornerRadius`, `BorderBrush`, `BorderThickness` | [SUIsei/RectContent.cs](SUIsei/RectContent.cs) |
+| `HdrColor` | authoring color (carried on content) | [SUIsei/HdrColor.cs](SUIsei/HdrColor.cs) |
+| `DrawListCompositor` | the *default* `IUICompositor` (public; apps/tests construct it) | [SUIsei/DrawListCompositor.cs](SUIsei/DrawListCompositor.cs) |
 
 **Seam 2 — neutral default-path / backend seam (`Loom.Core`).** What `DrawListCompositor` emits and the backend
 `UIRenderer`s consume; a foreign compositor bypasses it entirely (it produces its own rendering):
@@ -1496,7 +1496,7 @@ must be reflected in this section in the same change** — that is the deliberat
 ### D9.4 Enforcement
 
 Doc/policy-only for now: this section is the contract, review is the gate. A
-`Microsoft.CodeAnalysis.PublicApiAnalyzers` baseline (`PublicAPI.{Shipped,Unshipped}.txt` on `Loom.UI` +
+`Microsoft.CodeAnalysis.PublicApiAnalyzers` baseline (`PublicAPI.{Shipped,Unshipped}.txt` on `SUIsei` +
 `Loom.Core`) is the clean mechanical drop-in for when the repo nears going public or boundary churn warrants it —
 this enumeration is its ready-made baseline source.
 
@@ -1513,7 +1513,7 @@ its output is a drop-in for the MU1 `FontAtlas`.
 ### D10.1 Goal & shape
 
 A Loom-native generator that:
-- Ships as a **`dotnet tool`** (`loom-msdf`) for build-time baking — the `Loom.UI.Text.Bake` deferred from MU1,
+- Ships as a **`dotnet tool`** (`loom-msdf`) for build-time baking — the `SUIsei.Text.Bake` deferred from MU1,
   reborn — taking a `*.fontset.json` (§D3.1 schema) → MTSDF atlas page(s) + metrics JSON.
 - Defaults to **GPU-compute generation** via the first available Loom backend (`Engine.AvailableEngines` /
   `IRenderBackend.Create`, the headless smoke-harness path — no window; naturally **Vulkan on Linux**, Vulkan/DX12
@@ -1532,7 +1532,7 @@ backends, inherently cross-architecture.
 
 ### D10.2 Format contract (the only coupling to MU1 — locked)
 
-Emit exactly what MU1's `FontAtlas` (`Loom.UI/FontAtlas.cs`) loads:
+Emit exactly what MU1's `FontAtlas` (`SUIsei/FontAtlas.cs`) loads:
 - `<name>.N.png` — **RGBA 8-bit MTSDF** page(s): **RGB** = the multi-channel SDF (`median(rgb)` reconstructs the
   signed distance; corners preserved), **A** = a true single-channel SDF (for outline/shadow/glow/variable
   weight). `pxRange`-encoded. **Sampled linear/UNORM, never sRGB** (the values are linear distances).

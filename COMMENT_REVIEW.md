@@ -36,7 +36,7 @@ These describe a past or planned state that the code has since moved past. A rea
 ### B. Milestone & phase references (the core giveaway — pervasive)
 
 `// M13 resource viewer`, `(M14-4 generalized particles)`, `MU0 Phase A`, `M7-B5`, `lands in MU2`. A reader has to know what "M13" *was* to parse them. Concentrated in:
-- **Demo & test class summaries** ([Loom.Sandbox/Demos/](Loom.Sandbox/Demos/), [Loom.Tests/](Loom.Tests/), [Loom.UI.Tests/](Loom.UI.Tests/)) — these systematically *open* with the tag: `/// Sprite batching + texture atlases (PlanningPhase2.md M14-1, Track A)…`. The tag is the first thing the reader sees, before any description.
+- **Demo & test class summaries** ([Loom.Sandbox/Demos/](Loom.Sandbox/Demos/), [Loom.Tests/](Loom.Tests/), [SUIsei.Tests/](SUIsei.Tests/)) — these systematically *open* with the tag: `/// Sprite batching + texture atlases (PlanningPhase2.md M14-1, Track A)…`. The tag is the first thing the reader sees, before any description.
 - **The host** ([Program.cs](Loom.Sandbox/Program.cs)) — ~16 inline `// M13 …` / `// MU0 Phase A …` leads.
 - **The whole UI track** — every control doc and every DP-rung doc ends in `(MU2)` / `— MU3.` / `lands in MU4`.
 - **Both backends + Core** — milestone tags threaded through type and member docs.
@@ -49,7 +49,7 @@ These describe a past or planned state that the code has since moved past. A rea
 
 ### D. Temporal / forward narration: "for now", "lands in", "arrives in", "until then", "later optimisation"
 
-The non-milestone cousin of B. Examples: [DescriptorAllocator.cs:10](Loom.Vulkan/DescriptorAllocator.cs#L10) *"a later optimisation"*; [TechniqueCache.cs:10](Loom.Vulkan/TechniqueCache.cs#L10) *"In-memory for now; … will key a persistent VkPipelineCache later"*; [TextBlock.cs:25](Loom.UI/Controls/TextBlock.cs#L25) *"(consumed once glyph composition lands in MU1)"*; [GraphBuilder.cs:127](Loom.Core/GraphBuilder.cs#L127) *"anchor them to the backbuffer domain for now"*.
+The non-milestone cousin of B. Examples: [DescriptorAllocator.cs:10](Loom.Vulkan/DescriptorAllocator.cs#L10) *"a later optimisation"*; [TechniqueCache.cs:10](Loom.Vulkan/TechniqueCache.cs#L10) *"In-memory for now; … will key a persistent VkPipelineCache later"*; [TextBlock.cs:25](SUIsei/Controls/TextBlock.cs#L25) *"(consumed once glyph composition lands in MU1)"*; [GraphBuilder.cs:127](Loom.Core/GraphBuilder.cs#L127) *"anchor them to the backbuffer domain for now"*.
 
 ### E. Bug archaeology / commit-style history in comments
 
@@ -92,7 +92,7 @@ The owner wants public APIs well documented; these public members have *no* `///
 - [DirectX12Engine.cs](Loom.DirectX12/DirectX12Engine.cs) `IEngine` surface — `Render`, `Resize`, `WaitIdle`, `CreateMesh`/`CreateTexture`/`CreateMaterial`, `EnableUI`, `GetDebugTextureId`, `SetDebugLines` are bare while `EnableImGui` right beside them is documented (jarring asymmetry).
 - [LayeredAssetSource.cs:17,19](Loom.Assets/LayeredAssetSource.cs#L17) `Roots`/`TryResolve`; [AssetWatcher.cs:80](Loom.Assets/AssetWatcher.cs#L80) `Dispose`.
 
-(`Loom.Core`, `Loom.Graph`, and `Loom.UI` are otherwise ~95–100% covered. `ToString`/`Equals`/`GetHashCode` overrides being bare is conventional and fine.)
+(`Loom.Core`, `Loom.Graph`, and `SUIsei` are otherwise ~95–100% covered. `ToString`/`Equals`/`GetHashCode` overrides being bare is conventional and fine.)
 
 ---
 
@@ -107,7 +107,7 @@ The cleanup must be surgical — these are the high-water mark and should surviv
 - [DirectX12FormatMapping.cs:27-34](Loom.DirectX12/DirectX12FormatMapping.cs#L27) — the TYPELESS-depth (typed DSV + typed SRV) gotcha.
 - [DirectX12Technique.cs:193-198](Loom.DirectX12/DirectX12Technique.cs#L193) — one static sampler *per* sampled input, with the exact PSO-creation failure if you share `s0`.
 - [DirectX12Shaders.cs:98-110](Loom.DirectX12/DirectX12Shaders.cs#L98) — structured-buffer `StructureByteStride`/`NumElements` vs root-UAV `GetDimensions()==0` trap.
-- [DependencyObject.cs:5-9](Loom.UI/DependencyObject.cs#L5) — the DP precedence-ladder summary (`Animation > Local > Style > Inherited > Default`, "fire callback only on a *resolved* change"). *(Drop the `§D1.2` tail.)*
+- [DependencyObject.cs:5-9](SUIsei/DependencyObject.cs#L5) — the DP precedence-ladder summary (`Animation > Local > Style > Inherited > Default`, "fire callback only on a *resolved* change"). *(Drop the `§D1.2` tail.)*
 - [Geometry.cs:81-93](Loom.Sandbox/Demos/Geometry.cs#L81) — glTF tangent handedness + Gram-Schmidt degenerate-UV guard.
 - [InstanceUploadBuffer.cs:13-18](Loom.Vulkan/InstanceUploadBuffer.cs#L13) — "retire, don't free" mid-frame growth (a draw recorded earlier still references the old buffer).
 
@@ -165,7 +165,7 @@ AFTER:  …Dropping resource.Scale here would make the bloom "downsample" chain 
         no halo.
 ```
 
-**Public property doc (UI)** — [TextBlock.cs:25](Loom.UI/Controls/TextBlock.cs#L25)
+**Public property doc (UI)** — [TextBlock.cs:25](SUIsei/Controls/TextBlock.cs#L25)
 ```
 BEFORE: /// <summary>Glyph colour (consumed once glyph composition lands in MU1).</summary>
 AFTER:  /// <summary>Glyph colour. Not yet rendered (text emits no glyph content).</summary>

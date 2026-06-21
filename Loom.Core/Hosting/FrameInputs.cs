@@ -53,7 +53,7 @@ public sealed record FrameInputs
 	/// <summary>
 	/// This frame's draw lists — each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a
 	/// producer composited for it. Surfaced as <see cref="IRenderContext.DrawLists"/>; a pass pulls one out by id and
-	/// submits it (the game UI does so via <c>Loom.UI</c>'s painter). Empty (the default) renders no lists. Pulled in
+	/// submits it (the game UI does so via <c>SUIsei</c>'s painter). Empty (the default) renders no lists. Pulled in
 	/// the pass closure, never captured, so the graph stays frame-independent (Planning.md §8).
 	/// </summary>
 	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists { get; init; } = [];

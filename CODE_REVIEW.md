@@ -28,7 +28,7 @@ Loom is **architecturally healthy at its core.** The cardinal invariant — no g
 
 1. **A cluster of latent correctness bugs** masked by current demo usage but which will fire as the engine scales: the DirectX12 descriptor-ring mid-frame wrap can silently corrupt per-pass descriptors, sRGB mips are box-filtered in gamma space (visibly wrong albedo on *both* backends), the bake-cache hash omits buffer `ByteSize`, and glTF loading ignores node transforms entirely.
 2. **The async-compute / multi-queue façade** — `Queue.AsyncCompute` and `.Queue()` are authorable and documented as honored, but no layer derives cross-queue sync and neither backend creates a compute queue. The API actively lies about a named forward-looking pillar.
-3. **The brand-new `Loom.UI.SourceGen` XAML generator** (MU0/MU1, in flight) has several real correctness defects — broken incrementality, hint-name collisions, and unvalidated input that surfaces as confusing generated-code compile errors.
+3. **The brand-new `SUIsei.SourceGen` XAML generator** (MU0/MU1, in flight) has several real correctness defects — broken incrementality, hint-name collisions, and unvalidated input that surfaces as confusing generated-code compile errors.
 
 **Cross-backend parity — the headline invariant — has no automated asserting test**, despite the comparison infrastructure already existing.
 
@@ -51,7 +51,7 @@ The **forward-looking gaps** (ray tracing, bindless, GPU-driven indirect, tempor
 2. **🟠 Gamma-incorrect sRGB mip generation** — [Loom.Core/TextureData.cs:69-99](Loom.Core/TextureData.cs#L69). Box-average sRGB albedo in *linear* space (decode → average → re-encode). Every base-colour/glTF texture currently gets systematically-too-dark mips on **both** backends. Parity is preserved but the answer is wrong.
 3. **🟠 Resolve the async-compute façade** — [Loom.Core/Queue.cs](Loom.Core/Queue.cs) + `GraphSchedule` + both backends. Either implement the cross-queue derivation or soften the doc to *"accepted but not yet honoured; treated as Graphics"* and reject `Queue.AsyncCompute` at derive time so the API stops lying.
 4. **🟠 Bake-cache hash omits buffer `ByteSize`** — [Loom.Core/RenderGraph.cs:85-87](Loom.Core/RenderGraph.cs#L85). Two graphs differing only in a buffer's byte size hash identically → cache reuses a stale-sized GPU allocation. `ToJson` already serializes `ByteSize`, so the two structural views disagree.
-5. **🟠 `Loom.UI.SourceGen` correctness defects** — [XamlSourceGenerator.cs](Loom.UI.SourceGen/XamlSourceGenerator.cs). Broken incrementality, short-class-name hint collisions, and unvalidated `x:Name`/literal/enum values that emit uncompilable code with no diagnostic. *(MU1 in flight — confirm with the owning agent first.)*
+5. **🟠 `SUIsei.SourceGen` correctness defects** — [XamlSourceGenerator.cs](SUIsei.SourceGen/XamlSourceGenerator.cs). Broken incrementality, short-class-name hint collisions, and unvalidated `x:Name`/literal/enum values that emit uncompilable code with no diagnostic. *(MU1 in flight — confirm with the owning agent first.)*
 6. **🟠 glTF node-transform omission** — [Loom.Assets/GltfLoader.cs:26-27](Loom.Assets/GltfLoader.cs#L26). The loader iterates `LogicalMeshes` directly, ignoring the scene graph → non-trivial glTF loads scrambled at the origin; multi-instanced meshes load once.
 7. **🟠 DXIL build passes green on DX-only shader failures** — [build/Loom.Sdk/Loom.Shaders.targets:71-73](build/Loom.Sdk/Loom.Shaders.targets#L71). `|| exit /b 0` unconditionally swallows *every* DXC error → a SPIR-V-valid/DXIL-invalid shader ships no blob and DirectX12 silently falls back at runtime. The exact class of parity break this layer exists to prevent.
 8. **🟡 Add an automated cross-backend parity test** — the parity bar (4/255, <0.5%) and `ImageComparison` comparator already exist; no test ever diffs a Vulkan capture against a DirectX12 capture.
@@ -157,62 +157,62 @@ Points where the two backends derive or apply something on different principles 
   `DemoGraph.UI(...)` is called by exactly one demo; the MU0 "ui" pass + `ctx.DrawUI()` path is validated only on the simplest graph. Low risk (no-op renderer this phase, MU1 in flight).
   *Fix:* add `DemoGraph.UI` to other graphs as the renderer becomes non-trivial, or narrow the comment.
 
-### 4 · `Loom.UI.SourceGen` (XAML generator) — MU0/MU1 in flight
+### 4 · `SUIsei.SourceGen` (XAML generator) — MU0/MU1 in flight
 
 Real correctness defects in the Roslyn generator. MU1 is being written by another agent — **confirm before acting** — but these are shipped MU0 defects, not obviously half-finished stubs.
 
-- **🟠 Incremental pipeline combines the raw `Compilation`, defeating caching** — [XamlSourceGenerator.cs:40-42](Loom.UI.SourceGen/XamlSourceGenerator.cs#L40) · also [:55-101,161-182](Loom.UI.SourceGen/XamlSourceGenerator.cs#L55) · *architecture, conf: high*
+- **🟠 Incremental pipeline combines the raw `Compilation`, defeating caching** — [XamlSourceGenerator.cs:40-42](SUIsei.SourceGen/XamlSourceGenerator.cs#L40) · also [:55-101,161-182](SUIsei.SourceGen/XamlSourceGenerator.cs#L55) · *architecture, conf: high*
   `xaml.Combine(context.CompilationProvider)` feeds the `(AdditionalText, Compilation)` tuple straight to `RegisterSourceOutput` with no value-equatable model. `Compilation` has no value equality → considered changed on *every* compilation → full `XDocument.Parse` + recursive semantic walk re-runs on every keystroke in *any* C# file. The canonical "incremental in name only" anti-pattern.
   *Fix:* project `AdditionalTextsProvider` → a value-equatable model (path + text + parsed shape) with `.Select`, and only `Combine` with a narrowed provider at the final resolution stage.
 
-- **🟠 `AddSource` hint name uses the short class name → namespace collision breaks the build** — [XamlSourceGenerator.cs:72,100](Loom.UI.SourceGen/XamlSourceGenerator.cs#L72) · *correctness, conf: high*
+- **🟠 `AddSource` hint name uses the short class name → namespace collision breaks the build** — [XamlSourceGenerator.cs:72,100](SUIsei.SourceGen/XamlSourceGenerator.cs#L72) · *correctness, conf: high*
   `spc.AddSource($"{cls}.g.cs", …)` uses only the namespace-stripped name. Two views `A.MainView` and `B.MainView` both emit `MainView.g.cs` → Roslyn throws `ArgumentException` (hintName must be unique) and the whole compilation fails with no diagnostic.
   *Fix:* use the fully-qualified class as the hint name, sanitizing disallowed characters.
 
-- **🟠 `x:Name` / generated variable names emitted verbatim with no validation or collision guard** — [XamlSourceGenerator.cs:91,110-121](Loom.UI.SourceGen/XamlSourceGenerator.cs#L91) · *correctness, conf: high*
+- **🟠 `x:Name` / generated variable names emitted verbatim with no validation or collision guard** — [XamlSourceGenerator.cs:91,110-121](SUIsei.SourceGen/XamlSourceGenerator.cs#L91) · *correctness, conf: high*
   Raw `x:Name` is used directly as a C# identifier; `Root` field is emitted unconditionally. `x:Name='event'` (keyword) → uncompilable code; `x:Name='Root'` → duplicate field; `x:Name='__e0'` → collides with synthesized locals. All surface as confusing errors in a file the author can't edit.
   *Fix:* validate with `SyntaxFacts.IsValidIdentifier` + diagnostic; reserve/escape synthesized names; rename or diagnose `Root`.
 
-- **🟠 Literal/enum conversion emits unvalidated text** — [XamlSourceGenerator.cs:184-197,134-136](Loom.UI.SourceGen/XamlSourceGenerator.cs#L184) · *correctness, conf: high*
+- **🟠 Literal/enum conversion emits unvalidated text** — [XamlSourceGenerator.cs:184-197,134-136](SUIsei.SourceGen/XamlSourceGenerator.cs#L184) · *correctness, conf: high*
   `Orientation='Sideways'` → `Orientation.Sideways` (CS0117); bool `'yes'` → `yes`; `FontSize='big'` → `bigf`. The call site guards only a null return (unsupported *type*), not a bad *value*. Each becomes a compiler error inside generated code.
   *Fix:* validate before emitting — check enum members exist (case-insensitive, support flags); `TryParse` bool/numeric and emit canonical literals or report a diagnostic.
 
-- **🟡 Element XML namespace ignored during type resolution** — [XamlSourceGenerator.cs:104-107,160-161](Loom.UI.SourceGen/XamlSourceGenerator.cs#L104) · *correctness, conf: medium*
+- **🟡 Element XML namespace ignored during type resolution** — [XamlSourceGenerator.cs:104-107,160-161](SUIsei.SourceGen/XamlSourceGenerator.cs#L104) · *correctness, conf: medium*
   Only `LocalName` is used; `el.Name.Namespace` is never consulted, so a typo'd/wrong xmlns still resolves and there's no xmlns→CLR-namespace mapping. Acceptable for MU0 but forecloses a clean multi-namespace story and fails silently.
   *Fix:* gate resolution on the namespace; plan an xmlns→CLR map; report `UnknownElement` on unrecognized namespace.
 
-- **🟡 No cancellation checks inside the recursive emit walk** — [XamlSourceGenerator.cs:55-158](Loom.UI.SourceGen/XamlSourceGenerator.cs#L55) · *correctness, conf: medium*
+- **🟡 No cancellation checks inside the recursive emit walk** — [XamlSourceGenerator.cs:55-158](SUIsei.SourceGen/XamlSourceGenerator.cs#L55) · *correctness, conf: medium*
   `CancellationToken` read once; `EmitElement` recurses + semantic lookups with no `ThrowIfCancellationRequested`. A cancelled IDE pass keeps working. Compounds the incremental-caching problem.
   *Fix:* thread `spc.CancellationToken` into `EmitElement`.
 
-- **🟡 Text content and property-element / attached-property syntax silently dropped** — [XamlSourceGenerator.cs:129-130,141-144](Loom.UI.SourceGen/XamlSourceGenerator.cs#L129) · *correctness, conf: low*
+- **🟡 Text content and property-element / attached-property syntax silently dropped** — [XamlSourceGenerator.cs:129-130,141-144](SUIsei.SourceGen/XamlSourceGenerator.cs#L129) · *correctness, conf: low*
   `<TextBlock>OK</TextBlock>` inner text, `Grid.Row`, property-element syntax all vanish with no `ReportDiagnostic` (6 descriptors exist; none covers these). Defensible MU0 scoping, but silent.
   *Fix:* emit an informational "not yet supported" diagnostic.
 
-- **⚪ Diagnostic `Location` uses a zero-length span inconsistent with the line/column** — [XamlSourceGenerator.cs:211-215](Loom.UI.SourceGen/XamlSourceGenerator.cs#L211) · *correctness, conf: low* · IDE squiggles may land at file start.
-- **⚪ Root element type resolved twice** — [XamlSourceGenerator.cs:75-78,106](Loom.UI.SourceGen/XamlSourceGenerator.cs#L75) · *maintainability, conf: medium* · trivial redundant lookup.
+- **⚪ Diagnostic `Location` uses a zero-length span inconsistent with the line/column** — [XamlSourceGenerator.cs:211-215](SUIsei.SourceGen/XamlSourceGenerator.cs#L211) · *correctness, conf: low* · IDE squiggles may land at file start.
+- **⚪ Root element type resolved twice** — [XamlSourceGenerator.cs:75-78,106](SUIsei.SourceGen/XamlSourceGenerator.cs#L75) · *maintainability, conf: medium* · trivial redundant lookup.
 
-### 5 · `Loom.UI` layout & dependency-property parity — MU1 in flight
+### 5 · `SUIsei` layout & dependency-property parity — MU1 in flight
 
 WinUI-divergence bugs. The Grid Star collapse is the most impactful; the rest are latent until styles/animation/binding land.
 
-- **🟠 Grid Star tracks collapse to zero under an infinite measure → a default Grid in a StackPanel renders nothing** — [Grid.cs:68-88](Loom.UI/Controls/Grid.cs#L68) · [StackPanel.cs:18](Loom.UI/Controls/StackPanel.cs#L18) · *parity, conf: high*
+- **🟠 Grid Star tracks collapse to zero under an infinite measure → a default Grid in a StackPanel renders nothing** — [Grid.cs:68-88](SUIsei/Controls/Grid.cs#L68) · [StackPanel.cs:18](SUIsei/Controls/StackPanel.cs#L18) · *parity, conf: high*
   `leftover = hasFiniteSpace ? max(0, available-used) : 0` → under `+Infinity`, every Star track resolves to 0. An empty definition list defaults to one Star track. So a default Grid measured unconstrained (StackPanel stacking axis, Canvas) desires zero size and renders nothing. WinUI treats Star as Auto under an infinite constraint.
   *Fix:* size Star like Auto (measure unconstrained, take max) when the axis is infinite; proportional distribution only when finite.
 
-- **🟡 Stretch alignment with an explicit Width/Height left/top-aligns instead of centering** — [FrameworkElement.cs:73-86](Loom.UI/FrameworkElement.cs#L73) · *parity, conf: medium*
+- **🟡 Stretch alignment with an explicit Width/Height left/top-aligns instead of centering** — [FrameworkElement.cs:73-86](SUIsei/FrameworkElement.cs#L73) · *parity, conf: medium*
   When alignment is Stretch but an explicit size prevents stretching, `pos` hits the `_ => slotStart` default (near edge). WinUI centers it.
   *Fix:* treat Stretch-with-explicit-size as Center for positioning.
 
-- **🟡 Grid Auto sizing re-measures children twice with different constraints; O(tracks×children)** — [Grid.cs:35-103](Loom.UI/Controls/Grid.cs#L35) · [UIElement.cs:65](Loom.UI/UIElement.cs#L65) · *correctness, conf: medium*
+- **🟡 Grid Auto sizing re-measures children twice with different constraints; O(tracks×children)** — [Grid.cs:35-103](SUIsei/Controls/Grid.cs#L35) · [UIElement.cs:65](SUIsei/UIElement.cs#L65) · *correctness, conf: medium*
   Auto track measures each child with `Size.Infinite`, then the final loop re-measures at the resolved cell size; for constraint-dependent content (future wrapping text) the final `DesiredSize` can differ from what sized the track → overflow/under-fill. Also quadratic.
   *Fix:* measure each child once against its resolved cell constraint (WinUI order: fixed → auto → star).
 
-- **⚪ Coerce applied per-rung at write time, not to the resolved value** — [DependencyObject.cs:82-100](Loom.UI/DependencyObject.cs#L82) · *parity, conf: medium*
+- **⚪ Coerce applied per-rung at write time, not to the resolved value** — [DependencyObject.cs:82-100](SUIsei/DependencyObject.cs#L82) · *parity, conf: medium*
   Each rung stores its own coerced value; coercion never re-runs against the effective value or when a dependency changes. No DP defines a Coerce callback yet. Will misbehave once storyboards / min-max coercion land.
   *Fix:* coerce the resolved value after `TryResolve`, with a `CoerceValue` path that re-resolves on dependency changes.
 
-- **⚪ `ContentControl` re-hosts on every Content set with no equality short-circuit** — [ContentControl.cs:15-34](Loom.UI/Controls/ContentControl.cs#L15) (Border has the guard at [:19](Loom.UI/Controls/Border.cs#L19)) · *correctness, conf: low*
+- **⚪ `ContentControl` re-hosts on every Content set with no equality short-circuit** — [ContentControl.cs:15-34](SUIsei/Controls/ContentControl.cs#L15) (Border has the guard at [:19](SUIsei/Controls/Border.cs#L19)) · *correctness, conf: low*
   Re-assigning the same Content rebuilds the hosted child + invalidates layout, discarding state. Common in binding refresh.
   *Fix:* `if (field == value) return;` guard; reuse the hosted TextBlock when only the string changes.
 
@@ -248,7 +248,7 @@ Several authoring enums are narrower than the features they'll need; some are co
 
 None affect runtime correctness.
 
-- **🟡 UI file names use lowercase `Ui` while the types inside are correctly `UI`-cased** — `Loom.Core/Ui{Vertex,DrawData,DrawCommand,PrimKind,Surface,SurfaceId}.cs`, [Loom.Vulkan/UiRenderer.cs](Loom.Vulkan/UiRenderer.cs), [Loom.DirectX12/DirectX12UiRenderer.cs](Loom.DirectX12/DirectX12UiRenderer.cs), [Loom.UI/IUiCompositor.cs](Loom.UI/IUiCompositor.cs), [Loom.UI/UiTrack.cs](Loom.UI/UiTrack.cs), [Loom.UI.Tests/UiDrawDataTests.cs](Loom.UI.Tests/UiDrawDataTests.cs) · *maintainability, conf: high*
+- **🟡 UI file names use lowercase `Ui` while the types inside are correctly `UI`-cased** — `Loom.Core/Ui{Vertex,DrawData,DrawCommand,PrimKind,Surface,SurfaceId}.cs`, [Loom.Vulkan/UiRenderer.cs](Loom.Vulkan/UiRenderer.cs), [Loom.DirectX12/DirectX12UiRenderer.cs](Loom.DirectX12/DirectX12UiRenderer.cs), [SUIsei/IUiCompositor.cs](SUIsei/IUiCompositor.cs), [SUIsei/UiTrack.cs](SUIsei/UiTrack.cs), [SUIsei.Tests/UiDrawDataTests.cs](SUIsei.Tests/UiDrawDataTests.cs) · *maintainability, conf: high*
   A grep for the identifier pattern `\bUi[A-Z]` returns **no** matches — every declared type is correctly `UI`-cased and CLAUDE.md's rule is honored *in code*. Only the file basenames carry lowercase `Ui` (likely from PlanningUI.md's spelling), diverging from the filename==type convention and inconsistent with the matching `UIElement.cs`/`UIRoot.cs`. Separately, **`UiTrack.cs` contains no type at all** — just an `[assembly: InternalsVisibleTo]` scaffold behind a misleading name.
   *Fix:* `git mv` the files to match their types (`UIVertex.cs`, …, `DirectX12UIRenderer.cs`, `IUICompositor.cs`); rename `UiTrack.cs` → `AssemblyInfo.cs`; reconcile PlanningUI.md's spelling.
 
@@ -257,7 +257,7 @@ None affect runtime correctness.
   *Fix:* thread the flags through, or remove the properties until wired.
 
 - **🟡 CLAUDE.md "Current state" has drifted** — [CLAUDE.md:16,54,31](CLAUDE.md#L16) · *docs, conf: high*
-  The Projects list omits the entire `Loom.UI`/`Loom.UI.SourceGen`/`Loom.UI.Tests` track; line 54 claims "no golden-image tests yet" although [GoldenImageTests.cs](Loom.Tests/GoldenImageTests.cs) + [tools/golden.ps1](tools/golden.ps1) + committed `Goldens/` ship a full PNG-comparison harness; line 54 references `LOOM_CAPTURE` although line 31 says there are no `LOOM_*` runtime vars (it's `--capture`).
+  The Projects list omits the entire `SUIsei`/`SUIsei.SourceGen`/`SUIsei.Tests` track; line 54 claims "no golden-image tests yet" although [GoldenImageTests.cs](Loom.Tests/GoldenImageTests.cs) + [tools/golden.ps1](tools/golden.ps1) + committed `Goldens/` ship a full PNG-comparison harness; line 54 references `LOOM_CAPTURE` although line 31 says there are no `LOOM_*` runtime vars (it's `--capture`).
   *Fix:* add the UI projects; update the golden-tests claim; replace `LOOM_CAPTURE` with `--capture`.
 
 - **🟡 Two independent reflection-JSON parsers with a divergent classification gate** — [ShaderReflection.cs](Loom.Vulkan/ShaderReflection.cs) · [DirectX12Shaders.cs:84-87,124-130](Loom.DirectX12/DirectX12Shaders.cs#L84) · *maintainability, conf: medium*
@@ -282,7 +282,7 @@ None affect runtime correctness.
   Both early-returns (no `LOOM_GOLDEN_DIR`, or empty `Goldens/`) report **PASS** having asserted nothing; CI runs without the env var, so it's always a vacuous green. A broken capture step or regressed Goldens copy would still pass.
   *Fix:* use an explicit Skip so the run reports SKIPPED; fail loudly if `LOOM_GOLDEN_DIR` is set but `Goldens/` is empty.
 
-- **🟡 `DependencyProperty` precedence ladder only partially asserted** — [DependencyPropertyTests.cs:47-66](Loom.UI.Tests/DependencyPropertyTests.cs#L47) · *tests, conf: medium*
+- **🟡 `DependencyProperty` precedence ladder only partially asserted** — [DependencyPropertyTests.cs:47-66](SUIsei.Tests/DependencyPropertyTests.cs#L47) · *tests, conf: medium*
   The "fire callback only on a resolved change" contract is verified only for the Local-from-Default case; Style/Inherited/Animation transitions never inspect the callback log. A regression where an inherited value fails to fire `PropertyChanged` (or clearing animation fires a spurious one) wouldn't be caught.
   *Fix:* assert the log after each precedence transition; add a masked-by-higher-precedence case that must NOT fire.
 
