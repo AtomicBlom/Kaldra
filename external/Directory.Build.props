@@ -2,9 +2,19 @@
 
   <!--
     Shield for vendored code (e.g. external/VMASharp). MSBuild imports the *nearest* Directory.Build.props
-    walking up from a project and stops; placing this empty one at external/ stops the walk before the repo
+    walking up from a project and stops; placing this one at external/ stops the walk before the repo
     root, so the Loom feature flags / constants never leak into vendored builds. Intentionally does NOT
     import the repo-root Directory.Build.props.
   -->
+
+  <!--
+    Silence the vendored VMASharp's own compiler warnings (nullable + an unreachable branch) so they don't
+    pollute the build. Scoped to VMASharp by project name so the SUIsei submodule, which also lives under
+    external/ and inherits this file, keeps its full nullable/analysis diagnostics. We don't patch vendored
+    sources to clear these.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VMASharp'">
+    <NoWarn>$(NoWarn);CS0162;CS8602;CS8618</NoWarn>
+  </PropertyGroup>
 
 </Project>
