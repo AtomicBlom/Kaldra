@@ -54,11 +54,8 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	private int _debugErrors;
 	private bool _disposed;
 
-	// The active graph + its derived plans (null until SetGraph). Per-buffer backbuffer state is tracked because
-	// D3D12 transition barriers need the resource's exact current state (see DirectX12StateMapping).
-	private RenderGraph? _graph;
-	private BarrierPlan? _barrierPlan;
-	private AliasPlan? _aliasPlan;
+	// Per-buffer backbuffer state is tracked because D3D12 transition barriers need the resource's exact current
+	// state (see DirectX12StateMapping). The active graph + its derived plan live on EngineBase.
 	private readonly ResourceStates[] _backbufferState = new ResourceStates[BufferCount];
 	// Aliased transients re-barriered this frame: a bucket member that shares memory needs one D3D12 aliasing
 	// barrier before its first (re)activation each frame (the hand-off from whatever member last used the memory).
@@ -85,9 +82,6 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	private readonly bool[] _timingValid = new bool[BufferCount];
 	private int _timingPassCount;
 	private ulong _timestampFrequency; // ticks per second, from the graphics queue (0 ⇒ timing unavailable)
-
-	// M13 resource viewer: the active graph's colour/depth resources the host can preview. Rebuilt each SetGraph.
-	private readonly List<InspectableResource> _inspectable = [];
 
 	// Shader hot-reload (M13), opt-in. The watcher maps a changed artifact to a logical shader name; the base's
 	// reload registry queues it and the render thread drains it (fence-safe).
@@ -164,11 +158,9 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	// 0 timestamp frequency ⇒ the queue can't timestamp, so the profiler stays permanently unavailable.
 	protected override bool CanEnableGpuTiming => _timestampFrequency != 0;
 
-	public override IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
-
 	public override void Render(FrameInputs inputs)
 	{
-		if (_graph is not null)
+		if (Graph is not null)
 			RenderGraphFrame(inputs);
 		else
 			RenderLegacy(inputs);
@@ -259,7 +251,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		var timingBase = (uint)(2 * _timingPassCount) * index;
 		var passIndex = 0;
 
-		foreach (var pass in _barrierPlan!.Passes)
+		foreach (var pass in Barriers.Passes)
 		{
 			// Wrap each pass in a debug-label scope, nested under groups derived from its dotted name, so a PIX
 			// capture reads as a "bloom" group containing "down1", … instead of a flat list. [Conditional]:
@@ -306,7 +298,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 			rowPitch = CopyBackbufferToReadback(backbuffer);
 		}
 
-		foreach (var transition in _barrierPlan.FinalTransitions)
+		foreach (var transition in Barriers.FinalTransitions)
 			EmitGraphTransition(index, transition);
 
 		SilkMarshal.ThrowHResult(_commandList.Close());
@@ -428,7 +420,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
 	private void CloseTrailingLabels()
 	{
-		for (var i = 0; i < _barrierPlan!.TrailingLabelCloses; i++)
+		for (var i = 0; i < Barriers.TrailingLabelCloses; i++)
 			_ctx.EndDebugLabel(_commandList);
 	}
 
@@ -639,7 +631,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		void* mapped;
 		SilkMarshal.ThrowHResult(_timingReadback[index].Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
 		var t = new ReadOnlySpan<ulong>(mapped, 2 * _timingPassCount);
-		DecodeTimings(t, _barrierPlan!, 1000.0 / _timestampFrequency);
+		DecodeTimings(t, Barriers, 1000.0 / _timestampFrequency);
 		_timingReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 	}
 
@@ -711,10 +703,10 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		Array.Clear(_frameFenceValues);
 
 		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size).
-		if (_graph is not null)
+		if (Graph is not null)
 		{
 			_transients?.Dispose();
-			_transients = new DirectX12Transients(_ctx, _graph, _aliasPlan!, BufferCount, _swapchain.Width, _swapchain.Height);
+			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _swapchain.Width, _swapchain.Height);
 			_context.SetTransients(_transients);
 			for (uint i = 0; i < BufferCount; i++)
 				_backbufferState[i] = ResourceStates.Present;
@@ -869,52 +861,24 @@ public sealed unsafe class DirectX12Engine : EngineBase
 
 	}
 
-	public override bool ResourceInspectionEnabled { get; set; }
 
-	/// <summary>
-	/// Make <paramref name="graph"/> the active graph: derive its schedule + barrier plan (the backend-neutral
-	/// Execute-layer products, identical to what the Vulkan engine consumes) and route <see cref="Render"/>
-	/// through the executor. Transient-resource allocation (aliasing, the sample/blit path) lands next slice.
-	/// </summary>
-	public override void SetGraph(RenderGraph graph)
+	protected override string AliasingLogPrefix => "DirectX12 ";
+
+	// Tear down the previous graph's transients before the base binds a new graph; the device and caches survive.
+	// The base has already drained the GPU when a prior graph existed.
+	protected override void ReleaseGraphResources() => _transients?.Dispose();
+
+	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed)
 	{
-		ArgumentNullException.ThrowIfNull(graph);
-		if (_graph is not null)
-			WaitIdle();
-
-		_graph = graph;
-
-		// Resource viewer: enumerate the colour/depth resources the host can preview, and (when inspection is enabled)
-		// inject HUD .Samples edges so the Execute layer derives their keep-alive + PixelShaderResource transition —
-		// the viewer samples live images, not aliased corpses. Graphs set with inspection off (the DirectX12 aliasing
-		// diagnostics) keep their exact aliasing. The author's graph is untouched; we execute `executed`.
-		_inspectable.Clear();
-		var executed = graph;
-		if (ResourceInspectionEnabled)
-		{
-			foreach (var resource in graph.Resources)
-				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
-					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
-			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
-		}
-
-		// Derive once — the graph is immutable, so order/barriers/lifetimes/aliasing are frame-invariant. The
-		// AliasPlan (the §8/M4 transient-memory partition) is the SAME backend-neutral product the Vulkan engine
-		// consumes; this backend turns each bucket into a placed-resource heap shared by its members.
-		var schedule = GraphSchedule.Derive(executed);
-		_barrierPlan = BarrierPlan.Derive(schedule);
-		_aliasPlan = AliasPlan.Derive(LifetimePlan.Derive(schedule));
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present;
 
-		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
-			Console.WriteLine($"[loom] DirectX12 transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
-
-		_transients?.Dispose();
-		// Build transients from `executed` (same resources/ids; the injected edges only affect derived state).
-		_transients = new DirectX12Transients(_ctx, executed, _aliasPlan, BufferCount, _swapchain.Width, _swapchain.Height);
+		// Build transients from `executed` (same resources/ids; the injected edges only affect derived state). The
+		// AliasPlan (the transient-memory partition) is the SAME backend-neutral product the Vulkan engine consumes;
+		// this backend turns each bucket into a placed-resource heap shared by its members.
+		_transients = new DirectX12Transients(_ctx, executed, Aliases, BufferCount, _swapchain.Width, _swapchain.Height);
 		_context.SetTransients(_transients);
-		SetupPick(graph);
+		SetupPick(authored);
 		SetupTiming();
 	}
 
@@ -928,7 +892,8 @@ public sealed unsafe class DirectX12Engine : EngineBase
 			if (buffer.Handle is not null) { buffer.Dispose(); buffer = default; }
 		Array.Clear(_timingValid);
 		ResetTimings();
-		_timingPassCount = _barrierPlan!.Passes.Length;
+		_timingPassCount = Barriers.Passes.Length;
+
 		if (_timestampFrequency == 0 || _timingPassCount == 0)
 			return;
 

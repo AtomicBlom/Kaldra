@@ -93,10 +93,68 @@ public abstract class EngineBase : IEngine
 		LastFrameGpuMilliseconds = 0;
 	}
 
-	// ── The backend's own half: graph derivation, the per-frame record loop, resource creation, teardown. ──
-	public abstract bool ResourceInspectionEnabled { get; set; }
-	public abstract IReadOnlyList<InspectableResource> InspectableResources { get; }
-	public abstract void SetGraph(RenderGraph graph);
+	// ── Active graph + its derived plan: rebuilt by SetGraph, read by the backend's record loop ──
+	protected RenderGraph? Graph { get; private set; }
+	protected BarrierPlan Barriers { get; private set; } = null!;
+	protected AliasPlan Aliases { get; private set; } = null!;
+
+	private readonly List<InspectableResource> _inspectable = [];
+
+	public bool ResourceInspectionEnabled { get; set; }
+	public IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
+
+	/// <summary>Prefix on the aliasing-summary log line for backends that tag it (e.g. <c>"DirectX12 "</c>); empty by default.</summary>
+	protected virtual string AliasingLogPrefix => "";
+
+	/// <summary>
+	/// Make <paramref name="graph"/> the active graph: drain the GPU and release the previous graph's resources,
+	/// enumerate inspectable resources, derive the schedule/barriers/aliasing once, then rebuild the per-graph GPU
+	/// resources. The device and pipeline cache are reused — only the per-graph plan and resources are rebuilt.
+	/// </summary>
+	public void SetGraph(RenderGraph graph)
+	{
+		ArgumentNullException.ThrowIfNull(graph);
+		if (Graph is not null)
+			WaitIdle();
+		ReleaseGraphResources();
+		Graph = graph;
+
+		// Resource viewer: enumerate the colour/depth resources the host can preview, and (when inspection is on)
+		// inject debug-sample edges so the Execute layer keeps them alive in a sampleable layout. The author's graph
+		// is untouched — the engine derives and renders `executed`.
+		_inspectable.Clear();
+		var executed = graph;
+		if (ResourceInspectionEnabled)
+		{
+			foreach (var resource in graph.Resources)
+				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
+					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
+			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
+		}
+
+		// Derive once — the graph is immutable, so order/barriers/load-store/lifetimes/aliasing are frame-invariant.
+		var schedule = GraphSchedule.Derive(executed);
+		Barriers = BarrierPlan.Derive(schedule);
+		Aliases = AliasPlan.Derive(LifetimePlan.Derive(schedule));
+
+		if (Aliases.AliasableCount > Aliases.Buckets.Length)
+			Console.WriteLine($"[loom] {AliasingLogPrefix}transient aliasing: {Aliases.AliasableCount} transients folded into {Aliases.Buckets.Length} memory buckets.");
+
+		RebuildGraphResources(graph, executed);
+	}
+
+	/// <summary>Release the previous graph's per-graph GPU resources (transients, readback, timing pools). Called after a GPU drain.</summary>
+	protected abstract void ReleaseGraphResources();
+
+	/// <summary>
+	/// Build this graph's per-graph GPU resources from the derived plan (<see cref="Barriers"/> / <see cref="Aliases"/>):
+	/// transients from <paramref name="executed"/> (its debug-sample edges widen inspected resources), plus readback,
+	/// timing, and any backend-specific id-sets. <paramref name="authored"/> is the original graph (readback targets,
+	/// resource kinds).
+	/// </summary>
+	protected abstract void RebuildGraphResources(RenderGraph authored, RenderGraph executed);
+
+	// ── The backend's own half: the per-frame record loop, resource creation, teardown. ──
 	public abstract void Render(FrameInputs inputs);
 	public abstract void Resize(int width, int height);
 	public abstract void WaitIdle();

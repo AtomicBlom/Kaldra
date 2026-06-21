@@ -71,11 +71,8 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	// $(AssemblyName)); app shaders are loose .spv/.json on disk. ResolveShaderAsset tries embedded first.
 	private static readonly string EmbeddedShaderPrefix = typeof(VulkanEngine).Assembly.GetName().Name + ".Shaders.";
 
-	// Graph-level state — rebuilt by SetGraph, reusing the device above.
-	private RenderGraph? _graph;
-	private BarrierPlan _plan = null!;
-	private AliasPlan _aliasPlan = null!;
-	private HashSet<int> _aliasedHandoffIds = []; // resources that reuse an earlier alias's memory this frame
+	// Graph-level state — rebuilt by RebuildGraphResources; the active graph + derived plan live on EngineBase.
+	private IReadOnlySet<int> _aliasedHandoffIds = new HashSet<int>(); // resources that reuse an earlier alias's memory this frame
 	private HashSet<int> _persistentIds = [];     // resources whose contents survive across frames
 	private readonly Dictionary<int, ResourceState> _persistentState = []; // last state, carried across frames
 	private HashSet<int> _bufferIds = [];          // storage/vertex buffer resources (emit buffer barriers, not image)
@@ -107,9 +104,6 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	private float _timestampPeriod;          // ns per tick (device limit)
 	private uint _timestampValidBits;        // 0 ⇒ the graphics queue can't timestamp (timing unavailable)
 
-	// M13 resource viewer: the active graph's colour/depth resources the host can preview. Rebuilt each SetGraph.
-	private readonly List<InspectableResource> _inspectable = [];
-
 	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
 	private Camera _frameCamera = Camera.Identity;
 	private Camera _frameSun = Camera.Identity;
@@ -128,8 +122,6 @@ internal sealed unsafe class VulkanEngine : EngineBase
 
 	// 0 valid bits ⇒ the graphics queue can't timestamp, so the profiler stays permanently unavailable.
 	protected override bool CanEnableGpuTiming => _timestampValidBits != 0;
-
-	public override IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
 
 	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
 	{
@@ -237,71 +229,41 @@ internal sealed unsafe class VulkanEngine : EngineBase
 
 	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
-	public override bool ResourceInspectionEnabled { get; set; }
-
-	public override void SetGraph(RenderGraph graph)
+	// Tear down the previous graph's transients/readback/timing pools before the base binds a new graph; the device
+	// and caches survive. The base has already drained the GPU when a prior graph existed.
+	protected override void ReleaseGraphResources()
 	{
-		ArgumentNullException.ThrowIfNull(graph);
-
-		// Swapping the active graph mid-run: drain the GPU before releasing the old graph's transients/readback,
-		// then bind the new graph's derived plan + resources. The device, pipeline cache, meshes, and descriptors
-		// are untouched (Planning.md §8). The first call (no prior graph) skips the drain.
-		if (_graph is not null)
-			_vk.DeviceWaitIdle(_ctx.Device);
 		DisposeGraphResources();
 		_persistentState.Clear();
+	}
 
-		_graph = graph;
-
-		// Resource viewer: enumerate the colour/depth resources the host can preview, and (when inspection is enabled)
-		// inject HUD .Samples edges for them so the Execute layer derives their keep-alive + ShaderRead transition —
-		// the viewer samples live images, not aliased corpses. Graphs set with inspection off (e.g. the DirectX12
-		// aliasing diagnostics) keep their exact aliasing. The author's graph is untouched; we execute `executed`.
-		_inspectable.Clear();
-		var executed = graph;
-		if (ResourceInspectionEnabled)
-		{
-			foreach (var resource in graph.Resources)
-				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
-					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
-			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
-		}
-
-		// Derive once — the graph is immutable, so order/barriers/load-store/lifetimes are frame-invariant.
-		var schedule = GraphSchedule.Derive(executed);
-		_plan = BarrierPlan.Derive(schedule);
-		_aliasPlan = AliasPlan.Derive(LifetimePlan.Derive(schedule));
-
-		// Each bucket's members share one block; every member after the first reuses an earlier alias's memory
-		// this frame, so its Undefined→… birth transition must wait on all prior work to that memory (the
-		// aliasing barrier — see EmitTransition). The first member is covered by the per-frame fence instead.
-		_aliasedHandoffIds = [];
-		foreach (var bucket in _aliasPlan.Buckets)
-			for (var i = 1; i < bucket.Members.Length; i++)
-				_aliasedHandoffIds.Add(bucket.Members[i].Id);
+	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed)
+	{
+		// Every bucket member after the first reuses an earlier alias's memory this frame, so its Undefined→… birth
+		// transition must wait on all prior work to that memory (the aliasing barrier — see EmitTransition); the first
+		// member is covered by the per-frame fence instead.
+		_aliasedHandoffIds = Aliases.AliasedMemberIds();
 
 		// Persistent resources (auto-exposure history) keep their contents across frames; storage/vertex buffers
 		// emit buffer barriers rather than image transitions. Classify the graph's resources once.
 		_persistentIds = [];
 		_bufferIds = [];
-		foreach (var resource in graph.Resources)
+		foreach (var resource in authored.Resources)
 		{
 			if (resource.Kind == ResourceKind.Persistent)
 				_persistentIds.Add(resource.Id);
 			if (resource.Kind == ResourceKind.Buffer)
 				_bufferIds.Add(resource.Id);
 		}
-		if (_aliasPlan.AliasableCount > _aliasPlan.Buckets.Length)
-			Console.WriteLine($"[loom] transient aliasing: {_aliasPlan.AliasableCount} transients folded into {_aliasPlan.Buckets.Length} memory buckets.");
 
 		// Build transients from `executed` so the injected debug-sample edges add SampledBit to inspected resources.
-		_transients = new VulkanTransientResources(_ctx, executed, _aliasPlan, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
+		_transients = new VulkanTransientResources(_ctx, executed, Aliases, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
 		_context.SetTransients(_transients);
 
 		// Readback staging (§7.4): one host-visible buffer per frame slot for the first g.Readback target.
-		if (graph.ReadbackTargets.Length > 0)
+		if (authored.ReadbackTargets.Length > 0)
 		{
-			var target = graph.ReadbackTargets[0];
+			var target = authored.ReadbackTargets[0];
 			_readbackId = target.Id;
 			(_readbackWidth, _readbackHeight) = target.Resolve();
 			_readbackCpu = new float[_readbackWidth * _readbackHeight];
@@ -315,7 +277,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 
 		// GPU-timing pools (M13): 2 timestamps (begin/end) per pass, one pool per frame slot. Sized to this graph's
 		// pass count, so a swap to a graph with a different count reallocates (DisposeGraphResources freed the old).
-		_timingPassCount = _plan.Passes.Length;
+		_timingPassCount = Barriers.Passes.Length;
 		ResetTimings();
 		if (_timestampValidBits != 0 && _timingPassCount > 0)
 		{
@@ -379,7 +341,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	public override void Render(FrameInputs inputs)
 	{
 		ArgumentNullException.ThrowIfNull(inputs);
-		if (_graph is null || _transients is null)
+		if (Graph is null || _transients is null)
 			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
 
 		_frameCamera = ClipSpace(inputs.Camera);
@@ -528,7 +490,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 			_vk.CmdResetQueryPool(cmd, _timingPools[_currentFrame], 0, (uint)(2 * _timingPassCount));
 
 		var passIndex = 0;
-		foreach (var pass in _plan.Passes)
+		foreach (var pass in Barriers.Passes)
 		{
 			// Wrap each pass (its pre-barriers + its draws/dispatch) in a debug-label scope, nested under groups
 			// derived from the dotted pass name — so a RenderDoc capture reads as a "bloom" group containing
@@ -573,7 +535,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
 	private void CloseTrailingLabels(CommandBuffer cmd)
 	{
-		for (var i = 0; i < _plan.TrailingLabelCloses; i++)
+		for (var i = 0; i < Barriers.TrailingLabelCloses; i++)
 			_ctx.EndDebugLabel(cmd);
 	}
 
@@ -632,7 +594,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		var mask = _timestampValidBits >= 64 ? ulong.MaxValue : (1UL << (int)_timestampValidBits) - 1UL;
 		for (var i = 0; i < n; i++)
 			raw[i] &= mask;
-		DecodeTimings(new ReadOnlySpan<ulong>(raw, n), _plan, _timestampPeriod / 1_000_000.0);
+		DecodeTimings(new ReadOnlySpan<ulong>(raw, n), Barriers, _timestampPeriod / 1_000_000.0);
 	}
 
 	private void RecordPass(CommandBuffer cmd, PassBarriers pass)
@@ -725,7 +687,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	// Terminal: hand the present target to the swapchain, copying it out first if a capture was requested.
 	private void FinishFrame(CommandBuffer cmd, Buffer captureBuffer)
 	{
-		if (_graph!.PresentTarget is not { } present)
+		if (Graph!.PresentTarget is not { } present)
 			return; // Headless graph: nothing to present.
 
 		ref var image = ref _transients!.Get(_currentFrame, present.Id);
@@ -752,7 +714,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		}
 		else
 		{
-			foreach (var transition in _plan.FinalTransitions)
+			foreach (var transition in Barriers.FinalTransitions)
 				EmitTransition(cmd, transition);
 		}
 	}
