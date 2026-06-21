@@ -12,7 +12,11 @@
 // (src=ONE, dst=ONE_MINUS_SRC_ALPHA) — not ImGui's straight-alpha. The atlas binds linear/UNORM (SDF distances
 // are linear, never sRGB-decoded).
 
-// UIPrimKind (Loom.Core/UIPrimKind.cs) — keep in sync.
+// UIPrimKind (SUIsei) — keep in sync. Values 0..4 are the shaded primitive families this fragment switches on.
+// Values 5/6 (BeginLayer/EndLayer) are zero-geometry group-opacity markers the backend turns into an offscreen
+// render-to-texture composite below the graph seam; they never reach this shader, and the composite blit reuses
+// KIND_IMAGE (sample the resolved layer, tint by the group alpha). A layer effect id rides the BeginLayer marker
+// for a future blur branch — MU4 ships effect id 0 (opacity only), so no KIND_LAYER_* branch exists yet.
 static const uint KIND_FILL = 0;
 static const uint KIND_ROUNDED_RECT = 1;
 static const uint KIND_BORDER = 2;

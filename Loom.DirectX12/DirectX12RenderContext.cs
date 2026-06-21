@@ -3,6 +3,7 @@ using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Core.Primitives;
 using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
@@ -44,6 +45,15 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	// buffers bound by GPU address), so several draw lists in one frame append at successive offsets rather than clobber.
 	private readonly DirectX12InstanceUploadBuffer _listVtx;
 	private readonly DirectX12InstanceUploadBuffer _listIdx;
+	// Renderer-private offscreen targets backing UI group-opacity layers (BeginLayer/EndLayer), below the graph seam.
+	private readonly DirectX12LayerTargets _layerTargets;
+	// Reused across calls so an opacity layer never allocates per frame.
+	private readonly List<(int Depth, Half4 Tint)> _layerStack = [];
+	// The current pass's colour-target RTV handle(s) + extent, captured by the engine before the pass records, so a
+	// draw-list layer can rebind (suspend/resume) the pass's render targets around its offscreen target.
+	private readonly CpuDescriptorHandle[] _scopeRtvs = new CpuDescriptorHandle[8];
+	private int _scopeRtvCount;
+	private uint _scopeWidth, _scopeHeight;
 	private DirectX12Transients? _transients;
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
@@ -81,6 +91,21 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_storageUpload = new DirectX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
 		_listVtx = new DirectX12InstanceUploadBuffer(ctx, frameCount);
 		_listIdx = new DirectX12InstanceUploadBuffer(ctx, frameCount);
+		_layerTargets = new DirectX12LayerTargets(ctx, frameCount);
+	}
+
+	/// <summary>
+	/// Capture the current raster pass's colour-target RTV handle(s) + extent before its <c>.Record</c> runs, so a
+	/// <see cref="DrawList{TVertex}"/> group-opacity layer can rebind the pass's render targets after detouring into
+	/// an offscreen target.
+	/// </summary>
+	public void SetColorScope(ReadOnlySpan<CpuDescriptorHandle> rtvs, uint width, uint height)
+	{
+		_scopeRtvCount = Math.Min(rtvs.Length, _scopeRtvs.Length);
+		for (var i = 0; i < _scopeRtvCount; i++)
+			_scopeRtvs[i] = rtvs[i];
+		_scopeWidth = width;
+		_scopeHeight = height;
 	}
 
 	/// <summary>Bind the active graph's transient targets (the source of sampled-input SRVs). Called from SetGraph.</summary>
@@ -699,8 +724,65 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		for (var i = 0; i < pushLen; i++)
 			block[i] = push[i];
 
+		// Group-opacity layers are only meaningful on an overlay-vertex list (the markers' only producer), with a
+		// captured render-target scope to detour from, and a surface-pixel→clip push to size the composite quad.
+		var layersSupported = System.Runtime.CompilerServices.Unsafe.SizeOf<TVertex>() == System.Runtime.CompilerServices.Unsafe.SizeOf<OverlayVertex>()
+			&& _scopeRtvCount > 0 && _colorCount > 0 && push.Length >= 2 && push[0] != 0 && push[1] != 0;
+		var overlay = layersSupported ? System.Runtime.InteropServices.MemoryMarshal.Cast<TVertex, OverlayVertex>(vertices) : default;
+		if (layersSupported)
+			_layerTargets.Configure(_scopeWidth, _scopeHeight, _colorFormats[0]);
+		_layerStack.Clear();
+		var layerClear = stackalloc float[4] { 0f, 0f, 0f, 0f }; // transparent: a layer starts empty
+
 		foreach (var c in commands)
 		{
+			if (layersSupported && c.Tag == TagBeginLayer && _layerStack.Count < DirectX12LayerTargets.MaxNesting)
+			{
+				// Detour into a fresh transparent offscreen target: render the faded subtree at full alpha so
+				// overlapping children blend against each other, not a faded backdrop.
+				var depth = _layerStack.Count;
+				ref var target = ref _layerTargets.Acquire(_slot, depth);
+				if (target.State != ResourceStates.RenderTarget)
+				{
+					TransitionResource(target.Resource, target.State, ResourceStates.RenderTarget);
+					target.State = ResourceStates.RenderTarget;
+				}
+				var rtv = target.Rtv;
+				_cmd.OMSetRenderTargets(1, &rtv, false, (CpuDescriptorHandle*)null);
+				_cmd.ClearRenderTargetView(rtv, layerClear, 0u, (Silk.NET.Maths.Box2D<int>*)null);
+				_layerStack.Add((depth, overlay[c.VertexOffset].Color));
+				continue;
+			}
+			if (layersSupported && c.Tag == TagEndLayer)
+			{
+				if (_layerStack.Count == 0)
+					continue;
+				var (depth, tint) = _layerStack[^1];
+				_layerStack.RemoveAt(_layerStack.Count - 1);
+
+				// Resolve the layer (render-target → shader-resource) and rebind the parent's render targets.
+				ref var target = ref _layerTargets.Acquire(_slot, depth);
+				TransitionResource(target.Resource, ResourceStates.RenderTarget, ResourceStates.PixelShaderResource);
+				target.State = ResourceStates.PixelShaderResource;
+				if (_layerStack.Count > 0)
+				{
+					var parentRtv = _layerTargets.Acquire(_slot, _layerStack[^1].Depth).Rtv;
+					_cmd.OMSetRenderTargets(1, &parentRtv, false, (CpuDescriptorHandle*)null);
+				}
+				else
+				{
+					fixed (CpuDescriptorHandle* pRtv = _scopeRtvs)
+						_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
+				}
+
+				CompositeLayer(baked, target.Resource, tint, block, pushLen, push);
+
+				// Restore the list's geometry for the following commands (the composite bound its own quad buffer).
+				_cmd.IASetVertexBuffers(0, 1, &vbv);
+				_cmd.IASetIndexBuffer(&ibv);
+				continue;
+			}
+
 			var clip = c.ClipRect;
 			var minX = MathF.Max(0, clip.X);
 			var minY = MathF.Max(0, clip.Y);
@@ -725,6 +807,100 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 			_cmd.RSSetScissorRects(1, &scissor);
 			_cmd.DrawIndexedInstanced((uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
 		}
+
+		// Defensive: a well-formed list balances its markers, but never leave a layer's target bound — rebind the
+		// captured pass scope so the engine's following passes (and present) write the screen, not an orphaned layer.
+		if (_layerStack.Count > 0)
+		{
+			_layerStack.Clear();
+			fixed (CpuDescriptorHandle* pRtv = _scopeRtvs)
+				_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
+		}
+	}
+
+	// UI group-opacity layer markers (UIPrimKind, kept in sync with SUIsei): zero-index commands that never reach the
+	// fragment shader — the backend turns a BeginLayer/EndLayer pair into an offscreen target + a composite. KIND_IMAGE
+	// is the shader branch the composite blit uses (sample the layer, tint by the group alpha).
+	private const uint TagBeginLayer = 5;
+	private const uint TagEndLayer = 6;
+	private const uint KindImage = 4;
+
+	// Composite a resolved layer target back into the (now-rebound) parent: one full-surface KIND_IMAGE quad that
+	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once. The HDR
+	// paper-white lift is forced off here — the layer's primitives already lifted, and the lift commutes with the
+	// premultiplied alpha-over, so re-lifting would double it (the CPU rasterizer is the reference).
+	private void CompositeLayer(DirectX12Technique baked, ComPtr<ID3D12Resource> layer, Half4 tint, float* block, int pushLen, ReadOnlySpan<float> push)
+	{
+		var coordX = 2f / push[0];
+		var coordY = 2f / push[1];
+		var custom = default(Vector4);
+		Span<OverlayVertex> quad =
+		[
+			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
+			new(new Vector2(coordX, 0), new Vector2(1, 0), tint, custom),
+			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
+			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
+			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
+			new(new Vector2(0, coordY), new Vector2(0, 1), tint, custom),
+		];
+		var quadBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(quad);
+		var quadAddr = _listVtx.Upload(_slot, quadBytes);
+		var qvbv = new VertexBufferView { BufferLocation = quadAddr, SizeInBytes = (uint)quadBytes.Length, StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<OverlayVertex>() };
+		_cmd.IASetVertexBuffers(0, 1, &qvbv);
+
+		if (baked.RootConstantParam >= 0)
+		{
+			var cblock = stackalloc float[8];
+			for (var i = 0; i < pushLen; i++)
+				cblock[i] = block[i];
+			if (pushLen > 5)
+				cblock[5] = 0f;                 // isHdr off — do not re-lift the already-lifted layer
+			*(uint*)(cblock + pushLen) = KindImage;
+			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, (uint)(pushLen + 1), cblock, 0);
+		}
+
+		if (baked.TableParam >= 0)
+		{
+			var (cpu, gpu) = _ring.Allocate(1);
+			var srv = new ShaderResourceViewDesc
+			{
+				Format = _layerTargets.Format,
+				ViewDimension = SrvDimension.Texture2D,
+				Shader4ComponentMapping = DefaultShader4ComponentMapping,
+				Anonymous = new ShaderResourceViewDescUnion
+				{
+					Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f },
+				},
+			};
+			_ctx.Device.CreateShaderResourceView(layer, &srv, cpu);
+			_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
+		}
+
+		var scissor = new Silk.NET.Maths.Box2D<int>(0, 0, (int)_scopeWidth, (int)_scopeHeight);
+		_cmd.RSSetScissorRects(1, &scissor);
+		_cmd.DrawInstanced(6, 1, 0, 0);
+	}
+
+	// A resource-state transition for the renderer-private layer targets — recorded here because a layer's
+	// choreography is the backend's, below the graph's barrier derivation.
+	private void TransitionResource(ComPtr<ID3D12Resource> resource, ResourceStates before, ResourceStates after)
+	{
+		var barrier = new ResourceBarrier
+		{
+			Type = ResourceBarrierType.Transition,
+			Flags = ResourceBarrierFlags.None,
+			Anonymous = new ResourceBarrierUnion
+			{
+				Transition = new ResourceTransitionBarrier
+				{
+					PResource = resource.Handle,
+					Subresource = 0xffffffff,
+					StateBefore = before,
+					StateAfter = after,
+				},
+			},
+		};
+		_cmd.ResourceBarrier(1, &barrier);
 	}
 
 	/// <summary>Resolve an inspectable graph resource to a draw-list-bindable texture handle for this frame (resource
@@ -745,5 +921,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_storageUpload.Dispose();
 		_listVtx.Dispose();
 		_listIdx.Dispose();
+		_layerTargets.Dispose();
 	}
 }

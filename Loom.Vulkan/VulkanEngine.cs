@@ -680,6 +680,14 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
 
 		_context.BeginPass(new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly);
+
+		// Hand the context this pass's colour attachment views + area so a draw-list group-opacity layer can suspend
+		// and resume the dynamic-rendering scope around its offscreen target.
+		var scopeViews = stackalloc ImageView[colorCount];
+		for (var i = 0; i < colorCount; i++)
+			scopeViews[i] = color[i].ImageView;
+		_context.SetColorScope(new ReadOnlySpan<ImageView>(scopeViews, colorCount), area);
+
 		pass.Pass.Record?.Invoke(_context);
 
 		_vk.CmdEndRendering(cmd);
