@@ -15,6 +15,17 @@
     <Nullable>enable</Nullable>
     <!-- The marshaling seam is pointer-heavy COM interop, exactly as in Loom.Vulkan. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>Loom.Backend.DirectX12</PackageId>
+    <Description>DirectX 12 backend for the Loom render-graph engine. PSOs, placed-resource aliasing, offline signed DXIL shaders embedded.</Description>
+    <PackageTags>directx12;dx12;rendergraph;gamedev;graphics;dotnet;silk.net</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
 
     <!-- The SAME backend-neutral engine shaders Loom.Vulkan compiles (..\Loom.Shaders\Shaders); this backend
          emits + embeds them as signed DXIL (manifest prefix "Loom.DirectX12.Shaders.", = $(AssemblyName).Shaders.).

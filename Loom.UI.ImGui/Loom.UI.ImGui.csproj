@@ -18,6 +18,14 @@
     <LoomShaderOutputMode>Content</LoomShaderOutputMode>
   </PropertyGroup>
 
+  <PropertyGroup Label="NuGet">
+    <PackageId>Loom.UI.ImGui</PackageId>
+    <Description>Optional Dear ImGui overlay for Loom. Renders ImGui draw data through the backend-neutral draw-list API — neither Loom.Core nor any backend references ImGui.NET directly. Reference this package to add the overlay; omit it and the engine is wholly ImGui-free.</Description>
+    <PackageTags>imgui;ui;rendergraph;gamedev;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
   <!-- Optional Dear ImGui integration: renders the host's ImGui draw data through the public draw-list API, so
        neither backend references ImGui.NET. Reference this package to add the overlay; omit it and the engine is
        wholly ImGui-free. The twin of Loom.UI.SUIsei (which bridges the XAML UI engine the same way). -->

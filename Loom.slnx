@@ -4,6 +4,7 @@
     <File Path="Planning.md" />
     <File Path="PlanningUI.md" />
   </Folder>
+  <Project Path="build/Loom.Sdk/Loom.Sdk.csproj" />
   <Project Path="Loom.Assets/Loom.Assets.csproj" />
   <Project Path="Loom.Core/Loom.Core.csproj" />
   <Project Path="Loom.DirectX12/Loom.DirectX12.csproj" />
