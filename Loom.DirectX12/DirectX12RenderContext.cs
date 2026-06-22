@@ -62,7 +62,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	public Camera SunView { get; private set; } = Camera.Identity;
 	public Camera Camera { get; private set; } = Camera.Identity;
 	public IReadOnlyList<Camera> Cascades { get; private set; } = [];
-	public IReadOnlyList<float> CascadeSplits { get; private set; } = [];
 	public bool HdrOutput { get; private set; }
 	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists => _drawLists;
 	private Camera[] _cascades = [];
@@ -102,7 +101,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		for (var i = 0; i < inputs.Cascades.Count; i++)
 			_cascades[i] = ClipSpace(inputs.Cascades[i]);
 		Cascades = _cascades;
-		CascadeSplits = inputs.CascadeSplits;
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
 		_uniformUpload.BeginFrame(slot);  // and its per-frame uniform staging (M15-0)

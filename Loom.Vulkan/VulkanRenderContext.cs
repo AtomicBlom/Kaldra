@@ -77,7 +77,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	private Camera _camera;
 	private Camera _sunView;
 	private IReadOnlyList<Camera> _cascades = [];
-	private IReadOnlyList<float> _cascadeSplits = [];
 
 	public float DeltaTime { get; private set; }
 
@@ -88,8 +87,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	public Camera SunView => _sunView;
 
 	public IReadOnlyList<Camera> Cascades => _cascades;
-
-	public IReadOnlyList<float> CascadeSplits => _cascadeSplits;
 
 	public bool HdrOutput { get; private set; }
 
@@ -133,7 +130,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	public void ClearBaked() => _baked.Clear();
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, timing, HDR-output state, and draw lists before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, IReadOnlyList<Camera> cascades, IReadOnlyList<float> cascadeSplits, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists, Extent2D fbExtent, bool hdrOutput)
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, IReadOnlyList<Camera> cascades, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
@@ -142,7 +139,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_camera = camera;
 		_sunView = sunView;
 		_cascades = cascades;
-		_cascadeSplits = cascadeSplits;
 		_drawLists = drawLists;
 		_fbExtent = fbExtent;
 		HdrOutput = hdrOutput;

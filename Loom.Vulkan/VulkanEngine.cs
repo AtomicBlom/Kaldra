@@ -115,7 +115,6 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	private Camera _frameCamera = Camera.Identity;
 	private Camera _frameSun = Camera.Identity;
 	private Camera[] _frameCascades = [];
-	private IReadOnlyList<float> _frameCascadeSplits = [];
 	private float _frameTime;
 	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _frameDrawLists = [];
 
@@ -347,7 +346,6 @@ internal sealed unsafe class VulkanEngine : EngineBase
 			_frameCascades = new Camera[inputs.Cascades.Count];
 		for (var i = 0; i < inputs.Cascades.Count; i++)
 			_frameCascades[i] = ClipSpace(inputs.Cascades[i]);
-		_frameCascadeSplits = inputs.CascadeSplits;
 		_frameTime = inputs.Time;
 		_frameDrawLists = inputs.DrawLists;
 		DrawFrame((float)inputs.DeltaSeconds);
@@ -476,7 +474,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
 
 		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it. Re-uploading
 		// every frame (cheap — these are tiny) means the last IEngine.Write persists across frames, so a static
