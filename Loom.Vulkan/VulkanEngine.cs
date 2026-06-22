@@ -613,14 +613,15 @@ internal sealed unsafe class VulkanEngine : EngineBase
 
 	private void RecordPass(CommandBuffer cmd, PassBarriers pass)
 	{
-		// The app-writable parameter buffer this pass .Reads (or -1) — bound to the technique's uniform slot.
-		var constantsId = ConstantsIdOf(pass.Pass);
+		// The app-writable parameter buffers this pass .Reads — bound to the technique's uniform slots 0..K-1.
+		Span<int> uniformIds = stackalloc int[VulkanRenderContext.MaxUniformBuffers];
+		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
 
 		// Compute passes have no attachments and no dynamic-rendering scope — just bind + dispatch. The
 		// resource transitions (storage GENERAL, the consumer's SHADER_READ) were already emitted before this.
 		if (pass.Pass.Kind == PassKind.Compute)
 		{
-			_context.BeginPass([], default, false, constantsId); // no colour/depth targets; keeps the bake key stable
+			_context.BeginPass([], default, false, uniformIds[..uniformCount]); // no colour/depth targets; keeps the bake key stable
 			pass.Pass.Record?.Invoke(_context);
 			return;
 		}
@@ -695,19 +696,21 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		Rect2D scissor = new(new Offset2D(0, 0), area);
 		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
 
-		_context.BeginPass(new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly, constantsId);
+		_context.BeginPass(new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount]);
 		pass.Pass.Record?.Invoke(_context);
 
 		_vk.CmdEndRendering(cmd);
 	}
 
-	// The id of the app-writable parameter buffer a pass reads (its .Reads / ReadUniform edge), or -1 if none.
-	private static int ConstantsIdOf(GraphPass pass)
+	// Fill `ids` with the app-writable parameter buffers a pass .Reads (its ReadUniform edges, in .Reads order) —
+	// they bind to the technique's uniform slots 0..; returns the count.
+	private static int CollectUniformIds(GraphPass pass, Span<int> ids)
 	{
+		var n = 0;
 		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadUniform)
-				return access.Resource.Id;
-		return -1;
+			if (access.Kind == AccessKind.ReadUniform && n < ids.Length)
+				ids[n++] = access.Resource.Id;
+		return n;
 	}
 
 	// Terminal: hand the present target to the swapchain, copying it out first if a capture was requested.

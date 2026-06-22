@@ -43,8 +43,12 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the storage-image / structured-buffer UAV descriptor table (a compute's <c>.ReadWrites</c> of a texture or structured buffer), or -1 if none.</summary>
 	public int UavTableParam { get; private set; } = -1;
 
-	/// <summary>Root-parameter slot for the per-frame uniform buffer's root CBV at register b1 (M15-0 — the uniform seam: CSM matrices, lighting params, wind), or -1 if the technique reads no constant buffer.</summary>
+	/// <summary>Root-parameter slot of the FIRST uniform buffer's root CBV (register b1; the i-th uniform buffer is
+	/// this + i, at b(1+i)) — the uniform seam: CSM matrices, lighting params, wind. -1 if the technique reads no constant buffer.</summary>
 	public int CbvRootParam { get; private set; } = -1;
+
+	/// <summary>How many uniform buffers (root CBVs at b1..b<see cref="UniformBufferCount"/>) the technique declares — the reflected count. A pass's <c>.Reads</c> Constants fill the first slots; an in-closure push fills the next.</summary>
+	public int UniformBufferCount { get; }
 
 	/// <summary>Element stride (bytes) of a structured-buffer storage resource, for building its UAV descriptor's <c>StructureByteStride</c>/<c>NumElements</c>; 0 for a texture or raw buffer.</summary>
 	public int StorageBufferStride { get; private set; }
@@ -60,6 +64,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		StorageBufferStride = template.StorageBufferStride;
 		InputCount = template.InputCount;
 		InputBufferCount = template.InputBufferCount;
+		UniformBufferCount = template.UniformBufferCount;
 		InstanceStride = template.Instance?.Stride ?? 0;
 
 		if (template.IsCompute)
@@ -194,7 +199,8 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		// reads a vertex stream.
 		var hasMvpPush = (template.Layout is not null || template.Instance is not null) && !template.HasListPush;
 		var hasRootConstants = hasMvpPush || template.HasFragmentPush || template.HasListPush;
-		var parameters = stackalloc RootParameter[3];
+		// Root constants (b0) + N uniform CBVs (b1..bN) + one SRV table.
+		var parameters = stackalloc RootParameter[2 + template.UniformBufferCount];
 		var paramCount = 0;
 		var range = new DescriptorRange
 		{
@@ -215,19 +221,23 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = template.HasListPush ? ListPushDwords : 16u } },
 			};
 		}
-		// M15-0: the per-frame uniform buffer as a root CBV at b1 (the root constants own b0). Bound from the
-		// uniform ring's UPLOAD-heap GPU address each frame. ShaderVisibility.All so it serves both a fullscreen
-		// pixel reader (CSM/lighting params) and a vertex reader (foliage wind). Register b1 matches the shaders'
-		// explicit `: register(b1)`, which Slang honours for DXIL while [[vk::binding]] drives SPIR-V.
+		// The per-frame uniform buffers as root CBVs at b1..bN (the root constants own b0), one per reflected
+		// ConstantBuffer. Bound each frame from a Constants resource's UPLOAD address (a pass's .Reads) or the
+		// uniform ring (an in-closure push). ShaderVisibility.All so they serve both a fullscreen pixel reader
+		// (CSM/lighting params) and a vertex reader (foliage wind). Registers b1.. match the shaders' explicit
+		// `: register(bN)`, which Slang honours for DXIL while [[vk::binding]] drives SPIR-V.
 		if (template.UniformBufferCount > 0)
 		{
 			CbvRootParam = paramCount;
-			parameters[paramCount++] = new RootParameter
+			for (var u = 0; u < template.UniformBufferCount; u++)
 			{
-				ParameterType = RootParameterType.TypeCbv,
-				ShaderVisibility = ShaderVisibility.All,
-				Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = 1, RegisterSpace = 0 } },
-			};
+				parameters[paramCount++] = new RootParameter
+				{
+					ParameterType = RootParameterType.TypeCbv,
+					ShaderVisibility = ShaderVisibility.All,
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(1 + u), RegisterSpace = 0 } },
+				};
+			}
 		}
 		if (template.InputCount > 0)
 		{

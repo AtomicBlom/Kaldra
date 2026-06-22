@@ -153,9 +153,12 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_listIdx.BeginFrame(frameSlot);
 	}
 
-	// The parameter buffer (ResourceKind.Constants) the current pass .Reads, or -1. The engine resolves it from the
-	// pass's ReadUniform edge in BeginPass; a draw verb binds it to the technique's reflected uniform slot.
-	private int _activeConstantsId = -1;
+	// The parameter buffers (ResourceKind.Constants) the current pass .Reads, in order. The engine resolves them
+	// from the pass's ReadUniform edges in BeginPass; FullScreen binds them to the technique's uniform slots 0..K-1
+	// (an in-closure push fills slot K). MaxUniformBuffers caps the per-pass count.
+	public const int MaxUniformBuffers = 8;
+	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
+	private int _activeConstantsCount;
 
 	/// <summary>
 	/// Set the attachment formats of the current pass — the formats its techniques bake against — plus whether
@@ -164,7 +167,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	/// <paramref name="constantsId"/> is the parameter buffer the pass <c>.Reads</c> (or -1), bound to the
 	/// technique's uniform slot at draw time.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, int constantsId = -1)
+	public void BeginPass(ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default)
 	{
 		// Copy into the inline buffer (no allocation) rather than .ToArray(); the incoming span points into
 		// the executor's stackalloc, which is gone once this returns. Throw — never clamp — on an over-wide
@@ -175,7 +178,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		colorFormats.CopyTo(((Span<VkFormat>)_colorFormats)[.._colorCount]);
 		_depthFormat = depthFormat;
 		_depthReadOnly = depthReadOnly;
-		_activeConstantsId = constantsId;
+		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
+		constantsIds[.._activeConstantsCount].CopyTo(_activeConstantsIds);
 	}
 
 	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs) =>
@@ -187,17 +191,19 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		var template = _registry[technique];
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 
-		// The per-pass data channel. An app-writable parameter buffer the pass .Reads binds straight to the
-		// technique's reflected uniform slot; otherwise a float push block either routes to a reflected uniform
-		// buffer (M15-0 — CSM matrices, lighting params; no 16-float cap) or rides the fixed scalar push range.
-		var ubo = default(UniformBinding);
-		if (_activeConstantsId >= 0 && template.UniformBufferCount > 0)
-			ubo = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsId), 0, Vk.WholeSize);
+		// The per-pass data channel. The pass's .Reads Constants buffers bind to the technique's reflected uniform
+		// slots 0..K-1; an in-closure push then fills slot K if a reflected uniform slot remains (M15-0 — CSM
+		// matrices, lighting params; no 16-float cap), or rides the fixed scalar push range when the technique
+		// declares no uniform buffer.
+		Span<UniformBinding> ubos = stackalloc UniformBinding[MaxUniformBuffers];
+		var uboCount = 0;
+		for (var j = 0; j < _activeConstantsCount && uboCount < MaxUniformBuffers; j++)
+			ubos[uboCount++] = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[j]), 0, Vk.WholeSize);
 		if (push.Length > 0)
 		{
-			if (template.UniformBufferCount > 0 && !ubo.Present)
+			if (template.UniformBufferCount > uboCount && uboCount < MaxUniformBuffers)
 			{
-				ubo = UploadUniforms(push);
+				ubos[uboCount++] = UploadUniforms(push);
 			}
 			else if (template.UniformBufferCount == 0)
 			{
@@ -210,8 +216,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			}
 		}
 
-		if (inputs.Length > 0 || ubo.Present)
-			BindSampledInputs(baked, inputs, template.LinearFilter, ubo);
+		if (inputs.Length > 0 || uboCount > 0)
+			BindSampledInputs(baked, inputs, template.LinearFilter, ubos[..uboCount]);
 
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
@@ -577,13 +583,13 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	// FullScreen and the instanced light volumes share. The graph put each in ShaderReadOnly before this pass.
 	// A present uniform buffer (M15-0) is written as the last binding (index inputs.Length), matching the set
 	// layout's category order (samplers, then the UBO).
-	private void BindSampledInputs(VulkanTechnique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear, in UniformBinding ubo = default)
+	private void BindSampledInputs(VulkanTechnique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<UniformBinding> ubos = default)
 	{
 		var sampler = linear ? _linearSampler : _nearestSampler;
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-		var count = inputs.Length + (ubo.Present ? 1 : 0);
+		var count = inputs.Length + ubos.Length;
 		var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
-		var bufferInfo = ubo.Info;
+		var bufferInfos = stackalloc DescriptorBufferInfo[ubos.Length];
 		var writes = stackalloc WriteDescriptorSet[count];
 		for (var i = 0; i < inputs.Length; i++)
 		{
@@ -604,16 +610,20 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 				PImageInfo = &imageInfos[i],
 			};
 		}
-		if (ubo.Present)
-			writes[inputs.Length] = new WriteDescriptorSet
+		// The uniform buffers follow the samplers, at bindings inputs.Length..inputs.Length+ubos.Length-1.
+		for (var u = 0; u < ubos.Length; u++)
+		{
+			bufferInfos[u] = ubos[u].Info;
+			writes[inputs.Length + u] = new WriteDescriptorSet
 			{
 				SType = StructureType.WriteDescriptorSet,
 				DstSet = set,
-				DstBinding = (uint)inputs.Length,
+				DstBinding = (uint)(inputs.Length + u),
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.UniformBuffer,
-				PBufferInfo = &bufferInfo,
+				PBufferInfo = &bufferInfos[u],
 			};
+		}
 		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
 		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
 	}

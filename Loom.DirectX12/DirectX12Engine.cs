@@ -405,7 +405,9 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		_commandList.RSSetViewports(1, &viewport);
 		_commandList.RSSetScissorRects(1, &scissor);
 
-		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, ConstantsIdOf(pass.Pass));
+		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
+		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount]);
 		pass.Pass.Record?.Invoke(_context);
 	}
 
@@ -414,17 +416,21 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	// context's pass state stable (the DirectX12 mirror of VulkanEngine's compute branch in RecordPass).
 	private void RecordComputePass(PassBarriers pass)
 	{
-		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, ConstantsIdOf(pass.Pass));
+		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
+		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, uniformIds[..uniformCount]);
 		pass.Pass.Record?.Invoke(_context);
 	}
 
-	// The id of the app-writable parameter buffer a pass reads (its .Reads / ReadUniform edge), or -1 if none.
-	private static int ConstantsIdOf(GraphPass pass)
+	// Fill `ids` with the app-writable parameter buffers a pass .Reads (its ReadUniform edges, in .Reads order) —
+	// they bind to the technique's uniform CBVs b1..; returns the count.
+	private static int CollectUniformIds(GraphPass pass, Span<int> ids)
 	{
+		var n = 0;
 		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadUniform)
-				return access.Resource.Id;
-		return -1;
+			if (access.Kind == AccessKind.ReadUniform && n < ids.Length)
+				ids[n++] = access.Resource.Id;
+		return n;
 	}
 
 	// Open this pass's debug-label scopes: close the groups it leaves behind, open the ones it enters, then open

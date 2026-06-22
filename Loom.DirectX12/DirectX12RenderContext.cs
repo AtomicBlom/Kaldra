@@ -121,15 +121,20 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	private static Camera ClipSpace(Camera camera) => camera.FlipClipY();
 
 	// The parameter buffer (ResourceKind.Constants) the current pass .Reads, or -1 — bound to the technique's root CBV.
-	private int _activeConstantsId = -1;
+	// The app-writable parameter buffers the current pass .Reads (its ReadUniform edges, in order), bound to the
+	// technique's uniform CBVs b1..bK; an in-closure push follows at b(K+1). The engine fills this in BeginPass.
+	public const int MaxUniformBuffers = 8;
+	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
+	private int _activeConstantsCount;
 
 	/// <summary>
 	/// Tell the context the current pass's colour-target formats + depth format (or <c>FormatUnknown</c> for no
 	/// depth), so techniques bake matching pipelines. <paramref name="depthReadOnly"/> bakes with depth writes
 	/// disabled (a <c>.ReadsDepth</c> pass tests against, but does not disturb, the opaque depth).
-	/// <paramref name="constantsId"/> is the parameter buffer the pass <c>.Reads</c> (or -1), bound at draw time.
+	/// <paramref name="constantsIds"/> are the parameter buffers the pass <c>.Reads</c> (in order), bound to the
+	/// technique's uniform CBVs b1.. at draw time; an in-closure push follows them.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, int constantsId = -1)
+	public void BeginPass(ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default)
 	{
 		if (_colorFormats.Length < colorFormats.Length)
 			_colorFormats = new DxgiFormat[colorFormats.Length];
@@ -137,7 +142,8 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_colorCount = colorFormats.Length;
 		_depthFormat = depthFormat;
 		_depthReadOnly = depthReadOnly;
-		_activeConstantsId = constantsId;
+		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
+		constantsIds[.._activeConstantsCount].CopyTo(_activeConstantsIds);
 	}
 
 	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs) =>
@@ -149,16 +155,20 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		// The per-pass data channel. An app-writable parameter buffer the pass .Reads binds straight to the
-		// technique's root CBV; otherwise a float push block routes to that CBV (M15-0 — no 16-float cap) or rides
-		// the fixed 16-DWORD root-constant block.
-		if (_activeConstantsId >= 0 && baked.CbvRootParam >= 0)
-			_cmd.SetGraphicsRootConstantBufferView((uint)baked.CbvRootParam, _transients!.Resource(_slot, _activeConstantsId).GetGPUVirtualAddress());
-		else if (push.Length > 0)
+		// The per-pass data channel. The pass's .Reads Constants buffers bind to the technique's CBVs b1..bK; an
+		// in-closure push then fills the next CBV (b(K+1)) if a reflected slot remains (M15-0 — no 16-float cap),
+		// or rides the fixed 16-DWORD root-constant block when the technique declares no CBV.
+		var bound = 0;
+		if (baked.CbvRootParam >= 0)
 		{
-			if (baked.CbvRootParam >= 0)
-				BindUniforms(baked, push);
-			else
+			for (var j = 0; j < _activeConstantsCount; j++)
+				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound++), _transients!.Resource(_slot, _activeConstantsIds[j]).GetGPUVirtualAddress());
+		}
+		if (push.Length > 0)
+		{
+			if (baked.CbvRootParam >= 0 && baked.UniformBufferCount > bound)
+				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound), _uniformUpload.Upload(_slot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(push)));
+			else if (baked.CbvRootParam < 0)
 				SetPush(baked, push);
 		}
 		if (inputs.Length > 0)
