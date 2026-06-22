@@ -27,6 +27,8 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0   # needed by SourceLink for full git history
+          # PAT required for the private SUIsei submodule; GITHUB_TOKEN is scoped to this repo only.
+          token: ${{ secrets.PAT }}
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@v4
