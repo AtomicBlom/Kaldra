@@ -129,6 +129,10 @@ public sealed class BarrierPlan
 		var flags = new Dictionary<int, (ResourceHandle Res, bool Write, bool Blend, bool Sample, bool WriteDepth, bool ReadDepth, bool Storage, bool Vertex)>();
 		foreach (var access in pass.Accesses)
 		{
+			// An app-written parameter or storage buffer is host-coherent and needs no layout/state transition — it
+			// never produces a Use, so it stays out of barrier derivation entirely (the bind is handled at record time).
+			if (access.Kind is AccessKind.ReadUniform or AccessKind.ReadStorage)
+				continue;
 			var f = flags.GetValueOrDefault(access.Resource.Id);
 			f.Res = access.Resource;
 			switch (access.Kind)

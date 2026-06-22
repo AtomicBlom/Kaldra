@@ -65,19 +65,28 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	private ComPtr<ID3D12Resource> _readback;
 	private ulong _readbackSize;
 
-	// Picking (§7.4): the graph's first readback target (the object-id buffer) is copied into a per-slot READBACK
-	// buffer each frame; after that slot's fence the copy is decoded to _pickCpu, which SamplePick reads (a few
-	// frames stale — invisible for hover). _pickId < 0 when the active graph declares no readback target.
-	private int _pickId = -1;
-	private uint _pickWidth, _pickHeight, _pickRowPitch;
-	private Format _pickFormat;
-	private readonly ComPtr<ID3D12Resource>[] _pickReadback = new ComPtr<ID3D12Resource>[BufferCount];
-	private readonly bool[] _pickValid = new bool[BufferCount];
-	private float[] _pickCpu = [];
+	// Readback (§7.4): each g.Readback target is copied into a per-slot READBACK buffer every frame; after that
+	// slot's fence the copy is repacked tight (D3D12 pads rows to 256 bytes) and handed to StoreReadback, which
+	// IEngine.Read returns. Empty when the active graph declares no readback target.
+	private readonly List<ReadbackBuffers> _readbacks = [];
+
+	// One g.Readback target's GPU→CPU staging: a per-slot READBACK buffer the executor copies the target into, plus
+	// the dimensions/row-pitch the copy uses and a tightly-packed scratch buffer the row-padded copy is repacked into.
+	private sealed class ReadbackBuffers
+	{
+		public required int Id;
+		public required uint Width;
+		public required uint Height;
+		public required uint RowPitch;
+		public required uint BytesPerTexel;
+		public required ComPtr<ID3D12Resource>[] Readback; // per frame slot
+		public required bool[] Valid;                      // per frame slot
+		public required byte[] Packed;                     // tight (unpadded) bytes handed to StoreReadback
+	}
 
 	// GPU per-pass timing (§12 M13 profiler): one TIMESTAMP query heap with 2 queries (begin/end) per pass and a
 	// per-slot sub-range, plus a per-slot READBACK buffer ResolveQueryData writes into. Decoded after the slot's
-	// fence (like the pick readback) — a frame or two stale. Runtime-toggled (off by default).
+	// fence (like the §7.4 readback) — a frame or two stale. Runtime-toggled (off by default).
 	private ComPtr<ID3D12QueryHeap> _timingHeap;
 	private readonly ComPtr<ID3D12Resource>[] _timingReadback = new ComPtr<ID3D12Resource>[BufferCount];
 	private readonly bool[] _timingValid = new bool[BufferCount];
@@ -230,9 +239,9 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		var index = _swapchain.CurrentIndex;
 		WaitForFrame(index);
 
-		// This slot's GPU work (a couple frames back) is now done, so its readback buffer is safe to map — decode
-		// the object-id copy it holds into _pickCpu for SamplePick (a few frames stale; invisible for hover).
-		DownloadPick(index);
+		// This slot's GPU work (a couple frames back) is now done, so its readback buffers are safe to map — repack
+		// the copies they hold and hand them to StoreReadback for IEngine.Read (a few frames stale; invisible for hover).
+		DownloadReadback(index);
 		// Same story for the timing queries the slot resolved.
 		DownloadTiming(index);
 
@@ -245,6 +254,14 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		_ring.Reset(index); // this slot's own region — must not clobber the other in-flight frame's live descriptors
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
 		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _swapchain.Width, _swapchain.Height);
+
+		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it (write-on-change:
+		// the last IEngine.Write persists, re-uploaded each frame so the slot the GPU reads is always current).
+		foreach (var (id, bytes) in ConstantsShadows)
+			_transients!.WriteConstants(index, id, bytes);
+		// Same for the app-writable storage buffers (IEngine.Write span).
+		foreach (var (id, bytes) in StorageShadows)
+			_transients!.WriteStorage(index, id, bytes);
 
 		// GPU timing (M13): bracket each pass's own work (after its pre-barriers) with a begin/end timestamp into this
 		// slot's sub-range of the heap. Timestamp queries use EndQuery only (no BeginQuery).
@@ -274,8 +291,8 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		}
 		CloseTrailingLabels(); // close any groups still open after the last pass
 
-		// Picking: copy this frame's object-id target into the slot's readback buffer (no-op if the graph has none).
-		RecordPick(index);
+		// GPU→CPU readback: copy each readback target into its slot's buffer (no-op if the graph declares none).
+		RecordReadback(index);
 
 		// Resolve this slot's timestamps into its readback buffer (read back after the slot's next fence).
 		if (timing)
@@ -391,7 +408,11 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		_commandList.RSSetViewports(1, &viewport);
 		_commandList.RSSetScissorRects(1, &scissor);
 
-		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly);
+		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
+		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
+		var storageCount = CollectStorageIds(pass.Pass, storageIds);
+		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
 
 		// Hand the context this pass's render-target handles + extent so a draw-list group-opacity layer can rebind
 		// the pass scope after detouring through an offscreen target.
@@ -405,8 +426,34 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	// context's pass state stable (the DirectX12 mirror of VulkanEngine's compute branch in RecordPass).
 	private void RecordComputePass(PassBarriers pass)
 	{
-		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
+		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
+		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
+		var storageCount = CollectStorageIds(pass.Pass, storageIds);
+		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, uniformIds[..uniformCount], storageIds[..storageCount]);
 		pass.Pass.Record?.Invoke(_context);
+	}
+
+	// Fill `ids` with the app-writable parameter buffers a pass .Reads (its ReadUniform edges, in .Reads order) —
+	// they bind to the technique's uniform CBVs b1..; returns the count.
+	private static int CollectUniformIds(GraphPass pass, Span<int> ids)
+	{
+		var n = 0;
+		foreach (var access in pass.Accesses)
+			if (access.Kind == AccessKind.ReadUniform && n < ids.Length)
+				ids[n++] = access.Resource.Id;
+		return n;
+	}
+
+	// Fill `ids` with the app-writable storage buffers a pass .Reads (its ReadStorage edges, in .Reads order) —
+	// they bind to the technique's read-only structured-buffer root SRVs; returns the count.
+	private static int CollectStorageIds(GraphPass pass, Span<int> ids)
+	{
+		var n = 0;
+		foreach (var access in pass.Accesses)
+			if (access.Kind == AccessKind.ReadStorage && n < ids.Length)
+				ids[n++] = access.Resource.Id;
+		return n;
 	}
 
 	// Open this pass's debug-label scopes: close the groups it leaves behind, open the ones it enters, then open
@@ -571,61 +618,65 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		Console.WriteLine($"[loom] DirectX12 captured {width}x{height} -> {path}");
 	}
 
-	// Record the copy of this frame's object-id target into the slot's READBACK buffer (after the passes that wrote
-	// + read it). Transition the id target to COPY_SOURCE and track the new state, so next frame's first use of it
-	// transitions from the right state (D3D12 needs the exact current state). No-op when the graph has no readback.
-	private void RecordPick(uint index)
+	// Record the copy of each readback target into the slot's READBACK buffer (after the passes that wrote + read
+	// it). Transition the target to COPY_SOURCE and track the new state, so next frame's first use of it transitions
+	// from the right state (D3D12 needs the exact current state). No-op when the graph has no readback target.
+	private void RecordReadback(uint index)
 	{
-		if (_pickId < 0)
-			return;
-
-		var current = _transients!.State(index, _pickId);
-		if (current != ResourceStates.CopySource)
+		foreach (var readback in _readbacks)
 		{
-			Transition(_transients.Resource(index, _pickId), current, ResourceStates.CopySource);
-			_transients.SetState(index, _pickId, ResourceStates.CopySource);
-		}
-
-		var dst = new TextureCopyLocation
-		{
-			PResource = _pickReadback[index].Handle,
-			Type = TextureCopyType.PlacedFootprint,
-			Anonymous = new TextureCopyLocationUnion
+			var current = _transients!.State(index, readback.Id);
+			if (current != ResourceStates.CopySource)
 			{
-				PlacedFootprint = new PlacedSubresourceFootprint
-				{
-					Offset = 0,
-					Footprint = new SubresourceFootprint { Format = _transients.Format(index, _pickId), Width = _pickWidth, Height = _pickHeight, Depth = 1, RowPitch = _pickRowPitch }
-				}
+				Transition(_transients.Resource(index, readback.Id), current, ResourceStates.CopySource);
+				_transients.SetState(index, readback.Id, ResourceStates.CopySource);
 			}
-		};
-		var src = new TextureCopyLocation
-		{
-			PResource = _transients.Resource(index, _pickId).Handle,
-			Type = TextureCopyType.SubresourceIndex,
-			Anonymous = new TextureCopyLocationUnion { SubresourceIndex = 0 }
-		};
-		_commandList.CopyTextureRegion(&dst, 0, 0, 0, &src, (Box*)null);
-		_pickValid[index] = true;
+
+			var dst = new TextureCopyLocation
+			{
+				PResource = readback.Readback[index].Handle,
+				Type = TextureCopyType.PlacedFootprint,
+				Anonymous = new TextureCopyLocationUnion
+				{
+					PlacedFootprint = new PlacedSubresourceFootprint
+					{
+						Offset = 0,
+						Footprint = new SubresourceFootprint { Format = _transients.Format(index, readback.Id), Width = readback.Width, Height = readback.Height, Depth = 1, RowPitch = readback.RowPitch }
+					}
+				}
+			};
+			var src = new TextureCopyLocation
+			{
+				PResource = _transients.Resource(index, readback.Id).Handle,
+				Type = TextureCopyType.SubresourceIndex,
+				Anonymous = new TextureCopyLocationUnion { SubresourceIndex = 0 }
+			};
+			_commandList.CopyTextureRegion(&dst, 0, 0, 0, &src, (Box*)null);
+			readback.Valid[index] = true;
+		}
 	}
 
-	// Decode the slot's readback buffer (this frame's wait guaranteed its copy finished) into _pickCpu. The id
-	// targets are R16F (Half); read row by row to skip the 256-aligned row padding. No-op until the slot's first copy.
-	private void DownloadPick(uint index)
+	// Repack the slot's readback buffers tight (this frame's wait guaranteed their copies finished) and hand them to
+	// StoreReadback — D3D12 pads each row to 256 bytes, so copy row by row into the packed scratch. The app decodes
+	// whatever format it declared. No-op until a slot's first copy.
+	private void DownloadReadback(uint index)
 	{
-		if (_pickId < 0 || !_pickValid[index])
-			return;
-
-		void* mapped;
-		SilkMarshal.ThrowHResult(_pickReadback[index].Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
-		var src = (byte*)mapped;
-		for (uint y = 0; y < _pickHeight; y++)
+		foreach (var readback in _readbacks)
 		{
-			var row = new ReadOnlySpan<Half>(src + (long)y * _pickRowPitch, (int)_pickWidth);
-			for (uint x = 0; x < _pickWidth; x++)
-				_pickCpu[y * _pickWidth + x] = (float)row[(int)x];
+			if (!readback.Valid[index])
+				continue;
+			var stride = readback.Width * readback.BytesPerTexel; // packed (unpadded) row stride
+			void* mapped;
+			SilkMarshal.ThrowHResult(readback.Readback[index].Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
+			var src = (byte*)mapped;
+			for (uint y = 0; y < readback.Height; y++)
+			{
+				var row = new ReadOnlySpan<byte>(src + (long)y * readback.RowPitch, (int)stride);
+				row.CopyTo(new Span<byte>(readback.Packed, (int)(y * stride), (int)stride));
+			}
+			readback.Readback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+			StoreReadback(readback.Id, readback.Packed);
 		}
-		_pickReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 	}
 
 	// Read this slot's resolved timestamps and decode them into _timings + the frame total. Called after the slot's
@@ -751,9 +802,10 @@ public sealed unsafe class DirectX12Engine : EngineBase
 			CloseHandle(_fenceEvent);
 		if (_readback.Handle is not null)
 			_readback.Dispose();
-		foreach (ref var buffer in _pickReadback.AsSpan())
-			if (buffer.Handle is not null)
-				buffer.Dispose();
+		foreach (var readback in _readbacks)
+			foreach (ref var buffer in readback.Readback.AsSpan())
+				if (buffer.Handle is not null)
+					buffer.Dispose();
 		if (_timingHeap.Handle is not null)
 			_timingHeap.Dispose();
 		foreach (ref var buffer in _timingReadback.AsSpan())
@@ -802,8 +854,10 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		// M15-0: descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
 		// as a root CBV at b1 (0 for a built-in stand-in, which has no UBO).
 		var uniformBuffers = reflection.UniformBufferCount;
-		// M15-2: read-only structured-buffer compute inputs (skin's bind-pose verts + bone palette) — root SRVs.
-		var inputBuffers = descriptor.IsCompute ? reflection.InputBufferCount : 0;
+		// Read-only structured-buffer inputs, bound as root SRVs: a compute's inputs (skin's bind-pose verts + bone
+		// palette) or a graphics technique's app-writable storage buffers (g.Storage SSBOs). 0 for a built-in
+		// stand-in, whose empty reflection reports none.
+		var inputBuffers = reflection.InputBufferCount;
 		string source;
 
 		if (descriptor.IsCompute)
@@ -864,7 +918,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		_techniques.Register(name, new DirectX12TechniqueTemplate(
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
-			descriptor.IsCompute, descriptor.ParticleInput, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
+			descriptor.IsCompute, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
 			descriptor.Cull));
 
@@ -890,12 +944,12 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		// this backend turns each bucket into a placed-resource heap shared by its members.
 		_transients = new DirectX12Transients(_ctx, executed, Aliases, BufferCount, _swapchain.Width, _swapchain.Height);
 		_context.SetTransients(_transients);
-		SetupPick(authored);
+		SetupReadback(authored);
 		SetupTiming();
 	}
 
 	// Allocate the GPU-timing query heap + per-slot readback buffers for this graph (M13): 2 timestamps (begin/end)
-	// per pass, a sub-range per frame slot. Resized with the graph's pass count; mirrors SetupPick. WaitIdle()
+	// per pass, a sub-range per frame slot. Resized with the graph's pass count; mirrors SetupReadback. WaitIdle()
 	// already drained the GPU in SetGraph before this, so disposing the old heap/buffers is safe.
 	private void SetupTiming()
 	{
@@ -916,25 +970,29 @@ public sealed unsafe class DirectX12Engine : EngineBase
 			_timingReadback[i] = CreateReadbackBuffer((ulong)perSlot * sizeof(ulong));
 	}
 
-	// Wire up GPU→CPU picking for this graph: its first readback target (the object-id buffer, §7.4) gets a per-slot
-	// READBACK buffer the executor copies into each frame. Mirrors the Vulkan backend (graph.ReadbackTargets[0]).
-	private void SetupPick(RenderGraph graph)
+	// Wire up GPU→CPU readback for this graph: each readback target (§7.4) gets a per-slot READBACK buffer the
+	// executor copies into each frame. Mirrors the Vulkan backend (one per graph.ReadbackTargets entry).
+	private void SetupReadback(RenderGraph graph)
 	{
-		foreach (ref var buffer in _pickReadback.AsSpan())
-			if (buffer.Handle is not null) { buffer.Dispose(); buffer = default; }
-		Array.Clear(_pickValid);
-		_pickId = -1;
-		if (graph.ReadbackTargets.Length == 0)
-			return;
+		foreach (var readback in _readbacks)
+			foreach (ref var buffer in readback.Readback.AsSpan())
+				if (buffer.Handle is not null) { buffer.Dispose(); buffer = default; }
+		_readbacks.Clear();
 
-		var target = graph.ReadbackTargets[0];
-		_pickId = target.Id;
-		_pickFormat = target.Format;
-		(_pickWidth, _pickHeight) = _transients!.Extent(_pickId);
-		_pickRowPitch = Align(_pickWidth * BytesPerTexel(_pickFormat), 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
-		_pickCpu = new float[_pickWidth * _pickHeight];
-		for (uint i = 0; i < BufferCount; i++)
-			_pickReadback[i] = CreateReadbackBuffer((ulong)_pickRowPitch * _pickHeight);
+		foreach (var target in graph.ReadbackTargets)
+		{
+			var (width, height) = _transients!.Extent(target.Id);
+			var bpt = BytesPerTexel(target.Format);
+			var rowPitch = Align(width * bpt, 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
+			var readback = new ComPtr<ID3D12Resource>[BufferCount];
+			for (uint i = 0; i < BufferCount; i++)
+				readback[i] = CreateReadbackBuffer((ulong)rowPitch * height);
+			_readbacks.Add(new ReadbackBuffers
+			{
+				Id = target.Id, Width = width, Height = height, RowPitch = rowPitch, BytesPerTexel = bpt,
+				Readback = readback, Valid = new bool[BufferCount], Packed = new byte[(int)(width * bpt * height)],
+			});
+		}
 	}
 
 	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
@@ -952,18 +1010,6 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
 
 	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
-
-	/// <summary>
-	/// The object id at picking-domain pixel (<paramref name="x"/>, <paramref name="y"/>) — read from the CPU copy
-	/// of the graph's first readback target, a few frames stale (invisible for hover). 0 when out of bounds, before
-	/// the first copy lands, or when the active graph declares no readback target. The DirectX12 twin of Vulkan's SamplePick.
-	/// </summary>
-	public override float SamplePick(int x, int y)
-	{
-		if (_pickId < 0 || (uint)x >= _pickWidth || (uint)y >= _pickHeight)
-			return 0f;
-		return _pickCpu[y * _pickWidth + x];
-	}
 
 	[DllImport("kernel32", SetLastError = true)]
 	private static extern nint CreateEventW(nint lpEventAttributes, int bManualReset, int bInitialState, nint lpName);

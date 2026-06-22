@@ -37,12 +37,6 @@ public sealed record FrameInputs
 	/// </summary>
 	public IReadOnlyList<Camera> Cascades { get; init; } = [];
 
-	/// <summary>The far view-space distance covered by each cascade in <see cref="Cascades"/> (the split boundaries), for the lighting pass's cascade selection (M15-3).</summary>
-	public IReadOnlyList<float> CascadeSplits { get; init; } = [];
-
-	/// <summary>The object id under the cursor (0 = nothing); surfaced as <see cref="IRenderContext.HoverId"/> to seed the JFA outline.</summary>
-	public uint HoverId { get; init; }
-
 	/// <summary>
 	/// This frame's draw lists — each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a
 	/// producer composited for it. Surfaced as <see cref="IRenderContext.DrawLists"/>; a pass pulls one out by id and

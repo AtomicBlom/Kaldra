@@ -49,7 +49,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			DescriptorSetLayout = description.SampleCount + description.StorageCount + description.StorageBufferCount + description.UniformBufferCount > 0
 				? CreateSetLayout(description.SampleCount, description.StorageCount, description.StorageBufferCount, description.UniformBufferCount, descriptorStage)
 				: default;
-			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasVertexInput || description.ParticleInput, description.HasFragmentPush, scalarPushStage, description.HasListPush);
+			Layout = CreatePipelineLayout(DescriptorSetLayout, description.Layout is not null || description.Instance is not null, description.HasFragmentPush, scalarPushStage, description.HasListPush);
 			Pipeline = description.IsCompute
 				? CreateComputePipeline(module, in description)
 				: CreatePipeline(module, in description);
@@ -174,36 +174,43 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		return pipeline;
 	}
 
-	// Vertex input built from the technique's declared layouts (M12 — per-technique vertex layouts). The
-	// per-vertex layout is binding 0 (e.g. the canonical Loom.Core.Vertex: Position/Normal/Uv/Tangent, 48
-	// bytes); an optional per-instance layout adds binding 1 with InputRate.Instance (e.g. a 4×float4 world
-	// matrix — instanced drawing). Vulkan vertex-input locations are one flat namespace across bindings, so
-	// locations are assigned in order: per-vertex attributes get 0..k-1, per-instance attributes continue at
-	// k.. — the instanced shader's [[vk::location]]s must match.
-	private static PipelineVertexInputStateCreateInfo* VertexInput(VulkanNativeArena arena, VertexLayout vertexLayout, VertexLayout? instanceLayout)
+	// Vertex input built from the technique's declared streams (M12 — per-technique vertex layouts): an optional
+	// per-vertex layout (e.g. the canonical Loom.Core.Vertex: Position/Normal/Uv/Tangent, 48 bytes) and an optional
+	// per-instance layout (e.g. a 4×float4 world matrix for instanced drawing, or a GPU-particle stream). Each
+	// stream's binding slot and advance rate come from the VertexLayout itself, so the per-instance stream sits at
+	// binding 1 beside a mesh, or owns binding 0 outright when there is no per-vertex stream (a particle stream the
+	// compute fills). Vulkan vertex-input locations are one flat namespace across bindings, so attributes get
+	// sequential locations in stream order — per-vertex first (0..k-1), then per-instance (k..); the shader's
+	// [[vk::location]]s must match.
+	private static PipelineVertexInputStateCreateInfo* VertexInput(VulkanNativeArena arena, VertexLayout? vertexLayout, VertexLayout? instanceLayout)
 	{
-		var bindingCount = instanceLayout is null ? 1 : 2;
-		var attributeCount = vertexLayout.Attributes.Length + (instanceLayout?.Attributes.Length ?? 0);
-		var bindings = arena.Alloc<VertexInputBindingDescription>(bindingCount);
+		List<VertexLayout> streams = [];
+		if (vertexLayout is not null)
+			streams.Add(vertexLayout);
+		if (instanceLayout is not null)
+			streams.Add(instanceLayout);
+
+		var attributeCount = 0;
+		foreach (var stream in streams)
+			attributeCount += stream.Attributes.Length;
+		var bindings = arena.Alloc<VertexInputBindingDescription>(streams.Count);
 		var attributes = arena.Alloc<VertexInputAttributeDescription>(attributeCount);
 
 		uint location = 0;
+		var b = 0;
 		var a = 0;
-		bindings[0] = new VertexInputBindingDescription { Binding = 0, Stride = (uint)vertexLayout.Stride, InputRate = VertexInputRate.Vertex };
-		for (var i = 0; i < vertexLayout.Attributes.Length; i++)
-			attributes[a++] = new VertexInputAttributeDescription { Location = location++, Binding = 0, Format = ToVkFormat(vertexLayout.Attributes[i].Format), Offset = (uint)vertexLayout.Offsets[i] };
-
-		if (instanceLayout is not null)
+		foreach (var stream in streams)
 		{
-			bindings[1] = new VertexInputBindingDescription { Binding = 1, Stride = (uint)instanceLayout.Stride, InputRate = VertexInputRate.Instance };
-			for (var i = 0; i < instanceLayout.Attributes.Length; i++)
-				attributes[a++] = new VertexInputAttributeDescription { Location = location++, Binding = 1, Format = ToVkFormat(instanceLayout.Attributes[i].Format), Offset = (uint)instanceLayout.Offsets[i] };
+			var rate = stream.InputRate == Loom.Core.Geometry.VertexInputRate.PerInstance ? VertexInputRate.Instance : VertexInputRate.Vertex;
+			bindings[b++] = new VertexInputBindingDescription { Binding = (uint)stream.Binding, Stride = (uint)stream.Stride, InputRate = rate };
+			for (var i = 0; i < stream.Attributes.Length; i++)
+				attributes[a++] = new VertexInputAttributeDescription { Location = location++, Binding = (uint)stream.Binding, Format = ToVkFormat(stream.Attributes[i].Format), Offset = (uint)stream.Offsets[i] };
 		}
 
 		return arena.Write(new PipelineVertexInputStateCreateInfo
 		{
 			SType = StructureType.PipelineVertexInputStateCreateInfo,
-			VertexBindingDescriptionCount = (uint)bindingCount,
+			VertexBindingDescriptionCount = (uint)streams.Count,
 			PVertexBindingDescriptions = bindings,
 			VertexAttributeDescriptionCount = (uint)attributeCount,
 			PVertexAttributeDescriptions = attributes,
@@ -221,41 +228,6 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		VertexFormat.UNorm4 => Format.R8G8B8A8Unorm,
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
-
-	// Particle vertex input: the storage buffer a compute wrote, read PER INSTANCE at binding 0. Each particle is
-	// one instance of a fabricated 6-vertex quad (billboard), so the shader expands it without point sprites
-	// (§7.6 GPU particles). With a layout (M14-4 generalized particles) the stream's attributes/stride come from
-	// it (e.g. VertexLayout.Particle: two IPARTICLE float4 rows, 32 bytes); without one, the legacy single float4
-	// (xyz position + w life, stride 16) — so the original ParticlesDemo path is unchanged.
-	private static PipelineVertexInputStateCreateInfo* VertexInputForParticles(VulkanNativeArena arena, VertexLayout? layout)
-	{
-		if (layout is null)
-		{
-			var legacyBinding = arena.Write(new VertexInputBindingDescription { Binding = 0, Stride = 4 * sizeof(float), InputRate = VertexInputRate.Instance });
-			var legacyAttribute = arena.Write(new VertexInputAttributeDescription { Location = 0, Binding = 0, Format = Format.R32G32B32A32Sfloat, Offset = 0 });
-			return arena.Write(new PipelineVertexInputStateCreateInfo
-			{
-				SType = StructureType.PipelineVertexInputStateCreateInfo,
-				VertexBindingDescriptionCount = 1,
-				PVertexBindingDescriptions = legacyBinding,
-				VertexAttributeDescriptionCount = 1,
-				PVertexAttributeDescriptions = legacyAttribute,
-			});
-		}
-
-		var binding = arena.Write(new VertexInputBindingDescription { Binding = 0, Stride = (uint)layout.Stride, InputRate = VertexInputRate.Instance });
-		var attributes = arena.Alloc<VertexInputAttributeDescription>(layout.Attributes.Length);
-		for (var i = 0; i < layout.Attributes.Length; i++)
-			attributes[i] = new VertexInputAttributeDescription { Location = (uint)i, Binding = 0, Format = ToVkFormat(layout.Attributes[i].Format), Offset = (uint)layout.Offsets[i] };
-		return arena.Write(new PipelineVertexInputStateCreateInfo
-		{
-			SType = StructureType.PipelineVertexInputStateCreateInfo,
-			VertexBindingDescriptionCount = 1,
-			PVertexBindingDescriptions = binding,
-			VertexAttributeDescriptionCount = (uint)layout.Attributes.Length,
-			PVertexAttributeDescriptions = attributes,
-		});
-	}
 
 	private Pipeline CreatePipeline(ShaderModule module, in VulkanTechniqueDescription description)
 	{
@@ -277,8 +249,8 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			PName = arena.String(description.FragmentEntry),
 		};
 
-		var vertexInput = description.ParticleInput ? VertexInputForParticles(arena, description.Instance)
-			: description.Layout is not null ? VertexInput(arena, description.Layout, description.Instance)
+		var vertexInput = description.Layout is not null || description.Instance is not null
+			? VertexInput(arena, description.Layout, description.Instance)
 			// No vertex buffers: the fullscreen triangle is fabricated from SV_VertexID.
 			: arena.Write(new PipelineVertexInputStateCreateInfo { SType = StructureType.PipelineVertexInputStateCreateInfo });
 		var inputAssembly = arena.Write(new PipelineInputAssemblyStateCreateInfo

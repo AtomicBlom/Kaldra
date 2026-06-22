@@ -69,11 +69,9 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 
 	public float DeltaTime { get; private set; }
 	public float Time { get; private set; }
-	public uint HoverId { get; private set; }
 	public Camera SunView { get; private set; } = Camera.Identity;
 	public Camera Camera { get; private set; } = Camera.Identity;
 	public IReadOnlyList<Camera> Cascades { get; private set; } = [];
-	public IReadOnlyList<float> CascadeSplits { get; private set; } = [];
 	public bool HdrOutput { get; private set; }
 	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists => _drawLists;
 	private Camera[] _cascades = [];
@@ -120,7 +118,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_fbHeight = fbHeight;
 		DeltaTime = (float)inputs.DeltaSeconds;
 		Time = inputs.Time;
-		HoverId = inputs.HoverId;
 		Camera = ClipSpace(inputs.Camera);
 		SunView = ClipSpace(inputs.SunView);
 		// Flip each cascade's clip space the same way as SunView (M15-3).
@@ -129,7 +126,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		for (var i = 0; i < inputs.Cascades.Count; i++)
 			_cascades[i] = ClipSpace(inputs.Cascades[i]);
 		Cascades = _cascades;
-		CascadeSplits = inputs.CascadeSplits;
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
 		_uniformUpload.BeginFrame(slot);  // and its per-frame uniform staging (M15-0)
@@ -147,12 +143,27 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	// fullscreen pass vertically mirrored vs Vulkan — one mesh→fullscreen→backbuffer hop = upside down.)
 	private static Camera ClipSpace(Camera camera) => camera.FlipClipY();
 
+	// The parameter buffer (ResourceKind.Constants) the current pass .Reads, or -1 — bound to the technique's root CBV.
+	// The app-writable parameter buffers the current pass .Reads (its ReadUniform edges, in order), bound to the
+	// technique's uniform CBVs b1..bK; an in-closure push follows at b(K+1). The engine fills this in BeginPass.
+	public const int MaxUniformBuffers = 8;
+	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
+	private int _activeConstantsCount;
+
+	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
+	// technique's read-only root SRVs (the structured-buffer SSBO seam). The engine fills this in BeginPass.
+	public const int MaxStorageBuffers = 8;
+	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
+	private int _activeStorageCount;
+
 	/// <summary>
 	/// Tell the context the current pass's colour-target formats + depth format (or <c>FormatUnknown</c> for no
 	/// depth), so techniques bake matching pipelines. <paramref name="depthReadOnly"/> bakes with depth writes
 	/// disabled (a <c>.ReadsDepth</c> pass tests against, but does not disturb, the opaque depth).
+	/// <paramref name="constantsIds"/> / <paramref name="storageIds"/> are the parameter and storage buffers the
+	/// pass <c>.Reads</c> (in order), bound to the technique's uniform CBVs b1.. and read-only root SRVs at draw time.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly)
+	public void BeginPass(ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
 	{
 		if (_colorFormats.Length < colorFormats.Length)
 			_colorFormats = new DxgiFormat[colorFormats.Length];
@@ -160,6 +171,10 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_colorCount = colorFormats.Length;
 		_depthFormat = depthFormat;
 		_depthReadOnly = depthReadOnly;
+		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
+		constantsIds[.._activeConstantsCount].CopyTo(_activeConstantsIds);
+		_activeStorageCount = Math.Min(storageIds.Length, MaxStorageBuffers);
+		storageIds[.._activeStorageCount].CopyTo(_activeStorageIds);
 	}
 
 	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs) =>
@@ -171,17 +186,30 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		// The per-pass data channel: a technique that reflects a uniform buffer (M15-0) routes the float block to
-		// its root CBV (no 16-float cap); otherwise it rides the fixed 16-DWORD root-constant block.
+		// The per-pass data channel. The pass's .Reads Constants buffers bind to the technique's CBVs b1..bK; an
+		// in-closure push then fills the next CBV (b(K+1)) if a reflected slot remains (M15-0 — no 16-float cap),
+		// or rides the fixed 16-DWORD root-constant block when the technique declares no CBV.
+		var bound = 0;
+		if (baked.CbvRootParam >= 0)
+		{
+			for (var j = 0; j < _activeConstantsCount; j++)
+				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound++), _transients!.Resource(_slot, _activeConstantsIds[j]).GetGPUVirtualAddress());
+		}
 		if (push.Length > 0)
 		{
-			if (baked.CbvRootParam >= 0)
-				BindUniforms(baked, push);
-			else
+			if (baked.CbvRootParam >= 0 && baked.UniformBufferCount > bound)
+				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound), _uniformUpload.Upload(_slot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(push)));
+			else if (baked.CbvRootParam < 0)
 				SetPush(baked, push);
 		}
 		if (inputs.Length > 0)
 			BindInputs(baked, inputs);
+		// The pass's .Reads storage buffers (SSBOs) bind as read-only root SRVs from each UPLOAD buffer's address.
+		if (baked.InputBufferBaseParam >= 0)
+		{
+			for (var s = 0; s < _activeStorageCount; s++)
+				_cmd.SetGraphicsRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients!.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
+		}
 
 		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.DrawInstanced(3, 1, 0, 0); // fullscreen triangle, vertices fabricated from SV_VertexID
@@ -356,8 +384,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	{
 		if (_transients is null)
 			throw new InvalidOperationException("DirectX12: compute requires an active graph (SetGraph).");
-		if (storage.Length > 1)
-			throw new NotSupportedException("DirectX12: a compute pass binds one storage resource for now (the particle buffer / the exposure image); multi-storage compute lands later.");
 
 		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
 		_cmd.SetComputeRootSignature(baked.RootSignature);
@@ -380,24 +406,27 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 			_cmd.SetComputeRootDescriptorTable((uint)baked.TableParam, gpu);
 		}
 
-		// Storage (the graph put the resource in UNORDERED_ACCESS first):
-		//  * a RW STRUCTURED buffer (the particle stream) or a RW texture (the 1×1 exposure image) binds a UAV
-		//    DESCRIPTOR in the ring + a UAV table. The structured-buffer descriptor carries StructureByteStride +
-		//    NumElements, which is what makes the shader's GetDimensions report the real count (a root UAV is a raw
-		//    address with no metadata → GetDimensions 0 → the particle update early-outs every thread, writes nothing).
-		//  * a RAW buffer (the FXC built-in's ByteAddressBuffer, no reflected stride) binds as a root UAV by address.
-		if (storage.Length > 0)
+		// Storage (the graph put each resource in UNORDERED_ACCESS first), bound in declaration order to match the
+		// pass's .ReadWrites (as Vulkan binds them after the sampled inputs):
+		//  * a RAW buffer (the FXC built-in's ByteAddressBuffer, no reflected stride) binds as a single root UAV by
+		//    address — that root signature reserves one root UAV, so this path is inherently one resource.
+		//  * RW STRUCTURED buffers (the particle stream) and RW textures (the 1×1 exposure image) bind as a UAV
+		//    descriptor table, one descriptor per resource at u0.. — the count the root signature reserved. A
+		//    structured-buffer descriptor carries StructureByteStride + NumElements so the shader's GetDimensions
+		//    reports the real count (a root UAV is a raw address with no metadata → GetDimensions 0 → the particle
+		//    update early-outs every thread, writes nothing).
+		if (storage.Length > 0 && baked.UavRootParam >= 0)
 		{
-			var id = storage[0].Id;
-			if (storage[0].Kind == ResourceKind.Buffer && baked.UavRootParam >= 0)
+			_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, storage[0].Id).GetGPUVirtualAddress());
+		}
+		else if (storage.Length > 0 && baked.UavTableParam >= 0)
+		{
+			var (cpu, gpu) = _ring.Allocate((uint)storage.Length);
+			for (var i = 0; i < storage.Length; i++)
 			{
-				_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, id).GetGPUVirtualAddress());
-			}
-			else if (baked.UavTableParam >= 0)
-			{
-				var (cpu, gpu) = _ring.Allocate(1);
+				var id = storage[i].Id;
 				UnorderedAccessViewDesc uav;
-				if (storage[0].Kind == ResourceKind.Buffer)
+				if (storage[i].Kind == ResourceKind.Buffer)
 				{
 					var stride = (uint)baked.StorageBufferStride;
 					uav = new UnorderedAccessViewDesc
@@ -419,18 +448,18 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 						Anonymous = new UnorderedAccessViewDescUnion { Texture2D = new Tex2DUav { MipSlice = 0, PlaneSlice = 0 } }
 					};
 				}
-				_ctx.Device.CreateUnorderedAccessView(_transients.Resource(_slot, id), default(ComPtr<ID3D12Resource>), &uav, cpu);
-				_cmd.SetComputeRootDescriptorTable((uint)baked.UavTableParam, gpu);
+				_ctx.Device.CreateUnorderedAccessView(_transients.Resource(_slot, id), default(ComPtr<ID3D12Resource>), &uav, _ring.Offset(cpu, (uint)i));
 			}
+			_cmd.SetComputeRootDescriptorTable((uint)baked.UavTableParam, gpu);
 		}
 
 		_cmd.Dispatch(groups.X, groups.Y, groups.Z);
 	}
 
-	public void DrawParticles(ResourceHandle buffer, int count, string technique)
+	public void DrawInstanced(string technique, BufferHandle instances, int vertexCount, int instanceCount)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DirectX12: particles require an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: a GPU-buffer instanced draw requires an active graph (SetGraph).");
 
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
@@ -440,18 +469,18 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
-		// The buffer IS the per-instance vertex stream (one particle per element); the graph put it in
-		// VERTEX_AND_CONSTANT_BUFFER before this pass. Stride is the technique's particle stride (16 for the
-		// legacy float4, the layout's stride for a generalized particle). 6 fabricated quad verts × one instance.
+		// The buffer IS the per-instance vertex stream (one element per instance); the graph put it in
+		// VERTEX_AND_CONSTANT_BUFFER before this pass. Stride comes from the technique's declared instance layout;
+		// the technique fabricates vertexCount verts per instance from SV_VertexID (no geometry vertex buffer).
 		var vbv = new VertexBufferView
 		{
-			BufferLocation = _transients.Resource(_slot, buffer.Id).GetGPUVirtualAddress(),
-			SizeInBytes = _transients.ByteSize(buffer.Id),
-			StrideInBytes = (uint)baked.ParticleStride,
+			BufferLocation = _transients.Resource(_slot, instances.Id).GetGPUVirtualAddress(),
+			SizeInBytes = _transients.ByteSize(instances.Id),
+			StrideInBytes = (uint)baked.InstanceStride,
 		};
 		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.IASetVertexBuffers(0, 1, &vbv);
-		_cmd.DrawInstanced(6, (uint)count, 0, 0);
+		_cmd.DrawInstanced((uint)vertexCount, (uint)instanceCount, 0, 0);
 	}
 
 	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances) where T : unmanaged
@@ -664,10 +693,10 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
 	}
 
-	public void DrawParticles(ResourceHandle buffer, int count, Material material, string technique)
+	public void DrawInstanced(string technique, Material material, BufferHandle instances, int vertexCount, int instanceCount)
 	{
 		if (_transients is null)
-			throw new InvalidOperationException("DirectX12: particles require an active graph (SetGraph).");
+			throw new InvalidOperationException("DirectX12: a GPU-buffer instanced draw requires an active graph (SetGraph).");
 
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
@@ -677,19 +706,19 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
-		// The sprite-sheet atlas → reflected SRV table, so the render shader can sub-UV sample per frame.
+		// The atlas → reflected SRV table, so the fabricated quads can sub-UV sample per frame.
 		if (baked.TableParam >= 0 && baked.InputCount > 0)
 			BindMaterialTable(baked, material, technique);
 
 		var vbv = new VertexBufferView
 		{
-			BufferLocation = _transients.Resource(_slot, buffer.Id).GetGPUVirtualAddress(),
-			SizeInBytes = _transients.ByteSize(buffer.Id),
-			StrideInBytes = (uint)baked.ParticleStride,
+			BufferLocation = _transients.Resource(_slot, instances.Id).GetGPUVirtualAddress(),
+			SizeInBytes = _transients.ByteSize(instances.Id),
+			StrideInBytes = (uint)baked.InstanceStride,
 		};
 		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.IASetVertexBuffers(0, 1, &vbv);
-		_cmd.DrawInstanced(6, (uint)count, 0, 0);
+		_cmd.DrawInstanced((uint)vertexCount, (uint)instanceCount, 0, 0);
 	}
 
 	public void DrawList<TVertex>(string technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged

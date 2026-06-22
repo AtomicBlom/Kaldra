@@ -38,8 +38,10 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 	}
 
 	private readonly Target[][] _targets; // [slot][resourceId]
+	private readonly nint[][] _constantPtr; // [slot][resourceId] — persistently-mapped UPLOAD pointer for Constants resources
+	private readonly nint[][] _storagePtr;  // [slot][resourceId] — persistently-mapped UPLOAD pointer for Storage resources
 	private readonly (uint W, uint H)[] _extents; // by resourceId (same across slots)
-	private readonly uint[] _byteSizes; // by resourceId, for Buffer-kind resources
+	private readonly uint[] _byteSizes; // by resourceId, for Buffer- and Constants-kind resources (Constants 256-aligned)
 	private readonly bool[] _isTransient; // by resourceId
 										  // Persistent resources (e.g. the auto-exposure 1×1 image) live ACROSS frames — allocated ONCE, not per-slot,
 										  // and never aliased. Stored in slot 0; the accessors redirect persistent ids there so state is shared (a
@@ -60,13 +62,15 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		var aliasable = new List<ResourceHandle>(); // colour + depth targets (the AliasPlan's domain)
 		var bufferTargets = new List<ResourceHandle>();
 		var persistentTargets = new List<ResourceHandle>();
+		var constantTargets = new List<ResourceHandle>();
+		var storageTargets = new List<ResourceHandle>();
 		var colorCount = 0;
 		var depthCount = 0;
 		foreach (var resource in graph.Resources)
 		{
 			if (resource.Kind == ResourceKind.Backbuffer)
 				continue; // the swapchain facade, owned by the engine
-			if (resource.Kind is not (ResourceKind.Color or ResourceKind.Depth or ResourceKind.Buffer or ResourceKind.Persistent))
+			if (resource.Kind is not (ResourceKind.Color or ResourceKind.Depth or ResourceKind.Buffer or ResourceKind.Persistent or ResourceKind.Constants or ResourceKind.Storage))
 				throw new NotSupportedException($"DirectX12: resource kind {resource.Kind} ('{resource.Name}') is not supported yet.");
 			_isTransient[resource.Id] = true; // managed + sampleable (true for persistent too, so it can be sampled)
 			if (resource.Kind == ResourceKind.Persistent)
@@ -81,6 +85,18 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 				_byteSizes[resource.Id] = (uint)resource.ByteSize;
 				bufferTargets.Add(resource);
 			}
+			else if (resource.Kind == ResourceKind.Constants)
+			{
+				// App-writable parameter buffer: an UPLOAD-heap CBV, 256-aligned (the D3D12 constant-buffer size rule).
+				_byteSizes[resource.Id] = Align256((uint)resource.ByteSize);
+				constantTargets.Add(resource);
+			}
+			else if (resource.Kind == ResourceKind.Storage)
+			{
+				// App-writable storage buffer: an UPLOAD-heap structured buffer bound as a read-only root SRV.
+				_byteSizes[resource.Id] = (uint)resource.ByteSize;
+				storageTargets.Add(resource);
+			}
 			else
 			{
 				_extents[resource.Id] = Size(resource, swapWidth, swapHeight);
@@ -90,8 +106,14 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		}
 
 		_targets = new Target[bufferCount][];
+		_constantPtr = new nint[bufferCount][];
+		_storagePtr = new nint[bufferCount][];
 		for (uint slot = 0; slot < bufferCount; slot++)
+		{
 			_targets[slot] = new Target[count];
+			_constantPtr[slot] = new nint[count];
+			_storagePtr[slot] = new nint[count];
+		}
 
 		// One RTV per colour target per slot, one DSV per depth target per slot (descriptor heaps for the views —
 		// distinct from the placed-resource heaps that back the textures' memory).
@@ -118,6 +140,8 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 
 		AllocateBuffers(ctx, bufferTargets, bufferCount);
 		AllocatePersistent(ctx, persistentTargets);
+		AllocateConstants(ctx, constantTargets, bufferCount);
+		AllocateStorage(ctx, storageTargets, bufferCount);
 	}
 
 	// Group the aliasable (colour/depth) resources by their AliasPlan bucket, back each bucket with one placed-
@@ -232,8 +256,64 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		}
 	}
 
+	// One UPLOAD-heap constant buffer per Constants resource per frame slot, persistently mapped. The app fills it
+	// by handle (IEngine.Write → the engine memcpys the shadow into the current slot before recording); a pass binds
+	// it as a root CBV. UPLOAD resources live permanently in GENERIC_READ — never aliased, never transitioned, so
+	// the barrier planner skips them. Per-slot so this frame's CPU write never races an earlier frame's GPU read.
+	private void AllocateConstants(DirectX12Context ctx, List<ResourceHandle> constantTargets, uint bufferCount)
+	{
+		for (uint slot = 0; slot < bufferCount; slot++)
+			foreach (var resource in constantTargets)
+			{
+				var buffer = CreateUploadBuffer(ctx, _byteSizes[resource.Id]);
+				ctx.SetObjectName((ID3D12Object*)buffer.Handle, $"{resource.Name}#{slot}");
+				void* mapped;
+				SilkMarshal.ThrowHResult(buffer.Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
+				_constantPtr[slot][resource.Id] = (nint)mapped;
+				_targets[slot][resource.Id] = new Target { Resource = buffer, View = default, Format = DxgiFormat.FormatUnknown, SrvFormat = DxgiFormat.FormatUnknown, State = ResourceStates.GenericRead, IsDepth = false };
+			}
+	}
+
+	/// <summary>Copy <paramref name="data"/> (the CPU shadow) into a parameter buffer's slot at frame start, before recording.</summary>
+	public void WriteConstants(uint slot, int id, ReadOnlySpan<byte> data)
+	{
+		var ptr = _constantPtr[slot][id];
+		if (ptr == 0 || data.Length == 0)
+			return;
+		data.CopyTo(new Span<byte>((void*)ptr, data.Length));
+	}
+
+	// One UPLOAD-heap structured buffer per Storage resource per frame slot, persistently mapped — the array
+	// counterpart to AllocateConstants. The app fills it (IEngine.Write span → WriteStorage); a pass binds it as a
+	// read-only root SRV. UPLOAD resources live in GENERIC_READ — never aliased or transitioned, so the barrier
+	// planner skips them. Per-slot so this frame's CPU write never races an earlier frame's GPU read.
+	private void AllocateStorage(DirectX12Context ctx, List<ResourceHandle> storageTargets, uint bufferCount)
+	{
+		for (uint slot = 0; slot < bufferCount; slot++)
+			foreach (var resource in storageTargets)
+			{
+				var buffer = CreateUploadBuffer(ctx, _byteSizes[resource.Id]);
+				ctx.SetObjectName((ID3D12Object*)buffer.Handle, $"{resource.Name}#{slot}");
+				void* mapped;
+				SilkMarshal.ThrowHResult(buffer.Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
+				_storagePtr[slot][resource.Id] = (nint)mapped;
+				_targets[slot][resource.Id] = new Target { Resource = buffer, View = default, Format = DxgiFormat.FormatUnknown, SrvFormat = DxgiFormat.FormatUnknown, State = ResourceStates.GenericRead, IsDepth = false };
+			}
+	}
+
+	/// <summary>Copy <paramref name="data"/> (the CPU shadow) into a storage buffer's slot at frame start, before recording.</summary>
+	public void WriteStorage(uint slot, int id, ReadOnlySpan<byte> data)
+	{
+		var ptr = _storagePtr[slot][id];
+		if (ptr == 0 || data.Length == 0)
+			return;
+		data.CopyTo(new Span<byte>((void*)ptr, data.Length));
+	}
+
 	// Persistent resources live in slot 0 only (one shared instance); redirect their lookups there.
 	private uint SlotOf(uint slot, int id) => _isPersistent[id] ? 0u : slot;
+
+	private static uint Align256(uint value) => (value + 255u) & ~255u;
 
 	public bool IsTransient(int id) => _isTransient[id];
 	public (uint W, uint H) Extent(int id) => _extents[id];
@@ -308,6 +388,31 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		ComPtr<ID3D12Resource> buffer = default;
 		SilkMarshal.ThrowHResult(ctx.Device.CreateCommittedResource(
 			&heapProps, HeapFlags.None, &desc, ResourceStates.Common, (ClearValue*)null, out buffer));
+		return buffer;
+	}
+
+	// A host-visible (UPLOAD-heap) buffer the CPU maps and writes, the GPU reads as a constant buffer. UPLOAD
+	// resources are created — and stay — in GENERIC_READ (they're never transitioned), and the param-buffer
+	// planner never aliases or barriers them.
+	private static ComPtr<ID3D12Resource> CreateUploadBuffer(DirectX12Context ctx, uint byteSize)
+	{
+		var heapProps = new HeapProperties { Type = HeapType.Upload, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
+		var desc = new ResourceDesc
+		{
+			Dimension = ResourceDimension.Buffer,
+			Alignment = 0,
+			Width = byteSize,
+			Height = 1,
+			DepthOrArraySize = 1,
+			MipLevels = 1,
+			Format = DxgiFormat.FormatUnknown,
+			SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = 1, Quality = 0 },
+			Layout = TextureLayout.LayoutRowMajor,
+			Flags = ResourceFlags.None,
+		};
+		ComPtr<ID3D12Resource> buffer = default;
+		SilkMarshal.ThrowHResult(ctx.Device.CreateCommittedResource(
+			&heapProps, HeapFlags.None, &desc, ResourceStates.GenericRead, (ClearValue*)null, out buffer));
 		return buffer;
 	}
 

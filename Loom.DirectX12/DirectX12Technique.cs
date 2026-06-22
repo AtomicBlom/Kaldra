@@ -43,18 +43,19 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the storage-image / structured-buffer UAV descriptor table (a compute's <c>.ReadWrites</c> of a texture or structured buffer), or -1 if none.</summary>
 	public int UavTableParam { get; private set; } = -1;
 
-	/// <summary>Root-parameter slot for the per-frame uniform buffer's root CBV at register b1 (M15-0 — the uniform seam: CSM matrices, lighting params, wind), or -1 if the technique reads no constant buffer.</summary>
+	/// <summary>Root-parameter slot of the FIRST uniform buffer's root CBV (register b1; the i-th uniform buffer is
+	/// this + i, at b(1+i)) — the uniform seam: CSM matrices, lighting params, wind. -1 if the technique reads no constant buffer.</summary>
 	public int CbvRootParam { get; private set; } = -1;
+
+	/// <summary>How many uniform buffers (root CBVs at b1..b<see cref="UniformBufferCount"/>) the technique declares — the reflected count. A pass's <c>.Reads</c> Constants fill the first slots; an in-closure push fills the next.</summary>
+	public int UniformBufferCount { get; }
 
 	/// <summary>Element stride (bytes) of a structured-buffer storage resource, for building its UAV descriptor's <c>StructureByteStride</c>/<c>NumElements</c>; 0 for a texture or raw buffer.</summary>
 	public int StorageBufferStride { get; private set; }
 
-	/// <summary>Byte stride of the per-instance particle vertex stream's <c>VertexBufferView</c> — the layout's stride
-	/// (M14-4 generalized particles) or 16 for the legacy single-<c>float4</c> path; 0 for a non-particle technique.</summary>
-	public int ParticleStride { get; }
-
 	/// <summary>Per-instance vertex stride (bytes) from the technique's declared instance layout — the authoritative
-	/// stride for binding a GPU-filled instance buffer; 0 when the technique has no per-instance stream.</summary>
+	/// stride for binding a GPU-filled instance buffer (instanced mesh data or a particle stream); 0 when the
+	/// technique has no per-instance stream.</summary>
 	public int InstanceStride { get; }
 
 	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
@@ -63,7 +64,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		StorageBufferStride = template.StorageBufferStride;
 		InputCount = template.InputCount;
 		InputBufferCount = template.InputBufferCount;
-		ParticleStride = template.ParticleInput ? template.Instance?.Stride ?? 4 * sizeof(float) : 0;
+		UniformBufferCount = template.UniformBufferCount;
 		InstanceStride = template.Instance?.Stride ?? 0;
 
 		if (template.IsCompute)
@@ -196,9 +197,10 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		// A draw-list technique (HasListPush) wants an all-stage root-constants block (vertex reads scale/translate,
 		// pixel reads the tag/paper-white/hdr flag), so it pre-empts the vertex-only MVP push even though it also
 		// reads a vertex stream.
-		var hasMvpPush = (template.HasVertexInput || template.ParticleInput) && !template.HasListPush;
+		var hasMvpPush = (template.Layout is not null || template.Instance is not null) && !template.HasListPush;
 		var hasRootConstants = hasMvpPush || template.HasFragmentPush || template.HasListPush;
-		var parameters = stackalloc RootParameter[3];
+		// Root constants (b0) + N uniform CBVs (b1..bN) + one SRV table + M storage-buffer root SRVs.
+		var parameters = stackalloc RootParameter[2 + template.UniformBufferCount + template.InputBufferCount];
 		var paramCount = 0;
 		var range = new DescriptorRange
 		{
@@ -219,19 +221,23 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = template.HasListPush ? ListPushDwords : 16u } },
 			};
 		}
-		// M15-0: the per-frame uniform buffer as a root CBV at b1 (the root constants own b0). Bound from the
-		// uniform ring's UPLOAD-heap GPU address each frame. ShaderVisibility.All so it serves both a fullscreen
-		// pixel reader (CSM/lighting params) and a vertex reader (foliage wind). Register b1 matches the shaders'
-		// explicit `: register(b1)`, which Slang honours for DXIL while [[vk::binding]] drives SPIR-V.
+		// The per-frame uniform buffers as root CBVs at b1..bN (the root constants own b0), one per reflected
+		// ConstantBuffer. Bound each frame from a Constants resource's UPLOAD address (a pass's .Reads) or the
+		// uniform ring (an in-closure push). ShaderVisibility.All so they serve both a fullscreen pixel reader
+		// (CSM/lighting params) and a vertex reader (foliage wind). Registers b1.. match the shaders' explicit
+		// `: register(bN)`, which Slang honours for DXIL while [[vk::binding]] drives SPIR-V.
 		if (template.UniformBufferCount > 0)
 		{
 			CbvRootParam = paramCount;
-			parameters[paramCount++] = new RootParameter
+			for (var u = 0; u < template.UniformBufferCount; u++)
 			{
-				ParameterType = RootParameterType.TypeCbv,
-				ShaderVisibility = ShaderVisibility.All,
-				Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = 1, RegisterSpace = 0 } },
-			};
+				parameters[paramCount++] = new RootParameter
+				{
+					ParameterType = RootParameterType.TypeCbv,
+					ShaderVisibility = ShaderVisibility.All,
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(1 + u), RegisterSpace = 0 } },
+				};
+			}
 		}
 		if (template.InputCount > 0)
 		{
@@ -242,6 +248,22 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				ShaderVisibility = ShaderVisibility.Pixel,
 				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &range } },
 			};
+		}
+		// App-writable storage buffers (g.Storage SSBOs) as read-only root SRVs at t(InputCount)..; the sampled
+		// textures own t0..t(InputCount-1) via the table above, so these follow them. Bound from each Storage
+		// resource's UPLOAD address by a pass's .Reads, exactly as the compute skin path binds its input buffers.
+		if (template.InputBufferCount > 0)
+		{
+			InputBufferBaseParam = paramCount;
+			for (var b = 0; b < template.InputBufferCount; b++)
+			{
+				parameters[paramCount++] = new RootParameter
+				{
+					ParameterType = RootParameterType.TypeSrv,
+					ShaderVisibility = ShaderVisibility.All,
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(template.InputCount + b), RegisterSpace = 0 } },
+				};
+			}
 		}
 		// One static sampler PER sampled input: Slang lowers each combined Sampler2D to a Texture2D + its OWN
 		// SamplerState (texture t_i paired with sampler s_i), so a pass that samples N inputs references s0..s(N-1).
@@ -266,8 +288,8 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				RegisterSpace = 0,
 				ShaderVisibility = ShaderVisibility.Pixel,
 			};
-		// A mesh/particle pass reads a vertex buffer, so the root signature must allow the input-assembler layout.
-		var flags = template.HasVertexInput || template.ParticleInput ? RootSignatureFlags.AllowInputAssemblerInputLayout : RootSignatureFlags.None;
+		// A pass that reads any vertex stream (mesh, instanced, or particle) needs the input-assembler layout flag.
+		var flags = template.Layout is not null || template.Instance is not null ? RootSignatureFlags.AllowInputAssemblerInputLayout : RootSignatureFlags.None;
 		var rootDesc = new RootSignatureDesc
 		{
 			NumParameters = (uint)paramCount,
@@ -336,26 +358,32 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			for (var i = 0; i < colorFormats.Length && i < 8; i++)
 				pso.RTVFormats[i] = colorFormats[i];
 
-			// Vertex input: a mesh reads the canonical interleaved Loom.Core.Vertex (POSITION/NORMAL/TEXCOORD,
-			// mirroring lit.slang); a particle technique reads one float4 PER INSTANCE (the storage buffer the
-			// compute wrote, expanded into a billboard); a fullscreen technique fabricates its triangle and needs none.
-			if (template.Layout is not null)
+			// Vertex input: build the input layout from the technique's declared streams — an optional per-vertex
+			// layout (the canonical interleaved Loom.Core.Vertex POSITION/NORMAL/TEXCOORD/TANGENT, mirroring
+			// lit.slang) and an optional per-instance layout (an instanced mesh's transform rows, or a GPU-particle
+			// stream the compute filled). Each stream's input slot and classification come from the VertexLayout
+			// itself, so a per-instance stream binds at slot 1 beside a mesh or owns slot 0 when there is no mesh
+			// (particles). A fullscreen technique declares neither and fabricates its triangle, so it needs none.
+			// Semantic names are packed null-terminated into one stack buffer; the HLSL semantic index is the count
+			// of earlier attributes sharing the name (so four "ITRANSFORM" rows become ITRANSFORM0..3, two
+			// "IPARTICLE" rows IPARTICLE0..1). DXGI formats + byte offsets come straight from the Core layout — the
+			// same data the Vulkan attribute descriptions consume.
+			if (template.Layout is not null || template.Instance is not null)
 			{
-				// Build the input layout from the technique's declared per-vertex (slot 0) and optional
-				// per-instance (slot 1, PerInstanceData) layouts (M12). Semantic names are packed null-terminated
-				// into one stack buffer; the HLSL semantic index is the count of earlier attributes sharing the
-				// name (so four "ITRANSFORM" rows become ITRANSFORM0..3). DXGI formats + byte offsets come straight
-				// from the Core layout — the same data the Vulkan attribute descriptions consume.
-				var vertexLayout = template.Layout;
-				var instanceLayout = template.Instance;
-				var total = vertexLayout.Attributes.Length + (instanceLayout?.Attributes.Length ?? 0);
+				List<VertexLayout> streams = [];
+				if (template.Layout is not null)
+					streams.Add(template.Layout);
+				if (template.Instance is not null)
+					streams.Add(template.Instance);
 
+				var total = 0;
 				var nameCapacity = 0;
-				for (var i = 0; i < vertexLayout.Attributes.Length; i++)
-					nameCapacity += vertexLayout.Attributes[i].Semantic.Length + 1;
-				if (instanceLayout is not null)
-					for (var i = 0; i < instanceLayout.Attributes.Length; i++)
-						nameCapacity += instanceLayout.Attributes[i].Semantic.Length + 1;
+				foreach (var stream in streams)
+				{
+					total += stream.Attributes.Length;
+					for (var i = 0; i < stream.Attributes.Length; i++)
+						nameCapacity += stream.Attributes[i].Semantic.Length + 1;
+				}
 
 				var names = stackalloc byte[nameCapacity];
 				var elements = stackalloc InputElementDesc[total];
@@ -363,71 +391,33 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				var e = 0;
 				var semanticCounter = new Dictionary<string, uint>();
 
-				for (var i = 0; i < vertexLayout.Attributes.Length; i++)
+				foreach (var stream in streams)
 				{
-					var attribute = vertexLayout.Attributes[i];
-					var namePtr = names + nameOffset;
-					for (var c = 0; c < attribute.Semantic.Length; c++)
-						names[nameOffset++] = (byte)attribute.Semantic[c];
-					names[nameOffset++] = 0;
-					semanticCounter.TryGetValue(attribute.Semantic, out var index);
-					semanticCounter[attribute.Semantic] = index + 1;
-					elements[e++] = new InputElementDesc { SemanticName = namePtr, SemanticIndex = index, Format = ToDxgiFormat(attribute.Format), InputSlot = 0, AlignedByteOffset = (uint)vertexLayout.Offsets[i], InputSlotClass = InputClassification.PerVertexData, InstanceDataStepRate = 0 };
-				}
-				if (instanceLayout is not null)
-					for (var i = 0; i < instanceLayout.Attributes.Length; i++)
+					var perInstance = stream.InputRate == VertexInputRate.PerInstance;
+					for (var i = 0; i < stream.Attributes.Length; i++)
 					{
-						var attribute = instanceLayout.Attributes[i];
+						var attribute = stream.Attributes[i];
 						var namePtr = names + nameOffset;
 						for (var c = 0; c < attribute.Semantic.Length; c++)
 							names[nameOffset++] = (byte)attribute.Semantic[c];
 						names[nameOffset++] = 0;
 						semanticCounter.TryGetValue(attribute.Semantic, out var index);
 						semanticCounter[attribute.Semantic] = index + 1;
-						elements[e++] = new InputElementDesc { SemanticName = namePtr, SemanticIndex = index, Format = ToDxgiFormat(attribute.Format), InputSlot = 1, AlignedByteOffset = (uint)instanceLayout.Offsets[i], InputSlotClass = InputClassification.PerInstanceData, InstanceDataStepRate = 1 };
+						elements[e++] = new InputElementDesc
+						{
+							SemanticName = namePtr,
+							SemanticIndex = index,
+							Format = ToDxgiFormat(attribute.Format),
+							InputSlot = (uint)stream.Binding,
+							AlignedByteOffset = (uint)stream.Offsets[i],
+							InputSlotClass = perInstance ? InputClassification.PerInstanceData : InputClassification.PerVertexData,
+							InstanceDataStepRate = perInstance ? 1u : 0u,
+						};
 					}
+				}
 
 				pso.InputLayout = new InputLayoutDesc { NumElements = (uint)total, PInputElementDescs = elements };
 				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
-			}
-			else if (template.ParticleInput && template.Instance is not null)
-			{
-				// Generalized particles (M14-4): the per-instance stream's attributes come from the layout (slot 0,
-				// PerInstanceData), exactly like the template.Layout path's instance rows — semantic name + index
-				// (so two "IPARTICLE" rows become IPARTICLE0..1), DXGI format + byte offset from the Core layout.
-				var particleLayout = template.Instance;
-				var nameCapacity = 0;
-				for (var i = 0; i < particleLayout.Attributes.Length; i++)
-					nameCapacity += particleLayout.Attributes[i].Semantic.Length + 1;
-
-				var names = stackalloc byte[nameCapacity];
-				var elements = stackalloc InputElementDesc[particleLayout.Attributes.Length];
-				var nameOffset = 0;
-				var semanticCounter = new Dictionary<string, uint>();
-				for (var i = 0; i < particleLayout.Attributes.Length; i++)
-				{
-					var attribute = particleLayout.Attributes[i];
-					var namePtr = names + nameOffset;
-					for (var c = 0; c < attribute.Semantic.Length; c++)
-						names[nameOffset++] = (byte)attribute.Semantic[c];
-					names[nameOffset++] = 0;
-					semanticCounter.TryGetValue(attribute.Semantic, out var index);
-					semanticCounter[attribute.Semantic] = index + 1;
-					elements[i] = new InputElementDesc { SemanticName = namePtr, SemanticIndex = index, Format = ToDxgiFormat(attribute.Format), InputSlot = 0, AlignedByteOffset = (uint)particleLayout.Offsets[i], InputSlotClass = InputClassification.PerInstanceData, InstanceDataStepRate = 1 };
-				}
-				pso.InputLayout = new InputLayoutDesc { NumElements = (uint)particleLayout.Attributes.Length, PInputElementDescs = elements };
-				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
-			}
-			else if (template.ParticleInput)
-			{
-				// Legacy single-float4 particle stream (the original ParticlesDemo) — xyz position + w life, slot 0.
-				ReadOnlySpan<byte> position = "POSITION\0"u8;
-				fixed (byte* pPos = position)
-				{
-					var element = new InputElementDesc { SemanticName = pPos, SemanticIndex = 0, Format = Format.FormatR32G32B32A32Float, InputSlot = 0, AlignedByteOffset = 0, InputSlotClass = InputClassification.PerInstanceData, InstanceDataStepRate = 1 };
-					pso.InputLayout = new InputLayoutDesc { NumElements = 1, PInputElementDescs = &element };
-					SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
-				}
 			}
 			else
 			{

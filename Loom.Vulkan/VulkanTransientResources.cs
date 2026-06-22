@@ -67,6 +67,10 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 	private readonly List<(Image Image, ImageView View, Allocation Allocation)> _persistent = []; // shared across slots
 	private readonly Buffer[][] _buffers;        // [frameSlot][ResourceHandle.Id] — storage/vertex buffers (GPU particles)
 	private readonly List<Allocation> _bufferAllocations = [];
+	private readonly Buffer[][] _constantBuffers;        // [frameSlot][ResourceHandle.Id] — host-visible param buffers (IEngine.Write)
+	private readonly Allocation?[][] _constantAllocations; // parallel to _constantBuffers, mapped on write
+	private readonly Buffer[][] _storageBuffers;          // [frameSlot][ResourceHandle.Id] — host-visible app storage buffers (IEngine.Write span)
+	private readonly Allocation?[][] _storageAllocations; // parallel to _storageBuffers, mapped on write
 	private Extent2D _swapExtent;
 
 	public VulkanTransientResources(VulkanContext ctx, RenderGraph graph, AliasPlan aliasPlan, VkFormat backbufferFormat, Extent2D swapExtent, int framesInFlight, VulkanMemoryAllocator allocator)
@@ -85,10 +89,18 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 		_images = new ResourceImage[framesInFlight][];
 		_buckets = new SlotBucket[framesInFlight][];
 		_buffers = new Buffer[framesInFlight][];
+		_constantBuffers = new Buffer[framesInFlight][];
+		_constantAllocations = new Allocation?[framesInFlight][];
+		_storageBuffers = new Buffer[framesInFlight][];
+		_storageAllocations = new Allocation?[framesInFlight][];
 		for (var slot = 0; slot < framesInFlight; slot++)
 		{
 			_images[slot] = new ResourceImage[graph.Resources.Length];
 			_buffers[slot] = new Buffer[graph.Resources.Length];
+			_constantBuffers[slot] = new Buffer[graph.Resources.Length];
+			_constantAllocations[slot] = new Allocation?[graph.Resources.Length];
+			_storageBuffers[slot] = new Buffer[graph.Resources.Length];
+			_storageAllocations[slot] = new Allocation?[graph.Resources.Length];
 			foreach (var resource in graph.Resources)
 				InitMetadata(slot, resource, sampled, storage, readback);
 			_buckets[slot] = AllocateBuckets(slot);
@@ -97,6 +109,10 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 		AllocatePersistentResources(framesInFlight);
 		// Storage/vertex buffers (GPU particles) — one per slot, multi-buffered like transient images.
 		AllocateBuffers(framesInFlight);
+		// App-writable parameter buffers (IEngine.Write) — one host-visible buffer per slot, never aliased.
+		AllocateConstantBuffers(framesInFlight);
+		// App-writable storage buffers (IEngine.Write span) — one host-visible buffer per slot, never aliased.
+		AllocateStorageBuffers(framesInFlight);
 	}
 
 	// Sets a resource's format/aspect/usage/flags without creating the image — the bucket pass allocates.
@@ -140,8 +156,8 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 		var next = -1; // synthetic keys for un-bucketed (dedicated) resources
 		foreach (var resource in _graph.Resources)
 		{
-			if (resource.IsBackbuffer || resource.Kind is ResourceKind.Persistent or ResourceKind.Buffer)
-				continue; // backbuffer is the swapchain's; persistent shared across slots; buffers aren't images
+			if (resource.IsBackbuffer || resource.Kind is ResourceKind.Persistent or ResourceKind.Buffer or ResourceKind.Constants)
+				continue; // backbuffer is the swapchain's; persistent shared across slots; buffers/constants aren't images
 			var key = _aliasPlan.BucketOf(resource) ?? next--;
 			(groups.TryGetValue(key, out var list) ? list : groups[key] = []).Add(resource.Id);
 		}
@@ -206,6 +222,81 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 
 	/// <summary>The backing storage/vertex buffer for a <see cref="ResourceKind.Buffer"/> resource in the given slot.</summary>
 	public Buffer GetBuffer(int frameSlot, int id) => _buffers[frameSlot][id];
+
+	/// <summary>The backing host-visible parameter buffer for a <see cref="ResourceKind.Constants"/> resource in the given slot.</summary>
+	public Buffer GetConstantBuffer(int frameSlot, int id) => _constantBuffers[frameSlot][id];
+
+	/// <summary>Copy <paramref name="data"/> (the CPU shadow) into a parameter buffer's slot at frame start, before recording.</summary>
+	public void WriteConstants(int frameSlot, int id, ReadOnlySpan<byte> data)
+	{
+		var allocation = _constantAllocations[frameSlot][id];
+		if (allocation is null || data.Length == 0)
+			return;
+		var mapped = (byte*)allocation.Map();
+		data.CopyTo(new Span<byte>(mapped, data.Length));
+		allocation.Unmap();
+	}
+
+	// One host-visible UNIFORM buffer per Constants resource per frame slot (multi-buffered: this frame's CPU write
+	// never races an earlier frame still reading its own slot's copy). Mapped on write; bound at offset 0.
+	private void AllocateConstantBuffers(int framesInFlight)
+	{
+		foreach (var resource in _graph.Resources)
+		{
+			if (resource.Kind != ResourceKind.Constants)
+				continue;
+			BufferCreateInfo info = new()
+			{
+				SType = StructureType.BufferCreateInfo,
+				Size = (ulong)resource.ByteSize,
+				Usage = BufferUsageFlags.UniformBufferBit,
+				SharingMode = SharingMode.Exclusive,
+			};
+			for (var slot = 0; slot < framesInFlight; slot++)
+			{
+				_constantBuffers[slot][resource.Id] = _allocator.CreateBuffer(in info, new AllocationCreateInfo { Usage = MemoryUsage.CPU_Only }, out var allocation);
+				_constantAllocations[slot][resource.Id] = allocation;
+				_ctx.SetObjectName(ObjectType.Buffer, _constantBuffers[slot][resource.Id].Handle, $"{resource.Name}#{slot}");
+			}
+		}
+	}
+
+	/// <summary>The backing host-visible storage buffer for a <see cref="ResourceKind.Storage"/> resource in the given slot.</summary>
+	public Buffer GetStorageBuffer(int frameSlot, int id) => _storageBuffers[frameSlot][id];
+
+	/// <summary>Copy <paramref name="data"/> (the CPU shadow) into a storage buffer's slot at frame start, before recording.</summary>
+	public void WriteStorage(int frameSlot, int id, ReadOnlySpan<byte> data)
+	{
+		var allocation = _storageAllocations[frameSlot][id];
+		if (allocation is null || data.Length == 0)
+			return;
+		var mapped = (byte*)allocation.Map();
+		data.CopyTo(new Span<byte>(mapped, data.Length));
+		allocation.Unmap();
+	}
+
+	// One host-visible STORAGE buffer per Storage resource per frame slot (multi-buffered like the parameter buffers).
+	private void AllocateStorageBuffers(int framesInFlight)
+	{
+		foreach (var resource in _graph.Resources)
+		{
+			if (resource.Kind != ResourceKind.Storage)
+				continue;
+			BufferCreateInfo info = new()
+			{
+				SType = StructureType.BufferCreateInfo,
+				Size = (ulong)resource.ByteSize,
+				Usage = BufferUsageFlags.StorageBufferBit,
+				SharingMode = SharingMode.Exclusive,
+			};
+			for (var slot = 0; slot < framesInFlight; slot++)
+			{
+				_storageBuffers[slot][resource.Id] = _allocator.CreateBuffer(in info, new AllocationCreateInfo { Usage = MemoryUsage.CPU_Only }, out var allocation);
+				_storageAllocations[slot][resource.Id] = allocation;
+				_ctx.SetObjectName(ObjectType.Buffer, _storageBuffers[slot][resource.Id].Handle, $"{resource.Name}#{slot}");
+			}
+		}
+	}
 
 	// One device-local buffer per Buffer resource per frame slot (multi-buffered: a frame's compute writes it
 	// while an earlier frame's draw may still read its own slot's copy). Usage covers storage (compute write)
@@ -391,6 +482,22 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 					_vk.DestroyBuffer(_ctx.Device, buffer, null);
 		foreach (var allocation in _bufferAllocations)
 			allocation.Dispose();
+		// Parameter buffers: one VkBuffer + allocation per slot per Constants resource.
+		for (var slot = 0; slot < _constantBuffers.Length; slot++)
+			for (var id = 0; id < _constantBuffers[slot].Length; id++)
+			{
+				if (_constantBuffers[slot][id].Handle != 0)
+					_vk.DestroyBuffer(_ctx.Device, _constantBuffers[slot][id], null);
+				_constantAllocations[slot][id]?.Dispose();
+			}
+		// Storage buffers: one VkBuffer + allocation per slot per Storage resource.
+		for (var slot = 0; slot < _storageBuffers.Length; slot++)
+			for (var id = 0; id < _storageBuffers[slot].Length; id++)
+			{
+				if (_storageBuffers[slot][id].Handle != 0)
+					_vk.DestroyBuffer(_ctx.Device, _storageBuffers[slot][id], null);
+				_storageAllocations[slot][id]?.Dispose();
+			}
 		// The allocator is owned by the executor (shared with meshes), so it is not disposed here.
 	}
 }

@@ -10,7 +10,9 @@ $bytes = New-Object byte[] $len
 $bmp.UnlockBits($data)
 $set = New-Object 'System.Collections.Generic.HashSet[int]'
 for ($i = 0; $i -lt $len; $i += 4) {
-  [void]$set.Add(($bytes[$i+2] -shl 16) -bor ($bytes[$i+1] -shl 8) -bor $bytes[$i])
+  # Cast each channel to int before shifting: PowerShell's -shl on a [byte] truncates the result back to a byte,
+  # which would drop the high bytes and collapse the key down to the blue channel alone.
+  [void]$set.Add(([int]$bytes[$i+2] -shl 16) -bor ([int]$bytes[$i+1] -shl 8) -bor [int]$bytes[$i])
 }
 $w = $bmp.Width; $h = $bmp.Height
 $bmp.Dispose()

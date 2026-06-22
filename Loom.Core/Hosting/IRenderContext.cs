@@ -26,13 +26,6 @@ public interface IRenderContext
 	float Time { get; }
 
 	/// <summary>
-	/// The object id currently under the cursor (0 = nothing), supplied per-frame by the host (Planning.md §5
-	/// <c>ctx.Hover</c>). The JFA outline sub-graph's seed pass pulls it from here to decide which silhouette
-	/// to grow a border around — pulled, not captured, so the graph stays frame-independent (§8).
-	/// </summary>
-	uint HoverId { get; }
-
-	/// <summary>
 	/// The sun's view + projection for this frame (Planning.md §7.2's <c>ctx.Scene.Sun.View</c>). The shadow
 	/// pass draws the scene from <em>this</em> view into the shadow map; deferred lighting reuses it to project
 	/// world positions into light space for the shadow test. Per-frame host data, pulled not captured (§8).
@@ -40,16 +33,13 @@ public interface IRenderContext
 	Camera SunView { get; }
 
 	/// <summary>
-	/// The sun's per-cascade views this frame (M15-3 — cascaded shadow maps), nearest cascade first. A per-cascade
-	/// depth pass draws the scene from <c>Cascades[i]</c> (as <see cref="SunView"/> drives the single shadow pass);
-	/// the deferred lighting pass packs these into its uniform buffer and selects a cascade per pixel by view
-	/// distance (<see cref="CascadeSplits"/>). Empty when the demo uses the single-map <see cref="SunView"/> path.
-	/// Per-frame host data, pulled not captured (§8).
+	/// The sun's per-cascade views this frame (cascaded shadow maps), nearest cascade first. A per-cascade depth
+	/// pass draws the scene from <c>Cascades[i]</c> (as <see cref="SunView"/> drives the single shadow pass); the
+	/// deferred lighting pass packs these into its uniform buffer and selects a cascade per pixel by view distance
+	/// (the app supplies the split far-depths through a parameter buffer it writes, not through the context). Empty
+	/// when the demo uses the single-map <see cref="SunView"/> path. Per-frame host data, pulled not captured (§8).
 	/// </summary>
 	IReadOnlyList<Camera> Cascades { get; }
-
-	/// <summary>The far view-space distance each entry of <see cref="Cascades"/> covers — the split boundaries the lighting pass selects a cascade against (M15-3).</summary>
-	IReadOnlyList<float> CascadeSplits { get; }
 
 	/// <summary>
 	/// The camera to render from this frame (view + projection). Per-frame data the host supplies; a pass's
@@ -132,21 +122,25 @@ public interface IRenderContext
 	void Draw(Mesh mesh, Material material, string technique, Camera view);
 
 	/// <summary>
-	/// Draw <paramref name="count"/> points whose per-vertex data is read straight from <paramref name="buffer"/>
-	/// — a GPU storage buffer a compute pass just wrote (GPU particles, §7.6). The buffer must be one the pass
-	/// declared with <c>.ReadsVertex</c>, so the graph derives the compute→vertex-input barrier. The technique
-	/// transforms by <see cref="Camera"/> (pulled, not captured).
+	/// Draw <paramref name="instanceCount"/> instances of <paramref name="vertexCount"/> vertices fabricated in the
+	/// vertex shader from <c>SV_VertexID</c> (no vertex buffer for the geometry — a 6-vertex billboard quad, a point,
+	/// a strip), with the per-instance stream read straight from <paramref name="instances"/> — a GPU buffer a compute
+	/// pass just wrote (the GPU-particle path and any procedural-instanced effect, §7.6). The buffer must be one the
+	/// pass declared with <c>.ReadsVertex</c>, so the graph derives the compute→vertex-input barrier; its element is
+	/// the technique's per-instance <see cref="VertexLayout"/>. The technique transforms by <see cref="Camera"/>
+	/// (pulled, not captured). The engine fabricates no geometry of its own — the count is the caller's, so the verb
+	/// leans toward no particular primitive.
 	/// </summary>
-	void DrawParticles(ResourceHandle buffer, int count, string technique);
+	void DrawInstanced(string technique, BufferHandle instances, int vertexCount, int instanceCount);
 
 	/// <summary>
-	/// As <see cref="DrawParticles(ResourceHandle, int, string)"/>, but binds <paramref name="material"/>'s
-	/// textures into the technique's reflected sampler slots (texture 0 → binding 0, …) — the textured-particle
-	/// path (M14): a sprite-sheet atlas the render shader samples for sub-UV frames + colour-over-life. The
-	/// particle stream still rides in <paramref name="buffer"/> (a <c>.ReadsVertex</c> resource); the material
-	/// only adds the sampled atlas, exactly as <see cref="Draw(Mesh, Material, string)"/> adds it to a mesh draw.
+	/// As <see cref="DrawInstanced(string, BufferHandle, int, int)"/>, but binds <paramref name="material"/>'s
+	/// textures into the technique's reflected sampler slots (texture 0 → binding 0, …) — the textured path (e.g. a
+	/// sprite-sheet atlas the fabricated quads sample for sub-UV frames + colour-over-life). The per-instance stream
+	/// still rides in <paramref name="instances"/> (a <c>.ReadsVertex</c> resource); the material only adds the
+	/// sampled atlas, exactly as <see cref="Draw(Mesh, Material, string)"/> adds it to a mesh draw.
 	/// </summary>
-	void DrawParticles(ResourceHandle buffer, int count, Material material, string technique);
+	void DrawInstanced(string technique, Material material, BufferHandle instances, int vertexCount, int instanceCount);
 
 	/// <summary>
 	/// Draw <paramref name="mesh"/> once per element of <paramref name="instances"/> (M12 — GPU instancing,
@@ -218,7 +212,7 @@ public interface IRenderContext
 	/// mesh's own (bind-pose) vertex buffer. The buffer must be one the pass declared with <c>.ReadsVertex</c>, so
 	/// the graph derives the compute→vertex barrier. The technique consumes the <see cref="VertexLayout.MeshStandard"/>
 	/// layout (the skinned output is plain pos/normal/uv/tangent), so existing mesh techniques work unchanged.
-	/// Unlike <see cref="DrawParticles"/>, this is an indexed per-vertex draw using the mesh's index count.
+	/// Unlike <see cref="DrawInstanced(string, BufferHandle, int, int)"/>, this is an indexed per-vertex draw using the mesh's index count.
 	/// </summary>
 	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique);
 

@@ -26,6 +26,25 @@ public enum ResourceKind
 	Persistent,
 
 	/// <summary>
+	/// An app-writable parameter buffer — a small, host-visible block a technique reads as a uniform/constant
+	/// buffer. The app fills it by handle (<c>IEngine.Write</c>); a pass that <c>.Reads</c> it binds it to the
+	/// technique's reflected uniform slot. Backed by one host-visible buffer per frame in flight (so a CPU write
+	/// never races the GPU read of a frame still in flight), never aliased, and needs no barrier (host-coherent,
+	/// CPU-written then shader-read). Sized in bytes (<see cref="ResourceHandle.ByteSize"/>).
+	/// </summary>
+	Constants,
+
+	/// <summary>
+	/// An app-writable storage buffer — a host-visible array a technique reads as a read-only structured buffer
+	/// (an SSBO / <c>StructuredBuffer&lt;T&gt;</c>), for data too large or too variably-indexed for a uniform
+	/// block. The app fills it by handle (<c>IEngine.Write</c> with a span); a pass that <c>.Reads</c> it binds it
+	/// to the technique's reflected storage-buffer slot. Like <see cref="Constants"/> it is backed by one
+	/// host-visible buffer per frame in flight, never aliased, and needs no barrier (host-coherent, CPU-written
+	/// then shader-read). Sized in bytes (<see cref="ResourceHandle.ByteSize"/> = element count × stride).
+	/// </summary>
+	Storage,
+
+	/// <summary>
 	/// The swapchain colour target. Lives in the backbuffer domain at native resolution; its concrete
 	/// format is chosen by the backend (the surface format), not by the author.
 	/// </summary>

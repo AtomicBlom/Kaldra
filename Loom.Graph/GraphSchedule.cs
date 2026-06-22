@@ -93,10 +93,11 @@ public sealed class GraphSchedule
 				var s = state.GetValueOrDefault(id);
 				if (s is { LastWriter: >= 0 })
 					dependsOn[i].Add(s.LastWriter); // RAW
-				else if (resource.Kind != ResourceKind.Persistent && !writes.ContainsKey(id))
+				else if (resource.Kind is not (ResourceKind.Persistent or ResourceKind.Constants or ResourceKind.Storage) && !writes.ContainsKey(id))
 					// A pure read of a never-written, non-persistent resource samples undefined contents. A
 					// read+write in the SAME pass (a .ReadWrites producer, e.g. the particle compute) is the
 					// producer, not a consumer of undefined data — its own write initialises it, so it's fine.
+					// Constants and Storage are CPU-written by the app (IEngine.Write), so they have no graph writer.
 					errors.Add($"Pass '{passes[i].Name}' reads '{resource.Name}' before any pass writes it.");
 			}
 

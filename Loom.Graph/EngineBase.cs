@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Loom.Core.Animation;
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
@@ -103,6 +105,74 @@ public abstract class EngineBase : IEngine
 	public bool ResourceInspectionEnabled { get; set; }
 	public IReadOnlyList<InspectableResource> InspectableResources => _inspectable;
 
+	// CPU shadow of each active-graph Constants resource (id → its bytes), zero-initialised on SetGraph and
+	// updated by Write. The backend uploads each into the current frame slot at frame start, so the last write
+	// persists (write-on-change) without the CPU ever racing a frame still reading the previous value.
+	private readonly Dictionary<int, byte[]> _constants = [];
+
+	/// <summary>The active graph's parameter-buffer shadows (id → bytes) for the backend to upload into the current
+	/// frame slot before recording. Empty until <see cref="SetGraph"/>; rebuilt (zeroed) on every swap.</summary>
+	protected IReadOnlyDictionary<int, byte[]> ConstantsShadows => _constants;
+
+	public void Write<T>(ConstantsHandle handle, in T value) where T : unmanaged
+	{
+		ArgumentNullException.ThrowIfNull(handle);
+		if (!_constants.TryGetValue(handle.Id, out var shadow))
+			throw new InvalidOperationException(
+				$"Constants '{handle.Name}' is not part of the active graph — call SetGraph with a graph that declares it before writing.");
+		var size = Unsafe.SizeOf<T>();
+		if (size != shadow.Length)
+			throw new ArgumentException(
+				$"Constants '{handle.Name}' is {shadow.Length} bytes but the written {typeof(T).Name} is {size} bytes — the type must match the declared parameter-buffer size.", nameof(value));
+		MemoryMarshal.Write(shadow, in value);
+	}
+
+	// CPU shadow of each active-graph Storage resource (id → its bytes), like _constants but an array; the backend
+	// uploads each into the current frame slot at frame start. The shadow is the buffer's full declared size, so a
+	// partial write leaves the tail at its previous (or zero) value.
+	private readonly Dictionary<int, byte[]> _storage = [];
+
+	/// <summary>The active graph's storage-buffer shadows (id → bytes) for the backend to upload into the current frame slot before recording. Empty until <see cref="SetGraph"/>; rebuilt (zeroed) on every swap.</summary>
+	protected IReadOnlyDictionary<int, byte[]> StorageShadows => _storage;
+
+	public void Write<T>(StorageBufferHandle handle, ReadOnlySpan<T> values) where T : unmanaged
+	{
+		ArgumentNullException.ThrowIfNull(handle);
+		if (!_storage.TryGetValue(handle.Id, out var shadow))
+			throw new InvalidOperationException(
+				$"Storage '{handle.Name}' is not part of the active graph — call SetGraph with a graph that declares it before writing.");
+		var bytes = MemoryMarshal.AsBytes(values);
+		if (bytes.Length > shadow.Length)
+			throw new ArgumentException(
+				$"Storage '{handle.Name}' holds {shadow.Length} bytes but the written {values.Length} × {typeof(T).Name} is {bytes.Length} bytes — the data must fit the declared buffer size.", nameof(values));
+		bytes.CopyTo(shadow);
+	}
+
+	// CPU-side copy of each g.Readback target's contents (id → tightly-packed bytes in the resource's format),
+	// filled by the backend once a frame's slot fence signals and returned by Read. Empty until the backend first
+	// stores into it (the readback latency); rebuilt on every SetGraph.
+	private readonly Dictionary<int, byte[]> _readback = [];
+
+	public ReadOnlySpan<byte> Read(ResourceHandle handle)
+	{
+		ArgumentNullException.ThrowIfNull(handle);
+		if (_readback.TryGetValue(handle.Id, out var bytes))
+			return bytes;
+		return default;
+	}
+
+	/// <summary>
+	/// Store a <c>g.Readback</c> target's freshly-decoded CPU bytes (tightly packed in the resource's format) so
+	/// <see cref="Read"/> returns them. The backend calls this after the target's slot fence signals; the byte
+	/// count is constant for a given graph (the buffer is reused once allocated).
+	/// </summary>
+	protected void StoreReadback(int id, ReadOnlySpan<byte> bytes)
+	{
+		if (!_readback.TryGetValue(id, out var buffer) || buffer.Length != bytes.Length)
+			_readback[id] = buffer = new byte[bytes.Length];
+		bytes.CopyTo(buffer);
+	}
+
 	/// <summary>Prefix on the aliasing-summary log line for backends that tag it (e.g. <c>"DirectX12 "</c>); empty by default.</summary>
 	protected virtual string AliasingLogPrefix => "";
 
@@ -118,6 +188,21 @@ public abstract class EngineBase : IEngine
 			WaitIdle();
 		ReleaseGraphResources();
 		Graph = graph;
+
+		// Reset the app-writable buffer shadows for this graph (ids are graph-local, so a swap re-mints them). Each
+		// starts zero-filled, so a technique that reads a buffer the app hasn't written yet sees a defined value.
+		_constants.Clear();
+		_storage.Clear();
+		foreach (var resource in graph.Resources)
+		{
+			if (resource.Kind == ResourceKind.Constants)
+				_constants[resource.Id] = new byte[resource.ByteSize];
+			else if (resource.Kind == ResourceKind.Storage)
+				_storage[resource.Id] = new byte[resource.ByteSize];
+		}
+
+		// Drop the previous graph's readback bytes; the backend refills per target as frames retire.
+		_readback.Clear();
 
 		// Resource viewer: enumerate the colour/depth resources the host can preview, and (when inspection is on)
 		// inject debug-sample edges so the Execute layer keeps them alive in a sampleable layout. The author's graph
@@ -158,7 +243,6 @@ public abstract class EngineBase : IEngine
 	public abstract void Render(FrameInputs inputs);
 	public abstract void Resize(int width, int height);
 	public abstract void WaitIdle();
-	public abstract float SamplePick(int x, int y);
 	public abstract Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
 	public abstract Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged;
 	public abstract Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices);

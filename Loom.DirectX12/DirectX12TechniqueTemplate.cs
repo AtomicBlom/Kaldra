@@ -14,7 +14,7 @@ namespace Loom.DirectX12;
 internal readonly record struct DirectX12TechniqueTemplate(
 	byte[] VertexBytecode, byte[] FragmentBytecode, string VertexEntry, string FragmentEntry, int InputCount,
 	bool HasVertexInput, bool HasFragmentPush, bool LinearFilter,
-	bool IsCompute = false, bool ParticleInput = false, BlendMode Blend = BlendMode.None,
+	bool IsCompute = false, BlendMode Blend = BlendMode.None,
 	int StorageImages = 0, int StorageBuffers = 0, int StorageBufferStride = 0,
 	SamplerAddress Address = SamplerAddress.Clamp,
 	VertexLayout? Layout = null, VertexLayout? Instance = null,
