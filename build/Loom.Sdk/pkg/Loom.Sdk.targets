@@ -1,0 +1,12 @@
+<Project>
+
+  <!--
+    Loom.Sdk consumer entry targets — auto-injected by NuGet after the project body.
+
+    Imports the Slang shader-compile targets so consumer apps can compile *.slang sources in Content mode.
+    Set LoomShaderSourceDir and LoomShaderOutputMode=Content in your project to enable shader compilation.
+  -->
+
+  <Import Project="$(MSBuildThisFileDirectory)Sdk/Loom.Shaders.targets" />
+
+</Project>

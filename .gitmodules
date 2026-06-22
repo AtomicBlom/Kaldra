@@ -1,6 +1,6 @@
 [submodule "external/VMASharp"]
 	path = external/VMASharp
-	url = https://github.com/RaymondEllis/VMASharp.git
+	url = https://github.com/AtomicBlom/VMASharp.git
 [submodule "external/SUIsei"]
 	path = external/SUIsei
 	url = https://github.com/AtomicBlom/SUIsei
