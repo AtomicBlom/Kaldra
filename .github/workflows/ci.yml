@@ -18,7 +18,7 @@ jobs:
     steps:
       # Loom.Tests only references Core/Graph/Assets — no submodule needed for that job.
       # SUIsei is a private submodule; it is fetched separately below with a PAT.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Fetch the private SUIsei submodule using a PAT that has contents:read on AtomicBlom/SUIsei.
       # VMASharp (public) is not needed by Loom.Tests, so we only init the SUIsei submodule.
@@ -29,7 +29,7 @@ jobs:
           git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/"
           git submodule update --init external/SUIsei
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
