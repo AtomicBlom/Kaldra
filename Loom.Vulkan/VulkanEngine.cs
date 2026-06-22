@@ -483,6 +483,9 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		// param is written once and an animated one is written per frame; either way the slot the GPU reads is current.
 		foreach (var (id, bytes) in ConstantsShadows)
 			_transients!.WriteConstants(_currentFrame, id, bytes);
+		// Same for the app-writable storage buffers (IEngine.Write span).
+		foreach (var (id, bytes) in StorageShadows)
+			_transients!.WriteStorage(_currentFrame, id, bytes);
 
 		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).
@@ -616,12 +619,15 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		// The app-writable parameter buffers this pass .Reads — bound to the technique's uniform slots 0..K-1.
 		Span<int> uniformIds = stackalloc int[VulkanRenderContext.MaxUniformBuffers];
 		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		// The app-writable storage buffers this pass .Reads — bound to the technique's storage-buffer slots.
+		Span<int> storageIds = stackalloc int[VulkanRenderContext.MaxStorageBuffers];
+		var storageCount = CollectStorageIds(pass.Pass, storageIds);
 
 		// Compute passes have no attachments and no dynamic-rendering scope — just bind + dispatch. The
 		// resource transitions (storage GENERAL, the consumer's SHADER_READ) were already emitted before this.
 		if (pass.Pass.Kind == PassKind.Compute)
 		{
-			_context.BeginPass([], default, false, uniformIds[..uniformCount]); // no colour/depth targets; keeps the bake key stable
+			_context.BeginPass([], default, false, uniformIds[..uniformCount], storageIds[..storageCount]); // no colour/depth targets; keeps the bake key stable
 			pass.Pass.Record?.Invoke(_context);
 			return;
 		}
@@ -696,7 +702,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		Rect2D scissor = new(new Offset2D(0, 0), area);
 		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
 
-		_context.BeginPass(new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount]);
+		_context.BeginPass(new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
 		pass.Pass.Record?.Invoke(_context);
 
 		_vk.CmdEndRendering(cmd);
@@ -709,6 +715,17 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		var n = 0;
 		foreach (var access in pass.Accesses)
 			if (access.Kind == AccessKind.ReadUniform && n < ids.Length)
+				ids[n++] = access.Resource.Id;
+		return n;
+	}
+
+	// Fill `ids` with the app-writable storage buffers a pass .Reads (its ReadStorage edges, in .Reads order) —
+	// they bind to the technique's storage-buffer slots; returns the count.
+	private static int CollectStorageIds(GraphPass pass, Span<int> ids)
+	{
+		var n = 0;
+		foreach (var access in pass.Accesses)
+			if (access.Kind == AccessKind.ReadStorage && n < ids.Length)
 				ids[n++] = access.Resource.Id;
 		return n;
 	}

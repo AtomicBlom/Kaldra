@@ -86,6 +86,16 @@ public interface IEngine : IDisposable
 	/// </summary>
 	void Write<T>(ConstantsHandle handle, in T value) where T : unmanaged;
 
+	/// <summary>
+	/// Write <paramref name="values"/> into an app-writable storage buffer (<see cref="GraphBuilder.Storage{T}"/>)
+	/// of the active graph — the array counterpart to the parameter-buffer <see cref="Write{T}(ConstantsHandle, in T)"/>.
+	/// The data reaches the technique that <c>.Reads</c> the buffer on the next frame(s); the last write persists, so
+	/// write every frame for animated data or only on change for static data. The span's byte length must not exceed
+	/// the buffer's declared size; <typeparamref name="T"/> must match the shader's structured-buffer element layout.
+	/// The graph captures only the stable handle, so this never rebuilds it.
+	/// </summary>
+	void Write<T>(StorageBufferHandle handle, ReadOnlySpan<T> values) where T : unmanaged;
+
 	/// <summary>Render one frame of the active graph from <paramref name="inputs"/> (Planning.md §5 <c>graph.Render</c>).</summary>
 	void Render(FrameInputs inputs);
 

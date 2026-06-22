@@ -38,4 +38,11 @@ public enum AccessKind
 	/// binds the buffer to the technique's uniform slot and keeps the resource alive.
 	/// </summary>
 	ReadUniform,
+
+	/// <summary>
+	/// An app-writable storage buffer read as a read-only structured buffer (SSBO). (<c>.Reads</c> of a
+	/// <see cref="StorageBufferHandle"/>.) Host-written and host-coherent, so it derives no barrier — the edge
+	/// only binds the buffer to the technique's storage-buffer slot and keeps the resource alive.
+	/// </summary>
+	ReadStorage,
 }

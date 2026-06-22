@@ -259,6 +259,9 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		// the last IEngine.Write persists, re-uploaded each frame so the slot the GPU reads is always current).
 		foreach (var (id, bytes) in ConstantsShadows)
 			_transients!.WriteConstants(index, id, bytes);
+		// Same for the app-writable storage buffers (IEngine.Write span).
+		foreach (var (id, bytes) in StorageShadows)
+			_transients!.WriteStorage(index, id, bytes);
 
 		// GPU timing (M13): bracket each pass's own work (after its pre-barriers) with a begin/end timestamp into this
 		// slot's sub-range of the heap. Timestamp queries use EndQuery only (no BeginQuery).
@@ -407,7 +410,9 @@ public sealed unsafe class DirectX12Engine : EngineBase
 
 		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
 		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
-		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount]);
+		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
+		var storageCount = CollectStorageIds(pass.Pass, storageIds);
+		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
 		pass.Pass.Record?.Invoke(_context);
 	}
 
@@ -418,7 +423,9 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	{
 		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
 		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
-		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, uniformIds[..uniformCount]);
+		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
+		var storageCount = CollectStorageIds(pass.Pass, storageIds);
+		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, uniformIds[..uniformCount], storageIds[..storageCount]);
 		pass.Pass.Record?.Invoke(_context);
 	}
 
@@ -429,6 +436,17 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		var n = 0;
 		foreach (var access in pass.Accesses)
 			if (access.Kind == AccessKind.ReadUniform && n < ids.Length)
+				ids[n++] = access.Resource.Id;
+		return n;
+	}
+
+	// Fill `ids` with the app-writable storage buffers a pass .Reads (its ReadStorage edges, in .Reads order) —
+	// they bind to the technique's read-only structured-buffer root SRVs; returns the count.
+	private static int CollectStorageIds(GraphPass pass, Span<int> ids)
+	{
+		var n = 0;
+		foreach (var access in pass.Accesses)
+			if (access.Kind == AccessKind.ReadStorage && n < ids.Length)
 				ids[n++] = access.Resource.Id;
 		return n;
 	}
@@ -831,8 +849,10 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		// M15-0: descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
 		// as a root CBV at b1 (0 for a built-in stand-in, which has no UBO).
 		var uniformBuffers = reflection.UniformBufferCount;
-		// M15-2: read-only structured-buffer compute inputs (skin's bind-pose verts + bone palette) — root SRVs.
-		var inputBuffers = descriptor.IsCompute ? reflection.InputBufferCount : 0;
+		// Read-only structured-buffer inputs, bound as root SRVs: a compute's inputs (skin's bind-pose verts + bone
+		// palette) or a graphics technique's app-writable storage buffers (g.Storage SSBOs). 0 for a built-in
+		// stand-in, whose empty reflection reports none.
+		var inputBuffers = reflection.InputBufferCount;
 		string source;
 
 		if (descriptor.IsCompute)

@@ -194,6 +194,21 @@ public sealed class GraphBuilder
 	public ConstantsHandle Constants<T>(string name) where T : unmanaged =>
 		(ConstantsHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Constants, BackbufferDomainForPersistent(), scale: 1f, byteSize: Unsafe.SizeOf<T>());
 
+	/// <summary>
+	/// Declare an app-writable storage buffer of <paramref name="count"/> × <c>sizeof(T)</c> bytes — a read-only
+	/// structured array (SSBO) a technique reads, for data too large or too dynamically-indexed for a uniform block.
+	/// Fill it by handle each frame (or only on change) with <c>IEngine.Write</c> passing a span; a pass that
+	/// <c>.Reads</c> it binds it to the technique's reflected storage-buffer slot, so its contents need no graph
+	/// rebuild. <typeparamref name="T"/>'s layout must match the shader's structured-buffer element on both backends.
+	/// Anchored to the backbuffer domain (it has no resolution of its own).
+	/// </summary>
+	public StorageBufferHandle Storage<T>(string name, int count) where T : unmanaged
+	{
+		if (count <= 0)
+			throw new ArgumentOutOfRangeException(nameof(count), "A storage buffer needs a positive element count.");
+		return (StorageBufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Storage, BackbufferDomainForPersistent(), scale: 1f, byteSize: count * Unsafe.SizeOf<T>());
+	}
+
 	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0)
 	{
 		if (!_resourceNames.Add(name))
@@ -204,6 +219,7 @@ public sealed class GraphBuilder
 			ResourceKind.Depth => new DepthHandle(id, name, format, domain, scale),
 			ResourceKind.Buffer => new BufferHandle(id, name, format, domain, byteSize),
 			ResourceKind.Constants => new ConstantsHandle(id, name, domain, byteSize),
+			ResourceKind.Storage => new StorageBufferHandle(id, name, domain, byteSize),
 			// Color / Persistent / Backbuffer are all colour-like images; the lifetime/role lives in Kind.
 			_ => new ColorHandle(id, name, format, kind, domain, scale, count),
 		};

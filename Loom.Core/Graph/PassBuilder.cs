@@ -69,6 +69,14 @@ public sealed class PassBuilder
 	/// </summary>
 	public PassBuilder Reads(IUniformHandle constants) => Add(AccessKind.ReadUniform, (ResourceHandle)constants);
 
+	/// <summary>
+	/// Read an app-writable storage buffer (<see cref="GraphBuilder.Storage{T}"/>) as the technique's read-only
+	/// structured-buffer input (an SSBO). The backend binds it to the technique's reflected storage-buffer slot;
+	/// the app fills it by handle via <c>IEngine.Write</c> with a span. No barrier is derived (the buffer is
+	/// host-coherent, CPU-written).
+	/// </summary>
+	public PassBuilder Reads(IStorageBufferHandle storage) => Add(AccessKind.ReadStorage, (ResourceHandle)storage);
+
 	/// <summary>Assign this pass to a queue; the graph derives the cross-queue timeline sync.</summary>
 	public PassBuilder Queue(Queue queue)
 	{

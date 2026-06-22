@@ -160,14 +160,20 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
 	private int _activeConstantsCount;
 
+	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
+	// technique's storage-buffer slots (after the sampled inputs, before the uniform slots).
+	public const int MaxStorageBuffers = 8;
+	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
+	private int _activeStorageCount;
+
 	/// <summary>
 	/// Set the attachment formats of the current pass — the formats its techniques bake against — plus whether
 	/// the depth attachment is bound read-only (<c>.ReadsDepth</c>): a read-only pass bakes with depth writes
 	/// disabled so a transparent draw tests against, but does not disturb, the opaque depth.
-	/// <paramref name="constantsId"/> is the parameter buffer the pass <c>.Reads</c> (or -1), bound to the
-	/// technique's uniform slot at draw time.
+	/// <paramref name="constantsIds"/> / <paramref name="storageIds"/> are the parameter and storage buffers the
+	/// pass <c>.Reads</c> (in order), bound to the technique's uniform and storage-buffer slots at draw time.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default)
+	public void BeginPass(ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
 	{
 		// Copy into the inline buffer (no allocation) rather than .ToArray(); the incoming span points into
 		// the executor's stackalloc, which is gone once this returns. Throw — never clamp — on an over-wide
@@ -180,6 +186,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_depthReadOnly = depthReadOnly;
 		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
 		constantsIds[.._activeConstantsCount].CopyTo(_activeConstantsIds);
+		_activeStorageCount = Math.Min(storageIds.Length, MaxStorageBuffers);
+		storageIds[.._activeStorageCount].CopyTo(_activeStorageIds);
 	}
 
 	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs) =>
@@ -216,8 +224,14 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			}
 		}
 
-		if (inputs.Length > 0 || uboCount > 0)
-			BindSampledInputs(baked, inputs, template.LinearFilter, ubos[..uboCount]);
+		// The app-writable storage buffers the pass .Reads bind after the sampled inputs, before the uniform slots.
+		Span<Silk.NET.Vulkan.Buffer> storageBuffers = stackalloc Silk.NET.Vulkan.Buffer[MaxStorageBuffers];
+		var storageCount = 0;
+		for (var j = 0; j < _activeStorageCount && storageCount < MaxStorageBuffers; j++)
+			storageBuffers[storageCount++] = _resources.GetStorageBuffer(_frameSlot, _activeStorageIds[j]);
+
+		if (inputs.Length > 0 || storageCount > 0 || uboCount > 0)
+			BindSampledInputs(baked, inputs, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount]);
 
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
@@ -583,14 +597,15 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	// FullScreen and the instanced light volumes share. The graph put each in ShaderReadOnly before this pass.
 	// A present uniform buffer (M15-0) is written as the last binding (index inputs.Length), matching the set
 	// layout's category order (samplers, then the UBO).
-	private void BindSampledInputs(VulkanTechnique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<UniformBinding> ubos = default)
+	private void BindSampledInputs(VulkanTechnique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<Silk.NET.Vulkan.Buffer> storageBuffers = default, ReadOnlySpan<UniformBinding> ubos = default)
 	{
 		var sampler = linear ? _linearSampler : _nearestSampler;
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-		var count = inputs.Length + ubos.Length;
+		var count = inputs.Length + storageBuffers.Length + ubos.Length;
 		var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
-		var bufferInfos = stackalloc DescriptorBufferInfo[ubos.Length];
+		var bufferInfos = stackalloc DescriptorBufferInfo[storageBuffers.Length + ubos.Length];
 		var writes = stackalloc WriteDescriptorSet[count];
+		var w = 0;
 		for (var i = 0; i < inputs.Length; i++)
 		{
 			ref var image = ref _resources.Get(_frameSlot, inputs[i].Id);
@@ -600,7 +615,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 				ImageView = image.View,
 				ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
 			};
-			writes[i] = new WriteDescriptorSet
+			writes[w++] = new WriteDescriptorSet
 			{
 				SType = StructureType.WriteDescriptorSet,
 				DstSet = set,
@@ -610,18 +625,32 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 				PImageInfo = &imageInfos[i],
 			};
 		}
-		// The uniform buffers follow the samplers, at bindings inputs.Length..inputs.Length+ubos.Length-1.
-		for (var u = 0; u < ubos.Length; u++)
+		// Read-only storage buffers (SSBOs) follow the samplers, as StorageBuffer descriptors.
+		for (var s = 0; s < storageBuffers.Length; s++)
 		{
-			bufferInfos[u] = ubos[u].Info;
-			writes[inputs.Length + u] = new WriteDescriptorSet
+			bufferInfos[s] = new DescriptorBufferInfo { Buffer = storageBuffers[s], Offset = 0, Range = Vk.WholeSize };
+			writes[w++] = new WriteDescriptorSet
 			{
 				SType = StructureType.WriteDescriptorSet,
 				DstSet = set,
-				DstBinding = (uint)(inputs.Length + u),
+				DstBinding = (uint)(inputs.Length + s),
+				DescriptorCount = 1,
+				DescriptorType = DescriptorType.StorageBuffer,
+				PBufferInfo = &bufferInfos[s],
+			};
+		}
+		// Uniform buffers follow the storage buffers.
+		for (var u = 0; u < ubos.Length; u++)
+		{
+			bufferInfos[storageBuffers.Length + u] = ubos[u].Info;
+			writes[w++] = new WriteDescriptorSet
+			{
+				SType = StructureType.WriteDescriptorSet,
+				DstSet = set,
+				DstBinding = (uint)(inputs.Length + storageBuffers.Length + u),
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.UniformBuffer,
-				PBufferInfo = &bufferInfos[u],
+				PBufferInfo = &bufferInfos[storageBuffers.Length + u],
 			};
 		}
 		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);

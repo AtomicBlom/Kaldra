@@ -19,6 +19,7 @@ internal static class AccessKindExtensions
 		AccessKind.ReadWrite => true,
 		AccessKind.ReadVertex => true,
 		AccessKind.ReadUniform => true,
+		AccessKind.ReadStorage => true,
 		_ => false,
 	};
 

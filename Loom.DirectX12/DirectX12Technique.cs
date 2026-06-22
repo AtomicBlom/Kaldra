@@ -199,8 +199,8 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		// reads a vertex stream.
 		var hasMvpPush = (template.Layout is not null || template.Instance is not null) && !template.HasListPush;
 		var hasRootConstants = hasMvpPush || template.HasFragmentPush || template.HasListPush;
-		// Root constants (b0) + N uniform CBVs (b1..bN) + one SRV table.
-		var parameters = stackalloc RootParameter[2 + template.UniformBufferCount];
+		// Root constants (b0) + N uniform CBVs (b1..bN) + one SRV table + M storage-buffer root SRVs.
+		var parameters = stackalloc RootParameter[2 + template.UniformBufferCount + template.InputBufferCount];
 		var paramCount = 0;
 		var range = new DescriptorRange
 		{
@@ -248,6 +248,22 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				ShaderVisibility = ShaderVisibility.Pixel,
 				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &range } },
 			};
+		}
+		// App-writable storage buffers (g.Storage SSBOs) as read-only root SRVs at t(InputCount)..; the sampled
+		// textures own t0..t(InputCount-1) via the table above, so these follow them. Bound from each Storage
+		// resource's UPLOAD address by a pass's .Reads, exactly as the compute skin path binds its input buffers.
+		if (template.InputBufferCount > 0)
+		{
+			InputBufferBaseParam = paramCount;
+			for (var b = 0; b < template.InputBufferCount; b++)
+			{
+				parameters[paramCount++] = new RootParameter
+				{
+					ParameterType = RootParameterType.TypeSrv,
+					ShaderVisibility = ShaderVisibility.All,
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(template.InputCount + b), RegisterSpace = 0 } },
+				};
+			}
 		}
 		// One static sampler PER sampled input: Slang lowers each combined Sampler2D to a Texture2D + its OWN
 		// SamplerState (texture t_i paired with sampler s_i), so a pass that samples N inputs references s0..s(N-1).

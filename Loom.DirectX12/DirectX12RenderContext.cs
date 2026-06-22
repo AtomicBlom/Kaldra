@@ -127,14 +127,20 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
 	private int _activeConstantsCount;
 
+	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
+	// technique's read-only root SRVs (the structured-buffer SSBO seam). The engine fills this in BeginPass.
+	public const int MaxStorageBuffers = 8;
+	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
+	private int _activeStorageCount;
+
 	/// <summary>
 	/// Tell the context the current pass's colour-target formats + depth format (or <c>FormatUnknown</c> for no
 	/// depth), so techniques bake matching pipelines. <paramref name="depthReadOnly"/> bakes with depth writes
 	/// disabled (a <c>.ReadsDepth</c> pass tests against, but does not disturb, the opaque depth).
-	/// <paramref name="constantsIds"/> are the parameter buffers the pass <c>.Reads</c> (in order), bound to the
-	/// technique's uniform CBVs b1.. at draw time; an in-closure push follows them.
+	/// <paramref name="constantsIds"/> / <paramref name="storageIds"/> are the parameter and storage buffers the
+	/// pass <c>.Reads</c> (in order), bound to the technique's uniform CBVs b1.. and read-only root SRVs at draw time.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default)
+	public void BeginPass(ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
 	{
 		if (_colorFormats.Length < colorFormats.Length)
 			_colorFormats = new DxgiFormat[colorFormats.Length];
@@ -144,6 +150,8 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_depthReadOnly = depthReadOnly;
 		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
 		constantsIds[.._activeConstantsCount].CopyTo(_activeConstantsIds);
+		_activeStorageCount = Math.Min(storageIds.Length, MaxStorageBuffers);
+		storageIds[.._activeStorageCount].CopyTo(_activeStorageIds);
 	}
 
 	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs) =>
@@ -173,6 +181,12 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		}
 		if (inputs.Length > 0)
 			BindInputs(baked, inputs);
+		// The pass's .Reads storage buffers (SSBOs) bind as read-only root SRVs from each UPLOAD buffer's address.
+		if (baked.InputBufferBaseParam >= 0)
+		{
+			for (var s = 0; s < _activeStorageCount; s++)
+				_cmd.SetGraphicsRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients!.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
+		}
 
 		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.DrawInstanced(3, 1, 0, 0); // fullscreen triangle, vertices fabricated from SV_VertexID
