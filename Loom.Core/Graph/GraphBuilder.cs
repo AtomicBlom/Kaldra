@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 
 namespace Loom.Core.Graph;
 
@@ -182,6 +183,17 @@ public sealed class GraphBuilder
 		return (BufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Buffer, BackbufferDomainForPersistent(), scale: 1f, byteSize: byteSize);
 	}
 
+	/// <summary>
+	/// Declare an app-writable parameter buffer of <c>sizeof(T)</c> bytes — a small uniform/constant block a
+	/// technique reads. Fill it by handle each frame (or only on change) with <c>IEngine.Write</c>; a pass that
+	/// <c>.Reads</c> it binds it to the technique's reflected uniform slot, so a technique's live parameters need
+	/// no graph rebuild. <typeparamref name="T"/>'s field layout must match the shader's uniform block on both
+	/// backends (std140 / cbuffer packing — prefer <c>float4</c> rows). Anchored to the backbuffer domain (it has
+	/// no resolution of its own).
+	/// </summary>
+	public ConstantsHandle Constants<T>(string name) where T : unmanaged =>
+		(ConstantsHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Constants, BackbufferDomainForPersistent(), scale: 1f, byteSize: Unsafe.SizeOf<T>());
+
 	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0)
 	{
 		if (!_resourceNames.Add(name))
@@ -191,6 +203,7 @@ public sealed class GraphBuilder
 		{
 			ResourceKind.Depth => new DepthHandle(id, name, format, domain, scale),
 			ResourceKind.Buffer => new BufferHandle(id, name, format, domain, byteSize),
+			ResourceKind.Constants => new ConstantsHandle(id, name, domain, byteSize),
 			// Color / Persistent / Backbuffer are all colour-like images; the lifetime/role lives in Kind.
 			_ => new ColorHandle(id, name, format, kind, domain, scale, count),
 		};

@@ -62,6 +62,13 @@ public sealed class PassBuilder
 	/// <summary>Read a buffer as vertex-attribute data (GPU particles — the draw reads what a compute wrote).</summary>
 	public PassBuilder ReadsVertex(BufferHandle buffer) => Add(AccessKind.ReadVertex, buffer);
 
+	/// <summary>
+	/// Read an app-writable parameter buffer (<see cref="GraphBuilder.Constants{T}"/>) as the technique's
+	/// uniform/constant input. The backend binds it to the technique's reflected uniform slot; the app fills it
+	/// by handle via <c>IEngine.Write</c>. No barrier is derived (the buffer is host-coherent, CPU-written).
+	/// </summary>
+	public PassBuilder Reads(IUniformHandle constants) => Add(AccessKind.ReadUniform, (ResourceHandle)constants);
+
 	/// <summary>Assign this pass to a queue; the graph derives the cross-queue timeline sync.</summary>
 	public PassBuilder Queue(Queue queue)
 	{

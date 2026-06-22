@@ -31,4 +31,11 @@ public enum AccessKind
 
 	/// <summary>A buffer read as vertex-attribute data by a draw (GPU particles, §7.6). (<c>.ReadsVertex</c>)</summary>
 	ReadVertex,
+
+	/// <summary>
+	/// An app-writable parameter buffer read as a shader uniform/constant block. (<c>.Reads</c> of a
+	/// <see cref="ConstantsHandle"/>.) Host-written and host-coherent, so it derives no barrier — the edge only
+	/// binds the buffer to the technique's uniform slot and keeps the resource alive.
+	/// </summary>
+	ReadUniform,
 }

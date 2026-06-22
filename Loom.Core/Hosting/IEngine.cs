@@ -77,6 +77,15 @@ public interface IEngine : IDisposable
 	/// </summary>
 	void SetGraph(RenderGraph graph);
 
+	/// <summary>
+	/// Write <paramref name="value"/> into an app-writable parameter buffer (<see cref="GraphBuilder.Constants{T}"/>)
+	/// of the active graph. The value reaches the technique that <c>.Reads</c> the buffer on the next frame(s); the
+	/// last write persists until overwritten, so write every frame for animated params or only on change for static
+	/// ones. <typeparamref name="T"/> must match the buffer's declared size (and the shader's uniform-block layout).
+	/// The graph captures only the stable handle, so this never rebuilds it — it just updates the bytes the shader reads.
+	/// </summary>
+	void Write<T>(ConstantsHandle handle, in T value) where T : unmanaged;
+
 	/// <summary>Render one frame of the active graph from <paramref name="inputs"/> (Planning.md §5 <c>graph.Render</c>).</summary>
 	void Render(FrameInputs inputs);
 
@@ -84,11 +93,14 @@ public interface IEngine : IDisposable
 	void Resize(int width, int height);
 
 	/// <summary>
-	/// Sample the CPU-side readback of the graph's <c>g.Readback</c> target at a target-space pixel (Planning.md
-	/// §7.4 picking). Returns the value from a frame or two ago (the readback latency is real); 0 outside the
-	/// populated region, before warm-up, or when the graph declared no readback.
+	/// Read back the CPU-side copy of a <c>g.Readback</c> target's contents — the GPU→CPU edge (Planning.md §7.4).
+	/// Returns the resource's texels tightly packed in its declared format (no row padding, the same byte layout on
+	/// every backend), so the app decodes whatever format it chose — the picking path reads its R16F id at the cursor.
+	/// The bytes are a frame or two old (the latency is real) and empty before the first frame populates the target
+	/// or when <paramref name="handle"/> is not one the graph declared with <c>g.Readback</c>. The copy is from a
+	/// frame the GPU has finished, so it never races in-flight work.
 	/// </summary>
-	float SamplePick(int x, int y);
+	ReadOnlySpan<byte> Read(ResourceHandle handle);
 
 	/// <summary>Capture the next presented frame to a PNG at <paramref name="path"/> (debug/validation). Synchronous on that frame.</summary>
 	void RequestCapture(string path);
@@ -102,7 +114,7 @@ public interface IEngine : IDisposable
 
 	/// <summary>
 	/// Per-pass GPU timings from the most recently <em>completed</em> frame (a frame or two stale, like
-	/// <see cref="SamplePick"/> — timestamps are read back after the slot's fence). In execution order; the entries
+	/// <see cref="Read"/> — timestamps are read back after the slot's fence). In execution order; the entries
 	/// align with the active graph's leaf passes. Empty when timing is disabled or no timed frame has retired.
 	/// </summary>
 	IReadOnlyList<PassTiming> LastFrameTimings { get; }

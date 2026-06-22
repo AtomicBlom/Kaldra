@@ -14,6 +14,7 @@ using VMASharp;
 using Buffer = Silk.NET.Vulkan.Buffer;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 using VkFormat = Silk.NET.Vulkan.Format;
+using GraphFormat = Loom.Core.Graph.Format;
 
 namespace Loom.Vulkan;
 
@@ -84,16 +85,22 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	private Semaphore[] _renderFinished = []; // per swapchain image
 	private Fence[] _inFlight = [];           // per frame-in-flight
 
-	// GPU→CPU readback (§7.4 picking): the first g.Readback target is copied to a per-slot host-visible
-	// buffer each frame; the result is read back ~2 frames later (when the slot's fence next signals), kept
-	// in _readbackCpu as decoded floats. -1 = no readback declared. Graph-level (rebuilt by SetGraph).
-	private int _readbackId = -1;
-	private Buffer[] _readbackBuffers = [];
-	private DeviceMemory[] _readbackMemories = [];
-	private bool[] _readbackValid = [];
-	private float[] _readbackCpu = [];
-	private int _readbackWidth;
-	private int _readbackHeight;
+	// GPU→CPU readback (§7.4): each g.Readback target is copied to a per-slot host-visible buffer every frame; the
+	// result is read back ~2 frames later (when the slot's fence next signals) and handed to StoreReadback as the
+	// raw, tightly-packed texels IEngine.Read returns. Rebuilt by SetGraph; empty when the graph declares no readback.
+	private readonly List<ReadbackBuffers> _readbacks = [];
+
+	// One g.Readback target's GPU→CPU staging: a host-visible buffer per frame slot the executor copies the target's
+	// image into. The copy is tightly packed (Vulkan's image→buffer copy carries no row padding), so a slot's buffer
+	// is handed straight to StoreReadback once its fence signals.
+	private sealed class ReadbackBuffers(int id, int width, int height, int bytesPerTexel, Buffer[] buffers, DeviceMemory[] memories)
+	{
+		public int Id => id;
+		public int ByteCount => width * height * bytesPerTexel;
+		public Buffer[] Buffers => buffers;
+		public DeviceMemory[] Memories => memories;
+		public bool[] Valid { get; } = new bool[buffers.Length];
+	}
 
 	// GPU per-pass timing (§12 M13 profiler): a TIMESTAMP query pool per frame slot, 2 queries (begin/end) per
 	// pass. Decoded after the slot's fence — like the picking readback above — so the numbers are a frame or two
@@ -110,7 +117,6 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	private Camera[] _frameCascades = [];
 	private IReadOnlyList<float> _frameCascadeSplits = [];
 	private float _frameTime;
-	private uint _frameHover;
 	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _frameDrawLists = [];
 
 	private int _currentFrame;
@@ -260,19 +266,16 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		_transients = new VulkanTransientResources(_ctx, executed, Aliases, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
 		_context.SetTransients(_transients);
 
-		// Readback staging (§7.4): one host-visible buffer per frame slot for the first g.Readback target.
-		if (authored.ReadbackTargets.Length > 0)
+		// Readback staging (§7.4): one host-visible buffer per frame slot for each g.Readback target.
+		foreach (var target in authored.ReadbackTargets)
 		{
-			var target = authored.ReadbackTargets[0];
-			_readbackId = target.Id;
-			(_readbackWidth, _readbackHeight) = target.Resolve();
-			_readbackCpu = new float[_readbackWidth * _readbackHeight];
-			var bytes = (ulong)_readbackWidth * (ulong)_readbackHeight * 2; // R16F = 2 bytes/texel
-			_readbackBuffers = new Buffer[MaxFramesInFlight];
-			_readbackMemories = new DeviceMemory[MaxFramesInFlight];
-			_readbackValid = new bool[MaxFramesInFlight];
+			var (width, height) = target.Resolve();
+			var bpt = BytesPerTexel(target.Format);
+			var buffers = new Buffer[MaxFramesInFlight];
+			var memories = new DeviceMemory[MaxFramesInFlight];
 			for (var i = 0; i < MaxFramesInFlight; i++)
-				(_readbackBuffers[i], _readbackMemories[i]) = CreateStagingBuffer(bytes);
+				(buffers[i], memories[i]) = CreateStagingBuffer((ulong)(width * height * bpt));
+			_readbacks.Add(new ReadbackBuffers(target.Id, width, height, bpt, buffers, memories));
 		}
 
 		// GPU-timing pools (M13): 2 timestamps (begin/end) per pass, one pool per frame slot. Sized to this graph's
@@ -292,13 +295,6 @@ internal sealed unsafe class VulkanEngine : EngineBase
 			for (var i = 0; i < MaxFramesInFlight; i++)
 				_vk.CreateQueryPool(_ctx.Device, in info, null, out _timingPools[i]).Check("vkCreateQueryPool");
 		}
-	}
-
-	public override float SamplePick(int x, int y)
-	{
-		if (_readbackId < 0 || (uint)x >= (uint)_readbackWidth || (uint)y >= (uint)_readbackHeight)
-			return 0f;
-		return _readbackCpu[y * _readbackWidth + x];
 	}
 
 	public override void Resize(int width, int height)
@@ -353,7 +349,6 @@ internal sealed unsafe class VulkanEngine : EngineBase
 			_frameCascades[i] = ClipSpace(inputs.Cascades[i]);
 		_frameCascadeSplits = inputs.CascadeSplits;
 		_frameTime = inputs.Time;
-		_frameHover = inputs.HoverId;
 		_frameDrawLists = inputs.DrawLists;
 		DrawFrame((float)inputs.DeltaSeconds);
 	}
@@ -367,9 +362,9 @@ internal sealed unsafe class VulkanEngine : EngineBase
 
 		_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
 
-		// The fence just signalled, so this slot's readback buffer holds the copy from when it last ran (~2
-		// frames ago). Decode it into _readbackCpu before this frame overwrites it — that's the latency §7.4
-		// is upfront about. (Done before recording, so SamplePick always sees the freshest available.)
+		// The fence just signalled, so this slot's readback buffers hold the copies from when it last ran (~2
+		// frames ago). Hand them to StoreReadback before this frame overwrites them — that's the latency §7.4
+		// is upfront about. (Done before recording, so IEngine.Read always sees the freshest available.)
 		DownloadReadback(_currentFrame);
 		// Same story for the timing pool: the fence guarantees this slot's last timestamps are complete.
 		DownloadTimings(_currentFrame);
@@ -481,7 +476,13 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameHover, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameCascadeSplits, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
+
+		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it. Re-uploading
+		// every frame (cheap — these are tiny) means the last IEngine.Write persists across frames, so a static
+		// param is written once and an animated one is written per frame; either way the slot the GPU reads is current.
+		foreach (var (id, bytes) in ConstantsShadows)
+			_transients!.WriteConstants(_currentFrame, id, bytes);
 
 		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).
@@ -539,44 +540,57 @@ internal sealed unsafe class VulkanEngine : EngineBase
 			_ctx.EndDebugLabel(cmd);
 	}
 
-	// Copy the readback target (its last graph use is a .Samples, so it's in SHADER_READ) into this slot's
-	// host-visible buffer. The slot's fence guards it; DownloadReadback decodes it ~2 frames later. §7.4.
+	// Copy each readback target (its last graph use is a .Samples, so it's in SHADER_READ) into this slot's
+	// host-visible buffer. The slot's fence guards them; DownloadReadback hands them to the app ~2 frames later. §7.4.
 	private void RecordReadback(CommandBuffer cmd)
 	{
-		if (_readbackId < 0)
-			return;
-
-		ref var image = ref _transients!.Get(_currentFrame, _readbackId);
-		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
-		TransitionImage(cmd, image.Image, range,
-			ImageLayout.ShaderReadOnlyOptimal, ImageLayout.TransferSrcOptimal,
-			PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit,
-			PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit);
-
-		BufferImageCopy region = new()
+		foreach (var readback in _readbacks)
 		{
-			ImageSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.ColorBit, LayerCount = 1 },
-			ImageExtent = new Extent3D(image.Extent.Width, image.Extent.Height, 1),
-		};
-		_vk.CmdCopyImageToBuffer(cmd, image.Image, ImageLayout.TransferSrcOptimal, _readbackBuffers[_currentFrame], 1, in region);
-		_readbackValid[_currentFrame] = true;
+			ref var image = ref _transients!.Get(_currentFrame, readback.Id);
+			var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
+			TransitionImage(cmd, image.Image, range,
+				ImageLayout.ShaderReadOnlyOptimal, ImageLayout.TransferSrcOptimal,
+				PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit,
+				PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit);
+
+			BufferImageCopy region = new()
+			{
+				ImageSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.ColorBit, LayerCount = 1 },
+				ImageExtent = new Extent3D(image.Extent.Width, image.Extent.Height, 1),
+			};
+			_vk.CmdCopyImageToBuffer(cmd, image.Image, ImageLayout.TransferSrcOptimal, readback.Buffers[_currentFrame], 1, in region);
+			readback.Valid[_currentFrame] = true;
+		}
 	}
 
-	// Decode this slot's readback buffer (R16F halves → floats) into _readbackCpu. Called after the slot's
-	// fence signals, so the data is the copy from when the slot last ran (a frame or two ago).
+	// Hand this slot's readback buffers to StoreReadback as raw, tightly-packed bytes (Vulkan's image→buffer copy
+	// carries no row padding). Called after the slot's fence signals, so the data is the copy from when the slot
+	// last ran (a frame or two ago); the app decodes whatever format it declared.
 	private void DownloadReadback(int slot)
 	{
-		if (_readbackId < 0 || !_readbackValid[slot])
-			return;
-
-		var count = _readbackWidth * _readbackHeight;
-		void* mapped;
-		_vk.MapMemory(_ctx.Device, _readbackMemories[slot], 0, (ulong)count * 2, 0, &mapped).Check("vkMapMemory");
-		var halves = new ReadOnlySpan<Half>(mapped, count);
-		for (var i = 0; i < count; i++)
-			_readbackCpu[i] = (float)halves[i];
-		_vk.UnmapMemory(_ctx.Device, _readbackMemories[slot]);
+		foreach (var readback in _readbacks)
+		{
+			if (!readback.Valid[slot])
+				continue;
+			var count = readback.ByteCount;
+			void* mapped;
+			_vk.MapMemory(_ctx.Device, readback.Memories[slot], 0, (ulong)count, 0, &mapped).Check("vkMapMemory");
+			StoreReadback(readback.Id, new ReadOnlySpan<byte>(mapped, count));
+			_vk.UnmapMemory(_ctx.Device, readback.Memories[slot]);
+		}
 	}
+
+	// Bytes per texel of a readback target's format — the stride StoreReadback hands the app, and the size of each
+	// per-slot staging buffer. Extend as new readback formats appear (the picking id buffer is R16F).
+	private static int BytesPerTexel(GraphFormat format) => format switch
+	{
+		GraphFormat.R16F => 2,
+		GraphFormat.Rg16F => 4,
+		GraphFormat.R32Uint => 4,
+		GraphFormat.Rgba8Unorm or GraphFormat.Rgba8Srgb => 4,
+		GraphFormat.Rgba16F => 8,
+		_ => throw new NotSupportedException($"Vulkan: readback of format {format} is not supported."),
+	};
 
 	// Read this slot's timestamps (begin/end per pass) and decode them into _timings + the frame total. Called after
 	// the slot's fence signals, so the queries are complete. Mask to the queue's valid bits before decoding; the
@@ -599,11 +613,14 @@ internal sealed unsafe class VulkanEngine : EngineBase
 
 	private void RecordPass(CommandBuffer cmd, PassBarriers pass)
 	{
+		// The app-writable parameter buffer this pass .Reads (or -1) — bound to the technique's uniform slot.
+		var constantsId = ConstantsIdOf(pass.Pass);
+
 		// Compute passes have no attachments and no dynamic-rendering scope — just bind + dispatch. The
 		// resource transitions (storage GENERAL, the consumer's SHADER_READ) were already emitted before this.
 		if (pass.Pass.Kind == PassKind.Compute)
 		{
-			_context.BeginPass([], default, false); // no colour/depth targets; keeps the bake key stable
+			_context.BeginPass([], default, false, constantsId); // no colour/depth targets; keeps the bake key stable
 			pass.Pass.Record?.Invoke(_context);
 			return;
 		}
@@ -678,10 +695,19 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		Rect2D scissor = new(new Offset2D(0, 0), area);
 		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
 
-		_context.BeginPass(new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly);
+		_context.BeginPass(new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly, constantsId);
 		pass.Pass.Record?.Invoke(_context);
 
 		_vk.CmdEndRendering(cmd);
+	}
+
+	// The id of the app-writable parameter buffer a pass reads (its .Reads / ReadUniform edge), or -1 if none.
+	private static int ConstantsIdOf(GraphPass pass)
+	{
+		foreach (var access in pass.Accesses)
+			if (access.Kind == AccessKind.ReadUniform)
+				return access.Resource.Id;
+		return -1;
 	}
 
 	// Terminal: hand the present target to the swapchain, copying it out first if a capture was requested.
@@ -966,18 +992,17 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		_transients?.Dispose();
 		_transients = null;
 
-		for (var i = 0; i < _readbackBuffers.Length; i++)
+		foreach (var readback in _readbacks)
 		{
-			if (_readbackBuffers[i].Handle != 0)
-				_vk.DestroyBuffer(_ctx.Device, _readbackBuffers[i], null);
-			if (_readbackMemories[i].Handle != 0)
-				_vk.FreeMemory(_ctx.Device, _readbackMemories[i], null);
+			for (var i = 0; i < readback.Buffers.Length; i++)
+			{
+				if (readback.Buffers[i].Handle != 0)
+					_vk.DestroyBuffer(_ctx.Device, readback.Buffers[i], null);
+				if (readback.Memories[i].Handle != 0)
+					_vk.FreeMemory(_ctx.Device, readback.Memories[i], null);
+			}
 		}
-		_readbackBuffers = [];
-		_readbackMemories = [];
-		_readbackValid = [];
-		_readbackCpu = [];
-		_readbackId = -1;
+		_readbacks.Clear();
 
 		foreach (var pool in _timingPools)
 			if (pool.Handle != 0)

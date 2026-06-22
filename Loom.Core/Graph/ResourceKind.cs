@@ -26,6 +26,15 @@ public enum ResourceKind
 	Persistent,
 
 	/// <summary>
+	/// An app-writable parameter buffer — a small, host-visible block a technique reads as a uniform/constant
+	/// buffer. The app fills it by handle (<c>IEngine.Write</c>); a pass that <c>.Reads</c> it binds it to the
+	/// technique's reflected uniform slot. Backed by one host-visible buffer per frame in flight (so a CPU write
+	/// never races the GPU read of a frame still in flight), never aliased, and needs no barrier (host-coherent,
+	/// CPU-written then shader-read). Sized in bytes (<see cref="ResourceHandle.ByteSize"/>).
+	/// </summary>
+	Constants,
+
+	/// <summary>
 	/// The swapchain colour target. Lives in the backbuffer domain at native resolution; its concrete
 	/// format is chosen by the backend (the surface format), not by the author.
 	/// </summary>
