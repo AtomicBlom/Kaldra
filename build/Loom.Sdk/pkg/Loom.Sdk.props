@@ -1,0 +1,49 @@
+<Project>
+
+  <!--
+    Loom.Sdk consumer entry props — auto-injected by NuGet when a project references the Loom.Sdk package.
+
+    Sets backend flag defaults and conditionally injects PackageReferences for the selected backends.
+    Loom.Core, Loom.Graph, and Loom.Assets arrive transitively through the backend packages; consumers
+    do not need to reference them directly.
+
+    To customise, set the properties BEFORE referencing Loom.Sdk (in Directory.Build.props or in the
+    project file above the <PackageReference Include="Loom.Sdk" />):
+        <UseVulkan>true</UseVulkan>
+        <UseDirectX12>false</UseDirectX12>
+        <UseSUIsei>true</UseSUIsei>
+  -->
+
+  <!-- Backend flag defaults. -->
+  <PropertyGroup>
+    <UseVulkan     Condition="'$(UseVulkan)'     == ''">true</UseVulkan>
+    <UseDirectX12  Condition="'$(UseDirectX12)'  == ''">false</UseDirectX12>
+    <UseSUIsei     Condition="'$(UseSUIsei)'     == ''">false</UseSUIsei>
+  </PropertyGroup>
+
+  <!-- Shader-compile property defaults (before the project body so consumers can override). -->
+  <Import Project="$(MSBuildThisFileDirectory)Sdk/Loom.Shaders.props" />
+
+  <!-- Slang compiler: resolved as $(PkgSlang_Sdk) for use in Loom.Shaders.targets. Build-only. -->
+  <ItemGroup>
+    <PackageReference Include="Slang.Sdk" Version="0.5.1"
+                      GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
+  <!-- Backend packages: injected based on the Use* flags above. -->
+  <ItemGroup Condition="'$(UseVulkan)' == 'true'">
+    <PackageReference Include="Loom.Backend.Vulkan" Version="0.1.0-preview.1" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseDirectX12)' == 'true'">
+    <PackageReference Include="Loom.Backend.DirectX12" Version="0.1.0-preview.1" />
+  </ItemGroup>
+
+  <!-- SUIsei UI integration (optional). Loom.UI.SUIsei depends on the standalone SUIsei runtime, so both
+       arrive transitively from this one reference. -->
+  <ItemGroup Condition="'$(UseSUIsei)' == 'true'">
+    <PackageReference Include="Loom.UI.SUIsei" Version="0.1.0-preview.1" />
+  </ItemGroup>
+
+  <!-- Dear ImGui overlay is fully standalone — reference Loom.UI.ImGui directly to opt in. -->
+
+</Project>

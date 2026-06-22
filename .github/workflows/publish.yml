@@ -1,0 +1,95 @@
+name: Publish NuGet packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (pack but do not push)'
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  publish:
+    name: Pack and publish
+    # windows-latest for Windows SDK DXC (signed DXIL) + Slang hermetic slangc
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0   # needed by SourceLink for full git history
+          # PAT required for the private SUIsei submodule; GITHUB_TOKEN is scoped to this repo only.
+          token: ${{ secrets.PAT }}
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Loom.slnx
+
+      # Build once in Release — ImGui is no longer a flag, Loom.UI.ImGui is an opt-in package.
+      # UseDebugVisualization is disabled for published packages (arm64 marshal workaround pending).
+      - name: Build
+        run: >
+          dotnet build Loom.slnx -c Release --no-restore
+          -p:UseDebugVisualization=false
+
+      # Generate LLM orientation files before packing (llms.txt is included in Loom.nupkg).
+      - name: Generate LLM docs
+        run: dotnet run --file tools/generate-llms-docs.cs
+
+      # Pack in dependency order so each nupkg is self-consistent before the next one references it.
+      # VMASharp and SUIsei are submodules with their own projects; pack them from there.
+      - name: Pack
+        run: |
+          $noBuild  = "-c Release --no-build -o out/"
+          $withBuild = "-c Release -o out/"
+          # Submodule dependencies (no central version management — inline versions in their csprojs)
+          dotnet pack external/VMASharp/VMASharp/VMASharp.csproj               $noBuild
+          dotnet pack external/SUIsei/SUIsei/SUIsei.csproj                     $noBuild
+          # Core chain
+          dotnet pack Loom.Core/Loom.Core.csproj                               $noBuild
+          dotnet pack Loom.Graph/Loom.Graph.csproj                             $noBuild
+          dotnet pack Loom.Assets/Loom.Assets.csproj                           $noBuild
+          # Backends (embed shaders as EmbeddedResource — no runtime Content items needed)
+          dotnet pack Loom.Vulkan/Loom.Vulkan.csproj                           $noBuild
+          dotnet pack Loom.DirectX12/Loom.DirectX12.csproj                     $noBuild
+          # UI integrations: Content-mode shaders are added by LoomRegisterShaders (a Build target),
+          # so --no-build would skip that target and produce a package with no shaders.
+          # The build step above already compiled everything; this incremental build is instant.
+          dotnet pack Loom.UI.SUIsei/Loom.UI.SUIsei.csproj                    $withBuild
+          dotnet pack Loom.UI.ImGui/Loom.UI.ImGui.csproj                       $withBuild
+          # MSBuild SDK entry point (pure metadata, no build output)
+          dotnet pack build/Loom.Sdk/Loom.Sdk.csproj                          $noBuild
+        shell: pwsh
+
+      - name: List packages
+        run: Get-ChildItem out/ | Select-Object Name, Length | Format-Table
+        shell: pwsh
+
+      - name: Push packages
+        if: ${{ !inputs.dry_run }}
+        run: >
+          dotnet nuget push "out/*.nupkg"
+          --source "https://nuget.pkg.github.com/AtomicBlom/index.json"
+          --api-key ${{ secrets.GITHUB_TOKEN }}
+          --skip-duplicate
+
+      - name: Push symbol packages
+        if: ${{ !inputs.dry_run }}
+        run: >
+          dotnet nuget push "out/*.snupkg"
+          --source "https://nuget.pkg.github.com/AtomicBlom/index.json"
+          --api-key ${{ secrets.GITHUB_TOKEN }}
+          --skip-duplicate

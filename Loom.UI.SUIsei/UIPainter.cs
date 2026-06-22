@@ -27,14 +27,21 @@ public sealed class UIPainter
 	private const float HdrPaperWhiteScale = 200f / 80f;
 
 	private readonly UIHost _host;
-	// The UI textures a command selects by index: the 1×1 white texel (fills/borders) at 0, the optional MTSDF glyph
-	// atlas at 1. Held in one reused array so each Draw binds the span without a per-frame allocation.
-	private readonly Texture[] _textures;
+	private readonly IEngine _engine;
+	private readonly Texture _white;
+	// The base UI textures a command selects by index: the 1×1 white texel (fills/borders) at 0, the optional MTSDF
+	// glyph atlas at 1. Reused directly for image-free lists (no per-frame allocation); a list that references images
+	// gets a wider array resolved in ResolveTextures.
+	private readonly Texture[] _baseTextures;
+	// Images uploaded once and cached by their stable ImageSource.TextureIndex (≥ 2).
+	private readonly Dictionary<int, Texture> _imageTextures = [];
 
-	private UIPainter(UIHost host, Texture white, Texture? font)
+	private UIPainter(IEngine engine, UIHost host, Texture white, Texture? font)
 	{
+		_engine = engine;
 		_host = host;
-		_textures = font is { } f ? [white, f] : [white];
+		_white = white;
+		_baseTextures = font is { } f ? [white, f] : [white];
 	}
 
 	/// <summary>
@@ -51,13 +58,13 @@ public sealed class UIPainter
 
 		Texture? font = null;
 		if (fontAtlas is null)
-			return new UIPainter(host, white, font);
+			return new UIPainter(engine, host, white, font);
 
 		var img = fontAtlas.Image;
 		var td = TextureData.FromRgba8(img.Width, img.Height, img.Pixels.ToArray(), TextureFormat.Rgba8Unorm, generateMips: false);
 		font = engine.CreateTexture(td);
 
-		return new UIPainter(host, white, font);
+		return new UIPainter(engine, host, white, font);
 	}
 
 	/// <summary>
@@ -94,6 +101,38 @@ public sealed class UIPainter
 
 		// SUIsei.Drawing.OverlayVertex has the same binary layout as Loom.Core.Geometry.OverlayVertex;
 		// TVertex is inferred from draw.Vertices.Span — the backend sees raw bytes either way.
-		ctx.DrawList(Technique, _textures, draw.Vertices.Span, draw.Indices.Span, loomCommands, push);
+		ctx.DrawList(Technique, ResolveTextures(draw), draw.Vertices.Span, draw.Indices.Span, loomCommands, push);
+	}
+
+	// The texture array a frame binds, indexed by command TextureIndex. The image-free fast path reuses the shared
+	// base array (white + optional glyph atlas); a frame that references images gets a wider array with each image
+	// uploaded once (cached by index) and any gap filled with the white texel.
+	private Texture[] ResolveTextures(DrawListData draw)
+	{
+		if (draw.Images.Count == 0)
+			return _baseTextures;
+
+		var max = _baseTextures.Length - 1;
+		foreach (var image in draw.Images)
+		{
+			if (image.TextureIndex > max)
+				max = image.TextureIndex;
+		}
+
+		var textures = new Texture[max + 1];
+		for (var i = 0; i < textures.Length; i++)
+			textures[i] = i < _baseTextures.Length ? _baseTextures[i] : _white;
+
+		foreach (var image in draw.Images)
+		{
+			if (!_imageTextures.TryGetValue(image.TextureIndex, out var texture))
+			{
+				var atlas = image.Pixels;
+				texture = _engine.CreateTexture(TextureData.FromRgba8(atlas.Width, atlas.Height, atlas.Pixels.ToArray(), TextureFormat.Rgba8Unorm, generateMips: false));
+				_imageTextures[image.TextureIndex] = texture;
+			}
+			textures[image.TextureIndex] = texture;
+		}
+		return textures;
 	}
 }

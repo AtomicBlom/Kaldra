@@ -104,22 +104,36 @@
       <LoomDxilFile Include="$([System.IO.Directory]::GetFiles('$(LoomShaderOutDir)', '*.dxil'))" />
     </ItemGroup>
 
-    <!-- Content (app): loose .spv/.json (+ signed DXIL) copied to the output under shaders\, flowing to the
-         app's bin (and to projects that reference this one). -->
+    <!-- Content (app/UI package): loose .spv/.json (+ signed DXIL) copied to shaders\ in the project output,
+         flowing via P2P project references to consuming app's bin.
+
+         PackagePath is set so NuGet packs each file into contentFiles/any/any/shaders/ — the explicit
+         PackagePath overrides NuGet's default path calculation (which would otherwise use the obj\shaders\
+         relative path as the target). PackageCopyToOutput=true maps to copyToOutput="true" in the nuspec
+         <contentFiles> section so the files are copied to a consuming project's output at restore time.
+
+         Do NOT add Pack=false here: that would add the files to _PackageFilesToExclude, which blacklists
+         them from appearing in the package even when re-added via other item groups. -->
     <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content'">
       <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         <Link>shaders\%(Filename).spv</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(Filename).spv</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
       <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         <Link>shaders\%(Filename).json</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(Filename).json</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
       <Content Include="@(LoomDxilFile)">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         <Link>shaders\%(Filename)%(Extension)</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(Filename)%(Extension)</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
     </ItemGroup>
@@ -146,5 +160,6 @@
       </EmbeddedResource>
     </ItemGroup>
   </Target>
+
 
 </Project>

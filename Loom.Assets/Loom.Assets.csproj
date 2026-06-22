@@ -9,6 +9,14 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <PropertyGroup Label="NuGet">
+    <PackageId>Loom.Assets</PackageId>
+    <Description>Neutral asset I/O layer for Loom — image decoding (StbImageSharp), glTF model loading (SharpGLTF), CPU mip generation. No graphics-API reference.</Description>
+    <PackageTags>vulkan;directx12;rendergraph;gamedev;assets;gltf;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
   </ItemGroup>

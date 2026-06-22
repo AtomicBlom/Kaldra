@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- Pure build-tool package: ships MSBuild props/targets + shader compile machinery; no runtime assembly. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- No code -> no symbols package needed. -->
+    <IncludeSymbols>false</IncludeSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>Loom.Sdk</PackageId>
+    <Description>MSBuild SDK for Loom game projects. Reference this package to pull in the selected backends (UseVulkan, UseDirectX12, UseSUIsei flags) and compile Slang shaders in Content mode (set LoomShaderSourceDir + LoomShaderOutputMode=Content).</Description>
+    <PackageTags>sdk;msbuild;rendergraph;gamedev;dotnet;slang;shaders</PackageTags>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- NU5128: no lib/net10.0 folder by design — this is a build-tool / MSBuild SDK package. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Consumer entry points: NuGet auto-injects build/<PackageId>.{props,targets} into every
+         project that references this package — props early (before the project body), targets late. -->
+    <None Include="pkg\Loom.Sdk.props"    Pack="true" PackagePath="build\Loom.Sdk.props" />
+    <None Include="pkg\Loom.Sdk.targets"  Pack="true" PackagePath="build\Loom.Sdk.targets" />
+    <!-- Shader-compile machinery shipped under build/Sdk/ and imported by the props/targets above. -->
+    <None Include="Loom.Shaders.props"    Pack="true" PackagePath="build\Sdk\Loom.Shaders.props" />
+    <None Include="Loom.Shaders.targets"  Pack="true" PackagePath="build\Sdk\Loom.Shaders.targets" />
+  </ItemGroup>
+
+</Project>

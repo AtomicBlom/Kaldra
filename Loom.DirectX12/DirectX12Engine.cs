@@ -413,6 +413,11 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
 		var storageCount = CollectStorageIds(pass.Pass, storageIds);
 		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
+
+		// Hand the context this pass's render-target handles + extent so a draw-list group-opacity layer can rebind
+		// the pass scope after detouring through an offscreen target.
+		_context.SetColorScope(new ReadOnlySpan<CpuDescriptorHandle>(rtv, colorCount), width, height);
+
 		pass.Pass.Record?.Invoke(_context);
 	}
 

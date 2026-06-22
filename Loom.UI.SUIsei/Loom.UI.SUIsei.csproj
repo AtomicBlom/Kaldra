@@ -17,6 +17,14 @@
     <LoomShaderOutputMode>Content</LoomShaderOutputMode>
   </PropertyGroup>
 
+  <PropertyGroup Label="NuGet">
+    <PackageId>Loom.UI.SUIsei</PackageId>
+    <Description>Integrates the SUIsei retained-mode UI runtime with the Loom render graph — bridges the SUIsei compositor with Loom's backend-neutral draw path.</Description>
+    <PackageTags>ui;suisei;rendergraph;gamedev;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
   <!-- Glue between the standalone SUIsei UI runtime and the Loom render graph. References both sides;
        neither SUIsei nor Loom.Core reference each other. -->
   <ItemGroup>
