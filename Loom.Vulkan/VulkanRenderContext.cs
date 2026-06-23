@@ -257,7 +257,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	public void Draw(Mesh mesh, string technique, Camera view)
 	{
 		var baked = Bake(technique);
-		var mvp = view.ViewProjection; // model is identity for now; per-object transforms come later
+		var mvp = view.ViewProjectionMatrix; // model is identity for now; per-object transforms come later
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
@@ -269,7 +269,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	{
 		var baked = Bake(technique);
 		var template = _registry[technique];
-		var mvp = view.ViewProjection;
+		var mvp = view.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 
@@ -353,7 +353,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	public void DrawInstanced(string technique, BufferHandle instances, int vertexCount, int instanceCount)
 	{
 		var baked = Bake(technique);
-		var mvp = _view.ViewProjection;
+		var mvp = _view.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// The buffer IS the per-instance vertex stream (binding 0); the technique fabricates vertexCount verts per
@@ -369,7 +369,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		if (instances.Length == 0)
 			return;
 		var baked = Bake(technique);
-		var mvp = _view.ViewProjection; // the per-instance world matrix rides in the instance stream
+		var mvp = _view.ViewProjectionMatrix; // the per-instance world matrix rides in the instance stream
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
@@ -379,7 +379,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	public void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count)
 	{
 		var baked = Bake(technique);
-		var mvp = _view.ViewProjection;
+		var mvp = _view.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// The instance stream is a graph storage buffer a compute filled; the pass's .ReadsVertex derived the barrier.
@@ -434,7 +434,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view)
 	{
 		var baked = Bake(technique);
-		var mvp = view.ViewProjection;
+		var mvp = view.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// The per-vertex stream is the compute's skinned output (MeshStandard-shaped); the mesh contributes its index buffer.
@@ -448,7 +448,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	{
 		var baked = Bake(technique);
 		var template = _registry[technique];
-		var mvp = view.ViewProjection;
+		var mvp = view.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		if (template.SampleCount > 0)
@@ -463,7 +463,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			return;
 		var baked = Bake(technique);
 		var template = _registry[technique];
-		var mvp = _view.ViewProjection; // the per-instance world data rides in the instance stream
+		var mvp = _view.ViewProjectionMatrix; // the per-instance world data rides in the instance stream
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// Material atlas → the technique's reflected sampler slots, identical to Draw(mesh, material): every
@@ -480,7 +480,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			return;
 		var baked = Bake(technique);
 		var template = _registry[technique];
-		var mvp = _view.ViewProjection;
+		var mvp = _view.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// The per-frame uniform block (M15-0) — e.g. foliage wind, read in the vertex stage; bound alongside the
@@ -497,7 +497,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		if (instances.Length == 0)
 			return;
 		var baked = Bake(technique);
-		var mvp = _view.ViewProjection;
+		var mvp = _view.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// Sampled graph resources (the G-buffer) → sampled slots 0..N-1, identical to FullScreen: each instanced
@@ -512,7 +512,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	{
 		var baked = Bake(technique);
 		var template = _registry[technique];
-		var mvp = _view.ViewProjection;
+		var mvp = _view.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// The atlas → reflected sampler slots, so the fabricated quads can sub-UV sample per frame.

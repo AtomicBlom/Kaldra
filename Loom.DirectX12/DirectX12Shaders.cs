@@ -120,7 +120,7 @@ internal static unsafe class DirectX12Shaders
 		// constant at b0, the DirectX12 counterpart of Vulkan's vertex push constant), and shades each fragment with
 		// one directional key light + flat ambient, colouring albedo by normal so each cube face reads distinctly.
 		// Proves the mesh-draw path: vertex buffers + index buffer + depth test + the MVP root constant. The
-		// matrix math mirrors lit.slang exactly: mul(mvp, position) with the raw row-major Camera.ViewProjection
+		// matrix math mirrors lit.slang exactly: mul(mvp, position) with the raw row-major Camera.ViewProjectionMatrix
 		// (FXC's column-major cbuffer packing transposes it, yielding the row-vector clip = position·MVP).
 		["lit"] = ("""
 			cbuffer Push : register(b0) { float4x4 mvp; };

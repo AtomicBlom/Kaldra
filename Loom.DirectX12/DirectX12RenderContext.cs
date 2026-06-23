@@ -220,10 +220,10 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		// The MVP root constant (model is identity for now). The raw row-major Camera.ViewProjection is copied
+		// The MVP root constant (model is identity for now). The raw row-major Camera.ViewProjectionMatrix is copied
 		// as 16 DWORDs; the lit shader's column-major cbuffer packing transposes it back into the row-vector
 		// clip = position·MVP the math expects (the same convention the Vulkan vertex push uses).
-		var mvp = view.ViewProjection;
+		var mvp = view.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -238,7 +238,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = view.ViewProjection;
+		var mvp = view.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -462,7 +462,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = View.ViewProjection;
+		var mvp = View.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -488,7 +488,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = View.ViewProjection; // the per-instance world matrix rides in the instance stream
+		var mvp = View.ViewProjectionMatrix; // the per-instance world matrix rides in the instance stream
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -511,7 +511,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = View.ViewProjection;
+		var mvp = View.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -569,7 +569,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = view.ViewProjection;
+		var mvp = view.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -586,7 +586,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = view.ViewProjection;
+		var mvp = view.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -612,7 +612,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = View.ViewProjection; // the per-instance world data rides in the instance stream
+		var mvp = View.ViewProjectionMatrix; // the per-instance world data rides in the instance stream
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -640,7 +640,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = View.ViewProjection;
+		var mvp = View.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -670,7 +670,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = View.ViewProjection;
+		var mvp = View.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -699,7 +699,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = View.ViewProjection;
+		var mvp = View.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
