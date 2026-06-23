@@ -43,15 +43,34 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Restore only the projects that get packed — Loom.Sandbox and Loom.Tests are excluded
+      # to avoid compiling their demo shaders (not publish artifacts).
       - name: Restore
-        run: dotnet restore Loom.slnx
+        shell: pwsh
+        run: |
+          $projects = @(
+            "external/SUIsei/SUIsei/SUIsei.csproj",
+            "Loom.Vulkan/Loom.Vulkan.csproj",
+            "Loom.DirectX12/Loom.DirectX12.csproj",
+            "Loom.UI.SUIsei/Loom.UI.SUIsei.csproj",
+            "Loom.UI.ImGui/Loom.UI.ImGui.csproj",
+            "build/Loom.Sdk/Loom.Sdk.csproj"
+          )
+          foreach ($p in $projects) { dotnet restore $p }
 
-      # Build once in Release — ImGui is no longer a flag, Loom.UI.ImGui is an opt-in package.
+      # Build only packable projects. Transitive ProjectReferences (Loom.Core, Loom.Graph,
+      # Loom.Assets, VMASharp) build automatically — no need to list them explicitly.
       # UseDebugVisualization is disabled for published packages (arm64 marshal workaround pending).
       - name: Build
-        run: >
-          dotnet build Loom.slnx -c Release --no-restore
-          -p:UseDebugVisualization=false
+        shell: pwsh
+        run: |
+          $flags = "-c", "Release", "--no-restore", "-p:UseDebugVisualization=false"
+          dotnet build external/SUIsei/SUIsei/SUIsei.csproj @flags
+          dotnet build Loom.Vulkan/Loom.Vulkan.csproj      @flags
+          dotnet build Loom.DirectX12/Loom.DirectX12.csproj @flags
+          dotnet build Loom.UI.SUIsei/Loom.UI.SUIsei.csproj @flags
+          dotnet build Loom.UI.ImGui/Loom.UI.ImGui.csproj   @flags
+          dotnet build build/Loom.Sdk/Loom.Sdk.csproj       @flags
 
       # Generate LLM orientation files before packing (llms.txt is included in Loom.nupkg).
       - name: Generate LLM docs
