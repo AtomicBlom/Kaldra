@@ -3,7 +3,7 @@ using System.Numerics;
 namespace Loom.Core.Geometry;
 
 /// <summary>
-/// C# 14 extension members on <see cref="Matrix4x4"/> for frustum math (M13) — kept on the BCL type per the
+/// C# 14 extension members on <see cref="Matrix4x4"/> for frustum math — kept on the BCL type per the
 /// project convention (use <see cref="System.Numerics"/>; add missing operations as extension members, not a
 /// bespoke helper class). The receiver is a row-vector view-projection (<c>clip = world · viewProjection</c>).
 /// </summary>

@@ -5,7 +5,7 @@ using Loom.Core.Geometry;
 namespace Loom.Core.Animation;
 
 /// <summary>
-/// A skinned mesh's bind-pose vertex (M15): the canonical <see cref="Vertex"/> fields plus the two skinning
+/// A skinned mesh's bind-pose vertex: the canonical <see cref="Vertex"/> fields plus the two skinning
 /// attributes — four bone indices and four blend weights. 80 bytes, sequentially packed, mirroring
 /// <see cref="VertexLayout.MeshSkinned"/> (POSITION 0, NORMAL 12, TEXCOORD 24, TANGENT 32, JOINTS 48, WEIGHTS 64).
 /// Backend-neutral (<c>System.Numerics</c> + plain <c>uint</c>s, no graphics-API types).

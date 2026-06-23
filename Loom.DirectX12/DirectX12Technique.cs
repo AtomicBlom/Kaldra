@@ -34,10 +34,10 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the storage-buffer root UAV (a compute's <c>.ReadWrites</c> of a buffer), or -1 if none.</summary>
 	public int UavRootParam { get; private set; } = -1;
 
-	/// <summary>Root-parameter slot of the FIRST read-only structured-buffer input root SRV (M15-2 skin: bind-pose verts at t0, bone palette at t1); the i-th input SRV is this + i. -1 if the compute reads no input buffers.</summary>
+	/// <summary>Root-parameter slot of the FIRST read-only structured-buffer input root SRV (skin: bind-pose verts at t0, bone palette at t1); the i-th input SRV is this + i. -1 if the compute reads no input buffers.</summary>
 	public int InputBufferBaseParam { get; private set; } = -1;
 
-	/// <summary>Number of read-only structured-buffer input root SRVs the compute binds (M15-2).</summary>
+	/// <summary>Number of read-only structured-buffer input root SRVs the compute binds.</summary>
 	public int InputBufferCount { get; }
 
 	/// <summary>Root-parameter slot for the storage-image / structured-buffer UAV descriptor table (a compute's <c>.ReadWrites</c> of a texture or structured buffer), or -1 if none.</summary>
@@ -103,7 +103,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			ShaderVisibility = ShaderVisibility.All,
 			Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = 16 } },
 		};
-		// M15-2: read-only structured-buffer inputs (skin: bind-pose verts t0, bone palette t1) as root SRVs by
+		// Read-only structured-buffer inputs (skin: bind-pose verts t0, bone palette t1) as root SRVs by
 		// GPU address — no descriptor heap. The shader's StructuredBuffer<T>s land at t0..t(N-1) in declaration order.
 		if (template.InputBufferCount > 0)
 		{
@@ -300,7 +300,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		};
 		SerializeRootSignature(ctx, &rootDesc);
 
-		// Blend equation (Planning.md §7): None writes opaquely, Additive sums src+dst (bloom/particles),
+		// Blend equation: None writes opaquely, Additive sums src+dst (bloom/particles),
 		// AlphaOver does src-alpha over-blend (transparency). All pair with a pass that .Blends the target.
 		var (srcBlend, dstBlend) = template.Blend switch
 		{

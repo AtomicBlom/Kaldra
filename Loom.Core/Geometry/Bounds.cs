@@ -7,7 +7,7 @@ namespace Loom.Core.Geometry;
 /// a local-space box, an instance transforms it to world space, and the CPU frustum cull tests it against the
 /// camera's <see cref="Frustum"/>. Backend-neutral pure math (<c>System.Numerics</c>), like <see cref="Camera"/>
 /// — culling is an app-owned optimization the engine <em>offers</em>, never a scene graph it mandates
-/// (PlanningPhase2 §6 "you hand me draw lists").
+/// ("you hand me draw lists").
 /// </summary>
 /// <param name="Min">The minimum corner.</param>
 /// <param name="Max">The maximum corner.</param>

@@ -3,7 +3,7 @@ namespace Loom.Core.Graph;
 /// <summary>
 /// What a declared resource fundamentally is. This is a property of the <em>declaration</em>, not of
 /// how passes use it — storage-image / sampled / attachment <em>usage</em> is derived from the access
-/// edges (Planning.md §8, "derived, not declared"), never stated here.
+/// edges ("derived, not declared"), never stated here.
 /// </summary>
 public enum ResourceKind
 {
@@ -15,13 +15,13 @@ public enum ResourceKind
 
 	/// <summary>
 	/// A GPU storage buffer (not an image) — a compute pass writes it, a draw reads it as vertex data
-	/// (GPU particles, §7.6). Sized in bytes (<see cref="ResourceHandle.ByteSize"/>), not a domain. Transient.
+	/// (GPU particles). Sized in bytes (<see cref="ResourceHandle.ByteSize"/>), not a domain. Transient.
 	/// </summary>
 	Buffer,
 
 	/// <summary>
 	/// A resource whose lifetime is forever — the transient aliaser never recycles its memory.
-	/// Used for cross-frame history (e.g. auto-exposure). Opt-out of aliasing (Planning.md §8).
+	/// Used for cross-frame history (e.g. auto-exposure). Opt-out of aliasing.
 	/// </summary>
 	Persistent,
 

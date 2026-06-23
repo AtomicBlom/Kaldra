@@ -9,7 +9,7 @@ using Silk.NET.DXGI;
 namespace Loom.DirectX12;
 
 /// <summary>
-/// DirectX 12 device bring-up — the DirectX12 counterpart of <c>VulkanContext</c> (Planning.md §2). Owns the
+/// DirectX 12 device bring-up — the DirectX12 counterpart of <c>VulkanContext</c>. Owns the
 /// long-lived API handles: the DXGI factory, the D3D12 device, the direct (graphics) command queue, and the
 /// debug layer. The Vulkan/Silk.NET stack is quarantined in this assembly; nothing here reaches Core/Graph.
 /// <para>

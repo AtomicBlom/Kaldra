@@ -1,7 +1,7 @@
 namespace Loom.Core.Animation;
 
 /// <summary>
-/// One joint's animated transform within an <see cref="AnimationClip"/> (M15) — any of its translation,
+/// One joint's animated transform within an <see cref="AnimationClip"/> — any of its translation,
 /// rotation, and scale may be keyed. A null track means that component is not animated by this clip and the
 /// joint's bind-pose value (<see cref="Skeleton.LocalBindTransforms"/>) is used instead. Backend-neutral, immutable.
 /// </summary>

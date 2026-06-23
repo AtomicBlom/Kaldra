@@ -11,7 +11,7 @@ public class LifetimePlanTests
 	private static ResourceLifetime Life(LifetimePlan plan, string name) =>
 		plan.Lifetimes.Single(l => l.Resource.Name == name);
 
-	// The §6 reference frame: gbuffer(0) lighting(1) transparent(2) upscale(3) hud(4).
+	// The reference frame: gbuffer(0) lighting(1) transparent(2) upscale(3) hud(4).
 	private static LifetimePlan ReferenceFrame() => Derive(RenderGraph.Define(g =>
 	{
 		var world = g.Domain("world", 320, 180);

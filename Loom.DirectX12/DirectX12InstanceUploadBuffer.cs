@@ -6,7 +6,7 @@ using DxgiFormat = Silk.NET.DXGI.Format;
 namespace Loom.DirectX12;
 
 /// <summary>
-/// A per-frame-in-flight <c>UPLOAD</c>-heap vertex buffer for CPU-driven instancing (M12) — the DirectX12
+/// A per-frame-in-flight <c>UPLOAD</c>-heap vertex buffer for CPU-driven instancing — the DirectX12
 /// counterpart of the Vulkan backend's <c>VulkanInstanceUploadBuffer</c>. <c>ctx.DrawInstanced(mesh, technique,
 /// span)</c> stages its per-instance data here each frame; <see cref="Upload"/> returns the GPU virtual address to
 /// point the instance <see cref="VertexBufferView"/> at.
@@ -28,7 +28,7 @@ internal sealed unsafe class DirectX12InstanceUploadBuffer : IDisposable
 	/// <param name="ctx">The DirectX 12 device context owning this buffer.</param>
 	/// <param name="frameCount">Number of frames-in-flight slots to allocate (one buffer per slot).</param>
 	/// <param name="alignment">Per-append offset alignment — 16 for the instance stream (the default), or 256 for
-	/// the M15-0 uniform ring (D3D12 requires constant-buffer views 256-byte aligned).</param>
+	/// the uniform ring (D3D12 requires constant-buffer views 256-byte aligned).</param>
 	public DirectX12InstanceUploadBuffer(DirectX12Context ctx, int frameCount, ulong alignment = 16)
 	{
 		_ctx = ctx;

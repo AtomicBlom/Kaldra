@@ -1,7 +1,7 @@
 namespace Loom.Tests;
 
 /// <summary>
-/// M13 golden-image regression. Opt-in: it compares freshly captured frames (in <c>LOOM_GOLDEN_DIR</c>) against the
+/// Golden-image regression. Opt-in: it compares freshly captured frames (in <c>LOOM_GOLDEN_DIR</c>) against the
 /// committed baselines under <c>Goldens/</c>, so it is SKIPPED in the normal no-GPU CI run — the GPU-producing
 /// capture step happens locally (see <c>tools/golden.ps1</c>); only the pixel comparison lives here, which needs no
 /// GPU. A baseline filename must match its capture filename. Same-backend regression should be near-exact.

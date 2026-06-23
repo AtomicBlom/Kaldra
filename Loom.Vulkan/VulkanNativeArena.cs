@@ -4,7 +4,7 @@ using System.Text;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// The marshaling seam (Planning.md §1-2). A transient bump-style allocator over native memory
+/// The marshaling seam. A transient bump-style allocator over native memory
 /// for building a tree of <c>*CreateInfo</c> structs, <c>pNext</c> chains, arrays, and UTF-8
 /// strings just long enough to hand to a <c>vkCreate*</c> call. Because <c>vkCreate*</c> copies
 /// everything it needs, the whole graph can be freed the instant the call returns — dispose the

@@ -2,7 +2,7 @@ namespace Loom.Core.Graph;
 
 /// <summary>
 /// A GPU storage buffer (not an image). A compute pass <c>.ReadWrites</c> it and a draw <c>.ReadsVertex</c> it
-/// (GPU particles — §7.6). Sized in bytes, not resolution-bound.
+/// (GPU particles). Sized in bytes, not resolution-bound.
 /// </summary>
 public sealed class BufferHandle : ResourceHandle, IStorageHandle
 {

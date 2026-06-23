@@ -4,7 +4,7 @@ using System.Numerics;
 namespace Loom.Core.Animation;
 
 /// <summary>
-/// A keyframed <see cref="Vector3"/> animation channel — a joint's translation or scale over time (M15). The
+/// A keyframed <see cref="Vector3"/> animation channel — a joint's translation or scale over time. The
 /// <see cref="Times"/> are strictly increasing seconds; <see cref="Values"/>[i] is the value at <c>Times[i]</c>.
 /// The two arrays have equal length (≥ 1). Backend-neutral, immutable.
 /// </summary>

@@ -6,8 +6,8 @@ namespace Loom.Assets;
 /// <summary>
 /// Decodes an image file (PNG/JPG/…) into Loom's neutral <see cref="TextureData"/> via StbImageSharp (a
 /// pure-managed stb_image port — no native dependency). The decode is the only graphics-unaware step; the
-/// backend's texture store takes the resulting RGBA8 + mip chain and uploads it. This is the M11 asset path
-/// (PlanningPhase2.md §8): a neutral producer beside <c>Loom.Core</c>, with no graphics-API reference.
+/// backend's texture store takes the resulting RGBA8 + mip chain and uploads it. A neutral producer beside
+/// <c>Loom.Core</c>, with no graphics-API reference.
 /// </summary>
 public static class ImageLoader
 {

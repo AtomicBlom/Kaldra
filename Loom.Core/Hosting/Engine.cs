@@ -1,7 +1,7 @@
 namespace Loom.Core.Hosting;
 
 /// <summary>
-/// The backend registry and the host's entry point to rendering (Planning.md §5). Each referenced backend
+/// The backend registry and the host's entry point to rendering. Each referenced backend
 /// assembly self-registers an <see cref="IRenderBackend"/> here (via a module initializer) as it loads, so the
 /// host discovers what is available at runtime and selects one by name:
 /// <code>
@@ -9,7 +9,7 @@ namespace Loom.Core.Hosting;
 ///               ?? Engine.AvailableEngines.First();
 /// using var engine = backend.Create(window.VkSurface, width, height, settings);
 /// </code>
-/// Which backends are <em>present</em> is decided by the build (the M8 <c>&lt;UseVulkan&gt;</c>/
+/// Which backends are <em>present</em> is decided by the build (the <c>&lt;UseVulkan&gt;</c>/
 /// <c>&lt;UseDirectX12&gt;</c> flags pull in the assemblies); which present backend <em>runs</em> is the runtime
 /// selection above. A backend's module initializer fires when its assembly is first touched — constructing the
 /// backend's <see cref="EngineSettings"/> subclass (the one sanctioned place a backend type appears in app

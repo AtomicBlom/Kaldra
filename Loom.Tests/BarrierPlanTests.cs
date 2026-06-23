@@ -49,7 +49,7 @@ public class BarrierPlanTests
 	{
 		var lighting = Pass(ReferenceFrame(), "lighting");
 
-		// "The G-buffer targets flip COLOR_ATTACHMENT -> SHADER_READ between gbuffer and lighting." (§6)
+		// "The G-buffer targets flip COLOR_ATTACHMENT -> SHADER_READ between gbuffer and lighting."
 		HasTransition(lighting, "albedo", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
 		HasTransition(lighting, "normal", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
 		HasTransition(lighting, "material", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
@@ -134,7 +134,7 @@ public class BarrierPlanTests
 	[Test]
 	public void Instance_buffer_filled_by_compute_transitions_storage_to_vertex_input_for_the_draw()
 	{
-		// M12 GPU-driven instancing reuses the GPU-particle edge: a compute .ReadWrites the instance buffer, the
+		// GPU-driven instancing reuses the GPU-particle edge: a compute .ReadWrites the instance buffer, the
 		// draw .ReadsVertex it, so the graph derives the same Storage -> VertexInput barrier (no graphics-API type
 		// in the describe/execute layers — the buffer is just a resource with read/write edges).
 		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>

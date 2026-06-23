@@ -4,7 +4,7 @@ using Loom.Graph;
 
 namespace Loom.Tests;
 
-/// <summary>M13 graph-viz export: <see cref="RenderGraph.ToDot"/>/<see cref="RenderGraph.ToJson"/> and
+/// <summary>Graph-viz export: <see cref="RenderGraph.ToDot"/>/<see cref="RenderGraph.ToJson"/> and
 /// <see cref="GraphSchedule.ToDot"/> are deterministic, well-formed, and carry the graph's structure.</summary>
 public class GraphExportTests
 {

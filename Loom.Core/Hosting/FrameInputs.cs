@@ -3,15 +3,14 @@ using Loom.Core.Geometry;
 namespace Loom.Core.Hosting;
 
 /// <summary>
-/// The per-frame data a host hands the engine for one <see cref="IEngine.Render"/> call (Planning.md §5's
-/// <c>graph.Render(frameInputs)</c>). This is the single channel for everything that varies frame to frame —
-/// the view(s), timing, the UI draw data — so pass closures stay pure: they <em>pull</em>
-/// these from <see cref="IRenderContext"/> rather than capturing host state (Planning.md §8). Immutable: the
-/// host builds a fresh one each frame.
+/// The per-frame data a host hands the engine for one <see cref="IEngine.Render"/> call. This is the single
+/// channel for everything that varies frame to frame — the view(s), timing, the UI draw data — so pass closures
+/// stay pure: they <em>pull</em> these from <see cref="IRenderContext"/> rather than capturing host state.
+/// Immutable: the host builds a fresh one each frame.
 /// <para>
 /// Matrices are stated in a backend-neutral convention (right-handed, +Y up; <c>System.Numerics</c>); the
 /// backend applies its own clip-space fix-up (the Vulkan Y-flip, identity on D3D12) on ingest, so the host
-/// never bakes an API-specific NDC convention (Planning.md §8 portability; M7-B5).
+/// never bakes an API-specific NDC convention.
 /// </para>
 /// </summary>
 public sealed record FrameInputs
@@ -43,7 +42,7 @@ public sealed record FrameInputs
 	/// This frame's draw lists — each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a
 	/// producer composited for it. Surfaced as <see cref="IRenderContext.DrawLists"/>; a pass pulls one out by id and
 	/// submits it (the game UI does so via <c>SUIsei</c>'s painter). Empty (the default) renders no lists. Pulled in
-	/// the pass closure, never captured, so the graph stays frame-independent (Planning.md §8).
+	/// the pass closure, never captured, so the graph stays frame-independent.
 	/// </summary>
 	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists { get; init; } = [];
 }

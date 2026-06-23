@@ -8,7 +8,7 @@ namespace Loom.Core.Graph;
 /// <summary>
 /// An immutable, baked render-graph description: domains, resources, passes (with their access edges)
 /// and the present target. This is the whole output of the Describe layer — it carries <em>intent</em>
-/// only; no ordering, barriers, or GPU types (those are derived by the Execute layer in M3+).
+/// only; no ordering, barriers, or GPU types (those are derived by the Execute layer).
 /// <para>
 /// It is hashable (<see cref="Hash"/>) so the bake cache can recognise an unchanged graph, and dumpable
 /// (<see cref="Dump"/>) for inspection and tests. Authored via <see cref="Define"/>.
@@ -22,14 +22,14 @@ public sealed class RenderGraph
 	/// <summary>Declared resources, in declaration order (index == <see cref="ResourceHandle.Id"/>).</summary>
 	public ImmutableArray<ResourceHandle> Resources { get; }
 
-	/// <summary>Passes, in program (declaration) order — which is itself a derivation input (Planning.md §6).</summary>
+	/// <summary>Passes, in program (declaration) order — which is itself a derivation input.</summary>
 	public ImmutableArray<GraphPass> Passes { get; }
 
 	/// <summary>The resource presented to the screen, or null if the graph declared no <c>Present</c>.</summary>
 	public ResourceHandle? PresentTarget { get; }
 
 	/// <summary>
-	/// Resources the CPU wants read back (Planning.md §7.4 <c>g.Readback</c>) — the GPU→CPU edge. The backend
+	/// Resources the CPU wants read back via <c>g.Readback</c> — the GPU→CPU edge. The backend
 	/// copies each to host-visible memory after the frame; the result is available a frame or two later (the
 	/// latency is real — readback is genuinely a frame or two old). Used by picking.
 	/// </summary>
@@ -51,7 +51,7 @@ public sealed class RenderGraph
 
 	/// <summary>
 	/// Build a render graph from a fluent authoring closure. This stands in for <c>engine.DefineGraph</c>
-	/// (Planning.md §5) until the engine/Execute layer exists; the authoring surface is identical.
+	/// until the engine/Execute layer exists; the authoring surface is identical.
 	/// </summary>
 	public static RenderGraph Define(Action<GraphBuilder> author)
 	{
@@ -143,11 +143,11 @@ public sealed class RenderGraph
 
 	/// <summary>
 	/// Return a graph identical to this one but with extra <see cref="AccessKind.Sample"/> edges from the terminal
-	/// (last) pass to the given resources — the M13 debug-viewer hook. Making the read a real graph edge means the
+	/// (last) pass to the given resources — the debug-viewer hook. Making the read a real graph edge means the
 	/// Execute layer <em>derives</em> the keep-alive (the resource isn't recycled by transient aliasing before the
 	/// terminal pass) and the shader-read transition, so the viewer samples a live, correctly-laid-out image instead
-	/// of an aliased corpse — "derived, not declared" (Planning.md §8). The author's graph is untouched; the engine
-	/// applies this only to the graph it executes when the debug UI is present. Ids the terminal pass already
+	/// of an aliased corpse — "derived, not declared". The author's graph is untouched; the engine
+	/// applies this only to the graph it executes when the debug viewer is present. Ids the terminal pass already
 	/// accesses are skipped; an empty set (or a graph with no passes) returns <c>this</c>.
 	/// </summary>
 	public RenderGraph WithDebugSampling(IReadOnlyCollection<int> resourceIds)
@@ -175,7 +175,7 @@ public sealed class RenderGraph
 	private static bool IsWrite(AccessKind kind) => kind is AccessKind.Write or AccessKind.WriteDepth;
 
 	/// <summary>
-	/// A GraphViz DOT rendering of the graph's data-flow (M13 viz export): a bipartite digraph of passes (boxes,
+	/// A GraphViz DOT rendering of the graph's data-flow: a bipartite digraph of passes (boxes,
 	/// coloured by <see cref="PassKind"/>) and resources (ellipses for images, notes for buffers, coloured by
 	/// <see cref="ResourceKind"/>). Read edges point resource→pass, write edges pass→resource, and read-modify-write
 	/// (<c>.Blends</c>/<c>.ReadWrites</c>) edges are dashed + bidirectional. The present target is highlighted.
@@ -234,7 +234,7 @@ public sealed class RenderGraph
 	}
 
 	/// <summary>
-	/// A deterministic JSON rendering of the graph's structure (M13 viz export): domains, resources, passes (with
+	/// A deterministic JSON rendering of the graph's structure: domains, resources, passes (with
 	/// their access edges) and the present target — the same content as <see cref="Dump"/>, machine-readable for
 	/// external tooling. Excludes record callbacks (frame data, not structure), matching <see cref="Hash"/>.
 	/// </summary>

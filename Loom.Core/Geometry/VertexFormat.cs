@@ -8,7 +8,7 @@ namespace Loom.Core.Geometry;
 /// three-component float concept): a vertex attribute is just a small tuple of 32-bit floats today. The
 /// backend maps each to its concrete API format (e.g. <see cref="Float3"/> → <c>VK_FORMAT_R32G32B32_SFLOAT</c> /
 /// <c>DXGI_FORMAT_R32G32B32_FLOAT</c>). Grow this deliberately as layouts need more (packed colours, integer
-/// bone indices for skinning in M15).
+/// bone indices for skinning).
 /// </summary>
 public enum VertexFormat
 {
@@ -24,7 +24,7 @@ public enum VertexFormat
 	/// <summary>Four 32-bit floats (e.g. a tangent, a colour, or one row of an instance transform).</summary>
 	Float4,
 
-	/// <summary>Four 32-bit unsigned integers — the four bone indices of a skinned vertex's <c>JOINTS</c> attribute (M15).</summary>
+	/// <summary>Four 32-bit unsigned integers — the four bone indices of a skinned vertex's <c>JOINTS</c> attribute.</summary>
 	UInt4,
 
 	/// <summary>Four 16-bit floats (8 bytes) — a half-precision colour or other packed four-channel attribute (the UI vertex's premultiplied RGBA16F).</summary>

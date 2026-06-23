@@ -1,6 +1,6 @@
 namespace Loom.Tests;
 
-/// <summary>Result of comparing two RGBA images (M13 golden harness): the worst and average per-channel difference,
+/// <summary>Result of comparing two RGBA images (golden harness): the worst and average per-channel difference,
 /// and how many pixels exceed a per-channel tolerance.</summary>
 internal readonly record struct ImageDiff(int Width, int Height, int MaxChannelDiff, double MeanChannelDiff, int FailedPixels, int TotalPixels)
 {

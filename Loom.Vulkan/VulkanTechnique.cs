@@ -8,8 +8,8 @@ using VertexInputRate = Silk.NET.Vulkan.VertexInputRate;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// A baked graphics pipeline (the fluent describe-layer <c>TechniqueBuilder</c> arrives in M5). This is
-/// the Bake layer in miniature: the whole <see cref="GraphicsPipelineCreateInfo"/> struct graph is
+/// A baked graphics pipeline. This is the Bake layer in miniature: the whole
+/// <see cref="GraphicsPipelineCreateInfo"/> struct graph is
 /// flattened transiently into a <see cref="VulkanNativeArena"/>, the pipeline is created (vkCreate* copies
 /// everything), and the arena + shader module are freed immediately. Uses dynamic rendering — no
 /// VkRenderPass.
@@ -40,8 +40,8 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		try
 		{
 			// A graphics technique's DESCRIPTORS are visible to BOTH vertex and fragment: most are sampled only in
-			// the fragment stage, but a vertex-stage UBO (M15-0: foliage wind) needs vertex visibility, and the
-			// broader flag is harmless for the samplers. Compute techniques bind to the compute stage. The scalar
+			// the fragment stage, but a vertex-stage UBO (foliage wind) needs vertex visibility, and the broader
+			// flag is harmless for the samplers. Compute techniques bind to the compute stage. The scalar
 			// PUSH range, by contrast, stays single-stage (fragment for a draw, compute for a dispatch) — the
 			// vkCmdPushConstants call pushes exactly that stage, so the range's flags must match it.
 			var descriptorStage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit;
@@ -79,7 +79,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 	// Set 0, in binding order: <paramref name="sampleCount"/> combined image samplers (the .Samples inputs),
 	// then <paramref name="storageImages"/> storage images (a compute's .ReadWrites of an image), then
 	// <paramref name="storageBuffers"/> storage buffers (a compute's .ReadWrites of a buffer — GPU particles),
-	// then <paramref name="uniformBuffers"/> uniform buffers (M15-0 — the per-frame uniform seam, fed from the
+	// then <paramref name="uniformBuffers"/> uniform buffers (the per-frame uniform seam, fed from the
 	// uniform ring), visible to the given stage. The shader reflection derives these counts; the
 	// shaders declare the matching [[vk::binding(n,0)]] in the same category order.
 	private DescriptorSetLayout CreateSetLayout(int sampleCount, int storageImages, int storageBuffers, int uniformBuffers, ShaderStageFlags stage)
@@ -174,7 +174,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		return pipeline;
 	}
 
-	// Vertex input built from the technique's declared streams (M12 — per-technique vertex layouts): an optional
+	// Vertex input built from the technique's declared streams: an optional
 	// per-vertex layout (e.g. the canonical Loom.Core.Vertex: Position/Normal/Uv/Tangent, 48 bytes) and an optional
 	// per-instance layout (e.g. a 4×float4 world matrix for instanced drawing, or a GPU-particle stream). Each
 	// stream's binding slot and advance rate come from the VertexLayout itself, so the per-instance stream sits at
@@ -288,7 +288,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			RasterizationSamples = SampleCountFlags.Count1Bit,
 		});
 		// One blend attachment per colour target (a g-buffer writes several). The blend equation is technique
-		// state (Planning.md §7): None writes opaquely, AlphaOver does src-alpha over-blend (transparency),
+		// state: None writes opaquely, AlphaOver does src-alpha over-blend (transparency),
 		// Additive sums src+dst (bloom accumulation). All pair with a pass that .Blends the target (LoadOp.Load).
 		var (srcFactor, dstFactor) = description.Blend switch
 		{

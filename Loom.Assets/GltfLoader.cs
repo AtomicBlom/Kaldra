@@ -12,11 +12,11 @@ namespace Loom.Assets;
 
 /// <summary>
 /// Loads a glTF / GLB model into Loom's neutral description via SharpGLTF (managed, MIT). Static triangle
-/// geometry + base-colour and normal textures (M11), plus — when the model is rigged — the skeleton, per-vertex
-/// bone indices/weights, and animation clips (M15). Like <see cref="ImageLoader"/> it is a neutral producer
-/// (PlanningPhase2.md §8): it emits <see cref="Vertex"/>/<see cref="SkinnedVertex"/> arrays, a
-/// <see cref="Skeleton"/>, <see cref="AnimationClip"/>s, and <see cref="TextureData"/> — never a graphics-API
-/// type, so the engine boundary stays clean. (PBR channels remain M16.)
+/// geometry + base-colour and normal textures, plus — when the model is rigged — the skeleton, per-vertex
+/// bone indices/weights, and animation clips. Like <see cref="ImageLoader"/> it is a neutral producer: it emits
+/// <see cref="Vertex"/>/<see cref="SkinnedVertex"/> arrays, a <see cref="Skeleton"/>,
+/// <see cref="AnimationClip"/>s, and <see cref="TextureData"/> — never a graphics-API type, so the engine
+/// boundary stays clean.
 /// </summary>
 public static class GltfLoader
 {
@@ -27,7 +27,7 @@ public static class GltfLoader
 		var primitives = new List<ModelPrimitive>();
 		var materialCache = new Dictionary<GltfMaterial, ModelMaterial?>();
 
-		// Skinning (M15): a single-character model has one skin. Build the neutral skeleton from the first skin
+		// A single-character model has one skin. Build the neutral skeleton from the first skin
 		// and a node→joint-index map; the map retargets animation channels and tells which nodes are skinned.
 		var gltfSkin = model.LogicalSkins.Count > 0 ? model.LogicalSkins[0] : null;
 		var nodeToJoint = new Dictionary<Node, int>();
@@ -115,7 +115,7 @@ public static class GltfLoader
 				if (tangents is null)
 					ComputeTangents(vertices, indices);
 
-				// Skinned geometry (M15): pull JOINTS_0/WEIGHTS_0 and interleave with the bind-pose verts. Both the
+				// Pull JOINTS_0/WEIGHTS_0 and interleave with the bind-pose verts. Both the
 				// static Vertices and the SkinnedVertices are kept, so a consumer can draw either.
 				var skinnedVertices = skinned ? BuildSkinnedVertices(prim, vertices) : null;
 
@@ -276,7 +276,7 @@ public static class GltfLoader
 	{
 		AnimationInterpolationMode.STEP => AnimationInterpolation.Step,
 		AnimationInterpolationMode.LINEAR => AnimationInterpolation.Linear,
-		_ => throw new NotSupportedException($"glTF clip '{clip}' uses CUBICSPLINE interpolation for a joint's {what}, which Loom's animation runtime does not yet sample (M15)."),
+		_ => throw new NotSupportedException($"glTF clip '{clip}' uses CUBICSPLINE interpolation for a joint's {what}, which Loom's animation runtime does not yet sample."),
 	};
 
 	private static ModelMaterial? ResolveMaterial(GltfMaterial? material, Dictionary<GltfMaterial, ModelMaterial?> cache)

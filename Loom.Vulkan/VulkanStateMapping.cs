@@ -10,7 +10,7 @@ namespace Loom.Vulkan;
 /// <b>pipeline-stage</b> scope, and the <b>access</b> scope (synchronization2). A transition's
 /// <see cref="Loom.Graph.ResourceTransition.From"/> supplies the barrier's old layout + source
 /// stage/access; its <see cref="Loom.Graph.ResourceTransition.To"/> supplies the new layout + destination
-/// scope. This table is exactly the layout/stage/access knowledge Planning.md §8 keeps out of Loom.Graph
+/// scope. This table is exactly the layout/stage/access knowledge kept out of Loom.Graph
 /// so a second backend can map the same states its own way.
 /// </summary>
 internal static class VulkanStateMapping

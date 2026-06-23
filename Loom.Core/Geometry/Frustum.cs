@@ -4,8 +4,8 @@ namespace Loom.Core.Geometry;
 
 /// <summary>
 /// A view frustum as six inward-facing <see cref="Plane"/>s (left, right, bottom, top, near, far) in world space —
-/// the debug camera's "what would be visible" volume (M13) and the engine's optional CPU frustum-cull primitive
-/// (M12). Each plane is oriented so the inside half-space is positive (<see cref="Plane.DotCoordinate"/> ≥ 0).
+/// the debug camera's "what would be visible" volume and the engine's optional CPU frustum-cull primitive.
+/// Each plane is oriented so the inside half-space is positive (<see cref="Plane.DotCoordinate"/> ≥ 0).
 /// Built from a view-projection matrix via <see cref="Matrix4x4FrustumExtensions.ToFrustum"/> (or
 /// <see cref="Camera.ExtractFrustum"/>); composed entirely of <see cref="System.Numerics"/> types (no bespoke math).
 /// <para>
@@ -25,7 +25,7 @@ public readonly record struct Frustum(Plane Left, Plane Right, Plane Bottom, Pla
 	/// <summary>The six planes in order (left, right, bottom, top, near, far) — handy for culling loops.</summary>
 	public ReadOnlySpan<Plane> Planes => new[] { Left, Right, Bottom, Top, Near, Far };
 
-	/// <summary>True if <paramref name="point"/> is inside (or on) every plane — the simplest frustum test (M12 seed).</summary>
+	/// <summary>True if <paramref name="point"/> is inside (or on) every plane — the simplest frustum test.</summary>
 	public bool Contains(Vector3 point)
 	{
 		foreach (var plane in Planes)
@@ -35,7 +35,7 @@ public readonly record struct Frustum(Plane Left, Plane Right, Plane Bottom, Pla
 	}
 
 	/// <summary>True if the world-space sphere is not entirely outside any single plane — the standard cheap
-	/// sphere-vs-frustum cull test (M12 seed). Conservative: may keep a sphere that straddles two planes' corners.</summary>
+	/// sphere-vs-frustum cull test. Conservative: may keep a sphere that straddles two planes' corners.</summary>
 	public bool Intersects(Vector3 center, float radius)
 	{
 		foreach (var plane in Planes)
@@ -45,7 +45,7 @@ public readonly record struct Frustum(Plane Left, Plane Right, Plane Bottom, Pla
 	}
 
 	/// <summary>True if <paramref name="bounds"/> is at least partially inside the frustum — the conservative
-	/// "positive vertex" AABB test the M12 <see cref="Scene"/> cull uses (may keep a box that is just outside a
+	/// "positive vertex" AABB test the <see cref="Scene"/> cull uses (may keep a box that is just outside a
 	/// corner, but never culls one that is visible).</summary>
 	public bool Intersects(in Bounds bounds) =>
 		!(IsOutside(Left, bounds) || IsOutside(Right, bounds) || IsOutside(Bottom, bounds)

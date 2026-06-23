@@ -3,7 +3,7 @@ namespace Loom.Assets;
 /// <summary>
 /// An <see cref="IAssetSource"/> over an ordered list of directory roots — the simplest layering policy: the first
 /// root (highest priority) that contains a logical name wins, so a later "resource pack" root can override a base
-/// asset just by sitting earlier in the list. M13 uses a single root (the shader directory).
+/// asset just by sitting earlier in the list.
 /// </summary>
 public sealed class LayeredAssetSource : IAssetSource
 {

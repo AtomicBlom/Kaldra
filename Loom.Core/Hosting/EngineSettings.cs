@@ -3,7 +3,7 @@ namespace Loom.Core.Hosting;
 /// <summary>
 /// Backend-neutral engine configuration — the canonical config object a host populates and hands to
 /// <see cref="IRenderBackend.Create"/>, replacing the scattered constructor args and environment variables of
-/// earlier milestones (Planning.md §3). A host <em>may</em> read environment variables into it, but the object
+/// earlier milestones. A host <em>may</em> read environment variables into it, but the object
 /// is the source of truth. Subclass it per backend (<c>VulkanEngineSettings</c>, a future
 /// <c>DirectX12EngineSettings</c>) to carry backend-only knobs (preferred adapter, required extensions); the neutral
 /// engine surface only ever reads the base properties, and a backend down-casts to read its own.
@@ -30,9 +30,8 @@ public class EngineSettings
 	public double MaxFramesPerSecond { get; set; }
 
 	/// <summary>
-	/// Request true HDR display output (Planning.md §3/§9): negotiate an HDR-capable swapchain colour space and
-	/// apply the HDR output transform on the terminal pass when the display supports it, falling back to SDR
-	/// otherwise. The HDR output path lands across M7-A7/B6; until then this is recorded but inert.
+	/// Request true HDR display output: negotiate an HDR-capable swapchain colour space and apply the HDR output
+	/// transform on the terminal pass when the display supports it, falling back to SDR otherwise.
 	/// </summary>
 	public bool HdrOutput { get; set; }
 
@@ -44,7 +43,7 @@ public class EngineSettings
 	public string? PreferredBackend { get; set; }
 
 	/// <summary>
-	/// Watch the loose shader directory for rebuilt artifacts and hot-reload the affected pipelines (M13). Dev-only;
+	/// Watch the loose shader directory for rebuilt artifacts and hot-reload the affected pipelines. Dev-only;
 	/// production apps leave this false (off by default). The engine does NOT compile shaders — an external process
 	/// (the MSBuild Slang compile, a <c>dotnet watch</c>, …) rewrites the <c>.spv</c>/<c>.json</c>/<c>.dxil</c>; the
 	/// engine just picks them up, invalidating the technique cache and rebuilding on the next frame. Only loose

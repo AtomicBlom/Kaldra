@@ -4,7 +4,7 @@ namespace Loom.Vulkan;
 
 /// <summary>
 /// The swapchain plus its images and image views, sized to the window. Recreatable on resize
-/// (e.g. <see cref="Result.ErrorOutOfDateKhr"/>). M0 plumbing — no graph involvement yet.
+/// (e.g. <see cref="Result.ErrorOutOfDateKhr"/>).
 /// </summary>
 public sealed unsafe class VulkanSwapchain : IDisposable
 {
@@ -23,7 +23,7 @@ public sealed unsafe class VulkanSwapchain : IDisposable
 	/// <summary>
 	/// True when an HDR colour space was negotiated (HDR output requested, the colour-space extension present,
 	/// and the surface offered an HDR format). The terminal tone-map maps to display nits in this mode rather
-	/// than compressing to SDR (M7-A7/B6). False when HDR was not requested or the surface only offers SDR.
+	/// than compressing to SDR. False when HDR was not requested or the surface only offers SDR.
 	/// </summary>
 	public bool HdrActive { get; private set; }
 
@@ -124,9 +124,9 @@ public sealed unsafe class VulkanSwapchain : IDisposable
 		fixed (SurfaceFormatKHR* pFormats = formats)
 			_ctx.KhrSurface.GetPhysicalDeviceSurfaceFormats(_ctx.PhysicalDevice, _ctx.Surface, ref count, pFormats);
 
-		// HDR output (M7-A7): negotiate scRGB (linear FP16). Its linear transfer means the terminal pass writes
+		// HDR output: negotiate scRGB (linear FP16). Its linear transfer means the terminal pass writes
 		// its already-linear output straight through with no encode — the only HDR-specific change is the
-		// tone-map preserving the extended range (M7-B6). Needs VK_EXT_swapchain_colorspace, or the surface never
+		// tone-map preserving the extended range. Needs VK_EXT_swapchain_colorspace, or the surface never
 		// reports it. (HDR10/PQ would need a PQ-encode in the terminal shader — deferred; scRGB covers Windows
 		// HDR.) Falls through to the SDR sRGB choice when HDR isn't requested or isn't available.
 		if (_hdrOutput && _ctx.HdrColorSpaceAvailable

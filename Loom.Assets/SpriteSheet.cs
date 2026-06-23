@@ -3,7 +3,7 @@ using System.Numerics;
 namespace Loom.Assets;
 
 /// <summary>
-/// A grid sprite-sheet / texture atlas (M14): divides a texture into <see cref="Columns"/>×<see cref="Rows"/>
+/// A grid sprite-sheet / texture atlas: divides a texture into <see cref="Columns"/>×<see cref="Rows"/>
 /// equal cells and yields each cell's normalised uv-rect — <c>(u0, v0, u1, v1)</c> in [0,1] texture space — to
 /// drop into a sprite instance's uv-rect. Cell index is row-major (left-to-right, top-to-bottom), which is
 /// also the natural order for a sprite-sheet animation's frames.

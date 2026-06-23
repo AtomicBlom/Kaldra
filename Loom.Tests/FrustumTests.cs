@@ -3,7 +3,7 @@ using Loom.Core.Geometry;
 
 namespace Loom.Tests;
 
-/// <summary>M13 <see cref="Frustum"/> + the <see cref="Matrix4x4"/> frustum extension members.</summary>
+/// <summary><see cref="Frustum"/> + the <see cref="Matrix4x4"/> frustum extension members.</summary>
 public class FrustumTests
 {
 	// An eye at +Z=5 looking at the origin down -Z: near plane 0.5, far 20, square aspect.

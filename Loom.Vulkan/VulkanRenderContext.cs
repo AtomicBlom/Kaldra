@@ -20,9 +20,9 @@ namespace Loom.Vulkan;
 /// pipeline (baked against the current pass's target format), wires up any sampled input as a descriptor
 /// set, and emits the draw. State that changes per frame/pass (the command buffer, the target format) is
 /// pushed in by the <see cref="VulkanEngine"/> via <see cref="BeginFrame"/>/<see cref="BeginPass"/> so the
-/// callbacks stay the pure, capture-free closures the design wants (Planning.md §8).
+/// callbacks stay the pure, capture-free closures the design wants.
 /// </summary>
-internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
+internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisposable
 {
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
@@ -36,11 +36,11 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	private readonly VulkanTextureStore _textures;
 	private readonly MaterialStore _materials;
 	private readonly VulkanInstanceUploadBuffer _instanceUpload;
-	// M15-0: per-frame host-visible ring for the uniform seam (CSM matrices, lighting params, wind) — the same
+	// Per-frame host-visible ring for the uniform seam (CSM matrices, lighting params, wind) — the same
 	// retire-not-free ring as the instance stream, but created UniformBufferBit and aligned to 256 (≥ any
 	// device's minUniformBufferOffsetAlignment). Bound as the last descriptor of a technique that reflects a UBO.
 	private readonly VulkanInstanceUploadBuffer _uniformUpload;
-	// M15-2: per-frame host-visible ring for the bone palette the compute pre-skin pass reads as a structured
+	// Per-frame host-visible ring for the bone palette the compute pre-skin pass reads as a structured
 	// buffer — StorageBufferBit, 256-aligned (≥ minStorageBufferOffsetAlignment).
 	private readonly VulkanInstanceUploadBuffer _storageUpload;
 	// Per-frame host-visible rings for ctx.DrawList's dynamic geometry — a vertex ring and an index ring, the same
@@ -72,7 +72,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	private Extent2D _fbExtent;
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off VulkanTechniqueCache's
 	// per-call SPIR-V file read. Misses fall through to VulkanTechniqueCache (which bakes + content-hashes once).
-	// The key is a value type (PipelineKey) so the per-draw lookup allocates nothing (Planning.md §8: 0 GC
+	// The key is a value type (PipelineKey) so the per-draw lookup allocates nothing (zero GC pressure
 	// in the render loop) — the old interpolated-string key heap-allocated on every draw.
 	private readonly Dictionary<PipelineKey, VulkanTechnique> _baked = [];
 
@@ -133,7 +133,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
 	public void SetTransients(VulkanTransientResources resources) => _resources = resources;
 
-	/// <summary>Drop the per-(name,formats) baked-pipeline cache so the next draw re-bakes (shader hot-reload, M13).
+	/// <summary>Drop the per-(name,formats) baked-pipeline cache so the next draw re-bakes (shader hot-reload).
 	/// The VulkanTechnique objects are owned by the VulkanTechniqueCache; the engine resets that separately after draining.</summary>
 	public void ClearBaked() => _baked.Clear();
 
@@ -150,8 +150,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_fbExtent = fbExtent;
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(frameSlot); // reset this slot's per-frame instance staging
-		_uniformUpload.BeginFrame(frameSlot);  // and its per-frame uniform staging (M15-0)
-		_storageUpload.BeginFrame(frameSlot);  // and the bone-palette staging (M15-2)
+		_uniformUpload.BeginFrame(frameSlot);  // and its per-frame uniform staging
+		_storageUpload.BeginFrame(frameSlot);  // and the bone-palette staging
 		_listVtx.BeginFrame(frameSlot);        // and the draw-list geometry staging
 		_listIdx.BeginFrame(frameSlot);
 	}
@@ -216,8 +216,8 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 
 		// The per-pass data channel. The pass's .Reads Constants buffers bind to the technique's reflected uniform
-		// slots 0..K-1; an in-closure push then fills slot K if a reflected uniform slot remains (M15-0 — CSM
-		// matrices, lighting params; no 16-float cap), or rides the fixed scalar push range when the technique
+		// slots 0..K-1; an in-closure push then fills slot K if a reflected uniform slot remains (uniform seam:
+		// CSM matrices, lighting params; no 16-float cap), or rides the fixed scalar push range when the technique
 		// declares no uniform buffer.
 		Span<UniformBinding> ubos = stackalloc UniformBinding[MaxUniformBuffers];
 		var uboCount = 0;
@@ -252,425 +252,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
 
-	public void Draw(in DrawCall call)
-	{
-		var effectiveView = call.View ?? _view;
-		var baked = Bake(call.Technique);
-		var template = _registry[call.Technique];
-		var mvp = effectiveView.ViewProjectionMatrix;
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-
-		// Bind material textures (+ optional UBO) or sampled graph resources — mutually exclusive.
-		if (call.Material is { } material)
-		{
-			var ubo = call.Uniforms.Length > 0 ? UploadUniforms(call.Uniforms) : default;
-			if (template.SampleCount > 0 || ubo.Present)
-				BindMaterialTextures(baked, template, material, call.Technique, ubo);
-		}
-		else if (!call.Sampled.IsEmpty)
-		{
-			BindSampledInputs(baked, call.Sampled, template.LinearFilter);
-		}
-
-		if (call.Instances.IsEmpty)
-		{
-			// Single-instance draw: skinned override or standard mesh.
-			if (call.SkinnedVertices is { } sv)
-			{
-				var vertexBuffer = _resources.GetBuffer(_frameSlot, sv.Id);
-				_meshes.DrawSkinned(_cmd, call.Mesh.Value.Id, vertexBuffer);
-			}
-			else
-			{
-				_meshes.Draw(_cmd, call.Mesh.Value.Id);
-			}
-		}
-		else if (call.Instances.GpuBuffer is { } gpuBuf)
-		{
-			var gpuBuffer = _resources.GetBuffer(_frameSlot, gpuBuf.Id);
-			if (call.Mesh is { } mesh)
-			{
-				// GPU-resident instance stream + indexed mesh draw (foliage, GPU-driven placement).
-				_meshes.DrawInstanced(_cmd, mesh.Id, gpuBuffer, 0ul, (uint)call.Instances.Count);
-			}
-			else
-			{
-				// Procedural: GPU buffer IS the per-instance vertex stream; vertexCount verts per instance
-				// fabricated from SV_VertexID (the GPU-particle path).
-				ulong offset = 0;
-				_vk.CmdBindVertexBuffers(_cmd, 0, 1, in gpuBuffer, in offset);
-				_vk.CmdDraw(_cmd, (uint)call.VertexCount, (uint)call.Instances.Count, 0, 0);
-			}
-		}
-		else
-		{
-			// CPU-driven instances: upload the type-erased span to the per-frame ring.
-			if (call.Instances.CpuData.IsEmpty)
-				return;
-			var (buffer, offset) = _instanceUpload.Upload(_frameSlot, call.Instances.CpuData);
-			_meshes.DrawInstanced(_cmd, call.Mesh.Value.Id, buffer, offset, (uint)call.Instances.Count);
-		}
-	}
-
-	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
-	{
-		var baked = Bake(technique);
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Compute, baked.Pipeline);
-
-		if (push.Length > 0)
-		{
-			var block = stackalloc float[16];
-			for (var i = 0; i < push.Length && i < 16; i++)
-				block[i] = push[i];
-			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)VulkanTechnique.FragmentPushSize, block);
-		}
-
-		var total = sampled.Length + storage.Length;
-		if (total > 0)
-		{
-			// Sampled inputs use the technique's declared filter (matching the Draw/FullScreen path and DirectX12's
-			// static sampler) — not a hardcoded nearest, which silently diverged from DirectX12 for a LinearFilter pass.
-			var sampler = _registry[technique].LinearFilter ? _linearSampler : _nearestSampler;
-			// Binding order matches the layout: sampled inputs (combined image samplers, ShaderReadOnly), then
-			// storage resources — a storage IMAGE (GENERAL) or, for a Buffer-kind resource, a storage BUFFER.
-			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-			var imageInfos = stackalloc DescriptorImageInfo[total];
-			var bufferInfos = stackalloc DescriptorBufferInfo[total];
-			var writes = stackalloc WriteDescriptorSet[total];
-			for (var i = 0; i < total; i++)
-			{
-				var write = new WriteDescriptorSet
-				{
-					SType = StructureType.WriteDescriptorSet,
-					DstSet = set,
-					DstBinding = (uint)i,
-					DescriptorCount = 1,
-				};
-				if (i < sampled.Length)
-				{
-					ref var image = ref _resources.Get(_frameSlot, sampled[i].Id);
-					imageInfos[i] = new DescriptorImageInfo { Sampler = sampler, ImageView = image.View, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
-					write.DescriptorType = DescriptorType.CombinedImageSampler;
-					write.PImageInfo = &imageInfos[i];
-				}
-				else
-				{
-					var handle = storage[i - sampled.Length];
-					if (handle.Kind == ResourceKind.Buffer)
-					{
-						bufferInfos[i] = new DescriptorBufferInfo { Buffer = _resources.GetBuffer(_frameSlot, handle.Id), Offset = 0, Range = Vk.WholeSize };
-						write.DescriptorType = DescriptorType.StorageBuffer;
-						write.PBufferInfo = &bufferInfos[i];
-					}
-					else
-					{
-						ref var image = ref _resources.Get(_frameSlot, handle.Id);
-						imageInfos[i] = new DescriptorImageInfo { ImageView = image.View, ImageLayout = ImageLayout.General };
-						write.DescriptorType = DescriptorType.StorageImage;
-						write.PImageInfo = &imageInfos[i];
-					}
-				}
-				writes[i] = write;
-			}
-			_vk.UpdateDescriptorSets(_ctx.Device, (uint)total, writes, 0, null);
-			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Compute, baked.Layout, 0, 1, in set, 0, null);
-		}
-
-		_vk.CmdDispatch(_cmd, groups.X, groups.Y, groups.Z);
-	}
-
-
-	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)
-	{
-		if (vertexCount <= 0 || palette.Length == 0)
-			return;
-		var baked = Bake(technique);
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Compute, baked.Pipeline);
-
-		// vertexCount rides the compute scalar push (as a float — exact for any realistic count).
-		var block = stackalloc float[16];
-		block[0] = vertexCount;
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)VulkanTechnique.FragmentPushSize, block);
-
-		// Three storage buffers at bindings 0,1,2: bind-pose (mesh, long-lived) · palette (per-frame ring) · output
-		// (the transient the pass .ReadWrites). None but the output is a graph resource, so DispatchSkin writes its
-		// own set rather than going through the generic Dispatch storage path.
-		var paletteBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(palette);
-		var (paletteBuffer, paletteOffset) = _storageUpload.Upload(_frameSlot, paletteBytes);
-		var inBuffer = _meshes.BindPoseBuffer(skinnedMesh.Id);
-		var outBuffer = _resources.GetBuffer(_frameSlot, output.Id);
-
-		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-		var bufferInfos = stackalloc DescriptorBufferInfo[3];
-		bufferInfos[0] = new DescriptorBufferInfo { Buffer = inBuffer, Offset = 0, Range = Vk.WholeSize };
-		bufferInfos[1] = new DescriptorBufferInfo { Buffer = paletteBuffer, Offset = paletteOffset, Range = (ulong)paletteBytes.Length };
-		bufferInfos[2] = new DescriptorBufferInfo { Buffer = outBuffer, Offset = 0, Range = Vk.WholeSize };
-		var writes = stackalloc WriteDescriptorSet[3];
-		for (var i = 0; i < 3; i++)
-			writes[i] = new WriteDescriptorSet
-			{
-				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
-				DstBinding = (uint)i,
-				DescriptorCount = 1,
-				DescriptorType = DescriptorType.StorageBuffer,
-				PBufferInfo = &bufferInfos[i],
-			};
-		_vk.UpdateDescriptorSets(_ctx.Device, 3, writes, 0, null);
-		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Compute, baked.Layout, 0, 1, in set, 0, null);
-
-		_vk.CmdDispatch(_cmd, (uint)((vertexCount + 63) / 64), 1, 1);
-	}
-
-
-	// UI group-opacity layer markers (UIPrimKind, kept in sync with SUIsei): a BeginLayer/EndLayer pair carries no
-	// indices and never reaches the fragment shader — the backend turns it into an offscreen render scope and a
-	// composite. KIND_IMAGE is the shader branch the composite blit uses (sample the layer, tint by group alpha).
-	private const uint TagBeginLayer = 5;
-	private const uint TagEndLayer = 6;
-	private const uint KindImage = 4;
-
-	public void DrawList<TVertex>(string technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
-	{
-		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
-			return;
-		var baked = Bake(technique);
-		var template = _registry[technique];
-
-		// Stage this frame's geometry into the dynamic rings (bump-allocated: several draw lists in one frame
-		// append at successive offsets rather than overwrite each other).
-		var (vtxBuffer, vtxOffset) = _listVtx.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices));
-		var (idxBuffer, idxOffset) = _listIdx.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(indices));
-
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
-		_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
-
-		Viewport viewport = new() { X = 0, Y = 0, Width = _fbExtent.Width, Height = _fbExtent.Height, MinDepth = 0, MaxDepth = 1 };
-		_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
-
-		// The shared per-list push fills the block's first slots; each command rewrites the slot right after it with
-		// its tag (the draw-list contract). Pad to the layout's fixed range so the shader always reads defined memory.
-		const int blockFloats = VulkanTechnique.ListPushSize / sizeof(float);
-		var block = stackalloc float[blockFloats];
-		var pushLen = Math.Min(push.Length, blockFloats - 1);
-		for (var i = 0; i < pushLen; i++)
-			block[i] = push[i];
-
-		var sampler = template.Address switch
-		{
-			SamplerAddress.Repeat => template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler,
-			SamplerAddress.Clamp => template.LinearFilter ? _linearSampler : _nearestSampler,
-			_ => throw new VulkanException($"SamplerAddress '{template.Address}' is not mapped to a sampler."),
-		};
-
-		// Group-opacity layers are only meaningful on an overlay-vertex list (the only producer of the markers); a
-		// scope to suspend; and a surface-pixel→clip push to size the composite quad. Without all three, markers fold
-		// to no-ops (a zero-index draw).
-		var layerArea = _scopeArea.Width != 0 ? _scopeArea : _fbExtent;
-		var layersSupported = Unsafe.SizeOf<TVertex>() == Unsafe.SizeOf<OverlayVertex>()
-			&& _scopeColorCount > 0 && _colorCount > 0 && push.Length >= 2 && push[0] != 0 && push[1] != 0;
-		var overlay = layersSupported ? System.Runtime.InteropServices.MemoryMarshal.Cast<TVertex, OverlayVertex>(vertices) : default;
-		if (layersSupported)
-			_layerTargets.Configure(layerArea, _colorFormats[0]);
-		_layerStack.Clear();
-
-		foreach (var c in commands)
-		{
-			if (layersSupported && c.Tag == TagBeginLayer)
-			{
-				// Suspend the current scope, render the faded subtree into a fresh transparent offscreen target at
-				// full alpha (so overlapping children blend against each other, not a faded backdrop).
-				_vk.CmdEndRendering(_cmd);
-				var target = _layerTargets.Acquire(_frameSlot, _layerStack.Count);
-				TransitionImage(target.Image, ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
-					PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit,
-					PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit);
-				BeginColorScope(target.View, AttachmentLoadOp.Clear, layerArea);
-				_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
-				_layerStack.Add((target.Image, target.View, overlay[c.VertexOffset].Color));
-				continue;
-			}
-			if (layersSupported && c.Tag == TagEndLayer)
-			{
-				if (_layerStack.Count == 0)
-					continue;
-				var layer = _layerStack[^1];
-				_layerStack.RemoveAt(_layerStack.Count - 1);
-
-				// Resolve the layer target, then resume the parent scope (LoadOp.Load — keep what it already holds).
-				_vk.CmdEndRendering(_cmd);
-				TransitionImage(layer.Image, ImageLayout.ColorAttachmentOptimal, ImageLayout.ShaderReadOnlyOptimal,
-					PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit,
-					PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit);
-				if (_layerStack.Count > 0)
-					BeginColorScope(_layerStack[^1].View, AttachmentLoadOp.Load, layerArea);
-				else
-					BeginColorScope(_scopeColorViews.AsSpan(0, _scopeColorCount), AttachmentLoadOp.Load, layerArea);
-				_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
-
-				CompositeLayer(baked, layer.View, layer.Tint, sampler, block, pushLen, push, layerArea);
-
-				// Restore the list's geometry for the following commands (the composite bound its own quad buffer).
-				_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
-				_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
-				continue;
-			}
-
-			var clip = c.ClipRect;
-			var minX = MathF.Max(0, clip.X);
-			var minY = MathF.Max(0, clip.Y);
-			var maxX = MathF.Min(_fbExtent.Width, clip.X + clip.Width);
-			var maxY = MathF.Min(_fbExtent.Height, clip.Y + clip.Height);
-			if (maxX <= minX || maxY <= minY)
-				continue;
-
-			*(uint*)(block + pushLen) = c.Tag;
-			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, block);
-
-			var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
-			// An id offset by DebugTextureBase is an inspectable graph resource (the resource viewer): sample this
-			// frame's live transient image instead of a loaded texture-store entry.
-			var view = texId >= InspectableResource.DebugTextureBase
-				? _resources.Get(_frameSlot, texId - InspectableResource.DebugTextureBase).View
-				: _textures.View(texId);
-			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-			var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
-			var write = new WriteDescriptorSet
-			{
-				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
-				DstBinding = 0,
-				DescriptorCount = 1,
-				DescriptorType = DescriptorType.CombinedImageSampler,
-				PImageInfo = &imageInfo,
-			};
-			_vk.UpdateDescriptorSets(_ctx.Device, 1, in write, 0, null);
-			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
-
-			Rect2D scissor = new(new Offset2D((int)minX, (int)minY), new Extent2D((uint)(maxX - minX), (uint)(maxY - minY)));
-			_vk.CmdSetScissor(_cmd, 0, 1, in scissor);
-
-			_vk.CmdDrawIndexed(_cmd, (uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
-		}
-
-		// Defensive: a well-formed list balances its markers, but never leave a layer scope open — the engine ends
-		// exactly one scope after the pass, which must be the parent (screen) scope.
-		while (_layerStack.Count > 0)
-		{
-			_layerStack.RemoveAt(_layerStack.Count - 1);
-			_vk.CmdEndRendering(_cmd);
-			BeginColorScope(((ReadOnlySpan<ImageView>)_scopeColorViews)[.._scopeColorCount], AttachmentLoadOp.Load, layerArea);
-		}
-	}
-
-	// Begin a dynamic-rendering scope over the given colour attachment view(s) at the pass render area — used to
-	// open a layer's offscreen target (LoadOp.Clear) and to resume the suspended parent scope (LoadOp.Load).
-	private void BeginColorScope(ReadOnlySpan<ImageView> views, AttachmentLoadOp load, Extent2D area)
-	{
-		var color = stackalloc RenderingAttachmentInfo[views.Length];
-		for (var i = 0; i < views.Length; i++)
-			color[i] = new RenderingAttachmentInfo
-			{
-				SType = StructureType.RenderingAttachmentInfo,
-				ImageView = views[i],
-				ImageLayout = ImageLayout.ColorAttachmentOptimal,
-				LoadOp = load,
-				StoreOp = AttachmentStoreOp.Store,
-				ClearValue = default, // transparent-black premultiplied — a layer starts empty
-			};
-		RenderingInfo info = new()
-		{
-			SType = StructureType.RenderingInfo,
-			RenderArea = new Rect2D(new Offset2D(0, 0), area),
-			LayerCount = 1,
-			ColorAttachmentCount = (uint)views.Length,
-			PColorAttachments = color,
-		};
-		_vk.CmdBeginRendering(_cmd, in info);
-	}
-
-	private void BeginColorScope(ImageView view, AttachmentLoadOp load, Extent2D area) =>
-		BeginColorScope(new ReadOnlySpan<ImageView>(in view), load, area);
-
-	// Composite a resolved layer target back into the (now-resumed) parent: one full-surface KIND_IMAGE quad that
-	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once. The
-	// HDR paper-white lift is forced off here — the layer's primitives already lifted, and the lift commutes with
-	// the premultiplied alpha-over, so re-lifting would double it (the CPU rasterizer is the reference for this).
-	private void CompositeLayer(VulkanTechnique baked, ImageView layerView, Half4 tint, Sampler sampler, float* block, int pushLen, ReadOnlySpan<float> push, Extent2D area)
-	{
-		var coordX = 2f / push[0];
-		var coordY = 2f / push[1];
-		var custom = default(Vector4);
-		Span<OverlayVertex> quad =
-		[
-			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
-			new(new Vector2(coordX, 0), new Vector2(1, 0), tint, custom),
-			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
-			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
-			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
-			new(new Vector2(0, coordY), new Vector2(0, 1), tint, custom),
-		];
-		var (quadBuffer, quadOffset) = _listVtx.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(quad));
-		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in quadBuffer, in quadOffset);
-
-		const int blockFloats = VulkanTechnique.ListPushSize / sizeof(float);
-		var cblock = stackalloc float[blockFloats];
-		for (var i = 0; i < pushLen; i++)
-			cblock[i] = block[i];
-		if (pushLen > 5)
-			cblock[5] = 0f;                    // isHdr off — do not re-lift the already-lifted layer
-		*(uint*)(cblock + pushLen) = KindImage;
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, cblock);
-
-		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-		var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = layerView, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
-		var write = new WriteDescriptorSet
-		{
-			SType = StructureType.WriteDescriptorSet,
-			DstSet = set,
-			DstBinding = 0,
-			DescriptorCount = 1,
-			DescriptorType = DescriptorType.CombinedImageSampler,
-			PImageInfo = &imageInfo,
-		};
-		_vk.UpdateDescriptorSets(_ctx.Device, 1, in write, 0, null);
-		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
-
-		Rect2D scissor = new(new Offset2D(0, 0), area);
-		_vk.CmdSetScissor(_cmd, 0, 1, in scissor);
-		_vk.CmdDraw(_cmd, 6, 1, 0, 0);
-	}
-
-	// An image-layout transition (sync2) for the renderer-private layer targets — the same shape as the engine's
-	// transitions, recorded here because a layer's choreography is the backend's, below the graph's barrier derivation.
-	private void TransitionImage(Image image, ImageLayout oldLayout, ImageLayout newLayout,
-		PipelineStageFlags2 srcStage, AccessFlags2 srcAccess, PipelineStageFlags2 dstStage, AccessFlags2 dstAccess)
-	{
-		var barrier = new ImageMemoryBarrier2
-		{
-			SType = StructureType.ImageMemoryBarrier2,
-			SrcStageMask = srcStage,
-			SrcAccessMask = srcAccess,
-			DstStageMask = dstStage,
-			DstAccessMask = dstAccess,
-			OldLayout = oldLayout,
-			NewLayout = newLayout,
-			SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-			DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-			Image = image,
-			SubresourceRange = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1),
-		};
-		var dependency = new DependencyInfo
-		{
-			SType = StructureType.DependencyInfo,
-			ImageMemoryBarrierCount = 1,
-			PImageMemoryBarriers = &barrier,
-		};
-		_vk.CmdPipelineBarrier2(_cmd, in dependency);
-	}
-
 	/// <summary>Resolve an inspectable graph resource to a draw-list-bindable texture handle for this frame (resource
 	/// viewer). The id is offset by <see cref="InspectableResource.DebugTextureBase"/> so <see cref="DrawList{TVertex}"/> samples the live
 	/// transient image rather than a loaded texture; the dimensions are the resource's current size.</summary>
@@ -680,146 +261,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			return null;
 		ref var image = ref _resources.Get(_frameSlot, resourceId);
 		return new Texture(resourceId + InspectableResource.DebugTextureBase, (int)image.Extent.Width, (int)image.Extent.Height);
-	}
-
-	// Bind sampled graph resources (transients) as combined image samplers at bindings 0..N-1 — the path
-	// FullScreen and the instanced light volumes share. The graph put each in ShaderReadOnly before this pass.
-	// A present uniform buffer (M15-0) is written as the last binding (index inputs.Length), matching the set
-	// layout's category order (samplers, then the UBO).
-	private void BindSampledInputs(VulkanTechnique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<Silk.NET.Vulkan.Buffer> storageBuffers = default, ReadOnlySpan<UniformBinding> ubos = default)
-	{
-		var sampler = linear ? _linearSampler : _nearestSampler;
-		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-		var count = inputs.Length + storageBuffers.Length + ubos.Length;
-		var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
-		var bufferInfos = stackalloc DescriptorBufferInfo[storageBuffers.Length + ubos.Length];
-		var writes = stackalloc WriteDescriptorSet[count];
-		var w = 0;
-		for (var i = 0; i < inputs.Length; i++)
-		{
-			ref var image = ref _resources.Get(_frameSlot, inputs[i].Id);
-			imageInfos[i] = new DescriptorImageInfo
-			{
-				Sampler = sampler,
-				ImageView = image.View,
-				ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
-			};
-			writes[w++] = new WriteDescriptorSet
-			{
-				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
-				DstBinding = (uint)i,
-				DescriptorCount = 1,
-				DescriptorType = DescriptorType.CombinedImageSampler,
-				PImageInfo = &imageInfos[i],
-			};
-		}
-		// Read-only storage buffers (SSBOs) follow the samplers, as StorageBuffer descriptors.
-		for (var s = 0; s < storageBuffers.Length; s++)
-		{
-			bufferInfos[s] = new DescriptorBufferInfo { Buffer = storageBuffers[s], Offset = 0, Range = Vk.WholeSize };
-			writes[w++] = new WriteDescriptorSet
-			{
-				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
-				DstBinding = (uint)(inputs.Length + s),
-				DescriptorCount = 1,
-				DescriptorType = DescriptorType.StorageBuffer,
-				PBufferInfo = &bufferInfos[s],
-			};
-		}
-		// Uniform buffers follow the storage buffers.
-		for (var u = 0; u < ubos.Length; u++)
-		{
-			bufferInfos[storageBuffers.Length + u] = ubos[u].Info;
-			writes[w++] = new WriteDescriptorSet
-			{
-				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
-				DstBinding = (uint)(inputs.Length + storageBuffers.Length + u),
-				DescriptorCount = 1,
-				DescriptorType = DescriptorType.UniformBuffer,
-				PBufferInfo = &bufferInfos[storageBuffers.Length + u],
-			};
-		}
-		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
-		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
-	}
-
-	// Bind a material's loaded textures (VulkanTextureStore views) into the technique's reflected sampler slots 0..N-1,
-	// with the technique's address mode + filter. Shared by Draw(mesh, material), textured instancing, and
-	// textured particles. The caller checks SampleCount > 0 (or a present UBO). A present uniform buffer (M15-0)
-	// is written as the last binding (index SampleCount) — e.g. foliage's wind, read in the vertex stage.
-	private void BindMaterialTextures(VulkanTechnique baked, VulkanTechniqueTemplate template, Material material, string technique, in UniformBinding ubo = default)
-	{
-		var textures = _materials.TexturesOf(material.Id);
-		if (textures.Length < template.SampleCount)
-			throw new VulkanException($"Material supplies {textures.Length} textures but technique '{technique}' samples {template.SampleCount}.");
-
-		var sampler = template.Address switch
-		{
-			SamplerAddress.Repeat => template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler,
-			SamplerAddress.Clamp => template.LinearFilter ? _linearSampler : _nearestSampler,
-			_ => throw new VulkanException($"SamplerAddress '{template.Address}' is not mapped to a sampler."),
-		};
-		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-		var count = template.SampleCount + (ubo.Present ? 1 : 0);
-		var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];
-		var bufferInfo = ubo.Info;
-		var writes = stackalloc WriteDescriptorSet[count];
-		for (var i = 0; i < template.SampleCount; i++)
-		{
-			imageInfos[i] = new DescriptorImageInfo
-			{
-				Sampler = sampler,
-				ImageView = _textures.View(textures[i]),
-				ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
-			};
-			writes[i] = new WriteDescriptorSet
-			{
-				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
-				DstBinding = (uint)i,
-				DescriptorCount = 1,
-				DescriptorType = DescriptorType.CombinedImageSampler,
-				PImageInfo = &imageInfos[i],
-			};
-		}
-		if (ubo.Present)
-			writes[template.SampleCount] = new WriteDescriptorSet
-			{
-				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
-				DstBinding = (uint)template.SampleCount,
-				DescriptorCount = 1,
-				DescriptorType = DescriptorType.UniformBuffer,
-				PBufferInfo = &bufferInfo,
-			};
-		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
-		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
-	}
-
-	// M15-0: a present per-frame uniform buffer to bind as a technique's last descriptor — the resolved
-	// DescriptorBufferInfo plus a presence flag (default => absent). Copying Info to a local before taking its
-	// address keeps the pointer valid through vkUpdateDescriptorSets.
-	private readonly struct UniformBinding
-	{
-		public readonly DescriptorBufferInfo Info;
-		public readonly bool Present;
-
-		public UniformBinding(Silk.NET.Vulkan.Buffer buffer, ulong offset, ulong range)
-		{
-			Info = new DescriptorBufferInfo { Buffer = buffer, Offset = offset, Range = range };
-			Present = true;
-		}
-	}
-
-	// Stage a per-frame uniform block into the uniform ring and resolve it to a bindable descriptor (M15-0).
-	private UniformBinding UploadUniforms(ReadOnlySpan<float> data)
-	{
-		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(data);
-		var (buffer, offset) = _uniformUpload.Upload(_frameSlot, bytes);
-		return new UniformBinding(buffer, offset, (ulong)bytes.Length);
 	}
 
 	// The technique's shape (samples an input? reads a vertex buffer?) comes from its registered template;
@@ -920,7 +361,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		}
 	}
 
-	// Nearest keeps the §9 pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
+	// Nearest keeps the low-res pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
 	// the smooth filtering a chunky pixel glow still wants internally. The sampler is part of the combined
 	// image-sampler descriptor, so the technique's LinearFilter flag just selects which one FullScreen binds.
 	private Sampler CreateSampler(Filter filter, SamplerAddressMode address = SamplerAddressMode.ClampToEdge)

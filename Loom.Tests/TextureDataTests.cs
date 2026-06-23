@@ -4,7 +4,7 @@ namespace Loom.Tests;
 
 /// <summary>
 /// The neutral texture/mip-chain producer: dimensions, level counts, and the deterministic box filter that
-/// keeps both backends byte-identical (PlanningPhase2.md M11).
+/// keeps both backends byte-identical.
 /// </summary>
 public class TextureDataTests
 {

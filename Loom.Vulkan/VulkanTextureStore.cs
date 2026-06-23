@@ -10,7 +10,7 @@ namespace Loom.Vulkan;
 
 /// <summary>
 /// Owns GPU-resident textures: device-local sampled images with a full mip chain, uploaded once via a
-/// host-visible staging copy (the texture counterpart of <see cref="VulkanMeshStore"/>, PlanningPhase2.md M11). The
+/// host-visible staging copy (the texture counterpart of <see cref="VulkanMeshStore"/>). The
 /// app builds textures up front through the engine and gets back an opaque <see cref="Texture"/> handle; a
 /// material draw resolves the handle to its image view and binds it as a combined image sampler. Mip levels
 /// arrive pre-built on the CPU in <see cref="TextureData"/>, so the store just uploads each level — no GPU

@@ -9,7 +9,7 @@ namespace Loom.Core.Materials;
 /// directly from raw pixels via <see cref="FromRgba8"/>; the backend's texture store turns it into a sampled
 /// image. Mips are generated here on the CPU (a deterministic integer box filter) so both backends upload
 /// byte-identical level data — the cleanest path to cross-backend pixel parity and the reason no GPU
-/// blit/mip-gen plumbing is needed (Planning.md §8 backend isolation; PlanningPhase2.md M11).
+/// blit/mip-gen plumbing is needed.
 /// </summary>
 public sealed class TextureData
 {

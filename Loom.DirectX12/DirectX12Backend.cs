@@ -13,13 +13,13 @@ namespace Loom.DirectX12;
 /// <see cref="DirectX12Engine"/> as a neutral <see cref="IEngine"/>. It self-registers into
 /// <see cref="Engine.AvailableEngines"/> from a module initializer, so simply referencing (loading) this
 /// assembly makes <c>"DirectX12"</c> a selectable backend — no explicit wiring in app code. This is the second
-/// backend slotting in behind the unchanged describe/execute layers (Planning.md §2 portability invariant).
+/// backend slotting in behind the unchanged describe/execute layers.
 /// </summary>
 public sealed class DirectX12Backend : IRenderBackend
 {
 #pragma warning disable CA2255
 	/// <summary>
-	/// Register the DirectX12 backend as the Loom.DirectX12 assembly loads (Planning.md §5 backend registry) — but only if
+	/// Register the DirectX12 backend as the Loom.DirectX12 assembly loads — but only if
 	/// <see cref="IsSupported"/> confirms D3D12 is actually available. On a box (or OS) without it the backend then
 	/// never appears in <see cref="Engine.AvailableEngines"/>, so selection falls through to a working one instead
 	/// of crashing later in <see cref="Create"/>.

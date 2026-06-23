@@ -7,7 +7,7 @@ using Silk.NET.Input;
 namespace Loom.Sandbox;
 
 /// <summary>
-/// A free-fly debug camera (M13 detached camera): WASD to move on the view plane, Q/E down/up, right-mouse-drag to
+/// A free-fly debug camera: WASD to move on the view plane, Q/E down/up, right-mouse-drag to
 /// look. Host-side only — it just produces a <see cref="Camera"/> the host feeds to the engine, so the engine stays
 /// unaware there even is a debug camera. Neutral right-handed, +Y-up projection (the backend applies its clip-space
 /// fix-up), matching the demos' orbit camera.

@@ -135,7 +135,7 @@ public class RenderGraphTests
 	}
 
 	/// <summary>
-	/// The §6 reference-frame shape (minus the g.Bloom sub-graph helper, which is M5): deferred geometry
+	/// Reference-frame shape: deferred geometry
 	/// → lighting → forward transparency → nearest upscale → HUD → present. Proves the vocabulary composes.
 	/// </summary>
 	[Test]

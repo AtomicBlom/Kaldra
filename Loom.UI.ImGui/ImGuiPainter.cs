@@ -39,8 +39,8 @@ public sealed class ImGuiPainter
 	// The atlas uv of a solid white texel — line quads sample it so they render as a flat colour.
 	private readonly Vector2 _whiteUv;
 
-	// Per-frame scratch, grown on demand so a steady-state frame allocates nothing (Planning.md §8: no GC in the
-	// render loop). The backend copies each DrawList submission into its own ring synchronously, so the painter may
+	// Per-frame scratch, grown on demand so a steady-state frame allocates nothing (no GC in the render loop).
+	// The backend copies each DrawList submission into its own ring synchronously, so the painter may
 	// refill these between submissions in one frame (UI, then thumbnails, then lines).
 	private ImGuiVertex[] _verts = [];
 	private ushort[] _indices = [];

@@ -4,7 +4,7 @@ using System.Numerics;
 namespace Loom.Core.Animation;
 
 /// <summary>
-/// A mesh's skeleton (M15): a flat joint array (in glTF skin order) where each joint records its parent index
+/// A mesh's skeleton: a flat joint array (in glTF skin order) where each joint records its parent index
 /// (<c>-1</c> for a root), its inverse bind matrix, and its bind-pose local transform. The parents form a
 /// forest and may appear in any order — the animation runtime resolves world matrices accordingly, so no
 /// topological sort is assumed. Backend-neutral (<c>System.Numerics</c>), immutable — the natural output of a glTF skin.

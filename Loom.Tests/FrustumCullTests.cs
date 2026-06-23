@@ -4,7 +4,7 @@ using Loom.Core.Scene;
 
 namespace Loom.Tests;
 
-/// <summary>The optional CPU frustum cull (M12): AABB transform, frustum extraction, and the Scene cull helper.</summary>
+/// <summary>The optional CPU frustum cull: AABB transform, frustum extraction, and the Scene cull helper.</summary>
 public class FrustumCullTests
 {
 	// A camera at (0,0,5) looking toward -Z (origin), 60° vertical FOV, square aspect — the neutral convention.

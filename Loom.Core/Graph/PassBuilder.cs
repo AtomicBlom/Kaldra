@@ -7,7 +7,7 @@ namespace Loom.Core.Graph;
 /// The fluent builder for a single pass. You state only <em>what</em> the pass reads and writes — every
 /// verb records a <see cref="ResourceAccess"/> edge and returns <c>this</c> for chaining. Ordering,
 /// barriers and layout transitions are <em>derived</em> from these edges by the Execute layer; any verb
-/// that asked you to state order would be a design smell (Planning.md §8).
+/// that asked you to state order would be a design smell.
 /// </summary>
 public sealed class PassBuilder
 {
@@ -33,7 +33,7 @@ public sealed class PassBuilder
 
 	/// <summary>
 	/// Read-modify-write colour: the existing contents are loaded (preserved), then the technique's blend
-	/// accumulates onto them. The pass is both the last reader and the next writer (Planning.md §8).
+	/// accumulates onto them. The pass is both the last reader and the next writer.
 	/// </summary>
 	public PassBuilder Blends(ColorHandle resource) => Add(AccessKind.Blend, resource);
 
@@ -86,7 +86,7 @@ public sealed class PassBuilder
 
 	/// <summary>
 	/// The per-frame record callback for a raster pass. Must be pure w.r.t. graph structure: pull from
-	/// <c>ctx</c> rather than capturing, so the graph stays frame-independent and cacheable (§8).
+	/// <c>ctx</c> rather than capturing, so the graph stays frame-independent and cacheable.
 	/// </summary>
 	public PassBuilder Draw(Action<IRenderContext> record)
 	{

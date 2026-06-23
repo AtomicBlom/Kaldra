@@ -5,7 +5,7 @@ using Format = Silk.NET.Vulkan.Format;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// The bake inputs that uniquely identify a graphics <see cref="VulkanTechnique"/> — the cache key (M1).
+/// The bake inputs that uniquely identify a graphics <see cref="VulkanTechnique"/> — the cache key.
 /// As real pipeline state (blend, depth, cull, topology, vertex/instance layout) becomes
 /// configurable, it joins this record and the hash in <see cref="VulkanTechniqueCache"/>.
 /// <para>
@@ -13,8 +13,8 @@ namespace Loom.Vulkan;
 /// in attachment order (dynamic rendering requires the pipeline's attachment formats to match; a g-buffer
 /// pass has several), so one shader baked against different targets yields different cached pipelines.
 /// <see cref="SampleCount"/> selects the descriptor set layout: N gives N combined image samplers at set 0,
-/// bindings 0..N-1 (the fullscreen-sample / deferred-lighting inputs); the per-binding reflection that derives
-/// this automatically arrives later.
+/// bindings 0..N-1 (the fullscreen-sample / deferred-lighting inputs); the count is supplied explicitly until
+/// per-binding reflection is wired up.
 /// </para>
 /// <para>
 /// The <see cref="VulkanTechniqueCache"/> keys on a content hash (which folds in every field here), not this

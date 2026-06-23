@@ -6,7 +6,7 @@ using Loom.Core.Animation;
 namespace Loom.Tests;
 
 /// <summary>
-/// M15-2: the CPU animation runtime (<see cref="AnimationSampler"/>) — keyframe interpolation, bind-pose
+/// The CPU animation runtime (<see cref="AnimationSampler"/>) — keyframe interpolation, bind-pose
 /// fallback for un-keyed channels, hierarchy composition, and the inverse-bind palette. Pure + deterministic.
 /// </summary>
 public class AnimationSamplerTests

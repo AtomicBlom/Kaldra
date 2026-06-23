@@ -1,7 +1,7 @@
 namespace Loom.Core.Animation;
 
 /// <summary>
-/// How an animation track interpolates between keyframes — mirrors glTF's sampler interpolation modes (M15).
+/// How an animation track interpolates between keyframes — mirrors glTF's sampler interpolation modes.
 /// </summary>
 public enum AnimationInterpolation
 {

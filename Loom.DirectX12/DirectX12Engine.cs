@@ -21,15 +21,11 @@ using Format = Loom.Core.Graph.Format;
 namespace Loom.DirectX12;
 
 /// <summary>
-/// The DirectX 12 <see cref="IEngine"/> (Planning.md §2 "bake + record" layer, DirectX12 edition). Stands up the
-/// device + swapchain and records command lists with fence-based frame pacing. This first slice mirrors how the
-/// Vulkan backend started (M0/M1): it clears the backbuffer (and, next slice, draws a hand-baked triangle)
-/// before the render-graph executor is ported. The graph-driven members therefore throw
-/// <see cref="NotSupportedException"/> for now — they land in the following slice, when
-/// <see cref="GraphSchedule"/>/<see cref="BarrierPlan"/>/<c>AliasPlan</c> are consumed here exactly as the
-/// Vulkan engine consumes them.
+/// The DirectX 12 <see cref="IEngine"/>. Stands up the device + swapchain and records command lists with
+/// fence-based frame pacing. Consumes the backend-neutral <see cref="GraphSchedule"/>/<see cref="BarrierPlan"/>/
+/// <c>AliasPlan</c> products exactly as the Vulkan engine does.
 /// </summary>
-public sealed unsafe class DirectX12Engine : EngineBase
+public sealed unsafe partial class DirectX12Engine : EngineBase
 {
 	private const uint BufferCount = 2; // matches the Vulkan backend's 2 frames in flight
 
@@ -65,9 +61,9 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	private ComPtr<ID3D12Resource> _readback;
 	private ulong _readbackSize;
 
-	// Readback (§7.4): each g.Readback target is copied into a per-slot READBACK buffer every frame; after that
-	// slot's fence the copy is repacked tight (D3D12 pads rows to 256 bytes) and handed to StoreReadback, which
-	// IEngine.Read returns. Empty when the active graph declares no readback target.
+	// Each g.Readback target is copied into a per-slot READBACK buffer every frame; after that slot's fence the copy
+	// is repacked tight (D3D12 pads rows to 256 bytes) and handed to StoreReadback, which IEngine.Read returns.
+	// Empty when the active graph declares no readback target.
 	private readonly List<ReadbackBuffers> _readbacks = [];
 
 	// One g.Readback target's GPU→CPU staging: a per-slot READBACK buffer the executor copies the target into, plus
@@ -84,16 +80,16 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		public required byte[] Packed;                     // tight (unpadded) bytes handed to StoreReadback
 	}
 
-	// GPU per-pass timing (§12 M13 profiler): one TIMESTAMP query heap with 2 queries (begin/end) per pass and a
-	// per-slot sub-range, plus a per-slot READBACK buffer ResolveQueryData writes into. Decoded after the slot's
-	// fence (like the §7.4 readback) — a frame or two stale. Runtime-toggled (off by default).
+	// GPU per-pass timing: one TIMESTAMP query heap with 2 queries (begin/end) per pass and a per-slot sub-range,
+	// plus a per-slot READBACK buffer ResolveQueryData writes into. Decoded after the slot's fence — a frame or two
+	// stale. Runtime-toggled (off by default).
 	private ComPtr<ID3D12QueryHeap> _timingHeap;
 	private readonly ComPtr<ID3D12Resource>[] _timingReadback = new ComPtr<ID3D12Resource>[BufferCount];
 	private readonly bool[] _timingValid = new bool[BufferCount];
 	private int _timingPassCount;
 	private ulong _timestampFrequency; // ticks per second, from the graphics queue (0 ⇒ timing unavailable)
 
-	// Shader hot-reload (M13), opt-in. The watcher maps a changed artifact to a logical shader name; the base's
+	// Shader hot-reload, opt-in. The watcher maps a changed artifact to a logical shader name; the base's
 	// reload registry queues it and the render thread drains it (fence-safe).
 	private AssetWatcher? _shaderWatcher;
 
@@ -122,7 +118,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 
 		_triangle = new DirectX12Triangle(_ctx, _swapchain.Format);
 		_techniques = new DirectX12TechniqueCache(_ctx);
-		_ring = new DirectX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the M13 resource viewer's debug SRVs
+		_ring = new DirectX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the resource viewer's debug SRVs
 		_meshes = new DirectX12MeshStore(_ctx);
 		_textures = new DirectX12TextureStore(_ctx);
 		_materials = new MaterialStore();
@@ -130,7 +126,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
-		// GPU-timing clock (M13): the graphics (Direct) queue's timestamp frequency. A Direct queue always supports
+		// GPU-timing clock: the graphics (Direct) queue's timestamp frequency. A Direct queue always supports
 		// timestamps on D3D12; 0 only if the call fails, which disables the profiler (the GpuTimingEnabled setter guards it).
 		ulong frequency = 0;
 		if (_ctx.GraphicsQueue.GetTimestampFrequency(ref frequency) >= 0)
@@ -138,7 +134,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 
 		Console.WriteLine($"[loom] DirectX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
 
-		// Shader hot-reload (M13), opt-in. Watch the loose DXIL/reflection artifacts; an external process rewrites
+		// Shader hot-reload, opt-in. Watch the loose DXIL/reflection artifacts; an external process rewrites
 		// them and this picks up the new bytecode + rebuilds affected PSOs. Off by default.
 		if (settings.WatchShaderDirectory)
 		{
@@ -229,502 +225,6 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		}
 	}
 
-	// Graph-driven path: consume the neutral BarrierPlan derived in SetGraph. Per pass, emit its barriers, bind
-	// its derived render target(s), run its record callback; then the final present transition. The DirectX12 mirror
-	// of VulkanEngine's per-frame RecordGraph.
-	private void RenderGraphFrame(FrameInputs inputs)
-	{
-		DrainShaderReloads(); // M13: pick up any hot-reloaded shaders before recording this frame
-
-		var index = _swapchain.CurrentIndex;
-		WaitForFrame(index);
-
-		// This slot's GPU work (a couple frames back) is now done, so its readback buffers are safe to map — repack
-		// the copies they hold and hand them to StoreReadback for IEngine.Read (a few frames stale; invisible for hover).
-		DownloadReadback(index);
-		// Same story for the timing queries the slot resolved.
-		DownloadTiming(index);
-
-		SilkMarshal.ThrowHResult(_allocators[index].Reset());
-		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
-
-		// Bind the shader-visible heap for this command list, then reset its per-frame bump allocator.
-		var heap = _ring.Heap.Handle;
-		_commandList.SetDescriptorHeaps(1, &heap);
-		_ring.Reset(index); // this slot's own region — must not clobber the other in-flight frame's live descriptors
-		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
-		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _swapchain.Width, _swapchain.Height);
-
-		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it (write-on-change:
-		// the last IEngine.Write persists, re-uploaded each frame so the slot the GPU reads is always current).
-		foreach (var (id, bytes) in ConstantsShadows)
-			_transients!.WriteConstants(index, id, bytes);
-		// Same for the app-writable storage buffers (IEngine.Write span).
-		foreach (var (id, bytes) in StorageShadows)
-			_transients!.WriteStorage(index, id, bytes);
-
-		// GPU timing (M13): bracket each pass's own work (after its pre-barriers) with a begin/end timestamp into this
-		// slot's sub-range of the heap. Timestamp queries use EndQuery only (no BeginQuery).
-		var timing = GpuTimingEnabled && _timingHeap.Handle is not null;
-		var timingBase = (uint)(2 * _timingPassCount) * index;
-		var passIndex = 0;
-
-		foreach (var pass in Barriers.Passes)
-		{
-			// Wrap each pass in a debug-label scope, nested under groups derived from its dotted name, so a PIX
-			// capture reads as a "bloom" group containing "down1", … instead of a flat list. [Conditional]:
-			// vanishes without UseNamedGPUObjects.
-			BeginPassLabels(pass);
-			foreach (var transition in pass.Transitions)
-				EmitGraphTransition(index, transition);
-
-			if (timing)
-				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex));
-			if (pass.Pass.Kind == PassKind.Compute)
-				RecordComputePass(pass);
-			else
-				RecordRasterPass(index, pass);
-			if (timing)
-				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex + 1));
-			_ctx.EndDebugLabel(_commandList); // close the leaf scope opened by BeginPassLabels
-			passIndex++;
-		}
-		CloseTrailingLabels(); // close any groups still open after the last pass
-
-		// GPU→CPU readback: copy each readback target into its slot's buffer (no-op if the graph declares none).
-		RecordReadback(index);
-
-		// Resolve this slot's timestamps into its readback buffer (read back after the slot's next fence).
-		if (timing)
-		{
-			_commandList.ResolveQueryData(_timingHeap, QueryType.Timestamp, timingBase, (uint)(2 * _timingPassCount), _timingReadback[index], 0);
-			_timingValid[index] = true;
-		}
-
-		// Optional capture: copy the present target before the final present transition (which then runs from
-		// COPY_SOURCE, since EmitGraphTransition tracks the real state).
-		var capturing = CapturePath is not null;
-		uint rowPitch = 0;
-		if (capturing)
-		{
-			var backbuffer = _swapchain.BackBuffer(index);
-			if (_backbufferState[index] != ResourceStates.CopySource)
-			{
-				Transition(backbuffer, _backbufferState[index], ResourceStates.CopySource);
-				_backbufferState[index] = ResourceStates.CopySource;
-			}
-			rowPitch = CopyBackbufferToReadback(backbuffer);
-		}
-
-		foreach (var transition in Barriers.FinalTransitions)
-			EmitGraphTransition(index, transition);
-
-		SilkMarshal.ThrowHResult(_commandList.Close());
-		var list = (ID3D12CommandList*)_commandList.Handle;
-		_ctx.GraphicsQueue.ExecuteCommandLists(1, &list);
-		_swapchain.Present(_settings.VSync);
-
-		_fenceValue++;
-		SilkMarshal.ThrowHResult(_ctx.GraphicsQueue.Signal(_fence, _fenceValue));
-		_frameFenceValues[index] = _fenceValue;
-		_debugErrors += _ctx.DrainDebugMessages();
-
-		if (capturing)
-		{
-			WaitForFrame(index);
-			WriteCapture(CapturePath!, rowPitch);
-			CapturePath = null;
-		}
-	}
-
-	// Bind a raster pass's colour + depth target(s) from its derived AttachmentActions, apply load actions, then
-	// run the callback. Colour targets bind RTVs; a depth target binds the DSV and bakes the depth test into the
-	// pass's pipelines (via BeginPass). Targets may be the backbuffer (swapchain RTV) or graph transients.
-	private void RecordRasterPass(uint index, PassBarriers pass)
-	{
-		var rtv = stackalloc CpuDescriptorHandle[8];
-		var formats = stackalloc DxgiFormat[8];
-		var black = stackalloc float[4] { 0f, 0f, 0f, 1f };
-		var colorCount = 0;
-		uint width = 0, height = 0;
-
-		CpuDescriptorHandle dsv = default;
-		var hasDepth = false;
-		var depthClear = false;
-		var depthReadOnly = false;
-		var depthFormat = DxgiFormat.FormatUnknown;
-
-		foreach (var attachment in pass.Attachments)
-		{
-			var id = attachment.Resource.Id;
-			if (attachment.State == ResourceState.ColorAttachment)
-			{
-				if (colorCount >= 8)
-					throw new NotSupportedException("DirectX12: a pass declares more than 8 colour attachments; D3D12 caps simultaneous render targets at 8 (D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT).");
-				if (attachment.Resource.IsBackbuffer)
-				{
-					rtv[colorCount] = _swapchain.RtvHandle(index);
-					formats[colorCount] = _swapchain.RenderTargetFormat; // the sRGB RTV format — the PSO must match the actual view
-					width = _swapchain.Width;
-					height = _swapchain.Height;
-				}
-				else
-				{
-					rtv[colorCount] = _transients!.View(index, id);
-					formats[colorCount] = _transients.Format(index, id);
-					(width, height) = _transients.Extent(id);
-				}
-				if (attachment.Load == LoadAction.Clear)
-					_commandList.ClearRenderTargetView(rtv[colorCount], black, 0u, (Box2D<int>*)null);
-				colorCount++;
-			}
-			else // DepthAttachment or DepthReadOnly
-			{
-				dsv = _transients!.View(index, id);
-				depthFormat = _transients.Format(index, id);
-				depthReadOnly = attachment.State == ResourceState.DepthReadOnly;
-				depthClear = attachment.Load == LoadAction.Clear;
-				if (width == 0)
-					(width, height) = _transients.Extent(id);
-				hasDepth = true;
-			}
-		}
-
-		if (colorCount == 0 && !hasDepth)
-			throw new NotSupportedException("DirectX12: a raster pass with no colour or depth target is not supported yet.");
-
-		_commandList.OMSetRenderTargets((uint)colorCount, colorCount > 0 ? rtv : null, false, hasDepth ? &dsv : null);
-
-		// Colour clears were emitted above (per attachment); clear depth to 1.0 here if the pass produces it.
-		if (hasDepth && depthClear)
-			_commandList.ClearDepthStencilView(dsv, ClearFlags.Depth, 1f, 0, 0u, (Box2D<int>*)null);
-
-		// Negative-height viewport (origin at the bottom): turns D3D12's (1-ndc.y) NDC→screen map into Vulkan's
-		// (ndc.y+1). Paired with the Vulkan-style flipped projection (DirectX12RenderContext.ClipSpace) this renders
-		// geometry upright AND makes every fullscreen pass map uv→screen exactly like Vulkan — so the shared
-		// shaders need no per-backend Y handling (see ClipSpace). The scissor stays in pixel space (not flipped).
-		var viewport = new Viewport { TopLeftX = 0, TopLeftY = height, Width = width, Height = -(float)height, MinDepth = 0, MaxDepth = 1 };
-		var scissor = new Box2D<int>(0, 0, (int)width, (int)height);
-		_commandList.RSSetViewports(1, &viewport);
-		_commandList.RSSetScissorRects(1, &scissor);
-
-		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
-		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
-		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
-		var storageCount = CollectStorageIds(pass.Pass, storageIds);
-		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
-
-		// Hand the context this pass's render-target handles + extent so a draw-list group-opacity layer can rebind
-		// the pass scope after detouring through an offscreen target.
-		_context.SetColorScope(new ReadOnlySpan<CpuDescriptorHandle>(rtv, colorCount), width, height);
-
-		pass.Pass.Record?.Invoke(_context);
-	}
-
-	// A compute pass has no render targets and no render-target binding — its resource transitions (the storage
-	// buffer → UNORDERED_ACCESS) were emitted before this; just record the dispatch. Empty attachments keep the
-	// context's pass state stable (the DirectX12 mirror of VulkanEngine's compute branch in RecordPass).
-	private void RecordComputePass(PassBarriers pass)
-	{
-		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
-		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
-		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
-		var storageCount = CollectStorageIds(pass.Pass, storageIds);
-		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, uniformIds[..uniformCount], storageIds[..storageCount]);
-		pass.Pass.Record?.Invoke(_context);
-	}
-
-	// Fill `ids` with the app-writable parameter buffers a pass .Reads (its ReadUniform edges, in .Reads order) —
-	// they bind to the technique's uniform CBVs b1..; returns the count.
-	private static int CollectUniformIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadUniform && n < ids.Length)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
-
-	// Fill `ids` with the app-writable storage buffers a pass .Reads (its ReadStorage edges, in .Reads order) —
-	// they bind to the technique's read-only structured-buffer root SRVs; returns the count.
-	private static int CollectStorageIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadStorage && n < ids.Length)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
-
-	// Open this pass's debug-label scopes: close the groups it leaves behind, open the ones it enters, then open
-	// its own leaf scope (closed by the caller after the pass records). [Conditional] so the whole thing — loops
-	// and all — compiles away without UseNamedGPUObjects.
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void BeginPassLabels(PassBarriers pass)
-	{
-		for (var i = 0; i < pass.LabelCloses; i++)
-			_ctx.EndDebugLabel(_commandList);
-		foreach (var group in pass.LabelOpens)
-			_ctx.BeginDebugLabel(_commandList, group);
-		_ctx.BeginDebugLabel(_commandList, pass.LeafLabel);
-	}
-
-	// Close the debug-label groups still open after the final pass (balances BeginPassLabels' opens).
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void CloseTrailingLabels()
-	{
-		for (var i = 0; i < Barriers.TrailingLabelCloses; i++)
-			_ctx.EndDebugLabel(_commandList);
-	}
-
-	// Track the resource's real D3D12 state and emit a transition only when the required state differs (D3D12
-	// barriers need the exact current state, unlike Vulkan's "Undefined" old layout — see DirectX12StateMapping).
-	private void EmitGraphTransition(uint index, ResourceTransition transition)
-	{
-		var target = DirectX12StateMapping.For(transition.To);
-		var id = transition.Resource.Id;
-
-		if (transition.Resource.IsBackbuffer)
-		{
-			if (_backbufferState[index] == target)
-				return;
-			Transition(_swapchain.BackBuffer(index), _backbufferState[index], target);
-			_backbufferState[index] = target;
-			return;
-		}
-
-		var transients = _transients!; // non-null throughout recording (SetGraph built it)
-
-		// An aliased transient reuses memory another bucket member held — before its first (re)activation this
-		// frame, an aliasing barrier orders this use after whatever last touched the shared memory (and marks its
-		// contents undefined, which the pass's clear/full-write then initialises). The DirectX12 analogue of the
-		// Vulkan backend's widened-source-scope birth barrier; once per resource per frame.
-		if (_aliasedHandoffIds.Contains(id) && _aliasBarriered.Add(id))
-			EmitAliasingBarrier(transients.Resource(index, id));
-
-		var current = transients.State(index, id);
-		if (current == target)
-			return;
-		Transition(transients.Resource(index, id), current, target);
-		transients.SetState(index, id, target);
-	}
-
-	// A D3D12 aliasing barrier handing the bucket's shared memory to <paramref name="after"/> (before = null:
-	// any resource previously on that memory is deactivated — conservative but correct, and hand-offs are few).
-	private void EmitAliasingBarrier(ComPtr<ID3D12Resource> after)
-	{
-		var barrier = new ResourceBarrier
-		{
-			Type = ResourceBarrierType.Aliasing,
-			Flags = ResourceBarrierFlags.None,
-			Anonymous = new ResourceBarrierUnion
-			{
-				Aliasing = new ResourceAliasingBarrier { PResourceBefore = (ID3D12Resource*)null, PResourceAfter = after.Handle }
-			}
-		};
-		_commandList.ResourceBarrier(1, &barrier);
-	}
-
-	/// <summary>
-	/// Record (into the open command list) the copy of the just-rendered backbuffer into the readback buffer,
-	/// leaving the backbuffer in PRESENT state. Returns the row pitch of the readback layout.
-	/// </summary>
-	private uint RecordCapture(ComPtr<ID3D12Resource> backbuffer)
-	{
-		Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.CopySource);
-		var rowPitch = CopyBackbufferToReadback(backbuffer);
-		Transition(backbuffer, ResourceStates.CopySource, ResourceStates.Present);
-		return rowPitch;
-	}
-
-	/// <summary>Record the copy of <paramref name="backbuffer"/> (already in COPY_SOURCE) into the readback buffer; returns the row pitch.</summary>
-	private uint CopyBackbufferToReadback(ComPtr<ID3D12Resource> backbuffer)
-	{
-		var width = _swapchain.Width;
-		var height = _swapchain.Height;
-		var rowPitch = Align(width * 4, 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
-		EnsureReadback((ulong)rowPitch * height);
-
-		var dst = new TextureCopyLocation
-		{
-			PResource = _readback.Handle,
-			Type = TextureCopyType.PlacedFootprint,
-			Anonymous = new TextureCopyLocationUnion
-			{
-				PlacedFootprint = new PlacedSubresourceFootprint
-				{
-					Offset = 0,
-					Footprint = new SubresourceFootprint { Format = _swapchain.Format, Width = width, Height = height, Depth = 1, RowPitch = rowPitch }
-				}
-			}
-		};
-		var src = new TextureCopyLocation
-		{
-			PResource = backbuffer.Handle,
-			Type = TextureCopyType.SubresourceIndex,
-			Anonymous = new TextureCopyLocationUnion { SubresourceIndex = 0 }
-		};
-		_commandList.CopyTextureRegion(&dst, 0, 0, 0, &src, (Box*)null);
-		return rowPitch;
-	}
-
-	private void EnsureReadback(ulong size)
-	{
-		if (_readback.Handle is not null && _readbackSize >= size)
-			return;
-		if (_readback.Handle is not null)
-			_readback.Dispose();
-
-		var heapProps = new HeapProperties
-		{
-			Type = HeapType.Readback,
-			CPUPageProperty = CpuPageProperty.Unknown,
-			MemoryPoolPreference = MemoryPool.Unknown,
-			CreationNodeMask = 1,
-			VisibleNodeMask = 1
-		};
-		var desc = new ResourceDesc
-		{
-			Dimension = ResourceDimension.Buffer,
-			Alignment = 0,
-			Width = size,
-			Height = 1,
-			DepthOrArraySize = 1,
-			MipLevels = 1,
-			Format = Silk.NET.DXGI.Format.FormatUnknown,
-			SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
-			Layout = TextureLayout.LayoutRowMajor,
-			Flags = ResourceFlags.None
-		};
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommittedResource(
-			&heapProps, HeapFlags.None, &desc, ResourceStates.CopyDest, (ClearValue*)null, out _readback));
-		_readbackSize = size;
-	}
-
-	private void WriteCapture(string path, uint rowPitch)
-	{
-		var width = (int)_swapchain.Width;
-		var height = (int)_swapchain.Height;
-
-		void* mapped;
-		SilkMarshal.ThrowHResult(_readback.Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
-		var rgba = new byte[width * height * 4];
-		var src = (byte*)mapped;
-		for (var y = 0; y < height; y++)
-			new ReadOnlySpan<byte>(src + (long)y * rowPitch, width * 4).CopyTo(rgba.AsSpan(y * width * 4));
-		_readback.Unmap(0, (Silk.NET.Direct3D12.Range*)null);
-
-		PngWriter.WriteRgba(path, width, height, rgba);
-		Console.WriteLine($"[loom] DirectX12 captured {width}x{height} -> {path}");
-	}
-
-	// Record the copy of each readback target into the slot's READBACK buffer (after the passes that wrote + read
-	// it). Transition the target to COPY_SOURCE and track the new state, so next frame's first use of it transitions
-	// from the right state (D3D12 needs the exact current state). No-op when the graph has no readback target.
-	private void RecordReadback(uint index)
-	{
-		foreach (var readback in _readbacks)
-		{
-			var current = _transients!.State(index, readback.Id);
-			if (current != ResourceStates.CopySource)
-			{
-				Transition(_transients.Resource(index, readback.Id), current, ResourceStates.CopySource);
-				_transients.SetState(index, readback.Id, ResourceStates.CopySource);
-			}
-
-			var dst = new TextureCopyLocation
-			{
-				PResource = readback.Readback[index].Handle,
-				Type = TextureCopyType.PlacedFootprint,
-				Anonymous = new TextureCopyLocationUnion
-				{
-					PlacedFootprint = new PlacedSubresourceFootprint
-					{
-						Offset = 0,
-						Footprint = new SubresourceFootprint { Format = _transients.Format(index, readback.Id), Width = readback.Width, Height = readback.Height, Depth = 1, RowPitch = readback.RowPitch }
-					}
-				}
-			};
-			var src = new TextureCopyLocation
-			{
-				PResource = _transients.Resource(index, readback.Id).Handle,
-				Type = TextureCopyType.SubresourceIndex,
-				Anonymous = new TextureCopyLocationUnion { SubresourceIndex = 0 }
-			};
-			_commandList.CopyTextureRegion(&dst, 0, 0, 0, &src, (Box*)null);
-			readback.Valid[index] = true;
-		}
-	}
-
-	// Repack the slot's readback buffers tight (this frame's wait guaranteed their copies finished) and hand them to
-	// StoreReadback — D3D12 pads each row to 256 bytes, so copy row by row into the packed scratch. The app decodes
-	// whatever format it declared. No-op until a slot's first copy.
-	private void DownloadReadback(uint index)
-	{
-		foreach (var readback in _readbacks)
-		{
-			if (!readback.Valid[index])
-				continue;
-			var stride = readback.Width * readback.BytesPerTexel; // packed (unpadded) row stride
-			void* mapped;
-			SilkMarshal.ThrowHResult(readback.Readback[index].Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
-			var src = (byte*)mapped;
-			for (uint y = 0; y < readback.Height; y++)
-			{
-				var row = new ReadOnlySpan<byte>(src + (long)y * readback.RowPitch, (int)stride);
-				row.CopyTo(new Span<byte>(readback.Packed, (int)(y * stride), (int)stride));
-			}
-			readback.Readback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
-			StoreReadback(readback.Id, readback.Packed);
-		}
-	}
-
-	// Read this slot's resolved timestamps and decode them into _timings + the frame total. Called after the slot's
-	// fence, so the resolve is complete. The readback buffer is tightly-packed UINT64 (no row pitch); the timestamp
-	// frequency is ticks per second, so 1000/frequency is the milliseconds-per-tick the decoder needs.
-	private void DownloadTiming(uint index)
-	{
-		if (!GpuTimingEnabled || _timingHeap.Handle is null || _timingPassCount == 0 || !_timingValid[index])
-			return;
-
-		void* mapped;
-		SilkMarshal.ThrowHResult(_timingReadback[index].Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
-		var t = new ReadOnlySpan<ulong>(mapped, 2 * _timingPassCount);
-		DecodeTimings(t, Barriers, 1000.0 / _timestampFrequency);
-		_timingReadback[index].Unmap(0, (Silk.NET.Direct3D12.Range*)null);
-	}
-
-	private ComPtr<ID3D12Resource> CreateReadbackBuffer(ulong size)
-	{
-		var heapProps = new HeapProperties { Type = HeapType.Readback, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
-		var desc = new ResourceDesc
-		{
-			Dimension = ResourceDimension.Buffer,
-			Alignment = 0,
-			Width = size,
-			Height = 1,
-			DepthOrArraySize = 1,
-			MipLevels = 1,
-			Format = DxgiFormat.FormatUnknown,
-			SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
-			Layout = TextureLayout.LayoutRowMajor,
-			Flags = ResourceFlags.None
-		};
-		ComPtr<ID3D12Resource> buffer = default;
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommittedResource(
-			&heapProps, HeapFlags.None, &desc, ResourceStates.CopyDest, (ClearValue*)null, out buffer));
-		return buffer;
-	}
-
-	private static uint BytesPerTexel(Format format) => format switch
-	{
-		Format.R16F => 2,
-		Format.R32Uint => 4,
-		_ => throw new NotSupportedException($"DirectX12: readback of format {format} is not supported (the id buffer is R16F)."),
-	};
-
-	private static uint Align(uint value, uint alignment) => (value + alignment - 1) & ~(alignment - 1);
-
 	private void WaitForFrame(uint index)
 	{
 		var target = _frameFenceValues[index];
@@ -733,26 +233,6 @@ public sealed unsafe class DirectX12Engine : EngineBase
 			SilkMarshal.ThrowHResult(_fence.SetEventOnCompletion(target, (void*)_fenceEvent));
 			WaitForSingleObject(_fenceEvent, 0xFFFFFFFF);
 		}
-	}
-
-	private void Transition(ComPtr<ID3D12Resource> resource, ResourceStates before, ResourceStates after)
-	{
-		var barrier = new ResourceBarrier
-		{
-			Type = ResourceBarrierType.Transition,
-			Flags = ResourceBarrierFlags.None,
-			Anonymous = new ResourceBarrierUnion
-			{
-				Transition = new ResourceTransitionBarrier
-				{
-					PResource = resource.Handle,
-					Subresource = 0xffffffff, // D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES
-					StateBefore = before,
-					StateAfter = after
-				}
-			}
-		};
-		_commandList.ResourceBarrier(1, &barrier);
 	}
 
 	public override void Resize(int width, int height)
@@ -789,7 +269,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 			return;
 		_disposed = true;
 
-		_shaderWatcher?.Dispose(); // stop the hot-reload watcher before tearing the device down (M13)
+		_shaderWatcher?.Dispose(); // stop the hot-reload watcher before tearing the device down
 
 		try { WaitIdle(); }
 		catch { /* the device may already be lost; tear down regardless */ }
@@ -829,10 +309,9 @@ public sealed unsafe class DirectX12Engine : EngineBase
 	/// <summary>
 	/// Register a technique under a logical name. Resolves the real shader the Loom build emits next to the
 	/// SPIR-V — a cross-target <c>&lt;name&gt;.hlsl</c> (Slang→HLSL) plus its <c>&lt;name&gt;.json</c> reflection
-	/// (which gives the sampled-input count, so the app states only pipeline intent — M7-B4) — exactly as the
-	/// Vulkan backend resolves embedded SPIR-V. A shader with no resolvable/compilable HLSL falls back to the
-	/// backend's built-in stand-in, so the real-shader pipeline can be adopted shader-by-shader without breaking
-	/// a demo mid-port.
+	/// (which gives the sampled-input count, so the app states only pipeline intent) — exactly as the Vulkan backend
+	/// resolves embedded SPIR-V. A shader with no resolvable/compilable HLSL falls back to the backend's built-in
+	/// stand-in.
 	/// </summary>
 	protected override void BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
@@ -851,7 +330,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		var storageImages = 0;
 		var storageBuffers = 0;
 		var storageBufferStride = 0;
-		// M15-0: descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
+		// Descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
 		// as a root CBV at b1 (0 for a built-in stand-in, which has no UBO).
 		var uniformBuffers = reflection.UniformBufferCount;
 		// Read-only structured-buffer inputs, bound as root SRVs: a compute's inputs (skin's bind-pose verts + bone
@@ -913,7 +392,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 
 		Console.WriteLine($"[loom] DirectX12 technique '{name}' ← {source}.");
 		// Resolve the per-vertex layout (explicit, else canonical pos/normal/uv for a mesh technique, else none),
-		// mirroring the Vulkan backend — a non-null Instance marks it instanced (M12 — per-technique layouts).
+		// mirroring the Vulkan backend — a non-null Instance marks it instanced (per-technique layouts).
 		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
 		_techniques.Register(name, new DirectX12TechniqueTemplate(
 			vertexBytecode, fragmentBytecode, descriptor.VertexEntry, descriptor.FragmentEntry, inputCount,
@@ -948,7 +427,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 		SetupTiming();
 	}
 
-	// Allocate the GPU-timing query heap + per-slot readback buffers for this graph (M13): 2 timestamps (begin/end)
+	// Allocate the GPU-timing query heap + per-slot readback buffers for this graph: 2 timestamps (begin/end)
 	// per pass, a sub-range per frame slot. Resized with the graph's pass count; mirrors SetupReadback. WaitIdle()
 	// already drained the GPU in SetGraph before this, so disposing the old heap/buffers is safe.
 	private void SetupTiming()
@@ -970,7 +449,7 @@ public sealed unsafe class DirectX12Engine : EngineBase
 			_timingReadback[i] = CreateReadbackBuffer((ulong)perSlot * sizeof(ulong));
 	}
 
-	// Wire up GPU→CPU readback for this graph: each readback target (§7.4) gets a per-slot READBACK buffer the
+	// Wire up GPU→CPU readback for this graph: each readback target gets a per-slot READBACK buffer the
 	// executor copies into each frame. Mirrors the Vulkan backend (one per graph.ReadbackTargets entry).
 	private void SetupReadback(RenderGraph graph)
 	{

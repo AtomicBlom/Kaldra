@@ -28,7 +28,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		public VertexBufferView VertexView;
 		public IndexBufferView IndexView;
 		public uint IndexCount;
-		public uint VertexCount; // M15: skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
+		public uint VertexCount; // skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
 	}
 
 	private readonly DirectX12Context _ctx;
@@ -41,7 +41,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		Create(MemoryMarshal.AsBytes(vertices), sizeof(Vertex), indices);
 
 	/// <summary>
-	/// Upload raw vertex bytes laid out at <paramref name="vertexStride"/> (M12 — arbitrary
+	/// Upload raw vertex bytes laid out at <paramref name="vertexStride"/> (arbitrary
 	/// <see cref="VertexLayout"/>s). The stride rides in the vertex-buffer view (DirectX12 binds with a per-bind
 	/// stride), so the technique's per-vertex layout must match the data the app uploaded here.
 	/// </summary>
@@ -77,7 +77,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	}
 
 	/// <summary>
-	/// Upload a skinned mesh's bind-pose vertices (M15). The UPLOAD-heap buffer is already GPU-readable in
+	/// Upload a skinned mesh's bind-pose vertices. The UPLOAD-heap buffer is already GPU-readable in
 	/// GENERIC_READ, so its GPU address binds directly as a structured-buffer root SRV for the compute pre-skin
 	/// pass (<see cref="BindPoseAddress"/>) — no extra usage flag is needed (unlike Vulkan). The vertex count is
 	/// recorded for the dispatch's thread count; the index buffer is what <see cref="DrawSkinned"/> draws.
@@ -91,15 +91,15 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		return mesh;
 	}
 
-	/// <summary>The skinned mesh's bind-pose buffer GPU address, bound as a structured-buffer root SRV for the compute pre-skin pass (M15).</summary>
+	/// <summary>The skinned mesh's bind-pose buffer GPU address, bound as a structured-buffer root SRV for the compute pre-skin pass.</summary>
 	public ulong BindPoseAddress(int meshId) => _meshes[meshId].VertexBuffer.GetGPUVirtualAddress();
 
-	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count (M15).</summary>
+	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count.</summary>
 	public uint VertexCount(int meshId) => _meshes[meshId].VertexCount;
 
 	/// <summary>
 	/// Draw a mesh's index buffer with its per-vertex stream sourced from <paramref name="vertexView"/> instead of
-	/// the mesh's own vertex buffer (M15 — the skinned draw, reading the compute pre-skin pass's MeshStandard-shaped
+	/// the mesh's own vertex buffer (the skinned draw, reading the compute pre-skin pass's MeshStandard-shaped
 	/// output). The mesh contributes only its index buffer + count.
 	/// </summary>
 	public void DrawSkinned(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, VertexBufferView vertexView)
@@ -126,9 +126,8 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 
 	/// <summary>
 	/// Bind a mesh at slot 0 (per-vertex) plus <paramref name="instanceView"/> at slot 1 (per-instance) and
-	/// record an instanced indexed draw of <paramref name="instanceCount"/> copies (M12 — GPU instancing). The
-	/// instance view points at either an engine-managed per-frame upload buffer or a graph storage buffer a
-	/// compute filled.
+	/// record an instanced indexed draw of <paramref name="instanceCount"/> copies. The instance view points at
+	/// either an engine-managed per-frame upload buffer or a graph storage buffer a compute filled.
 	/// </summary>
 	public void DrawInstanced(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, VertexBufferView instanceView, uint instanceCount)
 	{

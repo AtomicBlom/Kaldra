@@ -4,7 +4,7 @@ namespace Loom.Core.Graph;
 
 /// <summary>
 /// A resolution domain: everything declared in it renders at <see cref="Width"/>×<see cref="Height"/>.
-/// This is the mechanism behind pixelation (Planning.md §9) — render the whole world into a small
+/// This is the mechanism behind pixelation — render the whole world into a small
 /// domain, then cross to the backbuffer with an explicit nearest-neighbour upscale.
 /// <para>
 /// A <c>Domain</c> is an immutable façade over the owning <see cref="GraphBuilder"/>: its
@@ -40,9 +40,7 @@ public sealed class Domain
 	/// <summary>
 	/// MSAA sample count for targets in this domain (1 = no multisampling; otherwise a power of two). The
 	/// backend creates this domain's colour/depth targets multisampled at this count. A multisampled target
-	/// must be <em>resolved</em> to a single-sample target before it can be sampled or presented — that resolve
-	/// lands in M9 (Planning.md §10 AA decision: the engine does not mandate deferred rendering, so MSAA is the
-	/// anti-aliasing path for forward/simple scenes; deferred scenes use post-process FXAA/SMAA instead).
+	/// must be <em>resolved</em> to a single-sample target before it can be sampled or presented.
 	/// </summary>
 	public int Samples { get; }
 
@@ -74,7 +72,7 @@ public sealed class Domain
 
 	/// <summary>
 	/// Declare a <see cref="ResourceKind.Persistent"/> target sized to this domain — contents survive across
-	/// frames and its memory is never aliased (Planning.md §8). Use a tiny domain (e.g. 1×1) for a scalar
+	/// frames and its memory is never aliased. Use a tiny domain (e.g. 1×1) for a scalar
 	/// history like the auto-exposure value. (<see cref="GraphBuilder.Persistent"/> is the resolution-agnostic
 	/// form anchored to the backbuffer domain.)
 	/// </summary>

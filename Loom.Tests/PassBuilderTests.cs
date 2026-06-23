@@ -55,7 +55,7 @@ public class PassBuilderTests
 	}
 
 	/// <summary>
-	/// The load-bearing distinction (Planning.md §8): producing vs accumulating must stay distinguishable
+	/// The load-bearing distinction: producing vs accumulating must stay distinguishable
 	/// on the same resource, because barrier derivation depends on it.
 	/// </summary>
 	[Test]

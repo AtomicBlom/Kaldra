@@ -6,10 +6,10 @@ using Loom.Core.Materials;
 namespace Loom.Core.Hosting;
 
 /// <summary>
-/// A live rendering engine — the backend-neutral front door the host codes against (Planning.md §5). It owns
+/// A live rendering engine — the backend-neutral front door the host codes against. It owns
 /// the long-lived device and the pipeline cache; the <em>active graph</em> is swappable (<see cref="SetGraph"/>),
-/// so a structural change re-derives the schedule/barriers/aliasing while the device and cache are reused
-/// (Planning.md §8's "structural changes rebuild the baked graph — cheap and cached"). Obtain one from
+/// so a structural change re-derives the schedule/barriers/aliasing while the device and cache are reused.
+/// Obtain one from
 /// <see cref="IRenderBackend.Create"/> via <see cref="Engine.AvailableEngines"/>; the host names no
 /// graphics-API type to drive it. Dispose it to tear the device down (drains the GPU first).
 /// </summary>
@@ -36,18 +36,18 @@ public interface IEngine : IDisposable
 	Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
 
 	/// <summary>
-	/// Upload geometry with an explicit <paramref name="layout"/> (M12 — per-technique vertex layouts). The
+	/// Upload geometry with an explicit <paramref name="layout"/>. The
 	/// vertex element type <typeparamref name="T"/> must be laid out to match <paramref name="layout"/>
 	/// (<c>sizeof(T) == layout.Stride</c>), and the technique the mesh is drawn with must declare the same
-	/// per-vertex layout. The neutral path for skinned meshes, tangents, and (M15) glTF imports.
+	/// per-vertex layout. The neutral path for skinned meshes, tangents, and glTF imports.
 	/// </summary>
 	Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged;
 
 	/// <summary>
 	/// Upload a skinned mesh's bind-pose vertices (the <see cref="VertexLayout.MeshSkinned"/> layout) once and get
-	/// a <see cref="Mesh"/> handle (M15). Unlike <see cref="CreateMesh{T}"/>, the bind-pose vertex buffer is made
+	/// a <see cref="Mesh"/> handle. Unlike <see cref="CreateMesh{T}"/>, the bind-pose vertex buffer is made
 	/// readable by a compute shader (the pre-skin pass reads it as a structured buffer), and the returned mesh's
-	/// index buffer is what <see cref="IRenderContext.DrawSkinned(Mesh, BufferHandle, string)"/> draws — its
+	/// index buffer is what <see cref="IRenderContext.Draw"/> draws — its
 	/// vertex stream comes from the compute's skinned output, not this buffer. The vertices' bone indices
 	/// reference the model's skeleton (the palette <see cref="IRenderContext.DispatchSkin"/> applies).
 	/// </summary>
@@ -63,7 +63,7 @@ public interface IEngine : IDisposable
 
 	/// <summary>
 	/// Bundle textures into a stable <see cref="Material"/> handle, in the order a material technique's shader
-	/// binds them (texture 0 → sampler slot 0, …). Passed to <see cref="IRenderContext.Draw(Mesh, Material, string)"/>;
+	/// binds them (texture 0 → sampler slot 0, …). Passed to <see cref="IRenderContext.Draw"/>;
 	/// the technique still picks the pipeline, so a depth-only/shadow pass (no reflected samplers) ignores the
 	/// material. Call up front like <see cref="CreateMesh"/>; the handle lives for the engine's lifetime.
 	/// </summary>
@@ -73,7 +73,7 @@ public interface IEngine : IDisposable
 	/// Make <paramref name="graph"/> the active graph: derive its schedule, barriers, and transient-memory plan
 	/// and prepare per-graph GPU resources, reusing the device and pipeline cache. Call once before the first
 	/// frame; calling it again swaps the active graph at runtime (the engine drains the GPU, releases the old
-	/// graph's transients, and binds the new one) — the basis for runtime demo switching (M7-B7).
+	/// graph's transients, and binds the new one) — the basis for runtime demo switching.
 	/// </summary>
 	void SetGraph(RenderGraph graph);
 
@@ -96,16 +96,16 @@ public interface IEngine : IDisposable
 	/// </summary>
 	void Write<T>(StorageBufferHandle handle, ReadOnlySpan<T> values) where T : unmanaged;
 
-	/// <summary>Render one frame of the active graph from <paramref name="inputs"/> (Planning.md §5 <c>graph.Render</c>).</summary>
+	/// <summary>Render one frame of the active graph from <paramref name="inputs"/>.</summary>
 	void Render(FrameInputs inputs);
 
 	/// <summary>Notify the engine the output surface resized to <paramref name="width"/>×<paramref name="height"/> pixels (drives swapchain + relative-domain recreation).</summary>
 	void Resize(int width, int height);
 
 	/// <summary>
-	/// Read back the CPU-side copy of a <c>g.Readback</c> target's contents — the GPU→CPU edge (Planning.md §7.4).
+	/// Read back the CPU-side copy of a <c>g.Readback</c> target's contents — the GPU→CPU edge.
 	/// Returns the resource's texels tightly packed in its declared format (no row padding, the same byte layout on
-	/// every backend), so the app decodes whatever format it chose — the picking path reads its R16F id at the cursor.
+	/// every backend), so the app decodes whatever format it chose.
 	/// The bytes are a frame or two old (the latency is real) and empty before the first frame populates the target
 	/// or when <paramref name="handle"/> is not one the graph declared with <c>g.Readback</c>. The copy is from a
 	/// frame the GPU has finished, so it never races in-flight work.
@@ -116,7 +116,7 @@ public interface IEngine : IDisposable
 	void RequestCapture(string path);
 
 	/// <summary>
-	/// Enable per-pass GPU timestamp collection (M13 profiling spine). Off by default; cheap to toggle live (an
+	/// Enable per-pass GPU timestamp collection. Off by default; cheap to toggle live (an
 	/// ImGui HUD checkbox) — no graph rebuild. A backend that cannot time (e.g. a queue with no timestamp support)
 	/// keeps this false. When off, <see cref="LastFrameTimings"/> stays empty and the per-frame cost is nil.
 	/// </summary>
@@ -146,7 +146,7 @@ public interface IEngine : IDisposable
 	bool ResourceInspectionEnabled { get; set; }
 
 	/// <summary>
-	/// The active graph's image resources the debug viewer can preview (colour + depth; M13). Empty until
+	/// The active graph's image resources the debug viewer can preview. Empty until
 	/// <see cref="SetGraph"/>, rebuilt on each swap, and empty unless <see cref="ResourceInspectionEnabled"/>. Neutral types.
 	/// </summary>
 	IReadOnlyList<InspectableResource> InspectableResources { get; }

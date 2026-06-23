@@ -5,10 +5,10 @@ using Loom.Core.Geometry;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// Bakes graphics pipelines and caches them by a content hash (Planning.md §2, §10). The key is
-/// a SHA-256 over the SPIR-V bytecode plus all pipeline state, so identical techniques bake once
-/// and share a VkPipeline, while an edited shader (new bytes) produces a new key and a fresh bake.
-/// In-memory for now; the same hashing scheme will key a persistent VkPipelineCache later.
+/// Bakes graphics pipelines and caches them by a content hash. The key is a SHA-256 over the
+/// SPIR-V bytecode plus all pipeline state, so identical techniques bake once and share a VkPipeline,
+/// while an edited shader (new bytes) produces a new key and a fresh bake.
+/// In-memory; the same hashing scheme will key a persistent VkPipelineCache later.
 /// </summary>
 public sealed class VulkanTechniqueCache(VulkanContext ctx) : IDisposable
 {
@@ -74,7 +74,7 @@ public sealed class VulkanTechniqueCache(VulkanContext ctx) : IDisposable
 			hash.AppendData(BitConverter.GetBytes((int)attribute.Format));
 	}
 
-	/// <summary>Dispose every baked pipeline and empty the cache — used by shader hot-reload (M13) to force a fresh
+	/// <summary>Dispose every baked pipeline and empty the cache — used by shader hot-reload to force a fresh
 	/// bake from the reloaded bytecode. The caller must have drained the GPU first (no pipeline in flight).</summary>
 	public void Reset()
 	{

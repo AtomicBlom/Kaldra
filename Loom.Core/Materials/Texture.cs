@@ -8,7 +8,7 @@ namespace Loom.Core.Materials;
 /// <see cref="Mesh"/>, it is just an identity the backend resolves to a real image/view — the describe layer
 /// never sees the GPU resource. Textures are app-owned, stable resources (built once at load, kept for the
 /// engine's lifetime), so referencing one from a pass's record closure doesn't break the closure's purity the
-/// way capturing per-frame data would (Planning.md §8).
+/// way capturing per-frame data would.
 /// </summary>
 /// <param name="Id">Stable, engine-assigned index the backend resolves to its texture store entry.</param>
 /// <param name="Width">Level-0 width in texels (for HUDs/logs; the backend owns the real dimensions).</param>

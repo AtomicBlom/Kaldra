@@ -3,7 +3,7 @@ namespace Loom.Core.Graph;
 /// <summary>
 /// How a single pass touches a single resource. These edges are the <em>entire</em> input to the
 /// Execute layer: ordering, barriers, layout transitions and aliasing are all derived from them
-/// (Planning.md §8). The <see cref="Write"/> vs <see cref="Blend"/> distinction is load-bearing —
+/// The <see cref="Write"/> vs <see cref="Blend"/> distinction is load-bearing —
 /// it tells the barrier-deriver whether the contents are produced (clearable) or accumulated onto.
 /// </summary>
 public enum AccessKind
@@ -29,7 +29,7 @@ public enum AccessKind
 	/// <summary>General read-modify-write — read-write storage resources (images/buffers), used by compute. (<c>.ReadWrites</c>)</summary>
 	ReadWrite,
 
-	/// <summary>A buffer read as vertex-attribute data by a draw (GPU particles, §7.6). (<c>.ReadsVertex</c>)</summary>
+	/// <summary>A buffer read as vertex-attribute data by a draw (GPU particles). (<c>.ReadsVertex</c>)</summary>
 	ReadVertex,
 
 	/// <summary>

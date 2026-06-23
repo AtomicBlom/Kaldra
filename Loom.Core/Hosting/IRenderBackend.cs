@@ -4,7 +4,7 @@ namespace Loom.Core.Hosting;
 /// A rendering backend — the factory for an <see cref="IEngine"/> on a particular graphics API (Vulkan today,
 /// a future DirectX12). Backends self-register into <see cref="Engine.AvailableEngines"/>; the host picks one by
 /// <see cref="Name"/> at runtime and calls <see cref="Create"/>. This is the seam that lets a second backend
-/// slot in without touching the describe/execute layers (Planning.md §2 portability invariant).
+/// slot in without touching the describe/execute layers.
 /// </summary>
 public interface IRenderBackend
 {

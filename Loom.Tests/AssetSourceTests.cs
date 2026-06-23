@@ -2,7 +2,7 @@ using Loom.Assets;
 
 namespace Loom.Tests;
 
-/// <summary>M13 <see cref="LayeredAssetSource"/>: ordered-root resolution (the layering the shader hot-reload watcher
+/// <summary><see cref="LayeredAssetSource"/>: ordered-root resolution (the layering the shader hot-reload watcher
 /// resolves through). The debounced <see cref="AssetWatcher"/> is verified live (FileSystemWatcher timing is too
 /// flaky to unit-test reliably).</summary>
 public class AssetSourceTests : IDisposable

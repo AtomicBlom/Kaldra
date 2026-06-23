@@ -8,12 +8,12 @@ namespace Loom.Core.Graph;
 /// This is an <b>abstract base</b>; every concrete handle is a <see cref="ColorHandle"/>, <see cref="DepthHandle"/>,
 /// or <see cref="BufferHandle"/>. The subtypes let the pass verbs reject category errors at <em>compile time</em>
 /// (you cannot <c>.WritesDepth</c> a colour target, <c>.Samples</c> a buffer, etc.) rather than at bake time
-/// (M7 — Planning.md §8). The marker interfaces <see cref="ITextureHandle"/> (sampleable) and
+/// The marker interfaces <see cref="ITextureHandle"/> (sampleable) and
 /// <see cref="IStorageHandle"/> (read-write storage) capture the capabilities verbs constrain against.
 /// </para>
 /// <para>
 /// Identity is by reference: a handle <em>is</em> the resource, so ping-pong is just swapping two handles in a
-/// normal loop (§8). Structural hashing lives on <see cref="RenderGraph"/>, which walks handles by their stable
+/// normal loop. Structural hashing lives on <see cref="RenderGraph"/>, which walks handles by their stable
 /// <see cref="Id"/> — never on the handle itself, whose <see cref="Domain"/> back-reference must not leak into a hash.
 /// </para>
 /// </summary>

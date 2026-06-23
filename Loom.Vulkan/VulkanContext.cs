@@ -10,10 +10,10 @@ using Silk.NET.Vulkan.Extensions.KHR;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// M0 device bring-up: the Vulkan instance (+ optional validation / debug messenger), the
+/// Vulkan device bring-up: the Vulkan instance (+ optional validation / debug messenger), the
 /// window surface, physical-device selection, and a logical device with the Vulkan 1.3 feature
-/// set Loom's design assumes — dynamic rendering, synchronization2, and timeline semaphores
-/// (Planning.md §3, §8). Backend-only; never referenced from Core/Graph.
+/// set Loom's design assumes — dynamic rendering, synchronization2, and timeline semaphores.
+/// Backend-only; never referenced from Core/Graph.
 /// </summary>
 public sealed unsafe class VulkanContext : IDisposable
 {

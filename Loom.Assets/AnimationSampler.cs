@@ -4,13 +4,13 @@ using Loom.Core.Animation;
 namespace Loom.Assets;
 
 /// <summary>
-/// The neutral, GC-free skeletal animation runtime (M15): samples an <see cref="AnimationClip"/> at a time into
+/// The neutral, GC-free skeletal animation runtime: samples an <see cref="AnimationClip"/> at a time into
 /// per-joint local transforms, composes them down the <see cref="Skeleton"/> hierarchy into joint world
 /// matrices, and multiplies by the inverse bind matrices to produce the <em>bone palette</em> the GPU skinning
 /// shader applies (<c>palette[j] = inverseBind[j] · jointWorld[j]</c>, row-vector / <c>System.Numerics</c>
 /// convention, so a model-space vertex skins as <c>v · Σ wₖ·palette[jₖ]</c>). Pure math over the neutral Core
 /// types — it belongs with the producer (the loader), not in Core, and the app calls it per frame and hands the
-/// palette to <c>ctx.DispatchSkin</c> (pulled, not captured — §8).
+/// palette to <c>ctx.DispatchSkin</c> (pulled, not captured).
 /// </summary>
 public static class AnimationSampler
 {
@@ -70,7 +70,7 @@ public static class AnimationSampler
 	/// <summary>
 	/// Sample <paramref name="clip"/> at <paramref name="timeSeconds"/> and write each joint's WORLD matrix into
 	/// <paramref name="world"/> (length ≥ <see cref="Skeleton.JointCount"/>) — the joint origins/axes the skeleton
-	/// debug viewer draws (M15-7), as opposed to the inverse-bind-folded palette <see cref="Evaluate"/> produces.
+	/// debug viewer draws, as opposed to the inverse-bind-folded palette <see cref="Evaluate"/> produces.
 	/// </summary>
 	public static void EvaluateJointWorld(Skeleton skeleton, AnimationClip clip, float timeSeconds, Span<Matrix4x4> world)
 	{

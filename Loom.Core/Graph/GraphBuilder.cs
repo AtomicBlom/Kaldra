@@ -6,17 +6,12 @@ namespace Loom.Core.Graph;
 /// <summary>
 /// The fluent entry point for authoring a render graph (the <c>g</c> in <c>DefineGraph(g => { … })</c>).
 /// Declare resolution domains and resources, then passes that state their reads/writes. Build is
-/// ordinary C#: feature toggles are control flow, not config (Planning.md §8). Call
+/// ordinary C#: feature toggles are control flow, not config. Call
 /// <see cref="RenderGraph.Define"/> to drive one and get the immutable <see cref="RenderGraph"/> back.
 /// <para>
-/// <b>Backbuffer spelling (deviation from Planning.md §6 noted deliberately).</b> §5/§6 sketch the
-/// swapchain as <c>g.Domain.Backbuffer</c> exposing a <c>.Color</c> property, while user domains use a
-/// <c>.Color(name, format)</c> method — two spellings that collide in real C# (a type can't have both a
-/// <c>Color</c> property and a <c>Color(…)</c> method, and <c>g.Domain</c> can't be both a property and a
-/// method). Loom resolves this by exposing the swapchain colour target <em>directly</em> as the
-/// <see cref="Backbuffer"/> handle. So §6's <c>var screen = g.Domain.Backbuffer; … .Writes(screen.Color)</c>
-/// becomes <c>var screen = g.Backbuffer; … .Writes(screen)</c>; reach the native-resolution domain for
-/// sibling targets via <c>g.Backbuffer.Domain</c>.
+/// <b>Backbuffer spelling.</b> The swapchain colour target is exposed directly as the
+/// <see cref="Backbuffer"/> handle: <c>var screen = g.Backbuffer; … .Writes(screen)</c>; reach the
+/// native-resolution domain for sibling targets via <c>g.Backbuffer.Domain</c>.
 /// </para>
 /// </summary>
 public sealed class GraphBuilder
@@ -38,7 +33,7 @@ public sealed class GraphBuilder
 
 	/// <summary>
 	/// Declare a resolution domain. Everything declared in it renders at <paramref name="width"/>×
-	/// <paramref name="height"/> — the mechanism behind pixelation (Planning.md §9).
+	/// <paramref name="height"/> — the mechanism behind pixelation.
 	/// </summary>
 	public Domain Domain(string name, int width, int height, int samples = 1)
 	{
@@ -74,7 +69,7 @@ public sealed class GraphBuilder
 		return domain;
 	}
 
-	// MSAA sample counts are powers of two (1, 2, 4, 8, 16). Validate at declaration so misuse fails loud (M7-A8).
+	// MSAA sample counts are powers of two (1, 2, 4, 8, 16). Validate at declaration so misuse fails loud.
 	private static void ValidateSamples(string name, int samples)
 	{
 		if (samples < 1 || (samples & (samples - 1)) != 0)
@@ -99,8 +94,7 @@ public sealed class GraphBuilder
 	/// The swapchain colour target (native resolution; backend-chosen format). This <em>is</em> the
 	/// present surface — hand it to <c>.Writes</c>/<c>.Blends</c> and to <see cref="Present"/>. Its
 	/// <see cref="ResourceHandle.Domain"/> is the native-resolution domain, for declaring sibling
-	/// native-res targets (e.g. a HUD at full resolution). See the type remarks for why this replaces
-	/// §6's <c>screen.Color</c> spelling.
+	/// native-res targets (e.g. a HUD at full resolution).
 	/// </summary>
 	public ColorHandle Backbuffer
 	{
@@ -148,7 +142,7 @@ public sealed class GraphBuilder
 
 	/// <summary>
 	/// The terminal: declare which resource is presented to the screen. The acquire/present/frames-in-flight
-	/// sync is derived behind this (Planning.md §6).
+	/// sync is derived behind this.
 	/// </summary>
 	public void Present(ColorHandle resource)
 	{
@@ -157,7 +151,7 @@ public sealed class GraphBuilder
 	}
 
 	/// <summary>
-	/// Declare that <paramref name="resource"/>'s contents should be read back to the CPU (Planning.md §7.4) —
+	/// Declare that <paramref name="resource"/>'s contents should be read back to the CPU —
 	/// the GPU→CPU edge, used for picking. The backend copies it to host-visible memory after the frame; the
 	/// value is available a frame or two later (readback is genuinely that old). Returns the handle so the
 	/// host can query it. The keep-alive (the resource must survive to end-of-frame) is derived from this edge.
@@ -171,7 +165,7 @@ public sealed class GraphBuilder
 	}
 
 	/// <summary>
-	/// Declare a GPU storage buffer of <paramref name="byteSize"/> bytes (Planning.md §7.6) — not an image,
+	/// Declare a GPU storage buffer of <paramref name="byteSize"/> bytes — not an image,
 	/// not resolution-bound. A compute pass <c>.ReadWrites</c> it and a draw <c>.ReadsVertex</c> it (GPU
 	/// particles): the engine derives the compute→vertex barrier from those edges. Anchored to the backbuffer
 	/// domain (it has no resolution of its own).

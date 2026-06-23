@@ -4,7 +4,7 @@ using System.Numerics;
 namespace Loom.Core.Animation;
 
 /// <summary>
-/// A keyframed <see cref="Quaternion"/> animation channel — a joint's rotation over time (M15). The
+/// A keyframed <see cref="Quaternion"/> animation channel — a joint's rotation over time. The
 /// <see cref="Times"/> are strictly increasing seconds; <see cref="Values"/>[i] is the (unit) rotation at
 /// <c>Times[i]</c>. Linear interpolation slerps between the surrounding keyframes. Backend-neutral, immutable.
 /// </summary>

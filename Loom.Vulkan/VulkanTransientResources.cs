@@ -12,7 +12,7 @@ namespace Loom.Vulkan;
 
 /// <summary>
 /// The concrete GPU images backing a graph's resources, allocated through VMA. One <see cref="Image"/> +
-/// view is created per non-backbuffer colour/depth resource, sized by its domain (Planning.md §6/§9); the
+/// view is created per non-backbuffer colour/depth resource, sized by its domain; the
 /// backbuffer resource is a façade over whichever swapchain image was acquired this frame
 /// (<see cref="SetBackbuffer"/>). Usage flags are derived from how the graph uses each resource — sampled
 /// targets get <see cref="ImageUsageFlags.SampledBit"/> so a later <c>.Samples</c> pass can read them.
@@ -23,7 +23,7 @@ namespace Loom.Vulkan;
 /// backbuffer images itself, so the backbuffer façade needs no per-slot copy beyond its per-frame handle).
 /// </para>
 /// <para>
-/// <b>Transient aliasing (§8, §12 M4).</b> The Execute layer's <see cref="AliasPlan"/> partitions the
+/// <b>Transient aliasing.</b> The Execute layer's <see cref="AliasPlan"/> partitions the
 /// transients into buckets whose members never coexist; this backend turns each bucket into <em>one</em> VMA
 /// allocation (per slot) and binds every member to it, so e.g. the bloom mip chain reuses the G-buffer's
 /// memory once lighting has consumed it. The combined block takes the max size/alignment and the intersection
@@ -105,7 +105,7 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 				InitMetadata(slot, resource, sampled, storage, readback);
 			_buckets[slot] = AllocateBuckets(slot);
 		}
-		// Persistent resources are allocated once and shared by every slot (cross-frame history, §8).
+		// Persistent resources are allocated once and shared by every slot (cross-frame history).
 		AllocatePersistentResources(framesInFlight);
 		// Storage/vertex buffers (GPU particles) — one per slot, multi-buffered like transient images.
 		AllocateBuffers(framesInFlight);
@@ -121,7 +121,7 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 		var aspect = resource.Kind == ResourceKind.Depth ? ImageAspectFlags.DepthBit : ImageAspectFlags.ColorBit;
 		ref var image = ref _images[slot][resource.Id];
 		image.Aspect = aspect;
-		image.Samples = SampleFlags(resource.Domain.Samples); // 1x for the backbuffer + most domains (M7-A8)
+		image.Samples = SampleFlags(resource.Domain.Samples); // 1x for the backbuffer + most domains
 
 		if (resource.IsBackbuffer)
 		{
@@ -300,7 +300,7 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 
 	// One device-local buffer per Buffer resource per frame slot (multi-buffered: a frame's compute writes it
 	// while an earlier frame's draw may still read its own slot's copy). Usage covers storage (compute write)
-	// + vertex (draw read) — the GPU particle path (§7.6).
+	// + vertex (draw read) — the GPU particle path.
 	private void AllocateBuffers(int framesInFlight)
 	{
 		foreach (var resource in _graph.Resources)
@@ -363,7 +363,7 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 	}
 
 	// A domain's MSAA sample count (a power of two) mapped to the Vulkan flag. 1x for the backbuffer and most
-	// domains; >1 makes the domain's targets multisampled (the resolve to single-sample lands in M9 — M7-A8).
+	// domains; >1 makes the domain's targets multisampled (resolve to single-sample is handled in the MSAA path).
 	private static SampleCountFlags SampleFlags(int count) => count switch
 	{
 		>= 16 => SampleCountFlags.Count16Bit,
@@ -418,7 +418,7 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 	}
 
 	// One image + memory per Persistent resource, shared by every frame slot so its contents carry across
-	// frames (auto-exposure history). Allocated apart from the per-slot alias buckets, never recycled (§8).
+	// frames (auto-exposure history). Allocated apart from the per-slot alias buckets, never recycled.
 	private void AllocatePersistentResources(int framesInFlight)
 	{
 		foreach (var resource in _graph.Resources)

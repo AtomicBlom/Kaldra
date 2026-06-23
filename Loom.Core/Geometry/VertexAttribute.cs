@@ -6,7 +6,7 @@ namespace Loom.Core.Geometry;
 /// DirectX12 binds by HLSL semantic name + index (the index derived from how many earlier attributes share the
 /// name, so four <c>"ITRANSFORM"</c> rows become <c>ITRANSFORM0..3</c>). Semantic names map 1:1 onto glTF
 /// attribute names (POSITION, NORMAL, TEXCOORD, TANGENT, …), which is what makes an importer's output drop
-/// straight into a layout (PlanningPhase2 — M15 glTF).
+/// straight into a layout (glTF).
 /// </summary>
 /// <param name="Semantic">The attribute's semantic name (uppercase by convention — POSITION, NORMAL, TEXCOORD, …).</param>
 /// <param name="Format">The attribute's element format.</param>

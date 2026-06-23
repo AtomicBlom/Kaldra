@@ -15,7 +15,7 @@ namespace Loom.DirectX12;
 /// frame-in-flight slot, and each buffer one UAV buffer per slot, so a frame's write never races a prior
 /// frame's read. The backbuffer is <em>not</em> here (it's the swapchain's facade, handled by the engine).
 /// <para>
-/// <b>Transient aliasing (§8, §12 M4).</b> The Execute layer's <see cref="AliasPlan"/> partitions the colour/
+/// <b>Transient aliasing .</b> The Execute layer's <see cref="AliasPlan"/> partitions the colour/
 /// depth transients into buckets whose members are never live at once; this backend turns each bucket (per
 /// slot) into <em>one</em> placed-resource <c>ID3D12Heap</c> and creates every member as a
 /// <c>CreatePlacedResource</c> at offset 0 — so e.g. the bloom mips reuse the G-buffer's memory once lighting
@@ -211,7 +211,7 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 	}
 
 	// One device-local UAV buffer per Buffer resource per frame slot. Buffers aren't aliased (not RT/DS), so
-	// they keep a committed allocation; a compute binds it as a root UAV, a draw as a vertex buffer (§7.6).
+	// they keep a committed allocation; a compute binds it as a root UAV, a draw as a vertex buffer.
 	private void AllocateBuffers(DirectX12Context ctx, List<ResourceHandle> bufferTargets, uint bufferCount)
 	{
 		for (uint slot = 0; slot < bufferCount; slot++)

@@ -35,7 +35,7 @@ public class GraphScheduleTests
 	[Test]
 	public void Write_after_write_on_one_resource_depends_in_program_order()
 	{
-		// The two backbuffer writers from §6: ordered by program order via a WAW edge.
+		// The two backbuffer writers: ordered by program order via a WAW edge.
 		var s = Schedule(g =>
 		{
 			var screen = g.Backbuffer;
@@ -151,7 +151,7 @@ public class GraphScheduleTests
 	[Test]
 	public void Presenting_a_target_no_pass_writes_throws()
 	{
-		// You cannot present a resource nothing produces — the screen would show undefined contents (M7-A4).
+		// You cannot present a resource nothing produces — the screen would show undefined contents.
 		var ex = Should.Throw<GraphValidationException>(() =>
 			Schedule(g =>
 			{
@@ -198,7 +198,7 @@ public class GraphScheduleTests
 	[Test]
 	public void Ping_pong_handle_swap_chains_dependencies_through_both_buffers()
 	{
-		// The §8 ping-pong idiom (bloom / JFA): two physical targets and a (read, write) tuple swapped between
+		// The ping-pong idiom (bloom / JFA): two physical targets and a (read, write) tuple swapped between
 		// passes. The derivation must follow the handles — pass 'v' reads what 'h' wrote.
 		var s = Schedule(g =>
 		{
@@ -217,7 +217,7 @@ public class GraphScheduleTests
 	[Test]
 	public void Reading_a_persistent_before_writing_is_allowed()
 	{
-		// Persistent resources carry cross-frame history, so read-before-write is legal (Planning.md §8).
+		// Persistent resources carry cross-frame history, so read-before-write is legal.
 		var s = Schedule(g =>
 		{
 			var history = g.Persistent("exposure", Format.R16F);
@@ -250,7 +250,7 @@ public class GraphScheduleTests
 		DepsOf(s, "hud").ShouldBe(new[] { "upscale" });                // WAW on the backbuffer, program order
 	}
 
-	// The §6 reference-frame shape (minus the bloom sub-graph, which is M5).
+	// The reference-frame shape (minus the bloom sub-graph).
 	private static GraphSchedule ReferenceFrame() => GraphSchedule.Derive(RenderGraph.Define(g =>
 	{
 		var world = g.Domain("world", 320, 180);

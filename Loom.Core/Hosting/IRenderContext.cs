@@ -16,7 +16,7 @@ public interface IRenderContext
 	float DeltaTime { get; }
 
 	/// <summary>Elapsed seconds since startup — per-frame host data for time-driven effects (the GPU particle
-	/// fountain animates from it). Pulled, not captured (§8).</summary>
+	/// fountain animates from it). Pulled, not captured.</summary>
 	float Time { get; }
 
 	/// <summary>
@@ -37,21 +37,19 @@ public interface IRenderContext
 	IReadOnlyDictionary<string, Camera> Views { get; }
 
 	/// <summary>
-	/// True when the engine negotiated an HDR display output (Planning.md §3 — requested via
+	/// True when the engine negotiated an HDR display output (requested via
 	/// <c>EngineSettings.HdrOutput</c> and granted by the surface). The terminal tone-map pulls this to map the
 	/// scene to display nits (extended-range, highlights above paper white) instead of compressing to SDR; false
 	/// means the standard SDR path. Engine-provided frame context, like <see cref="View"/> — pulled, not
-	/// captured (§8), so the same graph renders correctly under either output.
+	/// captured, so the same graph renders correctly under either output.
 	/// </summary>
 	bool HdrOutput { get; }
 
 	/// <summary>
 	/// Draw a fullscreen triangle with the named technique, sampling zero or more <paramref name="inputs"/>
 	/// (each bound, in the order given, as the technique's 0..N-1 sampled input — the backend maps that ordinal
-	/// to its own binding model). §5's
-	/// <c>ctx.FullScreen(Technique.X, ...args)</c>. With no inputs it's a from-scratch pass (a gradient); with
-	/// one it's the engine's blit/upscale (a fullscreen sample, not a copy — a nearest variant is the §9
-	/// pixelation step); with several it's deferred lighting and the like. Every input must be a resource the
+	/// to its own binding model). With no inputs it's a from-scratch pass (a gradient); with
+	/// one it's the engine's blit/upscale (a fullscreen sample, not a copy); with several it's deferred lighting and the like. Every input must be a resource the
 	/// pass declared with <c>.Samples</c>, so the graph derives the read dependency and shader-read transition.
 	/// The render target is the pass's declared <c>.Writes</c> target.
 	/// </summary>
@@ -67,8 +65,7 @@ public interface IRenderContext
 	void FullScreen(string technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs);
 
 	/// <summary>
-	/// Dispatch a compute technique over a grid of <paramref name="groups"/> workgroups (§5's
-	/// <c>ctx.Dispatch</c>). <paramref name="sampled"/> resources are the technique's 0..S-1 sampled inputs
+	/// Dispatch a compute technique over a grid of <paramref name="groups"/> workgroups. <paramref name="sampled"/> resources are the technique's 0..S-1 sampled inputs
 	/// (the pass's <c>.Samples</c>); <paramref name="storage"/> resources are its S..S+T-1 read-write inputs
 	/// (the pass's <c>.ReadWrites</c>) — the graph derives the read-write storage transitions and the
 	/// compute↔consumer barriers, and the backend maps the ordinals to its binding model. <paramref name="push"/>
@@ -82,7 +79,7 @@ public interface IRenderContext
 	/// geometry source (mesh / skinned override / procedural), instancing (none / CPU span / GPU buffer),
 	/// material, view, and extra inputs (uniforms or sampled graph resources). The common case is terse:
 	/// <c>ctx.Draw(DrawCall.Create(cube, "gbuffer"))</c>; richer combinations use an object initializer.
-	/// Keep-separate verbs: <see cref="FullScreen"/>, <see cref="Dispatch"/>, <see cref="DispatchSkin"/>, and
+	/// Keep-separate verbs: <see cref="FullScreen(string, ReadOnlySpan{ResourceHandle})"/>, <see cref="Dispatch"/>, <see cref="DispatchSkin"/>, and
 	/// <see cref="DrawList{TVertex}"/> are conceptually distinct and remain their own methods.
 	/// </summary>
 	void Draw(in DrawCall call);
@@ -135,7 +132,7 @@ public interface IRenderContext
 	/// producer composited for it — the per-frame channel behind overlay/UI-style rendering. The host fills it via
 	/// <see cref="FrameInputs.DrawLists"/> off the render graph; a pass closure pulls a list out by id and submits it
 	/// with <see cref="DrawList{TVertex}"/> (the UI does this through <c>SUIsei</c>'s painter). Engine-provided frame
-	/// context like <see cref="View"/> — pulled, not captured (§8), so the graph stays frame-independent. Empty
+	/// context like <see cref="View"/> — pulled, not captured, so the graph stays frame-independent. Empty
 	/// (the default) when the host supplied no lists.
 	/// </summary>
 	IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists { get; }

@@ -18,7 +18,7 @@ public sealed class ModelPrimitive
 
 	/// <summary>
 	/// The same geometry in the skinned layout (<see cref="SkinnedVertex"/> — position/normal/uv/tangent + bone
-	/// indices + weights) when the primitive's node carries a skin (M15); null for a static primitive. The
+	/// indices + weights) when the primitive's node carries a skin; null for a static primitive. The
 	/// <see cref="Vertices"/> field always holds the bind-pose geometry too, so a consumer can ignore skinning.
 	/// The bone indices reference the model's <see cref="LoadedModel.Skeleton"/> joint array.
 	/// </summary>

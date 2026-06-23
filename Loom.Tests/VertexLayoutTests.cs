@@ -3,7 +3,7 @@ using Loom.Core.Geometry;
 
 namespace Loom.Tests;
 
-/// <summary>The describe-layer vertex-layout vocabulary (M12): packed offsets, stride, and value equality.</summary>
+/// <summary>The describe-layer vertex-layout vocabulary: packed offsets, stride, and value equality.</summary>
 public class VertexLayoutTests
 {
 	[Test]
@@ -21,7 +21,7 @@ public class VertexLayoutTests
 
 		layout.InputRate.ShouldBe(VertexInputRate.PerVertex);
 		layout.Binding.ShouldBe(0);
-		layout.Stride.ShouldBe(48); // Vector3 + Vector3 + Vector2 + Vector4 — the same 48 bytes as Loom.Core.Vertex (M11 added the tangent)
+		layout.Stride.ShouldBe(48); // Vector3 + Vector3 + Vector2 + Vector4 — the same 48 bytes as Loom.Core.Vertex
 		layout.Offsets.ToArray().ShouldBe(new[] { 0, 12, 24, 32 });
 		layout.Attributes.Select(a => a.Semantic).ToArray().ShouldBe(new[] { "POSITION", "NORMAL", "TEXCOORD", "TANGENT" });
 	}

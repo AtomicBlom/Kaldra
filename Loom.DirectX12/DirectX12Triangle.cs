@@ -10,15 +10,13 @@ using Silk.NET.Maths;
 namespace Loom.DirectX12;
 
 /// <summary>
-/// The hand-baked triangle — the DirectX12 backend's M1 equivalent. A from-scratch pipeline (empty root signature,
-/// no vertex buffer: the three positions/colours are fabricated in the vertex shader from <c>SV_VertexID</c>,
-/// mirroring the Vulkan backend's fullscreen-triangle trick). It proves the bake path end to end: HLSL → DXBC,
-/// root signature, PSO, viewport/scissor, draw.
+/// The hand-baked triangle. A from-scratch pipeline (empty root signature, no vertex buffer: the three
+/// positions/colours are fabricated in the vertex shader from <c>SV_VertexID</c>, mirroring the Vulkan backend's
+/// fullscreen-triangle trick). It proves the bake path end to end: HLSL → DXBC, root signature, PSO,
+/// viewport/scissor, draw.
 /// <para>
 /// The shader is compiled at runtime with the in-box FXC (<c>D3DCompile</c>) to DXBC shader model 5.0, which
-/// D3D12 accepts directly. The bundled <c>slangc</c> can't emit DXIL on win-arm64 (no dxc/dxil shipped), so the
-/// offline DXIL pipeline — the real path once techniques arrive — is a later workstream; this keeps slice 2
-/// dependency-free.
+/// D3D12 accepts directly.
 /// </para>
 /// </summary>
 internal sealed unsafe class DirectX12Triangle : IDisposable

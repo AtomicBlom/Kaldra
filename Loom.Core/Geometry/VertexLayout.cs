@@ -7,15 +7,14 @@ namespace Loom.Core.Geometry;
 /// A backend-neutral description of one vertex stream: an ordered attribute set, the byte offset of each
 /// attribute (tight-packed in declaration order), the resulting stride, and whether the input assembler
 /// advances <see cref="VertexInputRate.PerVertex"/> or <see cref="VertexInputRate.PerInstance"/> (and which
-/// binding slot it occupies). This is M12's generalization of the old single hard-coded
-/// <c>Position/Normal/Uv</c> layout: a <see cref="Mesh"/> is uploaded against a layout, a technique declares
+/// binding slot it occupies). A <see cref="Mesh"/> is uploaded against a layout, a technique declares
 /// the layout(s) it consumes, and the backend builds its pipeline vertex-input + bind stride from them. The
 /// layout is the <em>shared contract</em> between a mesh and the technique that draws it — a stride mismatch is
 /// a clear engine error, not a silent corruption.
 /// <para>
 /// Backend-neutral by construction (no graphics-API type), so the same layout drives Vulkan and DirectX12. It is the
 /// natural output of an asset importer too — a glTF loader reads accessors and emits a layout + packed buffer
-/// (PlanningPhase2 §6: assets are loader-owned, Core never gains a decode dependency).
+/// — assets are loader-owned, Core never gains a decode dependency.
 /// </para>
 /// </summary>
 public sealed class VertexLayout : IEquatable<VertexLayout>
@@ -62,7 +61,7 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 	/// <summary>
 	/// Loom's canonical interleaved mesh layout — <c>Position</c> (float3) + <c>Normal</c> (float3) +
 	/// <c>Uv</c> (float2) + <c>Tangent</c> (float4), 48 bytes, mirroring <see cref="Vertex"/>. The default for
-	/// any mesh technique. The tangent (M11 normal mapping; glTF <c>xyz</c>+handedness convention) sits at
+	/// any mesh technique. The tangent (glTF <c>xyz</c>+handedness convention) sits at
 	/// location 3 — shaders that don't read it simply ignore the attribute.
 	/// </summary>
 	public static VertexLayout MeshStandard { get; } = new(
@@ -72,7 +71,7 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		new VertexAttribute("TANGENT", VertexFormat.Float4));
 
 	/// <summary>
-	/// The skinned-mesh per-vertex layout (M15) — <see cref="MeshStandard"/> plus the two skinning attributes:
+	/// The skinned-mesh per-vertex layout — <see cref="MeshStandard"/> plus the two skinning attributes:
 	/// <c>JOINTS</c> (four bone indices, <see cref="VertexFormat.UInt4"/>) and <c>WEIGHTS</c> (four normalized
 	/// blend weights, float4), 80 bytes, mirroring <see cref="SkinnedVertex"/>. A skinned mesh's bind-pose buffer
 	/// is uploaded against this; the compute pre-skin pass reads it (+ a bone palette) and writes a plain

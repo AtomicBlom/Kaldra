@@ -102,7 +102,7 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 			hash.AppendData(BitConverter.GetBytes((int)attribute.Format));
 	}
 
-	/// <summary>Dispose every baked PSO and empty the bake cache — used by shader hot-reload (M13) to force a fresh
+	/// <summary>Dispose every baked PSO and empty the bake cache — used by shader hot-reload to force a fresh
 	/// bake from re-registered templates. Templates are kept (re-registered by DefineTechnique). Drain the GPU first.</summary>
 	public void Reset()
 	{

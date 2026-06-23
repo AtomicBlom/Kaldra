@@ -24,7 +24,7 @@ public sealed class GraphPass
 
 	/// <summary>
 	/// The per-frame record callback (<c>.Draw</c> for raster, <c>.Dispatch</c> for compute). May be
-	/// null in M2 graphs authored purely to inspect structure. Not part of the graph hash.
+	/// null in graphs authored purely to inspect structure. Not part of the graph hash.
 	/// </summary>
 	public Action<IRenderContext>? Record { get; }
 

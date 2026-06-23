@@ -1,6 +1,6 @@
 namespace Loom.Tests;
 
-/// <summary>Compares decoded RGBA images for the golden-image harness (M13): a regression check against a committed
+/// <summary>Compares decoded RGBA images for the golden-image harness: a regression check against a committed
 /// baseline, and a cross-backend check (Vulkan vs DirectX12) — both expressed as a tolerance on per-channel difference.</summary>
 internal static class ImageComparison
 {

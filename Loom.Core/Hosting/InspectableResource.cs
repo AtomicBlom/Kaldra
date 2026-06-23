@@ -3,7 +3,7 @@ using Loom.Core.Graph;
 namespace Loom.Core.Hosting;
 
 /// <summary>
-/// A graph image resource the debug viewer can preview (M13). Backend-neutral — no GPU type; the host enumerates
+/// A graph image resource the debug viewer can preview. Backend-neutral — no GPU type; the host enumerates
 /// these from <see cref="IEngine.InspectableResources"/> and binds one into a draw list via
 /// <see cref="IRenderContext.ResolveInspectable"/>.
 /// </summary>
