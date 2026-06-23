@@ -78,140 +78,27 @@ public interface IRenderContext
 	void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage);
 
 	/// <summary>
-	/// Draw GPU-resident geometry with the named technique (the geometry counterpart to
-	/// <c>FullScreen</c> — §5's <c>ctx.Draw(drawList, Technique.X)</c>). The mesh is a stable
-	/// engine-minted handle; per-frame inputs (camera, transforms) are pulled from the context, not captured,
-	/// to keep the pass closure frame-independent (§8). The render target is the pass's declared output.
+	/// Submit a single raster draw command described by <paramref name="call"/>. Handles every combination of
+	/// geometry source (mesh / skinned override / procedural), instancing (none / CPU span / GPU buffer),
+	/// material, view, and extra inputs (uniforms or sampled graph resources). The common case is terse:
+	/// <c>ctx.Draw(DrawCall.Create(cube, "gbuffer"))</c>; richer combinations use an object initializer.
+	/// Keep-separate verbs: <see cref="FullScreen"/>, <see cref="Dispatch"/>, <see cref="DispatchSkin"/>, and
+	/// <see cref="DrawList{TVertex}"/> are conceptually distinct and remain their own methods.
 	/// </summary>
-	void Draw(Mesh mesh, string technique);
-
-	/// <summary>
-	/// Draw GPU-resident geometry from an explicit <paramref name="view"/> instead of the default <see cref="View"/>.
-	/// "The scene" and "the scene from another viewpoint" are the same draw with a different view — a shadow pass
-	/// renders the depth map by passing the shadow light's view here.
-	/// </summary>
-	void Draw(Mesh mesh, string technique, Camera view);
-
-	/// <summary>
-	/// Draw GPU-resident geometry with a <paramref name="material"/> whose textures fill the technique's
-	/// reflected sampler slots, in order (texture 0 → binding 0, …) — the geometry-with-textures counterpart to
-	/// <see cref="Draw(Mesh, string)"/>. The <paramref name="technique"/> still selects the pipeline; a technique
-	/// that reflects no samplers (depth-only/shadow) ignores the material, so the same material draws into a
-	/// G-buffer pass and a shadow pass unchanged. The material must supply at least as many textures as the
-	/// technique samples (extras are ignored). Per-frame inputs are pulled from the context, not captured (§8).
-	/// </summary>
-	void Draw(Mesh mesh, Material material, string technique);
-
-	/// <summary>
-	/// As <see cref="Draw(Mesh, Material, string)"/>, but from an explicit <paramref name="view"/> instead of
-	/// <see cref="View"/> (the §7.2 <c>view:</c> parameter) — the textured draw used when a pass renders from a
-	/// non-camera viewpoint.
-	/// </summary>
-	void Draw(Mesh mesh, Material material, string technique, Camera view);
-
-	/// <summary>
-	/// Draw <paramref name="instanceCount"/> instances of <paramref name="vertexCount"/> vertices fabricated in the
-	/// vertex shader from <c>SV_VertexID</c> (no vertex buffer for the geometry — a 6-vertex billboard quad, a point,
-	/// a strip), with the per-instance stream read straight from <paramref name="instances"/> — a GPU buffer a compute
-	/// pass just wrote (the GPU-particle path and any procedural-instanced effect, §7.6). The buffer must be one the
-	/// pass declared with <c>.ReadsVertex</c>, so the graph derives the compute→vertex-input barrier; its element is
-	/// the technique's per-instance <see cref="VertexLayout"/>. The technique transforms by <see cref="View"/>
-	/// (pulled, not captured). The engine fabricates no geometry of its own — the count is the caller's, so the verb
-	/// leans toward no particular primitive.
-	/// </summary>
-	void DrawInstanced(string technique, BufferHandle instances, int vertexCount, int instanceCount);
-
-	/// <summary>
-	/// As <see cref="DrawInstanced(string, BufferHandle, int, int)"/>, but binds <paramref name="material"/>'s
-	/// textures into the technique's reflected sampler slots (texture 0 → binding 0, …) — the textured path (e.g. a
-	/// sprite-sheet atlas the fabricated quads sample for sub-UV frames + colour-over-life). The per-instance stream
-	/// still rides in <paramref name="instances"/> (a <c>.ReadsVertex</c> resource); the material only adds the
-	/// sampled atlas, exactly as <see cref="Draw(Mesh, Material, string)"/> adds it to a mesh draw.
-	/// </summary>
-	void DrawInstanced(string technique, Material material, BufferHandle instances, int vertexCount, int instanceCount);
-
-	/// <summary>
-	/// Draw <paramref name="mesh"/> once per element of <paramref name="instances"/> (M12 — GPU instancing,
-	/// CPU-driven). The engine uploads the span to a per-frame host-visible instance buffer and binds it as the
-	/// technique's per-instance stream (binding 1). <paramref name="technique"/> must declare a per-instance
-	/// <see cref="VertexLayout"/> whose <see cref="VertexLayout.Stride"/> equals <c>sizeof(T)</c> (e.g. a
-	/// <see cref="System.Numerics.Matrix4x4"/> per instance for <see cref="VertexLayout.Transform"/>). This is
-	/// the path the CPU frustum cull feeds: the app compacts the visible transforms and hands them here. No
-	/// graph edge — the data is CPU-sourced, so no <c>.ReadsVertex</c> is needed.
-	/// </summary>
-	void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances) where T : unmanaged;
-
-	/// <summary>
-	/// As <see cref="DrawInstanced{T}(Mesh, string, ReadOnlySpan{T})"/>, but binds <paramref name="material"/>'s
-	/// textures into the technique's reflected sampler slots (texture 0 → binding 0, …) — the textured-instanced
-	/// path (M14 sprite/tile batching): one draw places <paramref name="instances"/>-many quads, each sampling the
-	/// shared atlas. The instance stream and the material are independent — the stream carries per-quad transform +
-	/// uv-rect + tint, the material supplies the atlas every instance shares. This is
-	/// <see cref="Draw(Mesh, Material, string)"/> + an instance stream; a technique that reflects no samplers
-	/// ignores the material.
-	/// </summary>
-	void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged;
-
-	/// <summary>
-	/// As <see cref="DrawInstanced{T}(Mesh, Material, string, ReadOnlySpan{T})"/>, but also hands the technique a
-	/// per-frame <paramref name="uniforms"/> block (M15-0 — the uniform seam): the engine stages it into a
-	/// per-frame uniform buffer and binds it as the technique's constant buffer, visible to the vertex stage. The
-	/// foliage path uses it for wind (time + direction + strength) read in the vertex shader to sway each blade,
-	/// while <paramref name="material"/> supplies the alpha-test cutout texture. The per-instance MVP still comes
-	/// from <see cref="View"/>. Per-frame inputs are pulled from the context, not captured (§8).
-	/// </summary>
-	void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<float> uniforms) where T : unmanaged;
-
-	/// <summary>
-	/// As <see cref="DrawInstanced{T}(Mesh, string, ReadOnlySpan{T})"/>, but the technique also samples the graph
-	/// resources in <paramref name="sampled"/> (each bound in order as sampled input 0..N-1, exactly as
-	/// <see cref="FullScreen(string, ReadOnlySpan{ResourceHandle})"/> binds them) — the instanced-draw-that-reads-
-	/// the-G-buffer path (M14 2D lighting): each instance is one additive light volume, and the fragment samples the
-	/// G-buffer normal/albedo at the covered pixel to shade it. Every entry must be a resource the pass declared
-	/// with <c>.Samples</c>, so the graph derives the read dependency and shader-read transition.
-	/// </summary>
-	void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<ResourceHandle> sampled) where T : unmanaged;
-
-	/// <summary>
-	/// Draw <paramref name="mesh"/> <paramref name="count"/> times, reading the per-instance stream from
-	/// <paramref name="instances"/> — a GPU storage buffer a compute pass filled (M12 — GPU-driven instancing,
-	/// the foliage/placement path). The buffer must be one the pass declared with <c>.ReadsVertex</c>, so the
-	/// graph derives the compute→vertex-input barrier exactly as for GPU particles. The technique must declare a
-	/// per-instance <see cref="VertexLayout"/>.
-	/// </summary>
-	void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count);
+	void Draw(in DrawCall call);
 
 	/// <summary>
 	/// Compute-skin <paramref name="skinnedMesh"/>'s bind-pose vertices by <paramref name="palette"/> (the
-	/// per-frame bone matrices) into <paramref name="output"/> — the GPU pre-skin pass (M15): one dispatch
-	/// transforms position/normal/tangent by each vertex's blended bone matrices and writes a plain
+	/// per-frame bone matrices) into <paramref name="output"/> — the GPU pre-skin pass: one dispatch transforms
+	/// position/normal/tangent by each vertex's blended bone matrices and writes a plain
 	/// <see cref="VertexLayout.MeshStandard"/>-shaped buffer, so the depth/g-buffer/shadow passes draw the skinned
 	/// result with their existing techniques. <paramref name="output"/> is a buffer the pass declared with
-	/// <c>.ReadWrites</c> (so the graph derives the compute→vertex-input barrier to each <see cref="DrawSkinned(Mesh, BufferHandle, string)"/>
-	/// reader). <paramref name="palette"/> is uploaded to a per-frame buffer the compute reads; it is a method
-	/// argument, pulled from app state refreshed before <c>Render</c> (not captured — §8). One pre-skin feeds
-	/// every cascade/depth/g-buffer pass that reads <paramref name="output"/>, so a skinned mesh is skinned once.
+	/// <c>.ReadWrites</c> (so the graph derives the compute→vertex-input barrier to each skinned
+	/// <see cref="Draw(in DrawCall)"/> reader). <paramref name="palette"/> is uploaded to a per-frame buffer
+	/// the compute reads; it is a method argument, pulled from app state refreshed before <c>Render</c> (not
+	/// captured), so the graph stays frame-independent.
 	/// </summary>
 	void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<System.Numerics.Matrix4x4> palette, BufferHandle output, int vertexCount);
-
-	/// <summary>
-	/// Draw <paramref name="mesh"/>'s index buffer with its per-vertex stream sourced from
-	/// <paramref name="skinnedVertices"/> — a buffer a <see cref="DispatchSkin"/> just wrote (M15) — instead of the
-	/// mesh's own (bind-pose) vertex buffer. The buffer must be one the pass declared with <c>.ReadsVertex</c>, so
-	/// the graph derives the compute→vertex barrier. The technique consumes the <see cref="VertexLayout.MeshStandard"/>
-	/// layout (the skinned output is plain pos/normal/uv/tangent), so existing mesh techniques work unchanged.
-	/// Unlike <see cref="DrawInstanced(string, BufferHandle, int, int)"/>, this is an indexed per-vertex draw using the mesh's index count.
-	/// </summary>
-	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique);
-
-	/// <summary>As <see cref="DrawSkinned(Mesh, BufferHandle, string)"/>, from an explicit <paramref name="view"/> (e.g. a shadow cascade's sun view) instead of <see cref="View"/>.</summary>
-	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view);
-
-	/// <summary>As <see cref="DrawSkinned(Mesh, BufferHandle, string)"/>, binding <paramref name="material"/>'s textures into the technique's reflected sampler slots (the textured skinned-character g-buffer draw).</summary>
-	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique);
-
-	/// <summary>As <see cref="DrawSkinned(Mesh, BufferHandle, Material, string)"/>, from an explicit <paramref name="view"/>.</summary>
-	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view);
 
 	/// <summary>
 	/// Submit a per-frame, variable-size indexed vertex stream as a batched draw list into the current pass —

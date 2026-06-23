@@ -212,43 +212,94 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.DrawInstanced(3, 1, 0, 0); // fullscreen triangle, vertices fabricated from SV_VertexID
 	}
 
-	public void Draw(Mesh mesh, string technique) => Draw(mesh, technique, View);
-
-	public void Draw(Mesh mesh, string technique, Camera view)
+	public void Draw(in DrawCall call)
 	{
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		var effectiveView = call.View ?? View;
+		var baked = _techniques.GetOrBake(call.Technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		// The MVP root constant (model is identity for now). The raw row-major Camera.ViewProjectionMatrix is copied
-		// as 16 DWORDs; the lit shader's column-major cbuffer packing transposes it back into the row-vector
-		// clip = position·MVP the math expects (the same convention the Vulkan vertex push uses).
-		var mvp = view.ViewProjectionMatrix;
+		// The MVP root constant — raw row-major ViewProjectionMatrix as 16 DWORDs; the lit shader's column-major
+		// cbuffer packing transposes it back into the row-vector clip = position·MVP convention.
+		var mvp = effectiveView.ViewProjectionMatrix;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
-		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
-	}
+		// Bind material textures (+ optional UBO) or sampled graph resources — mutually exclusive.
+		if (call.Material is { } material)
+		{
+			if (call.Uniforms.Length > 0 && baked.CbvRootParam >= 0)
+				BindUniforms(baked, call.Uniforms);
+			if (baked.TableParam >= 0 && baked.InputCount > 0)
+				BindMaterialTable(baked, material, call.Technique);
+		}
+		else if (!call.Sampled.IsEmpty)
+		{
+			BindInputs(baked, call.Sampled);
+		}
 
-	public void Draw(Mesh mesh, Material material, string technique) => Draw(mesh, material, technique, View);
+		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 
-	public void Draw(Mesh mesh, Material material, string technique, Camera view)
-	{
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = view.ViewProjectionMatrix;
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		// Bind the material's textures into the technique's reflected SRV table (slots 0..N-1) — the same path
-		// FullScreen uses for transients, but the SRVs come from the TextureStore (loaded textures, multi-mip).
-		// A technique that samples nothing (depth-only/shadow) has no table and ignores the material.
-		if (baked.TableParam >= 0 && baked.InputCount > 0)
-			BindMaterialTable(baked, material, technique);
-
-		_meshes.Draw(_cmd, mesh.Id);
+		if (call.Instances.IsEmpty)
+		{
+			// Single-instance draw: skinned override or standard mesh.
+			if (call.SkinnedVertices is { } sv)
+			{
+				if (_transients is null)
+					throw new InvalidOperationException("DirectX12: skinned draw requires an active graph (SetGraph).");
+				_meshes.DrawSkinned(_cmd, call.Mesh.Value.Id, SkinnedView(sv));
+			}
+			else
+			{
+				_meshes.Draw(_cmd, call.Mesh.Value.Id);
+			}
+		}
+		else if (call.Instances.GpuBuffer is { } gpuBuf)
+		{
+			if (_transients is null)
+				throw new InvalidOperationException("DirectX12: a GPU-buffer instanced draw requires an active graph (SetGraph).");
+			if (call.Mesh is { } mesh)
+			{
+				// GPU-resident instance stream + indexed mesh draw (foliage, GPU-driven placement).
+				var byteSize = _transients.ByteSize(gpuBuf.Id);
+				var count = call.Instances.Count;
+				var instanceView = new VertexBufferView
+				{
+					BufferLocation = _transients.Resource(_slot, gpuBuf.Id).GetGPUVirtualAddress(),
+					SizeInBytes = byteSize,
+					StrideInBytes = baked.InstanceStride > 0 ? (uint)baked.InstanceStride : (count > 0 ? byteSize / (uint)count : byteSize),
+				};
+				_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count);
+			}
+			else
+			{
+				// Procedural: GPU buffer IS the per-instance vertex stream; vertexCount verts per instance
+				// fabricated from SV_VertexID (the GPU-particle path).
+				var vbv = new VertexBufferView
+				{
+					BufferLocation = _transients.Resource(_slot, gpuBuf.Id).GetGPUVirtualAddress(),
+					SizeInBytes = _transients.ByteSize(gpuBuf.Id),
+					StrideInBytes = (uint)baked.InstanceStride,
+				};
+				_cmd.IASetVertexBuffers(0, 1, &vbv);
+				_cmd.DrawInstanced((uint)call.VertexCount, (uint)call.Instances.Count, 0, 0);
+			}
+		}
+		else
+		{
+			// CPU-driven instances: upload the type-erased span to the per-frame ring.
+			if (call.Instances.CpuData.IsEmpty)
+				return;
+			var bytes = call.Instances.CpuData;
+			var gpuAddress = _instanceUpload.Upload(_slot, bytes);
+			var instanceView = new VertexBufferView
+			{
+				BufferLocation = gpuAddress,
+				SizeInBytes = (uint)bytes.Length,
+				StrideInBytes = (uint)call.Instances.Stride,
+			};
+			_meshes.DrawInstanced(_cmd, call.Mesh.Value.Id, instanceView, (uint)call.Instances.Count);
+		}
 	}
 
 	// Bind a material's loaded-texture SRVs into the technique's reflected SRV table (slots 0..N-1). Shared by
@@ -453,81 +504,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.Dispatch(groups.X, groups.Y, groups.Z);
 	}
 
-	public void DrawInstanced(string technique, BufferHandle instances, int vertexCount, int instanceCount)
-	{
-		if (_transients is null)
-			throw new InvalidOperationException("DirectX12: a GPU-buffer instanced draw requires an active graph (SetGraph).");
-
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = View.ViewProjectionMatrix;
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		// The buffer IS the per-instance vertex stream (one element per instance); the graph put it in
-		// VERTEX_AND_CONSTANT_BUFFER before this pass. Stride comes from the technique's declared instance layout;
-		// the technique fabricates vertexCount verts per instance from SV_VertexID (no geometry vertex buffer).
-		var vbv = new VertexBufferView
-		{
-			BufferLocation = _transients.Resource(_slot, instances.Id).GetGPUVirtualAddress(),
-			SizeInBytes = _transients.ByteSize(instances.Id),
-			StrideInBytes = (uint)baked.InstanceStride,
-		};
-		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
-		_cmd.IASetVertexBuffers(0, 1, &vbv);
-		_cmd.DrawInstanced((uint)vertexCount, (uint)instanceCount, 0, 0);
-	}
-
-	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances) where T : unmanaged
-	{
-		if (instances.Length == 0)
-			return;
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = View.ViewProjectionMatrix; // the per-instance world matrix rides in the instance stream
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances);
-		var gpuAddress = _instanceUpload.Upload(_slot, bytes);
-		var instanceView = new VertexBufferView
-		{
-			BufferLocation = gpuAddress,
-			SizeInBytes = (uint)bytes.Length,
-			StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>(),
-		};
-		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
-	}
-
-	public void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count)
-	{
-		if (_transients is null)
-			throw new InvalidOperationException("DirectX12: instancing from a buffer requires an active graph (SetGraph).");
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = View.ViewProjectionMatrix;
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		// The instance stream is a graph storage buffer a compute filled; the pass's .ReadsVertex derived the
-		// transition to VERTEX_AND_CONSTANT_BUFFER. Take the per-instance stride from the technique's declared
-		// instance layout — the same source of truth Vulkan binds from — rather than dividing total bytes by
-		// count (which diverges when the buffer is over-allocated or the element has trailing padding).
-		var byteSize = _transients.ByteSize(instances.Id);
-		var instanceView = new VertexBufferView
-		{
-			BufferLocation = _transients.Resource(_slot, instances.Id).GetGPUVirtualAddress(),
-			SizeInBytes = byteSize,
-			StrideInBytes = baked.InstanceStride > 0 ? (uint)baked.InstanceStride : (count > 0 ? byteSize / (uint)count : byteSize),
-		};
-		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count);
-	}
 
 	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)
 	{
@@ -559,42 +535,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.Dispatch((uint)((vertexCount + 63) / 64), 1, 1);
 	}
 
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique) => DrawSkinned(mesh, skinnedVertices, technique, View);
-
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view)
-	{
-		if (_transients is null)
-			throw new InvalidOperationException("DirectX12: skinned draw requires an active graph (SetGraph).");
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = view.ViewProjectionMatrix;
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		_meshes.DrawSkinned(_cmd, mesh.Id, SkinnedView(skinnedVertices));
-	}
-
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique) => DrawSkinned(mesh, skinnedVertices, material, technique, View);
-
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view)
-	{
-		if (_transients is null)
-			throw new InvalidOperationException("DirectX12: skinned draw requires an active graph (SetGraph).");
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = view.ViewProjectionMatrix;
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		if (baked.TableParam >= 0 && baked.InputCount > 0)
-			BindMaterialTable(baked, material, technique);
-
-		_meshes.DrawSkinned(_cmd, mesh.Id, SkinnedView(skinnedVertices));
-	}
 
 	// The compute pre-skin output as a per-vertex stream: a MeshStandard-strided view over the transient buffer.
 	private VertexBufferView SkinnedView(BufferHandle skinnedVertices) => new()
@@ -604,119 +544,6 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		StrideInBytes = (uint)VertexLayout.MeshStandard.Stride,
 	};
 
-	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged
-	{
-		if (instances.Length == 0)
-			return;
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = View.ViewProjectionMatrix; // the per-instance world data rides in the instance stream
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		// Material atlas → the technique's reflected SRV table, identical to Draw(mesh, material); every instance
-		// samples the shared atlas, the per-instance uv-rect (in the stream) picks each quad's region.
-		if (baked.TableParam >= 0 && baked.InputCount > 0)
-			BindMaterialTable(baked, material, technique);
-
-		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances);
-		var gpuAddress = _instanceUpload.Upload(_slot, bytes);
-		var instanceView = new VertexBufferView
-		{
-			BufferLocation = gpuAddress,
-			SizeInBytes = (uint)bytes.Length,
-			StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>(),
-		};
-		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
-	}
-
-	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<float> uniforms) where T : unmanaged
-	{
-		if (instances.Length == 0)
-			return;
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = View.ViewProjectionMatrix;
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		// The per-frame uniform block (M15-0) — e.g. foliage wind, read in the vertex stage — bound as the root
-		// CBV (b1), alongside the material's alpha-test texture. The MVP still rides the b0 root constants.
-		if (uniforms.Length > 0 && baked.CbvRootParam >= 0)
-			BindUniforms(baked, uniforms);
-		if (baked.TableParam >= 0 && baked.InputCount > 0)
-			BindMaterialTable(baked, material, technique);
-
-		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances);
-		var gpuAddress = _instanceUpload.Upload(_slot, bytes);
-		var instanceView = new VertexBufferView
-		{
-			BufferLocation = gpuAddress,
-			SizeInBytes = (uint)bytes.Length,
-			StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>(),
-		};
-		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
-	}
-
-	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<ResourceHandle> sampled) where T : unmanaged
-	{
-		if (instances.Length == 0)
-			return;
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = View.ViewProjectionMatrix;
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		// Sampled graph resources (the G-buffer) → the technique's SRV table, identical to FullScreen: each
-		// instanced light volume samples the normal/albedo at its covered pixel. The graph put them in PixelShaderResource.
-		if (sampled.Length > 0)
-			BindInputs(baked, sampled);
-
-		var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances);
-		var gpuAddress = _instanceUpload.Upload(_slot, bytes);
-		var instanceView = new VertexBufferView
-		{
-			BufferLocation = gpuAddress,
-			SizeInBytes = (uint)bytes.Length,
-			StrideInBytes = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<T>(),
-		};
-		_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)instances.Length);
-	}
-
-	public void DrawInstanced(string technique, Material material, BufferHandle instances, int vertexCount, int instanceCount)
-	{
-		if (_transients is null)
-			throw new InvalidOperationException("DirectX12: a GPU-buffer instanced draw requires an active graph (SetGraph).");
-
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
-
-		var mvp = View.ViewProjectionMatrix;
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
-
-		// The atlas → reflected SRV table, so the fabricated quads can sub-UV sample per frame.
-		if (baked.TableParam >= 0 && baked.InputCount > 0)
-			BindMaterialTable(baked, material, technique);
-
-		var vbv = new VertexBufferView
-		{
-			BufferLocation = _transients.Resource(_slot, instances.Id).GetGPUVirtualAddress(),
-			SizeInBytes = _transients.ByteSize(instances.Id),
-			StrideInBytes = (uint)baked.InstanceStride,
-		};
-		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
-		_cmd.IASetVertexBuffers(0, 1, &vbv);
-		_cmd.DrawInstanced((uint)vertexCount, (uint)instanceCount, 0, 0);
-	}
 
 	public void DrawList<TVertex>(string technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{

@@ -252,35 +252,65 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
 
-	public void Draw(Mesh mesh, string technique) => Draw(mesh, technique, _view);
-
-	public void Draw(Mesh mesh, string technique, Camera view)
+	public void Draw(in DrawCall call)
 	{
-		var baked = Bake(technique);
-		var mvp = view.ViewProjectionMatrix; // model is identity for now; per-object transforms come later
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
-	}
-
-	public void Draw(Mesh mesh, Material material, string technique) => Draw(mesh, material, technique, _view);
-
-	public void Draw(Mesh mesh, Material material, string technique, Camera view)
-	{
-		var baked = Bake(technique);
-		var template = _registry[technique];
-		var mvp = view.ViewProjectionMatrix;
+		var effectiveView = call.View ?? _view;
+		var baked = Bake(call.Technique);
+		var template = _registry[call.Technique];
+		var mvp = effectiveView.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 
-		// Bind the material's textures into the technique's reflected sampler slots 0..N-1 — the same
-		// combined-image-sampler mechanism FullScreen uses, but the views come from the VulkanTextureStore (loaded
-		// textures), not the transients. A technique that reflects nothing (depth-only/shadow) skips this and the
-		// material is ignored. Material textures sample with Repeat addressing when the technique asks for it.
-		if (template.SampleCount > 0)
-			BindMaterialTextures(baked, template, material, technique);
+		// Bind material textures (+ optional UBO) or sampled graph resources — mutually exclusive.
+		if (call.Material is { } material)
+		{
+			var ubo = call.Uniforms.Length > 0 ? UploadUniforms(call.Uniforms) : default;
+			if (template.SampleCount > 0 || ubo.Present)
+				BindMaterialTextures(baked, template, material, call.Technique, ubo);
+		}
+		else if (!call.Sampled.IsEmpty)
+		{
+			BindSampledInputs(baked, call.Sampled, template.LinearFilter);
+		}
 
-		_meshes.Draw(_cmd, mesh.Id);
+		if (call.Instances.IsEmpty)
+		{
+			// Single-instance draw: skinned override or standard mesh.
+			if (call.SkinnedVertices is { } sv)
+			{
+				var vertexBuffer = _resources.GetBuffer(_frameSlot, sv.Id);
+				_meshes.DrawSkinned(_cmd, call.Mesh.Value.Id, vertexBuffer);
+			}
+			else
+			{
+				_meshes.Draw(_cmd, call.Mesh.Value.Id);
+			}
+		}
+		else if (call.Instances.GpuBuffer is { } gpuBuf)
+		{
+			var gpuBuffer = _resources.GetBuffer(_frameSlot, gpuBuf.Id);
+			if (call.Mesh is { } mesh)
+			{
+				// GPU-resident instance stream + indexed mesh draw (foliage, GPU-driven placement).
+				_meshes.DrawInstanced(_cmd, mesh.Id, gpuBuffer, 0ul, (uint)call.Instances.Count);
+			}
+			else
+			{
+				// Procedural: GPU buffer IS the per-instance vertex stream; vertexCount verts per instance
+				// fabricated from SV_VertexID (the GPU-particle path).
+				ulong offset = 0;
+				_vk.CmdBindVertexBuffers(_cmd, 0, 1, in gpuBuffer, in offset);
+				_vk.CmdDraw(_cmd, (uint)call.VertexCount, (uint)call.Instances.Count, 0, 0);
+			}
+		}
+		else
+		{
+			// CPU-driven instances: upload the type-erased span to the per-frame ring.
+			if (call.Instances.CpuData.IsEmpty)
+				return;
+			var (buffer, offset) = _instanceUpload.Upload(_frameSlot, call.Instances.CpuData);
+			_meshes.DrawInstanced(_cmd, call.Mesh.Value.Id, buffer, offset, (uint)call.Instances.Count);
+		}
 	}
 
 	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
@@ -350,42 +380,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_vk.CmdDispatch(_cmd, groups.X, groups.Y, groups.Z);
 	}
 
-	public void DrawInstanced(string technique, BufferHandle instances, int vertexCount, int instanceCount)
-	{
-		var baked = Bake(technique);
-		var mvp = _view.ViewProjectionMatrix;
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		// The buffer IS the per-instance vertex stream (binding 0); the technique fabricates vertexCount verts per
-		// instance from SV_VertexID. The pass's .ReadsVertex put it in the vertex-input stage.
-		var vertexBuffer = _resources.GetBuffer(_frameSlot, instances.Id);
-		ulong offset = 0;
-		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vertexBuffer, in offset);
-		_vk.CmdDraw(_cmd, (uint)vertexCount, (uint)instanceCount, 0, 0);
-	}
-
-	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances) where T : unmanaged
-	{
-		if (instances.Length == 0)
-			return;
-		var baked = Bake(technique);
-		var mvp = _view.ViewProjectionMatrix; // the per-instance world matrix rides in the instance stream
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
-		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, offset, (uint)instances.Length);
-	}
-
-	public void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count)
-	{
-		var baked = Bake(technique);
-		var mvp = _view.ViewProjectionMatrix;
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		// The instance stream is a graph storage buffer a compute filled; the pass's .ReadsVertex derived the barrier.
-		var buffer = _resources.GetBuffer(_frameSlot, instances.Id);
-		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, 0ul, (uint)count);
-	}
 
 	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)
 	{
@@ -429,100 +423,6 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_vk.CmdDispatch(_cmd, (uint)((vertexCount + 63) / 64), 1, 1);
 	}
 
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique) => DrawSkinned(mesh, skinnedVertices, technique, _view);
-
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view)
-	{
-		var baked = Bake(technique);
-		var mvp = view.ViewProjectionMatrix;
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		// The per-vertex stream is the compute's skinned output (MeshStandard-shaped); the mesh contributes its index buffer.
-		var vertexBuffer = _resources.GetBuffer(_frameSlot, skinnedVertices.Id);
-		_meshes.DrawSkinned(_cmd, mesh.Id, vertexBuffer);
-	}
-
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique) => DrawSkinned(mesh, skinnedVertices, material, technique, _view);
-
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view)
-	{
-		var baked = Bake(technique);
-		var template = _registry[technique];
-		var mvp = view.ViewProjectionMatrix;
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		if (template.SampleCount > 0)
-			BindMaterialTextures(baked, template, material, technique);
-		var vertexBuffer = _resources.GetBuffer(_frameSlot, skinnedVertices.Id);
-		_meshes.DrawSkinned(_cmd, mesh.Id, vertexBuffer);
-	}
-
-	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances) where T : unmanaged
-	{
-		if (instances.Length == 0)
-			return;
-		var baked = Bake(technique);
-		var template = _registry[technique];
-		var mvp = _view.ViewProjectionMatrix; // the per-instance world data rides in the instance stream
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		// Material atlas → the technique's reflected sampler slots, identical to Draw(mesh, material): every
-		// instance samples the shared atlas; the per-instance uv-rect (in the stream) picks each quad's region.
-		if (template.SampleCount > 0)
-			BindMaterialTextures(baked, template, material, technique);
-		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
-		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, offset, (uint)instances.Length);
-	}
-
-	public void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<float> uniforms) where T : unmanaged
-	{
-		if (instances.Length == 0)
-			return;
-		var baked = Bake(technique);
-		var template = _registry[technique];
-		var mvp = _view.ViewProjectionMatrix;
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		// The per-frame uniform block (M15-0) — e.g. foliage wind, read in the vertex stage; bound alongside the
-		// material's alpha texture into the technique's reflected slots. The MVP still rides the vertex push.
-		var ubo = uniforms.Length > 0 ? UploadUniforms(uniforms) : default;
-		if (template.SampleCount > 0 || ubo.Present)
-			BindMaterialTextures(baked, template, material, technique, ubo);
-		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
-		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, offset, (uint)instances.Length);
-	}
-
-	public void DrawInstanced<T>(Mesh mesh, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<ResourceHandle> sampled) where T : unmanaged
-	{
-		if (instances.Length == 0)
-			return;
-		var baked = Bake(technique);
-		var mvp = _view.ViewProjectionMatrix;
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		// Sampled graph resources (the G-buffer) → sampled slots 0..N-1, identical to FullScreen: each instanced
-		// light volume samples the normal/albedo at its covered pixel. The graph put them in ShaderReadOnly.
-		if (sampled.Length > 0)
-			BindSampledInputs(baked, sampled, _registry[technique].LinearFilter);
-		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
-		_meshes.DrawInstanced(_cmd, mesh.Id, buffer, offset, (uint)instances.Length);
-	}
-
-	public void DrawInstanced(string technique, Material material, BufferHandle instances, int vertexCount, int instanceCount)
-	{
-		var baked = Bake(technique);
-		var template = _registry[technique];
-		var mvp = _view.ViewProjectionMatrix;
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
-		// The atlas → reflected sampler slots, so the fabricated quads can sub-UV sample per frame.
-		if (template.SampleCount > 0)
-			BindMaterialTextures(baked, template, material, technique);
-		var vertexBuffer = _resources.GetBuffer(_frameSlot, instances.Id);
-		ulong offset = 0;
-		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vertexBuffer, in offset);
-		_vk.CmdDraw(_cmd, (uint)vertexCount, (uint)instanceCount, 0, 0);
-	}
 
 	// UI group-opacity layer markers (UIPrimKind, kept in sync with SUIsei): a BeginLayer/EndLayer pair carries no
 	// indices and never reaches the fragment shader — the backend turns it into an offscreen render scope and a
