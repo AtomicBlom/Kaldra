@@ -21,7 +21,7 @@ namespace Loom.Vulkan;
 /// <summary>
 /// The Vulkan <see cref="IEngine"/> (Planning.md §2 Execute/Bake, §5 front door). It owns the long-lived
 /// device (<see cref="VulkanContext"/>), the pipeline cache, the mesh store, and the descriptor allocator; the
-/// <em>active graph</em> is swappable (<see cref="SetGraph"/>). On each <see cref="SetGraph"/> it derives a
+/// <em>active graph</em> is swappable (<c>SetGraph</c>). On each <c>SetGraph</c> it derives a
 /// <see cref="GraphSchedule"/>, <see cref="BarrierPlan"/>, and transient-memory plan once (the plan is
 /// frame-stable, so the per-frame cost is recording, not deriving) and prepares the graph's transients; then
 /// each <see cref="Render"/> records the plan into a command buffer — emitting <c>vkCmdPipelineBarrier2</c> from
@@ -32,7 +32,7 @@ namespace Loom.Vulkan;
 /// <b>Device vs graph.</b> Device-level resources (context, allocator, command buffers, sync, swapchain,
 /// pipeline cache, meshes, descriptors, ImGui) live for the engine's lifetime and survive a graph swap;
 /// graph-level resources (the derived plan, transients, readback buffers, persistent-state tracking) are rebuilt
-/// by <see cref="SetGraph"/>, reusing the device and cache — Planning.md §8's "structural changes rebuild the
+/// by <c>SetGraph</c>, reusing the device and cache — Planning.md §8's "structural changes rebuild the
 /// baked graph — cheap and cached," and the basis for runtime demo switching (M7-B7).
 /// </para>
 /// <para>

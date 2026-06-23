@@ -30,6 +30,9 @@ internal sealed unsafe class VulkanInstanceUploadBuffer : IDisposable
 	private readonly ulong[] _cursors;
 	private readonly List<(Buffer Buffer, Allocation Allocation)>[] _retired;
 
+	/// <param name="ctx">The Vulkan device context owning this buffer.</param>
+	/// <param name="allocator">The VMA allocator used to create and free the mappable buffers.</param>
+	/// <param name="framesInFlight">Number of frames-in-flight slots to allocate (one buffer per slot).</param>
 	/// <param name="usage">Buffer usage the ring's mappable buffers are created with — <see cref="BufferUsageFlags.VertexBufferBit"/>
 	/// for the instance stream (the default), or <see cref="BufferUsageFlags.UniformBufferBit"/> for the M15-0 uniform ring.</param>
 	/// <param name="alignment">Per-append offset alignment — 16 for vertex streams; 256 for uniform buffers

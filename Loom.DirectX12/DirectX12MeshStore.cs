@@ -9,7 +9,7 @@ using DxgiFormat = Silk.NET.DXGI.Format;
 namespace Loom.DirectX12;
 
 /// <summary>
-/// Owns GPU-resident geometry — the DirectX12 counterpart of the Vulkan backend's <see cref="MeshStore"/>. The app
+/// Owns GPU-resident geometry — the DirectX12 counterpart of the Vulkan backend's <c>VulkanMeshStore</c>. The app
 /// builds meshes up front through the engine and gets back an opaque <see cref="Mesh"/> handle; recording
 /// resolves the handle to its vertex/index buffer views and emits the indexed draw.
 /// <para>

@@ -8,7 +8,7 @@ using DxgiFormat = Silk.NET.DXGI.Format;
 namespace Loom.DirectX12;
 
 /// <summary>
-/// Owns GPU-resident textures — the DirectX12 counterpart of the Vulkan backend's <see cref="TextureStore"/>
+/// Owns GPU-resident textures — the DirectX12 counterpart of the Vulkan backend's <c>VulkanTextureStore</c>
 /// (PlanningPhase2.md M11). Each texture is a DEFAULT-heap committed <c>Texture2D</c> with a full mip chain,
 /// uploaded once from an UPLOAD-heap staging buffer via per-subresource <c>CopyTextureRegion</c>, then left in
 /// <c>PixelShaderResource</c>. Mip levels arrive pre-built on the CPU in <see cref="TextureData"/>, so the

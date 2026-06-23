@@ -44,7 +44,7 @@ public interface IRenderContext
 	/// <summary>
 	/// The camera to render from this frame (view + projection). Per-frame data the host supplies; a pass's
 	/// <c>.Draw</c> closure pulls it from here rather than capturing it, so the graph stays frame-independent
-	/// (§8). <see cref="Draw"/> uses it to transform geometry into clip space.
+	/// (§8). <see cref="Draw(Mesh, string)"/> uses it to transform geometry into clip space.
 	/// </summary>
 	Camera Camera { get; }
 
@@ -91,7 +91,7 @@ public interface IRenderContext
 
 	/// <summary>
 	/// Draw GPU-resident geometry with the named technique (the geometry counterpart to
-	/// <see cref="FullScreen(string)"/> — §5's <c>ctx.Draw(drawList, Technique.X)</c>). The mesh is a stable
+	/// <c>FullScreen</c> — §5's <c>ctx.Draw(drawList, Technique.X)</c>). The mesh is a stable
 	/// engine-minted handle; per-frame inputs (camera, transforms) are pulled from the context, not captured,
 	/// to keep the pass closure frame-independent (§8). The render target is the pass's declared output.
 	/// </summary>
@@ -199,7 +199,7 @@ public interface IRenderContext
 	/// transforms position/normal/tangent by each vertex's blended bone matrices and writes a plain
 	/// <see cref="VertexLayout.MeshStandard"/>-shaped buffer, so the depth/g-buffer/shadow passes draw the skinned
 	/// result with their existing techniques. <paramref name="output"/> is a buffer the pass declared with
-	/// <c>.ReadWrites</c> (so the graph derives the compute→vertex-input barrier to each <see cref="DrawSkinned"/>
+	/// <c>.ReadWrites</c> (so the graph derives the compute→vertex-input barrier to each <see cref="DrawSkinned(Mesh, BufferHandle, string)"/>
 	/// reader). <paramref name="palette"/> is uploaded to a per-frame buffer the compute reads; it is a method
 	/// argument, pulled from app state refreshed before <c>Render</c> (not captured — §8). One pre-skin feeds
 	/// every cascade/depth/g-buffer pass that reads <paramref name="output"/>, so a skinned mesh is skinned once.

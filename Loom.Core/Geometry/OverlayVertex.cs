@@ -8,7 +8,7 @@ namespace Loom.Core.Geometry;
 /// The vertex of a 2D overlay draw list — the universal shape for screen-space, painter-ordered geometry
 /// (UI, immediate-mode overlays, a textured quad): a pixel-space position, a texture coordinate, a
 /// premultiplied colour, and a float4 of per-vertex data the consuming technique defines. Backend-neutral
-/// (<c>System.Numerics</c> + <see cref="Half4"/>), <see cref="StructLayout"/> sequential so it uploads as
+/// (<c>System.Numerics</c> + <see cref="Half4"/>), <c>[StructLayout]</c> sequential so it uploads as
 /// <see cref="VertexLayout.Overlay"/> verbatim.
 /// </summary>
 /// <param name="Position">Target-pixel position (already post-transform, post-DPI).</param>

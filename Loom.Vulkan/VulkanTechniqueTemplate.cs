@@ -13,7 +13,7 @@ namespace Loom.Vulkan;
 /// yields two cached pipelines.
 /// </summary>
 /// <param name="Spirv">The compiled SPIR-V module containing both entry points, resolved once at
-/// <see cref="VulkanEngine.DefineTechnique"/> — from an embedded resource (engine shaders) or disk (app shaders).</param>
+/// <c>DefineTechnique</c> — from an embedded resource (engine shaders) or disk (app shaders).</param>
 /// <param name="VertexEntry">Vertex entry-point name.</param>
 /// <param name="FragmentEntry">Fragment entry-point name.</param>
 /// <param name="SampleCount">Number of sampled inputs the fragment reads (combined image samplers at set 0, bindings 0..N-1).</param>
@@ -23,7 +23,13 @@ namespace Loom.Vulkan;
 /// <param name="HasFragmentPush">True if the shader's fragment (or, for a compute technique, compute) stage reads a small push-constant block (up to four floats) — the per-pass scalar channel (JFA step, hovered id, exposure rate).</param>
 /// <param name="IsCompute">True for a compute technique: one compute entry point (in <see cref="FragmentEntry"/>), dispatched rather than drawn (Planning.md §5 <c>.Dispatch</c>).</param>
 /// <param name="StorageCount">Number of storage images the (compute) shader read-writes, bound after the sampled inputs (bindings SampleCount..SampleCount+StorageCount-1).</param>
+/// <param name="StorageBufferCount">Number of storage buffers (not images) the shader read-writes, bound after the storage images.</param>
+/// <param name="Address">Sampler wrap mode for the technique's combined image samplers — <see cref="SamplerAddress.Clamp"/> for most passes; repeat for tiling textures.</param>
+/// <param name="Layout">Per-vertex stream layout, or null for fabricated-vertex techniques (fullscreen, particles) that have no vertex buffer.</param>
+/// <param name="Instance">Per-instance stream layout, or null when the technique has no instance buffer.</param>
 /// <param name="UniformBufferCount">Number of descriptor-bound constant buffers the shader reads (M15-0 — the per-frame uniform seam), bound after the storage slots; 0 or 1 in practice. Fed from the per-frame uniform ring; carries data too large for the 16-float push (CSM matrices, lighting params, wind).</param>
+/// <param name="HasListPush">True if the technique reads a per-command tag rewrite after the shared push block (the draw-list path).</param>
+/// <param name="Cull">Triangle face-culling mode — back-face culling for opaque mesh passes, none for fullscreen/billboard techniques.</param>
 public readonly record struct VulkanTechniqueTemplate(
 	byte[] Spirv,
 	string VertexEntry,
