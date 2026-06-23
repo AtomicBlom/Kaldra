@@ -64,6 +64,13 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// (Wrap + MinMagMip{Linear,Point}). The existing nearest/linear samplers above clamp (post passes never tile).
 	private readonly Sampler _repeatLinearSampler;
 	private readonly Sampler _repeatNearestSampler;
+	// Additional addressing modes: mirror-repeat, clamp-to-border (opaque black), mirror-clamp-to-edge.
+	private readonly Sampler _mirrorLinearSampler;
+	private readonly Sampler _mirrorNearestSampler;
+	private readonly Sampler _borderLinearSampler;
+	private readonly Sampler _borderNearestSampler;
+	private readonly Sampler _mirrorEdgeLinearSampler;
+	private readonly Sampler _mirrorEdgeNearestSampler;
 
 	// This frame's draw lists, pulled from FrameInputs.DrawLists and surfaced as ctx.DrawLists; a producer (the UI
 	// painter) looks one up by id and submits it through DrawList.
@@ -128,6 +135,12 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		_linearSampler = CreateSampler(Filter.Linear);
 		_repeatLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.Repeat);
 		_repeatNearestSampler = CreateSampler(Filter.Nearest, SamplerAddressMode.Repeat);
+		_mirrorLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.MirroredRepeat);
+		_mirrorNearestSampler = CreateSampler(Filter.Nearest, SamplerAddressMode.MirroredRepeat);
+		_borderLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.ClampToBorder);
+		_borderNearestSampler = CreateSampler(Filter.Nearest, SamplerAddressMode.ClampToBorder);
+		_mirrorEdgeLinearSampler = CreateSampler(Filter.Linear, SamplerAddressMode.MirrorClampToEdge);
+		_mirrorEdgeNearestSampler = CreateSampler(Filter.Nearest, SamplerAddressMode.MirrorClampToEdge);
 	}
 
 	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
@@ -398,5 +411,17 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			_vk.DestroySampler(_ctx.Device, _repeatLinearSampler, null);
 		if (_repeatNearestSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _repeatNearestSampler, null);
+		if (_mirrorLinearSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _mirrorLinearSampler, null);
+		if (_mirrorNearestSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _mirrorNearestSampler, null);
+		if (_borderLinearSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _borderLinearSampler, null);
+		if (_borderNearestSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _borderNearestSampler, null);
+		if (_mirrorEdgeLinearSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _mirrorEdgeLinearSampler, null);
+		if (_mirrorEdgeNearestSampler.Handle != 0)
+			_vk.DestroySampler(_ctx.Device, _mirrorEdgeNearestSampler, null);
 	}
 }

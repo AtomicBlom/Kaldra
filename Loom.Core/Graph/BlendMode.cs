@@ -24,4 +24,8 @@ public enum BlendMode
 	/// vertex colour, so its draw list blends this way.
 	/// </summary>
 	PremultipliedAlpha,
+
+	/// <summary>Multiply: <c>src·dst</c>. The source colour is multiplied by the destination colour, darkening
+	/// the result. Used for shadow overlays and colour-grading effects.</summary>
+	Multiply,
 }

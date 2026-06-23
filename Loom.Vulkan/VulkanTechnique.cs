@@ -295,6 +295,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			BlendMode.AlphaOver => (BlendFactor.SrcAlpha, BlendFactor.OneMinusSrcAlpha),
 			BlendMode.PremultipliedAlpha => (BlendFactor.One, BlendFactor.OneMinusSrcAlpha),
 			BlendMode.Additive => (BlendFactor.One, BlendFactor.One),
+			BlendMode.Multiply => (BlendFactor.DstColor, BlendFactor.Zero),
 			BlendMode.None => (BlendFactor.One, BlendFactor.Zero),
 			_ => throw new NotSupportedException($"Vulkan: BlendMode '{description.Blend}' is not mapped to blend factors."),
 		};

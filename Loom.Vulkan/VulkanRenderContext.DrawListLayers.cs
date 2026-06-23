@@ -49,8 +49,11 @@ internal sealed unsafe partial class VulkanRenderContext
 
 		var sampler = template.Address switch
 		{
-			SamplerAddress.Repeat => template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler,
 			SamplerAddress.Clamp => template.LinearFilter ? _linearSampler : _nearestSampler,
+			SamplerAddress.Repeat => template.LinearFilter ? _repeatLinearSampler : _repeatNearestSampler,
+			SamplerAddress.MirrorRepeat => template.LinearFilter ? _mirrorLinearSampler : _mirrorNearestSampler,
+			SamplerAddress.ClampToBorder => template.LinearFilter ? _borderLinearSampler : _borderNearestSampler,
+			SamplerAddress.MirrorClampToEdge => template.LinearFilter ? _mirrorEdgeLinearSampler : _mirrorEdgeNearestSampler,
 			_ => throw new VulkanException($"SamplerAddress '{template.Address}' is not mapped to a sampler."),
 		};
 

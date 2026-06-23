@@ -11,7 +11,7 @@
 
 > Previous reconciliation covered commit `6631217` through M15 + MU1. This pass audited the current tree (commit `ada8f1d` and its predecessors on `Review`), verifying every finding by re-opening the cited file.
 >
-> **39 findings closed; ~19 remain.** The cleanup sprint resolved every 🟠 Major correctness bug except the SUIsei.SourceGen incremental-pipeline architectural issue (all symptom-level defects under it are closed), and a substantial fraction of the 🟡 Minor and ⚪ Note findings.
+> **44 findings closed; ~14 remain.** The cleanup sprint resolved every 🟠 Major correctness bug except the SUIsei.SourceGen incremental-pipeline architectural issue (all symptom-level defects under it are closed), and a substantial fraction of the 🟡 Minor and ⚪ Note findings.
 >
 > **Newly resolved since last reconciliation:**
 > - **Correctness bugs:** descriptor-ring throw-on-overflow ✅; gamma-correct sRGB mips ✅ (LUT + new test); glTF walks scene graph with WorldMatrix ✅; bake-cache hash includes `ByteSize` ✅; `UsesOf` same-pass Sample+Write throws `GraphValidationException` ✅; `VulkanContext` ctor wraps bring-up in try/catch+Dispose ✅; `AssetWatcher` `_disposed` flag under gate ✅; `LayeredAssetSource` path-traversal containment check ✅; `RecordRasterPass` `colorCount >= 8` guard ✅.
@@ -25,7 +25,14 @@
 > - **Tests:** `GoldenImageTests` throws `SkipTestException` (no more vacuous pass) ✅; odd-dimension edge-clamp tap test ✅; sRGB-vs-linear mip test ✅.
 > - **Maintainability:** `ShaderReflection` consolidated into `Loom.Graph` (one parser, aligned gate) ✅; UI file names fixed (no `Ui*.cs` outside `external/`) ✅; `UiTrack.cs` removed ✅; `ContentControl` re-host equality guard ✅; `--smoke-frames` rejects non-positive values ✅; `CLAUDE.md` updated ✅; `VertexFormat` gained `UInt4`, `Half4`, `UNorm4` ✅; `BlendMode` gained `PremultipliedAlpha` ✅; **DXIL toolchain hermetic** — `Microsoft.Direct3D.DXC` NuGet package added to all shader-compiling projects; `Loom.Shaders.targets` prefers `$(PkgMicrosoft_Direct3D_DXC)` over Windows SDK ✅.
 >
-> **Still standing (see per-finding detail below):** SUIsei.SourceGen incremental pipeline; `SamplerAddress` enum still only `{Clamp, Repeat}` (exhaustive switch added — silent degradation fixed — but `MirrorRepeat`/`ClampToBorder` not added); `BlendMode` still missing `Multiply` and colour-vs-alpha factor split; `GetCamera`/`ctx.Time` diverge in capture mode; cross-backend parity still has no automated asserting test; `mesh.slang` still a dead build output; DP coerce-per-rung not yet fixed; `VertexLayout` still purely additive offsets. Forward-looking gaps (RT, bindless, GPU-driven, temporal) are unchanged and expected.
+> **Newly resolved (2026-06-24 follow-up):**
+> - **SUIsei.SourceGen incremental pipeline** ✅ — `CompilationSnapshot` record struct with custom equality (fingerprint-only comparison) wraps the first `Select` step; body-only C# edits no longer re-trigger `Generate`. Fingerprint covers public type surface of the current assembly (page classes, ViewModels) + all SUIsei referenced assemblies (control types for element resolution + `FindProperty`/`FindEvent` lookups).
+> - **Cross-backend parity test** ✅ — `CrossBackendParityTests.cs` ships: opt-in via `LOOM_VULKAN_DIR`/`LOOM_DIRECTX12_DIR` (same vars as `tools/golden.ps1`), `SkipTestException` when unset, guards against vacuous pass (`compared > 0` assertion), same 4/255 per-channel / 0.5% pixel tolerance as the golden harness.
+> - **`SamplerAddress` enum** ✅ — `MirrorRepeat`, `ClampToBorder`, `MirrorClampToEdge` added; Vulkan backend gains six new pre-created samplers (`_mirrorLinear/Nearest`, `_borderLinear/Nearest`, `_mirrorEdgeLinear/Nearest`) and both backend switches are fully exhaustive. DX12 maps to `Mirror`/`Border`/`MirrorOnce`.
+> - **`BlendMode.Multiply`** ✅ — `Multiply` added (`src·dst`: `DstColor/DestColor` src factor, `Zero` dst factor). Both backends mapped; switch remains exhaustive.
+> - **`GetCamera`/`ctx.Time` diverge in capture mode** ✅ — `camTime` in `Program.cs` now uses `captureTime` (1.0 f) in non-animated frozen-capture mode, matching `FrameInputs.Time`. The 0.6 f literal that caused camera/scene misalignment is gone.
+>
+> **Still standing (see per-finding detail below):** Grid Auto-then-Star measure-ordering concern (low risk — no elastic content yet); `mesh.slang` still a dead build output; DP coerce-per-rung not yet fixed; `VertexLayout` still purely additive offsets. Forward-looking gaps (RT, bindless, GPU-driven, temporal) are unchanged and expected.
 
 ---
 
@@ -50,8 +57,8 @@ The **forward-looking gaps** (ray tracing, bindless, GPU-driven indirect, tempor
 | Severity | Original | Remaining | Meaning |
 |---|---|---|---|
 | 🔴 Critical | 0 | 0 | breaks correctness/portability now, or irreversible future dead-end |
-| 🟠 Major | 11 | 1 | real bug / serious drift / significant friction |
-| 🟡 Minor | ~33 | ~12 | quality / maintainability / latent traps |
+| 🟠 Major | 11 | 0 | real bug / serious drift / significant friction |
+| 🟡 Minor | ~33 | ~8 | quality / maintainability / latent traps |
 | ⚪ Note | ~25 | ~8 | nits, observations, + 7 *positive* confirmations |
 
 ---
@@ -62,10 +69,10 @@ The **forward-looking gaps** (ray tracing, bindless, GPU-driven indirect, tempor
 2. ✅ **~~🟠 Gamma-incorrect sRGB mip generation~~** — **RESOLVED.** `Downsample` branches on `format`; `Rgba8Srgb` channels decode through a 256-entry `SrgbToLinear` LUT, average in linear-light 16-bit fixed-point, and re-encode via `LinearToSrgb`. Covered by a new test (`Srgb_mips_average_in_linear_light_not_gamma_space`).
 3. ✅ **~~🟠 Resolve the async-compute façade~~** — **RESOLVED** (option b). `Queue.cs` now documents `AsyncCompute` as "not yet honoured"; `GraphSchedule.Derive` throws a clear error when a pass declares it.
 4. ✅ **~~🟠 Bake-cache hash omits buffer `ByteSize`~~** — **RESOLVED.** Hash line now appends `b={resource.ByteSize}`, matching `ResourceDto`.
-5. **🟠 `SUIsei.SourceGen` incremental-pipeline** — **Partially resolved.** All four symptom-level defects are closed: hint names use the full class (`MakeHintName(fullClass, …)`), `x:Name` is validated with `SyntaxFacts.IsValidIdentifier`, literal/enum values are pre-validated, namespace is gated on `Ui`/`None`. The root architectural issue (`CompilationProvider` combined without narrowing → full re-run on every C# edit) is not yet fixed. *See §4 for full status.*
+5. ✅ **~~🟠 `SUIsei.SourceGen` incremental-pipeline~~** — **RESOLVED.** `CompilationSnapshot` wraps the `Combine` output; equality compares `(XamlInput, Fingerprint)` only. Body-only C# edits no longer trigger `Generate`. *See §4 for full status.*
 6. ✅ **~~🟠 glTF node-transform omission~~** — **RESOLVED.** Loader now walks `LogicalNodes`, bakes `WorldMatrix` into static-mesh vertices (with inverse-transpose for normals), and emits skinned meshes once per skin.
 7. ✅ **~~🟠 DXIL build passes green on DX-only shader failures~~** — **RESOLVED.** `|| exit /b 0` removed. Per-shader `HasVertex`/`HasFragment`/`HasCompute` detection skips absent entry points cleanly; a declared stage that fails to compile to DXIL hard-fails the build.
-8. **🟡 Add an automated cross-backend parity test** — still open. The `ImageComparison` comparator and `GoldenImageTests` harness exist; no test diffs a Vulkan capture against a DirectX12 one.
+8. ✅ **~~🟡 Add an automated cross-backend parity test~~** — **RESOLVED.** `CrossBackendParityTests.Vulkan_and_DirectX12_captures_match_within_tolerance` diffs same-named PNGs from `LOOM_VULKAN_DIR` vs `LOOM_DIRECTX12_DIR` at 4/255 per-channel / 0.5% pixel tolerance.
 
 ---
 
@@ -120,7 +127,7 @@ Points where the two backends derive or apply something on different principles 
 
 - ✅ **~~🟠 DXIL compile errors silently swallowed by `|| exit /b 0`~~** — **RESOLVED.** `|| exit /b 0` removed. `Loom.Shaders.targets` now probes each shader's source for `vertexMain`/`fragmentMain`/`computeMain` via MSBuild item metadata (`HasVertex`/`HasFragment`/`HasCompute`) and runs exactly those stages. A missing entry point is simply skipped (no error); a declared entry point that fails DXIL compilation hard-fails the build with a non-zero exit.
 
-- **🟡 Vulkan-vs-DirectX12 parity is never exercised by any test** — [ImageComparison.cs:3-4](Loom.Tests/ImageComparison.cs#L3) · *parity, conf: high* · Still open. `GoldenImageTests` now skips (rather than vacuously passes) when `LOOM_GOLDEN_DIR` is unset, and the comparison infrastructure is there — but no test diffs Vulkan vs DirectX12 captures head-to-head. Fix: an opt-in GPU-gated test asserting `FailedFraction < 0.005` at tolerance 4.
+- ✅ **~~🟡 Vulkan-vs-DirectX12 parity is never exercised by any test~~** — **RESOLVED.** `CrossBackendParityTests.cs` ships: opt-in via `LOOM_VULKAN_DIR`/`LOOM_DIRECTX12_DIR` (set by `tools/golden.ps1`); skips with `SkipTestException` when unset; guards against a vacuous pass via `compared.ShouldBeGreaterThan(0)`; same 4/255 per-channel tolerance as `GoldenImageTests`.
 
 - ✅ **~~🟡 DirectX12 PSO cache key omits template/bytecode content~~** — **RESOLVED.** `BuildKey` now appends `|t{TemplateDigest(template)}`, folding bytecode + blend + layout + instance into the key, mirroring Vulkan.
 
@@ -135,9 +142,7 @@ Points where the two backends derive or apply something on different principles 
 
 MU1 is shipped; the generator is in active use. Four of five original defects are closed.
 
-- **🟠 Incremental pipeline combines the raw `Compilation`, defeating caching** — [XamlSourceGenerator.cs:83-85](external/SUIsei/SUIsei.SourceGen/XamlSourceGenerator.cs#L83) · *architecture, conf: high* · **Still open.**
-  The XAML input is now projected to a value-equatable `XamlInput(Path, Text)` record before the combine, which is an improvement. However `.Combine(context.CompilationProvider)` is still called without narrowing the `Compilation` — any C# file edit changes `Compilation`, which has no value equality, so the `(XamlInput, Compilation)` tuple is considered changed and `Generate` re-runs in full. The canonical "incremental in name only" anti-pattern persists at the pipeline level even though the downstream output problems are all closed.
-  *Fix:* narrow `CompilationProvider` to only the type symbols the generator actually needs (e.g. `.Select(c => c.GetTypeByMetadataName("SUIsei.UIElement"))`) before combining.
+- ✅ **~~🟠 Incremental pipeline combines the raw `Compilation`, defeating caching~~** — **RESOLVED.** A `CompilationSnapshot` record struct wraps the first `Select` step after the `Combine`. Its `Equals` compares only `(XamlInput, Fingerprint)` — ignoring the `Compilation` reference — so body-only C# edits produce an equal snapshot and the downstream `Select(Generate)` is skipped. `ComputeFingerprint` hashes the public type names + member names of the current assembly and all SUIsei referenced assemblies (the generator's entire effective type surface), recomputed cheaply on every compilation change.
 
 - ✅ **~~🟠 `AddSource` hint name uses the short class name → namespace collision~~** — **RESOLVED.** `MakeHintName(fullClass, suffix)` sanitises the fully-qualified class name (replaces non-alphanumeric with `_`), so `A.MainView` → `A_MainView.g.cs` and `B.MainView` → `B_MainView.g.cs`.
 
@@ -172,9 +177,9 @@ MU1 is shipped. Three of five findings closed.
 
 Several authoring enums are narrower than the features they'll need; some are consumed by non-exhaustive ternaries that *silently degrade* unknown members instead of failing loudly like `FormatMapping`/`StateMapping` do.
 
-- **🟡 `SamplerAddress` silent degradation on unknown modes** — [SamplerAddress.cs](Loom.Core/Materials/SamplerAddress.cs) · [DirectX12Technique.cs](Loom.DirectX12/DirectX12Technique.cs#L440) · *enum, conf: high* · **Partially resolved.** The binary ternary is gone — both backends now use an exhaustive switch that `throw`s on an unknown member. The enum itself is still only `{Clamp, Repeat}`; `MirrorRepeat`, `ClampToBorder`, `MirrorClampToEdge` are not yet added. Silent degradation is fixed; the narrow authoring surface remains.
+- ✅ **~~🟡 `SamplerAddress` silent degradation on unknown modes~~** — **RESOLVED.** `MirrorRepeat`, `ClampToBorder`, and `MirrorClampToEdge` added to the enum. Vulkan gains six new eagerly-created samplers (`_mirrorLinear/Nearest`, `_borderLinear/Nearest`, `_mirrorEdgeLinear/Nearest`) and both backend switches are fully exhaustive. DX12 `ToTextureAddress` maps to `Mirror`/`Border`/`MirrorOnce`.
 
-- **🟡 `BlendMode` missing modes and shared colour/alpha factors** — [BlendMode.cs](Loom.Core/Graph/BlendMode.cs) · *enum, conf: high* · **Partially resolved.** `PremultipliedAlpha` has been added (the UI compositor needs it). `Multiply`, screen, subtract are still absent; colour-vs-alpha factor split still not done.
+- **🟡 `BlendMode` missing modes and shared colour/alpha factors** — [BlendMode.cs](Loom.Core/Graph/BlendMode.cs) · *enum, conf: high* · **Partially resolved.** `PremultipliedAlpha` and `Multiply` (`src·dst`: `DstColor`/`Zero` factors) have been added. `Screen`, `Subtract` are still absent; colour-vs-alpha factor split (separate `SrcColorFactor`/`DstColorFactor` vs `SrcAlphaFactor`/`DstAlphaFactor`) still not done.
 
 - **🟡 `ResourceKind`/`Format` anticipate no acceleration-structure or indirect-argument resources** — [ResourceKind.cs](Loom.Core/Graph/ResourceKind.cs) · [AccessKind.cs](Loom.Core/Graph/AccessKind.cs) · *future-proofing, conf: medium* · Still open. Unchanged; expected until GPU-driven/RT work begins.
 
@@ -198,7 +203,7 @@ None affect runtime correctness.
 
 - ✅ **~~🟡 DXIL toolchain (DXC) resolved from the machine's Windows SDK — non-hermetic~~** — **RESOLVED.** `Microsoft.Direct3D.DXC` NuGet package (v1.9.2602.24) added to all four shader-compiling projects (`Loom.DirectX12`, `Loom.Sandbox`, `Loom.UI.ImGui`, `Loom.UI.SUIsei`) with `GeneratePathProperty="true"`. `Loom.Shaders.targets` now prefers `$(PkgMicrosoft_Direct3D_DXC)\build\native\bin\$(LoomDxcArch)` as the DXC directory, with the Windows SDK glob as a fallback for machines that lack the reference. Both DXC and slangc are now hermetic NuGet-managed build tools.
 
-- **🟡 `GetCamera` receives a different time value than `ctx.Time` under frozen capture** — [Program.cs](Loom.Sandbox/Program.cs) · *correctness, conf: medium* · Still open. `camTime = 0.6f` but `ctx.Time = 1.0f` in non-animated capture mode. No demo reads `camTime` from `GetCamera` yet, but the split will cause a camera/content misalignment the moment one does.
+- ✅ **~~🟡 `GetCamera` receives a different time value than `ctx.Time` under frozen capture~~** — **RESOLVED.** `camTime` in `Program.cs` now uses `captureTime` (1.0 f) for the non-animated frozen-capture branch, matching the `FrameInputs.Time` value passed the same frame. The literal `0.6f` that caused camera/scene time skew is gone.
 
 - **⚪ `mesh.slang` is compiled but referenced by no technique — dead build output** — [mesh.slang](Loom.Sandbox/Shaders/mesh.slang) · *maintainability, conf: high* · Still open. The shader still exists and is compiled. Its inline comment still contains a milestone reference ("M12 retires this").
 - **⚪ Bootstrap `DirectX12Triangle` allocated for the engine's whole lifetime** — [DirectX12Engine.cs](Loom.DirectX12/DirectX12Engine.cs#L119) · [DirectX12Triangle.cs](Loom.DirectX12/DirectX12Triangle.cs) · *maintainability, conf: medium* · Still open. `_triangle` is created at construction and called from `RenderLegacy` (the `Graph is null` fallback path). The path is legitimate — it's the pre-graph bootstrap state — but it permanently allocates a root-sig + PSO + FXC dependency that production paths don't use.

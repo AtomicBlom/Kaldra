@@ -307,6 +307,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			BlendMode.Additive => (Blend.One, Blend.One),
 			BlendMode.AlphaOver => (Blend.SrcAlpha, Blend.InvSrcAlpha),
 			BlendMode.PremultipliedAlpha => (Blend.One, Blend.InvSrcAlpha),
+			BlendMode.Multiply => (Blend.DestColor, Blend.Zero),
 			BlendMode.None => (Blend.One, Blend.Zero),
 			_ => throw new NotSupportedException($"DirectX12: BlendMode '{template.Blend}' is not mapped to blend factors."),
 		};
@@ -442,6 +443,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	{
 		SamplerAddress.Clamp => TextureAddressMode.Clamp,
 		SamplerAddress.Repeat => TextureAddressMode.Wrap,
+		SamplerAddress.MirrorRepeat => TextureAddressMode.Mirror,
+		SamplerAddress.ClampToBorder => TextureAddressMode.Border,
+		SamplerAddress.MirrorClampToEdge => TextureAddressMode.MirrorOnce,
 		_ => throw new NotSupportedException($"DirectX12: SamplerAddress '{address}' is not mapped to a TextureAddressMode."),
 	};
 

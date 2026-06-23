@@ -17,4 +17,17 @@ public enum SamplerAddress
 
 	/// <summary>Repeat (wrap) — the texture tiles, so UVs greater than 1 sample it again from the start.</summary>
 	Repeat,
+
+	/// <summary>Mirror and repeat — coordinates outside <c>[0,1]</c> are mirrored at each integer boundary,
+	/// producing a seamless alternating-direction tile.</summary>
+	MirrorRepeat,
+
+	/// <summary>Clamp to border — coordinates outside <c>[0,1]</c> sample a constant border colour (opaque
+	/// black by default). Useful for shadow maps where samples outside the light frustum should read zero.</summary>
+	ClampToBorder,
+
+	/// <summary>Mirror once then clamp to edge — coordinates below 0 are mirrored into <c>[0,1]</c>;
+	/// coordinates above 1 clamp to the edge texel. Mirrors the <c>D3D12_TEXTURE_ADDRESS_MODE_MIRROR_ONCE</c>
+	/// and Vulkan <c>VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE</c> semantics.</summary>
+	MirrorClampToEdge,
 }
