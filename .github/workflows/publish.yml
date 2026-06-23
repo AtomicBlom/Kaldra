@@ -65,8 +65,7 @@ jobs:
           # becomes a separate argument to the native dotnet command.
           $noBuild  = "-c", "Release", "--no-build", "-o", "out/"
           $withBuild = "-c", "Release", "-o", "out/"
-          # Submodule dependencies (no central version management — inline versions in their csprojs)
-          dotnet pack external/VMASharp/VMASharp/VMASharp.csproj               $noBuild
+          # SUIsei submodule (no central version management — inline version in its csproj)
           dotnet pack external/SUIsei/SUIsei/SUIsei.csproj                     $noBuild
           # Core chain
           dotnet pack Loom.Core/Loom.Core.csproj                               $noBuild

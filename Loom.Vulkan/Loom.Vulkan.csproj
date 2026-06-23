@@ -39,10 +39,13 @@
     <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
     <!-- Neutral asset layer: the M13 shader hot-reload watcher (no graphics types). -->
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
-    <!-- VMASharp (AtomicBlom fork, package Loom.VulkanMemoryAllocator): pure-managed VMA port on Silk.NET
-         2.23/net10, MIT, as a submodule. Deliberately NOT in Loom.slnx so `dotnet format` never reformats
-         vendored code; the ProjectReference still builds it transitively. The transient-memory aliaser builds on it. -->
-    <ProjectReference Include="..\external\VMASharp\VMASharp\VMASharp.csproj" />
+    <!-- VMASharp: pure-managed VMA port on Silk.NET 2.23/net10, MIT, as a submodule. Deliberately NOT in
+         Loom.slnx so `dotnet format` never reformats vendored code. PrivateAssets=all bundles VMASharp.dll
+         into the Loom.Backend.Vulkan nupkg rather than listing it as a separate NuGet dependency — consumers
+         never reference VMASharp directly. -->
+    <ProjectReference Include="..\external\VMASharp\VMASharp\VMASharp.csproj">
+      <PrivateAssets>all</PrivateAssets>
+    </ProjectReference>
   </ItemGroup>
 
   <!-- The first backend. The Vulkan/Silk.NET stack is quarantined here. -->
