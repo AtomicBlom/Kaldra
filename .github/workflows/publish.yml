@@ -33,6 +33,7 @@ jobs:
       - name: Checkout submodules (PAT for private SUIsei)
         env:
           GH_PAT: ${{ secrets.PAT }}
+        shell: bash
         run: |
           git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/"
           git submodule update --init --recursive
