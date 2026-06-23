@@ -22,13 +22,20 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout (with submodules)
+      - name: Checkout
         uses: actions/checkout@v7
         with:
-          submodules: recursive
           fetch-depth: 0   # needed by SourceLink for full git history
-          # PAT required for the private SUIsei submodule; GITHUB_TOKEN is scoped to this repo only.
-          token: ${{ secrets.PAT }}
+
+      # VMASharp is public; SUIsei is private. Wire the PAT before initialising submodules so both resolve.
+      # Using token: PAT in the checkout step would replace GITHUB_TOKEN for the Loom repo fetch too,
+      # causing a 403 if the PAT is fine-grained and scoped only to SUIsei.
+      - name: Checkout submodules (PAT for private SUIsei)
+        env:
+          GH_PAT: ${{ secrets.PAT }}
+        run: |
+          git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/"
+          git submodule update --init --recursive
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@v5
