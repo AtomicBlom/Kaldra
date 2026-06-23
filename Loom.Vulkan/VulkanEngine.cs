@@ -112,9 +112,8 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	private uint _timestampValidBits;        // 0 ⇒ the graphics queue can't timestamp (timing unavailable)
 
 	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
-	private Camera _frameCamera = Camera.Identity;
-	private Camera _frameSun = Camera.Identity;
-	private Camera[] _frameCascades = [];
+	private Camera _frameView = Camera.Identity;
+	private readonly Dictionary<string, Camera> _frameViews = new();
 	private float _frameTime;
 	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _frameDrawLists = [];
 
@@ -328,9 +327,9 @@ internal sealed unsafe class VulkanEngine : EngineBase
 	}
 
 	// Vulkan clip space is +Y-down, so the projection's Y row is negated on ingest. The host supplies a neutral
-	// (+Y-up) projection in FrameInputs; doing the flip here keeps the API convention in the backend (M7-B5) and
-	// applies it consistently to both the render MVP and any matrix a shader samples with (the sun's light-space
-	// VP the lighting/shadow passes share). A +Y-up backend (D3D12) would apply identity here instead.
+	// (+Y-up) projection in FrameInputs; doing the flip here keeps the API convention in the backend and applies it
+	// consistently to the render MVP and any matrix a shader samples with (a light-space VP a shadow pass shares).
+	// A +Y-up backend (D3D12) would apply identity here instead.
 	private static Camera ClipSpace(Camera camera) => camera.FlipClipY();
 
 	public override void Render(FrameInputs inputs)
@@ -339,13 +338,12 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		if (Graph is null || _transients is null)
 			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
 
-		_frameCamera = ClipSpace(inputs.Camera);
-		_frameSun = ClipSpace(inputs.SunView);
-		// Flip each cascade's clip space the same way (M15-3) — neutral matrices in, the backend's Y-flip applied.
-		if (_frameCascades.Length != inputs.Cascades.Count)
-			_frameCascades = new Camera[inputs.Cascades.Count];
-		for (var i = 0; i < inputs.Cascades.Count; i++)
-			_frameCascades[i] = ClipSpace(inputs.Cascades[i]);
+		_frameView = ClipSpace(inputs.View);
+		// Flip every named view's clip space the same way — neutral matrices in, the backend's Y-flip applied, so a
+		// light-space VP a shader samples with matches the depth map it was rasterized into.
+		_frameViews.Clear();
+		foreach (var (key, view) in inputs.Views)
+			_frameViews[key] = ClipSpace(view);
 		_frameTime = inputs.Time;
 		_frameDrawLists = inputs.DrawLists;
 		DrawFrame((float)inputs.DeltaSeconds);
@@ -474,7 +472,7 @@ internal sealed unsafe class VulkanEngine : EngineBase
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameCamera, _frameSun, _frameCascades, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameView, _frameViews, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
 
 		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it. Re-uploading
 		// every frame (cheap — these are tiny) means the last IEngine.Write persists across frames, so a static

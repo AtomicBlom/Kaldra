@@ -84,19 +84,16 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	private VkFormat _depthFormat;
 	private bool _depthReadOnly;
 	private int _frameSlot;
-	private Camera _camera;
-	private Camera _sunView;
-	private IReadOnlyList<Camera> _cascades = [];
+	private Camera _view;
+	private IReadOnlyDictionary<string, Camera> _views = new Dictionary<string, Camera>();
 
 	public float DeltaTime { get; private set; }
 
 	public float Time { get; private set; }
 
-	public Camera Camera => _camera;
+	public Camera View => _view;
 
-	public Camera SunView => _sunView;
-
-	public IReadOnlyList<Camera> Cascades => _cascades;
+	public IReadOnlyDictionary<string, Camera> Views => _views;
 
 	public bool HdrOutput { get; private set; }
 
@@ -140,16 +137,15 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	/// The VulkanTechnique objects are owned by the VulkanTechniqueCache; the engine resets that separately after draining.</summary>
 	public void ClearBaked() => _baked.Clear();
 
-	/// <summary>Bind the context to this frame's command buffer, frame slot, cameras, timing, HDR-output state, and draw lists before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera camera, Camera sunView, IReadOnlyList<Camera> cascades, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists, Extent2D fbExtent, bool hdrOutput)
+	/// <summary>Bind the context to this frame's command buffer, frame slot, views, timing, HDR-output state, and draw lists before any pass records.</summary>
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera view, IReadOnlyDictionary<string, Camera> views, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
 		Time = time;
 		_frameSlot = frameSlot;
-		_camera = camera;
-		_sunView = sunView;
-		_cascades = cascades;
+		_view = view;
+		_views = views;
 		_drawLists = drawLists;
 		_fbExtent = fbExtent;
 		HdrOutput = hdrOutput;
@@ -256,7 +252,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
 
-	public void Draw(Mesh mesh, string technique) => Draw(mesh, technique, _camera);
+	public void Draw(Mesh mesh, string technique) => Draw(mesh, technique, _view);
 
 	public void Draw(Mesh mesh, string technique, Camera view)
 	{
@@ -267,7 +263,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
 	}
 
-	public void Draw(Mesh mesh, Material material, string technique) => Draw(mesh, material, technique, _camera);
+	public void Draw(Mesh mesh, Material material, string technique) => Draw(mesh, material, technique, _view);
 
 	public void Draw(Mesh mesh, Material material, string technique, Camera view)
 	{
@@ -357,7 +353,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	public void DrawInstanced(string technique, BufferHandle instances, int vertexCount, int instanceCount)
 	{
 		var baked = Bake(technique);
-		var mvp = _camera.ViewProjection;
+		var mvp = _view.ViewProjection;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// The buffer IS the per-instance vertex stream (binding 0); the technique fabricates vertexCount verts per
@@ -373,7 +369,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		if (instances.Length == 0)
 			return;
 		var baked = Bake(technique);
-		var mvp = _camera.ViewProjection; // the per-instance world matrix rides in the instance stream
+		var mvp = _view.ViewProjection; // the per-instance world matrix rides in the instance stream
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		var (buffer, offset) = _instanceUpload.Upload(_frameSlot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instances));
@@ -383,7 +379,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	public void DrawInstanced(Mesh mesh, string technique, BufferHandle instances, int count)
 	{
 		var baked = Bake(technique);
-		var mvp = _camera.ViewProjection;
+		var mvp = _view.ViewProjection;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// The instance stream is a graph storage buffer a compute filled; the pass's .ReadsVertex derived the barrier.
@@ -433,7 +429,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_vk.CmdDispatch(_cmd, (uint)((vertexCount + 63) / 64), 1, 1);
 	}
 
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique) => DrawSkinned(mesh, skinnedVertices, technique, _camera);
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique) => DrawSkinned(mesh, skinnedVertices, technique, _view);
 
 	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view)
 	{
@@ -446,7 +442,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		_meshes.DrawSkinned(_cmd, mesh.Id, vertexBuffer);
 	}
 
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique) => DrawSkinned(mesh, skinnedVertices, material, technique, _camera);
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique) => DrawSkinned(mesh, skinnedVertices, material, technique, _view);
 
 	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view)
 	{
@@ -467,7 +463,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			return;
 		var baked = Bake(technique);
 		var template = _registry[technique];
-		var mvp = _camera.ViewProjection; // the per-instance world data rides in the instance stream
+		var mvp = _view.ViewProjection; // the per-instance world data rides in the instance stream
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// Material atlas → the technique's reflected sampler slots, identical to Draw(mesh, material): every
@@ -484,7 +480,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 			return;
 		var baked = Bake(technique);
 		var template = _registry[technique];
-		var mvp = _camera.ViewProjection;
+		var mvp = _view.ViewProjection;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// The per-frame uniform block (M15-0) — e.g. foliage wind, read in the vertex stage; bound alongside the
@@ -501,7 +497,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 		if (instances.Length == 0)
 			return;
 		var baked = Bake(technique);
-		var mvp = _camera.ViewProjection;
+		var mvp = _view.ViewProjection;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// Sampled graph resources (the G-buffer) → sampled slots 0..N-1, identical to FullScreen: each instanced
@@ -516,7 +512,7 @@ internal sealed unsafe class VulkanRenderContext : IRenderContext, IDisposable
 	{
 		var baked = Bake(technique);
 		var template = _registry[technique];
-		var mvp = _camera.ViewProjection;
+		var mvp = _view.ViewProjection;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 		// The atlas → reflected sampler slots, so the fabricated quads can sub-UV sample per frame.

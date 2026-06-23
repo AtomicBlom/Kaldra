@@ -69,12 +69,11 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 
 	public float DeltaTime { get; private set; }
 	public float Time { get; private set; }
-	public Camera SunView { get; private set; } = Camera.Identity;
-	public Camera Camera { get; private set; } = Camera.Identity;
-	public IReadOnlyList<Camera> Cascades { get; private set; } = [];
+	public Camera View { get; private set; } = Camera.Identity;
+	public IReadOnlyDictionary<string, Camera> Views => _views;
 	public bool HdrOutput { get; private set; }
 	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists => _drawLists;
-	private Camera[] _cascades = [];
+	private readonly Dictionary<string, Camera> _views = new();
 
 	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, MaterialStore materials, int frameCount)
 	{
@@ -118,14 +117,12 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_fbHeight = fbHeight;
 		DeltaTime = (float)inputs.DeltaSeconds;
 		Time = inputs.Time;
-		Camera = ClipSpace(inputs.Camera);
-		SunView = ClipSpace(inputs.SunView);
-		// Flip each cascade's clip space the same way as SunView (M15-3).
-		if (_cascades.Length != inputs.Cascades.Count)
-			_cascades = new Camera[inputs.Cascades.Count];
-		for (var i = 0; i < inputs.Cascades.Count; i++)
-			_cascades[i] = ClipSpace(inputs.Cascades[i]);
-		Cascades = _cascades;
+		View = ClipSpace(inputs.View);
+		// Flip every named view the same way as the primary — so a light-space VP a shader samples with matches the
+		// depth map it was rasterized into.
+		_views.Clear();
+		foreach (var (key, view) in inputs.Views)
+			_views[key] = ClipSpace(view);
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
 		_uniformUpload.BeginFrame(slot);  // and its per-frame uniform staging (M15-0)
@@ -138,7 +135,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 	// NO per-backend branch — ndc.y matches the +Y-down texture V everywhere (mesh MVP, fullscreen reprojection,
 	// the JFA's SV_Position). On its own this flips D3D12 upside down; the engine pairs it with a negative-height
 	// viewport (DirectX12Engine.RecordRasterPass) that turns D3D12's (1-ndc.y) screen map into Vulkan's (ndc.y+1), so
-	// geometry stays upright. The host supplies a neutral +Y-up projection in FrameInputs (M7-B5); both backends
+	// geometry stays upright. The host supplies a neutral +Y-up projection in FrameInputs; both backends
 	// flip it the same way here. (Earlier "identity ingest, no Y-flip" rendered mesh upright but left every
 	// fullscreen pass vertically mirrored vs Vulkan — one mesh→fullscreen→backbuffer hop = upside down.)
 	private static Camera ClipSpace(Camera camera) => camera.FlipClipY();
@@ -215,7 +212,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.DrawInstanced(3, 1, 0, 0); // fullscreen triangle, vertices fabricated from SV_VertexID
 	}
 
-	public void Draw(Mesh mesh, string technique) => Draw(mesh, technique, Camera);
+	public void Draw(Mesh mesh, string technique) => Draw(mesh, technique, View);
 
 	public void Draw(Mesh mesh, string technique, Camera view)
 	{
@@ -233,7 +230,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_meshes.Draw(_cmd, mesh.Id); // binds the mesh's vertex/index buffers and records the indexed draw
 	}
 
-	public void Draw(Mesh mesh, Material material, string technique) => Draw(mesh, material, technique, Camera);
+	public void Draw(Mesh mesh, Material material, string technique) => Draw(mesh, material, technique, View);
 
 	public void Draw(Mesh mesh, Material material, string technique, Camera view)
 	{
@@ -465,7 +462,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = Camera.ViewProjection;
+		var mvp = View.ViewProjection;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -491,7 +488,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = Camera.ViewProjection; // the per-instance world matrix rides in the instance stream
+		var mvp = View.ViewProjection; // the per-instance world matrix rides in the instance stream
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -514,7 +511,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = Camera.ViewProjection;
+		var mvp = View.ViewProjection;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -562,7 +559,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.Dispatch((uint)((vertexCount + 63) / 64), 1, 1);
 	}
 
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique) => DrawSkinned(mesh, skinnedVertices, technique, Camera);
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique) => DrawSkinned(mesh, skinnedVertices, technique, View);
 
 	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view)
 	{
@@ -579,7 +576,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_meshes.DrawSkinned(_cmd, mesh.Id, SkinnedView(skinnedVertices));
 	}
 
-	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique) => DrawSkinned(mesh, skinnedVertices, material, technique, Camera);
+	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique) => DrawSkinned(mesh, skinnedVertices, material, technique, View);
 
 	public void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, Material material, string technique, Camera view)
 	{
@@ -615,7 +612,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = Camera.ViewProjection; // the per-instance world data rides in the instance stream
+		var mvp = View.ViewProjection; // the per-instance world data rides in the instance stream
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -643,7 +640,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = Camera.ViewProjection;
+		var mvp = View.ViewProjection;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -673,7 +670,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = Camera.ViewProjection;
+		var mvp = View.ViewProjection;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
@@ -702,7 +699,7 @@ internal sealed unsafe class DirectX12RenderContext : IRenderContext, IDisposabl
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		var mvp = Camera.ViewProjection;
+		var mvp = View.ViewProjection;
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 

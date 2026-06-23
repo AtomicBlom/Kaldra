@@ -11,12 +11,12 @@ namespace Loom.Core.Geometry;
 /// identity on a +Y-up API like D3D12 — so no API-specific NDC convention is baked into host or Core code
 /// (Planning.md §8 portability; M7-B5).
 /// </summary>
-/// <param name="View">World → view (camera) space.</param>
+/// <param name="ViewMatrix">World → view (camera) space.</param>
 /// <param name="Projection">View → clip space.</param>
-public readonly record struct Camera(Matrix4x4 View, Matrix4x4 Projection)
+public readonly record struct Camera(Matrix4x4 ViewMatrix, Matrix4x4 Projection)
 {
-	/// <summary>The combined view-projection (no model). Row-vector order: <c>View * Projection</c>.</summary>
-	public Matrix4x4 ViewProjection => View * Projection;
+	/// <summary>The combined view-projection (no model). Row-vector order: <c>ViewMatrix * Projection</c>.</summary>
+	public Matrix4x4 ViewProjection => ViewMatrix * Projection;
 
 	/// <summary>An identity camera (clip space == world space) — the default before the host sets one.</summary>
 	public static Camera Identity => new(Matrix4x4.Identity, Matrix4x4.Identity);

@@ -5,16 +5,10 @@ using Loom.Core.Materials;
 namespace Loom.Core.Hosting;
 
 /// <summary>
-/// The per-frame execution context handed to a pass's <c>.Draw</c>/<c>.Dispatch</c> callback.
-/// Callbacks <em>pull</em> their inputs from here rather than capturing them, which is what keeps the
-/// graph description frame-independent and cacheable (Planning.md §8).
-/// <para>
-/// The full surface (<c>ctx.Scene</c>, <c>ctx.Camera</c>, <c>ctx.Draw</c>, <c>ctx.Run</c>,
-/// <c>ctx.Hover</c> — Planning.md §5) lands as the milestones that need it arrive (real geometry,
-/// compute, the app-owned <c>Scene</c>/<c>Camera</c> types). M3 adds only the fullscreen-pass verbs —
-/// enough to drive the offscreen→backbuffer reference. Techniques are addressed by <em>name</em> until
-/// the describe-layer <c>Technique</c> builder lands (M5); the strings here are that placeholder.
-/// </para>
+/// The per-frame execution context handed to a pass's <c>.Draw</c>/<c>.Dispatch</c> callback. Callbacks
+/// <em>pull</em> their inputs from here rather than capturing them, which is what keeps the graph description
+/// frame-independent and cacheable. Techniques are addressed by name — the string a pass passes to a draw verb
+/// matching a <see cref="IEngine.DefineTechnique"/> registration.
 /// </summary>
 public interface IRenderContext
 {
@@ -26,33 +20,27 @@ public interface IRenderContext
 	float Time { get; }
 
 	/// <summary>
-	/// The sun's view + projection for this frame (Planning.md §7.2's <c>ctx.Scene.Sun.View</c>). The shadow
-	/// pass draws the scene from <em>this</em> view into the shadow map; deferred lighting reuses it to project
-	/// world positions into light space for the shadow test. Per-frame host data, pulled not captured (§8).
+	/// The default view to render from this frame (view + projection) — what a draw transforms by when it names no
+	/// other. Per-frame data the host supplies; a pass's <c>.Draw</c> closure pulls it from here rather than
+	/// capturing it, so the graph stays frame-independent. The engine carries no notion of <em>which</em> viewpoint
+	/// this is (a player camera, a chase cam, a fixed view) — that is the app's to decide.
 	/// </summary>
-	Camera SunView { get; }
+	Camera View { get; }
 
 	/// <summary>
-	/// The sun's per-cascade views this frame (cascaded shadow maps), nearest cascade first. A per-cascade depth
-	/// pass draws the scene from <c>Cascades[i]</c> (as <see cref="SunView"/> drives the single shadow pass); the
-	/// deferred lighting pass packs these into its uniform buffer and selects a cascade per pixel by view distance
-	/// (the app supplies the split far-depths through a parameter buffer it writes, not through the context). Empty
-	/// when the demo uses the single-map <see cref="SunView"/> path. Per-frame host data, pulled not captured (§8).
+	/// The frame's additional named views, keyed by the app's own strings. A draw renders from one by passing it as
+	/// the view argument; a pass that consumes view matrices (a shadow test, a reflection) reads one by key. This is
+	/// the general channel for every viewpoint beyond <see cref="View"/> — a shadow light, a mirror, a security
+	/// camera, each cascade slice of a cascaded shadow map — so the engine names none of them itself. Pulled, not
+	/// captured. Empty when the frame draws only from <see cref="View"/>.
 	/// </summary>
-	IReadOnlyList<Camera> Cascades { get; }
-
-	/// <summary>
-	/// The camera to render from this frame (view + projection). Per-frame data the host supplies; a pass's
-	/// <c>.Draw</c> closure pulls it from here rather than capturing it, so the graph stays frame-independent
-	/// (§8). <see cref="Draw(Mesh, string)"/> uses it to transform geometry into clip space.
-	/// </summary>
-	Camera Camera { get; }
+	IReadOnlyDictionary<string, Camera> Views { get; }
 
 	/// <summary>
 	/// True when the engine negotiated an HDR display output (Planning.md §3 — requested via
 	/// <c>EngineSettings.HdrOutput</c> and granted by the surface). The terminal tone-map pulls this to map the
 	/// scene to display nits (extended-range, highlights above paper white) instead of compressing to SDR; false
-	/// means the standard SDR path. Engine-provided frame context, like <see cref="Camera"/> — pulled, not
+	/// means the standard SDR path. Engine-provided frame context, like <see cref="View"/> — pulled, not
 	/// captured (§8), so the same graph renders correctly under either output.
 	/// </summary>
 	bool HdrOutput { get; }
@@ -98,9 +86,9 @@ public interface IRenderContext
 	void Draw(Mesh mesh, string technique);
 
 	/// <summary>
-	/// Draw GPU-resident geometry from an explicit <paramref name="view"/> instead of <see cref="Camera"/> —
-	/// §7.2's <c>view:</c> parameter. "The scene" and "the scene from the sun" are the same draw with a
-	/// different view; the shadow pass uses this with <see cref="SunView"/> to render the depth map.
+	/// Draw GPU-resident geometry from an explicit <paramref name="view"/> instead of the default <see cref="View"/>.
+	/// "The scene" and "the scene from another viewpoint" are the same draw with a different view — a shadow pass
+	/// renders the depth map by passing the shadow light's view here.
 	/// </summary>
 	void Draw(Mesh mesh, string technique, Camera view);
 
@@ -116,7 +104,7 @@ public interface IRenderContext
 
 	/// <summary>
 	/// As <see cref="Draw(Mesh, Material, string)"/>, but from an explicit <paramref name="view"/> instead of
-	/// <see cref="Camera"/> (the §7.2 <c>view:</c> parameter) — the textured draw used when a pass renders from a
+	/// <see cref="View"/> (the §7.2 <c>view:</c> parameter) — the textured draw used when a pass renders from a
 	/// non-camera viewpoint.
 	/// </summary>
 	void Draw(Mesh mesh, Material material, string technique, Camera view);
@@ -127,7 +115,7 @@ public interface IRenderContext
 	/// a strip), with the per-instance stream read straight from <paramref name="instances"/> — a GPU buffer a compute
 	/// pass just wrote (the GPU-particle path and any procedural-instanced effect, §7.6). The buffer must be one the
 	/// pass declared with <c>.ReadsVertex</c>, so the graph derives the compute→vertex-input barrier; its element is
-	/// the technique's per-instance <see cref="VertexLayout"/>. The technique transforms by <see cref="Camera"/>
+	/// the technique's per-instance <see cref="VertexLayout"/>. The technique transforms by <see cref="View"/>
 	/// (pulled, not captured). The engine fabricates no geometry of its own — the count is the caller's, so the verb
 	/// leans toward no particular primitive.
 	/// </summary>
@@ -170,7 +158,7 @@ public interface IRenderContext
 	/// per-frame uniform buffer and binds it as the technique's constant buffer, visible to the vertex stage. The
 	/// foliage path uses it for wind (time + direction + strength) read in the vertex shader to sway each blade,
 	/// while <paramref name="material"/> supplies the alpha-test cutout texture. The per-instance MVP still comes
-	/// from <see cref="Camera"/>. Per-frame inputs are pulled from the context, not captured (§8).
+	/// from <see cref="View"/>. Per-frame inputs are pulled from the context, not captured (§8).
 	/// </summary>
 	void DrawInstanced<T>(Mesh mesh, Material material, string technique, ReadOnlySpan<T> instances, ReadOnlySpan<float> uniforms) where T : unmanaged;
 
@@ -216,7 +204,7 @@ public interface IRenderContext
 	/// </summary>
 	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique);
 
-	/// <summary>As <see cref="DrawSkinned(Mesh, BufferHandle, string)"/>, from an explicit <paramref name="view"/> (e.g. a shadow cascade's sun view) instead of <see cref="Camera"/>.</summary>
+	/// <summary>As <see cref="DrawSkinned(Mesh, BufferHandle, string)"/>, from an explicit <paramref name="view"/> (e.g. a shadow cascade's sun view) instead of <see cref="View"/>.</summary>
 	void DrawSkinned(Mesh mesh, BufferHandle skinnedVertices, string technique, Camera view);
 
 	/// <summary>As <see cref="DrawSkinned(Mesh, BufferHandle, string)"/>, binding <paramref name="material"/>'s textures into the technique's reflected sampler slots (the textured skinned-character g-buffer draw).</summary>
@@ -260,7 +248,7 @@ public interface IRenderContext
 	/// producer composited for it — the per-frame channel behind overlay/UI-style rendering. The host fills it via
 	/// <see cref="FrameInputs.DrawLists"/> off the render graph; a pass closure pulls a list out by id and submits it
 	/// with <see cref="DrawList{TVertex}"/> (the UI does this through <c>SUIsei</c>'s painter). Engine-provided frame
-	/// context like <see cref="Camera"/> — pulled, not captured (§8), so the graph stays frame-independent. Empty
+	/// context like <see cref="View"/> — pulled, not captured (§8), so the graph stays frame-independent. Empty
 	/// (the default) when the host supplied no lists.
 	/// </summary>
 	IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists { get; }

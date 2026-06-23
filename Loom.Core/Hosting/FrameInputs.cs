@@ -5,7 +5,7 @@ namespace Loom.Core.Hosting;
 /// <summary>
 /// The per-frame data a host hands the engine for one <see cref="IEngine.Render"/> call (Planning.md §5's
 /// <c>graph.Render(frameInputs)</c>). This is the single channel for everything that varies frame to frame —
-/// the camera, timing, the hovered object, the UI draw data — so pass closures stay pure: they <em>pull</em>
+/// the view(s), timing, the UI draw data — so pass closures stay pure: they <em>pull</em>
 /// these from <see cref="IRenderContext"/> rather than capturing host state (Planning.md §8). Immutable: the
 /// host builds a fresh one each frame.
 /// <para>
@@ -22,20 +22,22 @@ public sealed record FrameInputs
 	/// <summary>Elapsed seconds since startup, for time-driven effects; surfaced as <see cref="IRenderContext.Time"/>.</summary>
 	public float Time { get; init; }
 
-	/// <summary>The camera to render from this frame; surfaced as <see cref="IRenderContext.Camera"/>. Neutral convention — the backend applies its clip-space fix-up.</summary>
-	public Camera Camera { get; init; } = Camera.Identity;
-
-	/// <summary>The sun's view + projection this frame; surfaced as <see cref="IRenderContext.SunView"/> for the shadow pass and the lighting shadow test.</summary>
-	public Camera SunView { get; init; } = Camera.Identity;
+	/// <summary>
+	/// The default view a pass renders from this frame — the one a draw uses when it names no other; surfaced as
+	/// <see cref="IRenderContext.View"/>. Neutral convention (right-handed, +Y up); the backend applies its
+	/// clip-space fix-up on ingest. A renderer with one viewpoint sets only this.
+	/// </summary>
+	public Camera View { get; init; } = Camera.Identity;
 
 	/// <summary>
-	/// The sun's per-cascade views this frame (M15-3 — cascaded shadow maps), nearest cascade first; surfaced as
-	/// <see cref="IRenderContext.Cascades"/>. Each is a neutral ortho <see cref="Camera"/> fitted to a slice of the
-	/// view frustum (the backend applies its clip-space fix-up per cascade, as for <see cref="SunView"/>). A
-	/// per-cascade depth pass renders from each; the deferred lighting pass selects a cascade by view distance.
-	/// Empty (the default) when a demo uses the single <see cref="SunView"/> shadow.
+	/// The frame's additional named views, keyed by an app-chosen string; surfaced as <see cref="IRenderContext.Views"/>.
+	/// A draw renders from one by passing it as the view argument, and a pass that consumes view matrices (a shadow
+	/// test, a reflection) reads them by key. This is how the host supplies any extra viewpoint — a shadow light, a
+	/// mirror, a security camera, a cascade slice — without the engine naming any of them. Each is a neutral
+	/// <see cref="Camera"/> the backend flips on ingest, exactly as <see cref="View"/>. Empty (the default) when the
+	/// frame draws only from <see cref="View"/>.
 	/// </summary>
-	public IReadOnlyList<Camera> Cascades { get; init; } = [];
+	public IReadOnlyDictionary<string, Camera> Views { get; init; } = new Dictionary<string, Camera>();
 
 	/// <summary>
 	/// This frame's draw lists — each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a
