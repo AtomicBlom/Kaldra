@@ -59,6 +59,13 @@
          (detected from its source). A missing stage is skipped — no error to swallow — and a stage that IS
          declared but fails to compile to DXIL HARD-FAILS the build, instead of being silently dropped and
          leaving DirectX12 to fall back to a stand-in (the exact cross-backend break this layer guards against). -->
+    <!-- DXC resolution: hermetic NuGet package first ($(PkgMicrosoft_Direct3D_DXC) set via GeneratePathProperty
+         on a Microsoft.Direct3D.DXC PackageReference), then Windows SDK as a fallback for machines where the
+         package is not referenced. Forward-slashes: a trailing backslash escapes the closing quote in cmd. -->
+    <PropertyGroup Condition="'$(LoomEmitDxil)' == 'true' And '$(LoomDxcPath)' == '' And '$(PkgMicrosoft_Direct3D_DXC)' != ''">
+      <LoomDxcPath>$(PkgMicrosoft_Direct3D_DXC)\build\native\bin\$(LoomDxcArch)</LoomDxcPath>
+      <LoomDxcPath>$(LoomDxcPath.Replace('\','/'))</LoomDxcPath>
+    </PropertyGroup>
     <ItemGroup Condition="'$(LoomEmitDxil)' == 'true' And '$(LoomDxcPath)' == ''">
       <_LoomDxcDll Include="$(MSBuildProgramFiles32)\Windows Kits\10\bin\**\$(LoomDxcArch)\dxcompiler.dll" />
     </ItemGroup>
@@ -67,7 +74,7 @@
       <LoomDxcPath>$(LoomDxcPath.Replace('\','/'))</LoomDxcPath>
     </PropertyGroup>
     <Warning Condition="'$(LoomEmitDxil)' == 'true' And '$(LoomDxcPath)' == ''"
-             Text="LoomEmitDxil is on but no DXC found (Windows SDK '$(LoomDxcArch)' bin). DirectX12 will fall back to built-in shaders; install the Windows SDK or set $(LoomDxcPath)." />
+             Text="LoomEmitDxil is on but no DXC found (neither Microsoft.Direct3D.DXC NuGet package nor Windows SDK '$(LoomDxcArch)' bin). Add a Microsoft.Direct3D.DXC PackageReference with GeneratePathProperty=true to this project, or set $(LoomDxcPath)." />
     <Message Condition="'$(LoomEmitDxil)' == 'true'" Importance="high" Text="Slang -&gt; signed DXIL (per stage): %(LoomSlangEntry.Filename).slang" />
     <ItemGroup Condition="'$(LoomEmitDxil)' == 'true'">
       <_LoomDxilEntry Include="@(LoomSlangEntry)">

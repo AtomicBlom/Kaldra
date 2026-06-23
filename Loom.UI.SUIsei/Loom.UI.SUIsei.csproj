@@ -33,6 +33,8 @@
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <!-- Hermetic slangc for compiling this package's shader (bundled in the package; win-x64 / win-arm64) — build-only. -->
     <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <!-- Hermetic DXC for signing the DXIL output; build-only. -->
+    <PackageReference Include="Microsoft.Direct3D.DXC" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 
   <Import Project="..\build\Loom.Sdk\Loom.Shaders.targets" />

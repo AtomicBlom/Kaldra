@@ -42,6 +42,9 @@
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <!-- Hermetic slangc for compiling the engine shaders to DXIL (bundled in the package; win-x64 / win-arm64). -->
     <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <!-- Hermetic DXC for signing: Loom.Shaders.targets uses $(PkgMicrosoft_Direct3D_DXC) to locate
+         dxcompiler.dll + dxil.dll, falling back to Windows SDK only if this reference is absent. -->
+    <PackageReference Include="Microsoft.Direct3D.DXC" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 
   <!-- The DirectX 12 stack, quarantined here. D3DCompiler is the in-box FXC (d3dcompiler_47.dll) — slice 1

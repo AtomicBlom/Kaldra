@@ -10,7 +10,8 @@
     A consuming project sets:
       <LoomShaderSourceDir>   the folder of *.slang sources
       <LoomShaderOutputMode>  Embed (-> EmbeddedResource, the engine) | Content (-> loose files, an app)
-    and adds a Slang.Sdk PackageReference (GeneratePathProperty="true") for the hermetic slangc.
+    and adds Slang.Sdk + Microsoft.Direct3D.DXC PackageReferences (both GeneratePathProperty="true")
+    for hermetic slangc and hermetic DXC signing respectively.
   -->
 
   <PropertyGroup>
@@ -23,9 +24,11 @@
     <LoomEmitDxil Condition="'$(LoomEmitDxil)' == ''">false</LoomEmitDxil>
 
     <!-- slangc emits DXIL by handing off to DXC, which it loads only from its own module dir or a path we give
-         it (NOT the PATH env var). The Windows SDK ships an architecture-matched dxc (dxcompiler.dll + the
-         dxil.dll signer); point slangc at that bin directory. Overridable via $(LoomDxcPath). Build-machine
-         only — the shipped app carries just the signed .dxil. -->
+         it (NOT the PATH env var). The Microsoft.Direct3D.DXC NuGet package ships architecture-matched
+         dxcompiler.dll + dxil.dll; Loom.Shaders.targets picks it up via $(PkgMicrosoft_Direct3D_DXC) when the
+         consuming project carries that PackageReference with GeneratePathProperty=true. Falls back to the Windows
+         SDK if the package is absent. Override the resolved directory via $(LoomDxcPath). Build-machine only —
+         the shipped app carries just the signed .dxil. -->
     <LoomDxcArch Condition="'$(LoomDxcArch)' == '' And '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString())' == 'Arm64'">arm64</LoomDxcArch>
     <LoomDxcArch Condition="'$(LoomDxcArch)' == ''">x64</LoomDxcArch>
 
