@@ -61,8 +61,10 @@ jobs:
       # VMASharp and SUIsei are submodules with their own projects; pack them from there.
       - name: Pack
         run: |
-          $noBuild  = "-c Release --no-build -o out/"
-          $withBuild = "-c Release -o out/"
+          # PowerShell does not word-split strings, so pass flags as arrays — each element
+          # becomes a separate argument to the native dotnet command.
+          $noBuild  = "-c", "Release", "--no-build", "-o", "out/"
+          $withBuild = "-c", "Release", "-o", "out/"
           # Submodule dependencies (no central version management — inline versions in their csprojs)
           dotnet pack external/VMASharp/VMASharp/VMASharp.csproj               $noBuild
           dotnet pack external/SUIsei/SUIsei/SUIsei.csproj                     $noBuild
