@@ -1,7 +1,6 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
 
-using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
@@ -43,7 +42,7 @@ internal sealed class StorageBufferDemo : IDemo
 	});
 
 	// Fill the four-element palette each frame (static here; an animated effect would vary it). TL/TR/BL/BR.
-	public void Update(Camera camera) =>
+	public void Update(Concepts.Camera camera) =>
 		_engine.Write<Color>(_palette,
 		[
 			new Color(new Vector4(0.9f, 0.1f, 0.1f, 1f)), // top-left  → red

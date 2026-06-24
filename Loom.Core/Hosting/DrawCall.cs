@@ -64,8 +64,9 @@ public ref struct DrawCall
 	/// <summary>
 	/// The per-draw uniform block, staged into the technique's per-draw constant buffer (the uniform seam) — raw
 	/// bytes matching the shader's cbuffer layout, so any type rides it (a model matrix, a <c>uint</c> object id,
-	/// wind parameters), not only floats. Build it from a typed value or span with <see cref="Bytes{T}"/>. The
-	/// technique must declare a uniform buffer for this slot; empty means the draw supplies no per-draw block.
+	/// wind parameters), not only floats. Set it from a typed value or span with <see cref="SetUniforms{T}(in T)"/>
+	/// so the caller never marshals bytes by hand. The technique must declare a uniform buffer for this slot; empty
+	/// means the draw supplies no per-draw block.
 	/// </summary>
 	public ReadOnlySpan<byte> Uniforms;
 
@@ -77,6 +78,24 @@ public ref struct DrawCall
 
 	/// <summary>Short form for the common single-mesh, no-material, primary-view draw.</summary>
 	public static DrawCall Create(Mesh mesh, string technique) => new() { Mesh = mesh, Technique = technique };
+
+	/// <summary>
+	/// Set <see cref="Uniforms"/> from a typed value — the engine marshals it to bytes, so the caller never touches
+	/// <see cref="MemoryMarshal"/>. <typeparamref name="T"/> must be laid out to match the shader's per-draw
+	/// constant-buffer layout. The bytes alias <paramref name="value"/> (no copy), so it must stay alive until the
+	/// draw is submitted (the engine uploads synchronously) — bind it to a local, not a temporary that dies at the
+	/// end of the call.
+	/// </summary>
+	public void SetUniforms<T>(in T value) where T : unmanaged =>
+		Uniforms = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(in Unsafe.AsRef(in value), 1));
+
+	/// <summary>
+	/// Set <see cref="Uniforms"/> from a typed span (e.g. an array of per-draw rows or a small scalar block) — the
+	/// span counterpart of <see cref="SetUniforms{T}(in T)"/>. The bytes alias the caller's storage; keep it alive
+	/// until the draw is submitted.
+	/// </summary>
+	public void SetUniforms<T>(ReadOnlySpan<T> values) where T : unmanaged =>
+		Uniforms = MemoryMarshal.AsBytes(values);
 
 	/// <summary>
 	/// Type-erase a typed value or span to the byte block for <see cref="Uniforms"/> — the uniform-channel parallel

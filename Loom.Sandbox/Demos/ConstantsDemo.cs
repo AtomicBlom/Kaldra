@@ -1,7 +1,6 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
 
-using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
@@ -44,6 +43,6 @@ internal sealed class ConstantsDemo : IDemo
 
 	// The host-push channel: write the parameter buffer each frame (a static colour here; an animated effect would
 	// vary it). The last write persists, so this is also correct as a write-once-on-change call.
-	public void Update(Camera camera) =>
+	public void Update(Concepts.Camera camera) =>
 		_engine.Write(_tint, new TintParams(new Vector4(0.85f, 0.35f, 0.10f, 1f)));
 }

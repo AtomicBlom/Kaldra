@@ -1,18 +1,18 @@
 using System.Numerics;
 
-using Loom.Core;
-using Loom.Core.Geometry;
+using Loom.Concepts;
+using Loom.Core.Hosting;
 using Silk.NET.Input;
 
 namespace Loom.Sandbox;
 
 /// <summary>
-/// A free-fly debug camera: WASD to move on the view plane, Q/E down/up, right-mouse-drag to
-/// look. Host-side only — it just produces a <see cref="Camera"/> the host feeds to the engine, so the engine stays
-/// unaware there even is a debug camera. Neutral right-handed, +Y-up projection (the backend applies its clip-space
-/// fix-up), matching the demos' orbit camera.
+/// A free-fly debug camera: WASD to move on the view plane, Q/E down/up, right-mouse-drag to look. Host-side only
+/// — it drives a <see cref="Camera"/> in free-look mode (position + yaw/pitch) and hands it to the host, so the
+/// engine stays unaware there even is a debug camera. Takes the engine's clip space so the camera it produces is
+/// clip-corrected like the demos' cameras.
 /// </summary>
-internal sealed class FlyCamera
+internal sealed class FlyCamera(IEngineClipSpace clip)
 {
 	public Vector3 Position;
 	public float Yaw;   // radians; 0 looks toward -Z
@@ -22,6 +22,7 @@ internal sealed class FlyCamera
 
 	private Vector2 _lastMouse;
 	private bool _looking;
+	private readonly Camera _camera = new(clip);
 
 	/// <summary>Place the camera at <paramref name="eye"/> looking at <paramref name="target"/> (used when the debug
 	/// camera is first activated, so it starts where the scripted camera was).</summary>
@@ -39,7 +40,7 @@ internal sealed class FlyCamera
 		MathF.Sin(Pitch),
 		-MathF.Cos(Yaw) * MathF.Cos(Pitch));
 
-	/// <summary>Advance the camera from this frame's input and return its view+projection.</summary>
+	/// <summary>Advance the camera from this frame's input and return it (free-look view + perspective projection).</summary>
 	public Camera Update(IKeyboard? keyboard, IMouse? mouse, float deltaSeconds, float aspect)
 	{
 		if (mouse is not null)
@@ -75,8 +76,6 @@ internal sealed class FlyCamera
 			if (keyboard.IsKeyPressed(Key.Q)) Position -= Vector3.UnitY * step;
 		}
 
-		var view = Matrix4x4.CreateLookAt(Position, Position + forward, Vector3.UnitY);
-		var projection = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3f, aspect, 0.1f, 100f);
-		return new Camera(view, projection);
+		return _camera.FreeLook(Position, Yaw, Pitch).Perspective(MathF.PI / 3f, aspect, 0.1f, 100f);
 	}
 }

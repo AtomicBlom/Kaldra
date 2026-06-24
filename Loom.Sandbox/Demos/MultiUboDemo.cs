@@ -1,7 +1,6 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
 
-using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
@@ -45,6 +44,6 @@ internal sealed class MultiUboDemo : IDemo
 
 	// Write the base colour each frame (slot 0); the multiplier rides the FullScreen push (slot 1). 0.8·0.5, 0.6·1,
 	// 0.4·0.5 → (0.4, 0.6, 0.2).
-	public void Update(Camera camera) =>
+	public void Update(Concepts.Camera camera) =>
 		_engine.Write(_base, new Tint(new Vector4(0.8f, 0.6f, 0.4f, 1f)));
 }

@@ -13,22 +13,13 @@ namespace Loom.Core.Hosting;
 /// <see cref="IRenderBackend.Create"/> via <see cref="Engine.AvailableEngines"/>; the host names no
 /// graphics-API type to drive it. Dispose it to tear the device down (drains the GPU first).
 /// </summary>
-public interface IEngine : IDisposable
+public interface IEngine : IEngineClipSpace, IDisposable
 {
 	/// <summary>The backend that created this engine (<see cref="IRenderBackend.Name"/>, e.g. <c>"Vulkan"</c>).</summary>
 	string BackendName { get; }
 
 	/// <summary>A human-readable name of the GPU the engine runs on, for HUDs and logs.</summary>
 	string DeviceName { get; }
-
-	/// <summary>
-	/// The engine's clip-space convention as a neutral matrix to compose into a host-built view-projection before
-	/// handing it to a shader (e.g. through a <see cref="GraphBuilder.Constants{T}"/> buffer the pass reads): the app
-	/// computes <c>view * projection * ClipSpaceCorrection</c> so the result lands in the engine's clip space on
-	/// every backend, without the host ever naming a backend's NDC convention. A right-handed, +Y-up projection
-	/// composes correctly on both Vulkan and DirectX12.
-	/// </summary>
-	System.Numerics.Matrix4x4 ClipSpaceCorrection { get; }
 
 	/// <summary>
 	/// Register a technique under a logical <paramref name="name"/> the pass closures reference
