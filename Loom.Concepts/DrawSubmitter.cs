@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Loom.Core.Geometry;
+using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
 
@@ -26,11 +27,28 @@ public sealed class DrawSubmitter
 	/// </summary>
 	public void Draw(IRenderContext ctx, Mesh mesh, string technique, in Matrix4x4 model, float objectId = 0f, Material? material = null)
 	{
+		Pack(model, objectId);
+		ctx.Draw(new DrawCall { Mesh = mesh, Technique = technique, Material = material, Uniforms = _block });
+	}
+
+	/// <summary>
+	/// Draw a compute-pre-skinned <paramref name="mesh"/> (its vertices supplied by <paramref name="skinnedVertices"/>,
+	/// a <c>.ReadsVertex</c> buffer) with the same per-draw model + id block as <see cref="Draw"/>. The skinned
+	/// vertices are already in object space, so <paramref name="model"/> places that object in the world.
+	/// </summary>
+	public void DrawSkinned(IRenderContext ctx, Mesh mesh, BufferHandle skinnedVertices, string technique, in Matrix4x4 model, float objectId = 0f)
+	{
+		Pack(model, objectId);
+		ctx.Draw(new DrawCall { Mesh = mesh, SkinnedVertices = skinnedVertices, Technique = technique, Uniforms = _block });
+	}
+
+	// Write the model matrix (16 floats) + misc (id, then padding) into the reusable block.
+	private void Pack(in Matrix4x4 model, float objectId)
+	{
 		MemoryMarshal.Write(MemoryMarshal.AsBytes(_block.AsSpan(0, ModelFloats)), in model);
 		_block[16] = objectId;
 		_block[17] = 0f;
 		_block[18] = 0f;
 		_block[19] = 0f;
-		ctx.Draw(new DrawCall { Mesh = mesh, Technique = technique, Material = material, Uniforms = _block });
 	}
 }
