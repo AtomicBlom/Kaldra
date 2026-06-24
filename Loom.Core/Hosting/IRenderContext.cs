@@ -20,27 +20,10 @@ public interface IRenderContext
 	float Time { get; }
 
 	/// <summary>
-	/// The default view to render from this frame (view + projection) — what a draw transforms by when it names no
-	/// other. Per-frame data the host supplies; a pass's <c>.Draw</c> closure pulls it from here rather than
-	/// capturing it, so the graph stays frame-independent. The engine carries no notion of <em>which</em> viewpoint
-	/// this is (a player camera, a chase cam, a fixed view) — that is the app's to decide.
-	/// </summary>
-	Camera View { get; }
-
-	/// <summary>
-	/// The frame's additional named views, keyed by the app's own strings. A draw renders from one by passing it as
-	/// the view argument; a pass that consumes view matrices (a shadow test, a reflection) reads one by key. This is
-	/// the general channel for every viewpoint beyond <see cref="View"/> — a shadow light, a mirror, a security
-	/// camera, each cascade slice of a cascaded shadow map — so the engine names none of them itself. Pulled, not
-	/// captured. Empty when the frame draws only from <see cref="View"/>.
-	/// </summary>
-	IReadOnlyDictionary<string, Camera> Views { get; }
-
-	/// <summary>
 	/// True when the engine negotiated an HDR display output (requested via
 	/// <c>EngineSettings.HdrOutput</c> and granted by the surface). The terminal tone-map pulls this to map the
 	/// scene to display nits (extended-range, highlights above paper white) instead of compressing to SDR; false
-	/// means the standard SDR path. Engine-provided frame context, like <see cref="View"/> — pulled, not
+	/// means the standard SDR path. Engine-provided frame context, like <see cref="Time"/> — pulled, not
 	/// captured, so the same graph renders correctly under either output.
 	/// </summary>
 	bool HdrOutput { get; }
@@ -132,7 +115,7 @@ public interface IRenderContext
 	/// producer composited for it — the per-frame channel behind overlay/UI-style rendering. The host fills it via
 	/// <see cref="FrameInputs.DrawLists"/> off the render graph; a pass closure pulls a list out by id and submits it
 	/// with <see cref="DrawList{TVertex}"/> (the UI does this through <c>SUIsei</c>'s painter). Engine-provided frame
-	/// context like <see cref="View"/> — pulled, not captured, so the graph stays frame-independent. Empty
+	/// context like <see cref="Time"/> — pulled, not captured, so the graph stays frame-independent. Empty
 	/// (the default) when the host supplied no lists.
 	/// </summary>
 	IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists { get; }

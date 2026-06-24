@@ -3,7 +3,6 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 
 using Loom.Core;
-using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
@@ -91,16 +90,10 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	private VkFormat _depthFormat;
 	private bool _depthReadOnly;
 	private int _frameSlot;
-	private Camera _view;
-	private IReadOnlyDictionary<string, Camera> _views = new Dictionary<string, Camera>();
 
 	public float DeltaTime { get; private set; }
 
 	public float Time { get; private set; }
-
-	public Camera View => _view;
-
-	public IReadOnlyDictionary<string, Camera> Views => _views;
 
 	public bool HdrOutput { get; private set; }
 
@@ -150,15 +143,13 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	/// The VulkanTechnique objects are owned by the VulkanTechniqueCache; the engine resets that separately after draining.</summary>
 	public void ClearBaked() => _baked.Clear();
 
-	/// <summary>Bind the context to this frame's command buffer, frame slot, views, timing, HDR-output state, and draw lists before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, Camera view, IReadOnlyDictionary<string, Camera> views, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists, Extent2D fbExtent, bool hdrOutput)
+	/// <summary>Bind the context to this frame's command buffer, frame slot, timing, HDR-output state, and draw lists before any pass records.</summary>
+	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
 		Time = time;
 		_frameSlot = frameSlot;
-		_view = view;
-		_views = views;
 		_drawLists = drawLists;
 		_fbExtent = fbExtent;
 		HdrOutput = hdrOutput;

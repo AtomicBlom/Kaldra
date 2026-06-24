@@ -6,8 +6,8 @@ namespace Loom.Core.Geometry;
 /// A view frustum as six inward-facing <see cref="Plane"/>s (left, right, bottom, top, near, far) in world space —
 /// the debug camera's "what would be visible" volume and the engine's optional CPU frustum-cull primitive.
 /// Each plane is oriented so the inside half-space is positive (<see cref="Plane.DotCoordinate"/> ≥ 0).
-/// Built from a view-projection matrix via <see cref="Matrix4x4FrustumExtensions.ToFrustum"/> (or
-/// <see cref="Camera.ExtractFrustum"/>); composed entirely of <see cref="System.Numerics"/> types (no bespoke math).
+/// Built from a view-projection matrix via <see cref="Matrix4x4FrustumExtensions.ToFrustum"/>; composed entirely
+/// of <see cref="System.Numerics"/> types (no bespoke math).
 /// <para>
 /// Extracted from the <em>neutral</em> view-projection (right-handed, +Y up, z ∈ [0,1] — the host's
 /// <c>CreatePerspectiveFieldOfView</c> convention), so culling is backend-independent: the per-backend

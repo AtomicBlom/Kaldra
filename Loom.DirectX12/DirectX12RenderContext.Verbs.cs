@@ -17,16 +17,9 @@ internal sealed unsafe partial class DirectX12RenderContext
 {
 	public void Draw(in DrawCall call)
 	{
-		var effectiveView = call.View ?? View;
 		var baked = _techniques.GetOrBake(call.Technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
-
-		// The MVP root constant — raw row-major ViewProjectionMatrix as 16 DWORDs; the lit shader's column-major
-		// cbuffer packing transposes it back into the row-vector clip = position·MVP convention.
-		var mvp = effectiveView.ViewProjectionMatrix;
-		if (baked.RootConstantParam >= 0)
-			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
 		// The technique's CBVs (b1..) in slot order: the pass's .Reads constants (e.g. a view-projection) first,
 		// then the per-draw Uniforms block (model, object data). Bound for material and sampled draws alike.

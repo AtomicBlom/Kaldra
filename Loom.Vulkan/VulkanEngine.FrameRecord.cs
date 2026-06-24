@@ -134,7 +134,7 @@ internal sealed unsafe partial class VulkanEngine
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameView, _frameViews, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
 
 		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it. Re-uploading
 		// every frame (cheap — these are tiny) means the last IEngine.Write persists across frames, so a static

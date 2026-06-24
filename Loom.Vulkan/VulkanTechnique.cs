@@ -49,7 +49,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			DescriptorSetLayout = description.SampleCount + description.StorageCount + description.StorageBufferCount + description.UniformBufferCount > 0
 				? CreateSetLayout(description.SampleCount, description.StorageCount, description.StorageBufferCount, description.UniformBufferCount, descriptorStage)
 				: default;
-			Layout = CreatePipelineLayout(DescriptorSetLayout, description.Layout is not null || description.Instance is not null, description.HasFragmentPush, scalarPushStage, description.HasListPush);
+			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasFragmentPush, scalarPushStage, description.HasListPush);
 			Pipeline = description.IsCompute
 				? CreateComputePipeline(module, in description)
 				: CreatePipeline(module, in description);
@@ -122,22 +122,20 @@ public sealed unsafe class VulkanTechnique : IDisposable
 	public const int ListPushSize = 8 * sizeof(float);
 
 	// Zero or one descriptor set (whether the technique binds resources), plus at most one push-constant
-	// range: a draw-list technique gets an all-stage range for its scale/translate/tag block; mesh techniques
-	// get a 64-byte VERTEX range for the MVP (small + per-draw, so push constants beat a uniform buffer);
-	// post/compute techniques get a 16-byte range for per-pass scalars (JFA step, hover id, exposure rate) in
-	// <paramref name="scalarStage"/> (fragment for a draw, compute for a dispatch). A technique uses exactly one
-	// of these, so a single-element range array suffices.
-	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout, bool hasMvpPushConstant, bool hasScalarPush, ShaderStageFlags scalarStage, bool hasListPush)
+	// range: a draw-list technique gets an all-stage range for its scale/translate/tag block; post/compute
+	// techniques get a 16-byte range for per-pass scalars (JFA step, hover id, exposure rate) in
+	// <paramref name="scalarStage"/> (fragment for a draw, compute for a dispatch). A technique uses at most one
+	// of these, so a single-element range array suffices. (A mesh technique's view-projection + per-object model
+	// ride uniform buffers, not a push range.)
+	private PipelineLayout CreatePipelineLayout(DescriptorSetLayout setLayout, bool hasScalarPush, ShaderStageFlags scalarStage, bool hasListPush)
 	{
 		var hasSet = setLayout.Handle != 0;
 		var range = new PushConstantRange();
 		if (hasListPush)
 			range = new PushConstantRange { StageFlags = ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, Offset = 0, Size = ListPushSize };
-		else if (hasMvpPushConstant)
-			range = new PushConstantRange { StageFlags = ShaderStageFlags.VertexBit, Offset = 0, Size = (uint)sizeof(Matrix4x4) };
 		else if (hasScalarPush)
 			range = new PushConstantRange { StageFlags = scalarStage, Offset = 0, Size = FragmentPushSize };
-		var hasRange = hasMvpPushConstant || hasScalarPush || hasListPush;
+		var hasRange = hasScalarPush || hasListPush;
 
 		PipelineLayoutCreateInfo info = new()
 		{

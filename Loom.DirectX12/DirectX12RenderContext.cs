@@ -68,11 +68,8 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 
 	public float DeltaTime { get; private set; }
 	public float Time { get; private set; }
-	public Camera View { get; private set; } = Camera.Identity;
-	public IReadOnlyDictionary<string, Camera> Views => _views;
 	public bool HdrOutput { get; private set; }
 	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists => _drawLists;
-	private readonly Dictionary<string, Camera> _views = new();
 
 	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, MaterialStore materials, int frameCount)
 	{
@@ -116,12 +113,6 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		_fbHeight = fbHeight;
 		DeltaTime = (float)inputs.DeltaSeconds;
 		Time = inputs.Time;
-		View = ClipSpace(inputs.View);
-		// Flip every named view the same way as the primary — so a light-space VP a shader samples with matches the
-		// depth map it was rasterized into.
-		_views.Clear();
-		foreach (var (key, view) in inputs.Views)
-			_views[key] = ClipSpace(view);
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging
 		_uniformUpload.BeginFrame(slot);  // and its per-frame uniform staging
@@ -129,15 +120,6 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		_listVtx.BeginFrame(slot);        // and the draw-list geometry staging
 		_listIdx.BeginFrame(slot);
 	}
-
-	// Adopt the Vulkan backend's clip-space convention (negate the projection's Y row), so the shared shaders need
-	// NO per-backend branch — ndc.y matches the +Y-down texture V everywhere (mesh MVP, fullscreen reprojection,
-	// the JFA's SV_Position). On its own this flips D3D12 upside down; the engine pairs it with a negative-height
-	// viewport (DirectX12Engine.RecordRasterPass) that turns D3D12's (1-ndc.y) screen map into Vulkan's (ndc.y+1), so
-	// geometry stays upright. The host supplies a neutral +Y-up projection in FrameInputs; both backends
-	// flip it the same way here. (Earlier "identity ingest, no Y-flip" rendered mesh upright but left every
-	// fullscreen pass vertically mirrored vs Vulkan — one mesh→fullscreen→backbuffer hop = upside down.)
-	private static Camera ClipSpace(Camera camera) => camera.FlipClipY();
 
 	// The parameter buffer (ResourceKind.Constants) the current pass .Reads, or -1 — bound to the technique's root CBV.
 	// The app-writable parameter buffers the current pass .Reads (its ReadUniform edges, in order), bound to the

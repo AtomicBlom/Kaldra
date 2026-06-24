@@ -14,12 +14,9 @@ internal sealed unsafe partial class VulkanRenderContext
 {
 	public void Draw(in DrawCall call)
 	{
-		var effectiveView = call.View ?? _view;
 		var baked = Bake(call.Technique);
 		var template = _registry[call.Technique];
-		var mvp = effectiveView.ViewProjectionMatrix;
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
-		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 
 		// Gather the technique's uniform buffers in slot order: the pass's .Reads constants (e.g. a view-projection)
 		// first, then the per-draw Uniforms block (model, object data). Both material and sampled draws bind them.

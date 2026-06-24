@@ -5,7 +5,7 @@ namespace Loom.Core.Geometry;
 /// <summary>
 /// An axis-aligned bounding box (<c>Min</c>/<c>Max</c> corners). The unit of coarse visibility: a mesh carries
 /// a local-space box, an instance transforms it to world space, and the CPU frustum cull tests it against the
-/// camera's <see cref="Frustum"/>. Backend-neutral pure math (<c>System.Numerics</c>), like <see cref="Camera"/>
+/// camera's <see cref="Frustum"/>. Backend-neutral pure math (<c>System.Numerics</c>), like <see cref="Frustum"/>
 /// — culling is an app-owned optimization the engine <em>offers</em>, never a scene graph it mandates
 /// ("you hand me draw lists").
 /// </summary>
@@ -25,7 +25,7 @@ public readonly record struct Bounds(Vector3 Min, Vector3 Max)
 	/// <summary>
 	/// Transform this (local-space) box by <paramref name="m"/> and return a world-space box that encloses the
 	/// result — the centre is transformed and the extents are scaled by the absolute value of the matrix's linear
-	/// part (the standard conservative AABB transform; row-vector convention, matching <see cref="Camera"/>).
+	/// part (the standard conservative AABB transform; row-vector convention).
 	/// </summary>
 	public Bounds Transform(Matrix4x4 m)
 	{

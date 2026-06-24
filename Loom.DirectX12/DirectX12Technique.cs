@@ -197,8 +197,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		// A draw-list technique (HasListPush) wants an all-stage root-constants block (vertex reads scale/translate,
 		// pixel reads the tag/paper-white/hdr flag), so it pre-empts the vertex-only MVP push even though it also
 		// reads a vertex stream.
-		var hasMvpPush = (template.Layout is not null || template.Instance is not null) && !template.HasListPush;
-		var hasRootConstants = hasMvpPush || template.HasFragmentPush || template.HasListPush;
+		var hasRootConstants = template.HasFragmentPush || template.HasListPush;
 		// Root constants (b0) + N uniform CBVs (b1..bN) + one SRV table + M storage-buffer root SRVs.
 		var parameters = stackalloc RootParameter[2 + template.UniformBufferCount + template.InputBufferCount];
 		var paramCount = 0;
@@ -217,7 +216,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			parameters[paramCount++] = new RootParameter
 			{
 				ParameterType = RootParameterType.Type32BitConstants,
-				ShaderVisibility = template.HasListPush ? ShaderVisibility.All : hasMvpPush ? ShaderVisibility.Vertex : ShaderVisibility.Pixel,
+				ShaderVisibility = template.HasListPush ? ShaderVisibility.All : ShaderVisibility.Pixel,
 				Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = template.HasListPush ? ListPushDwords : 16u } },
 			};
 		}

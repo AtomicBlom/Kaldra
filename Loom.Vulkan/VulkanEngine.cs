@@ -112,8 +112,6 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private uint _timestampValidBits;        // 0 ⇒ the graphics queue can't timestamp (timing unavailable)
 
 	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
-	private Camera _frameView = Camera.Identity;
-	private readonly Dictionary<string, Camera> _frameViews = new();
 	private float _frameTime;
 	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _frameDrawLists = [];
 
@@ -326,24 +324,12 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Vulkan?");
 	}
 
-	// Vulkan clip space is +Y-down, so the projection's Y row is negated on ingest. The host supplies a neutral
-	// (+Y-up) projection in FrameInputs; doing the flip here keeps the API convention in the backend and applies it
-	// consistently to the render MVP and any matrix a shader samples with (a light-space VP a shadow pass shares).
-	// A +Y-up backend (D3D12) would apply identity here instead.
-	private static Camera ClipSpace(Camera camera) => camera.FlipClipY();
-
 	public override void Render(FrameInputs inputs)
 	{
 		ArgumentNullException.ThrowIfNull(inputs);
 		if (Graph is null || _transients is null)
 			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
 
-		_frameView = ClipSpace(inputs.View);
-		// Flip every named view's clip space the same way — neutral matrices in, the backend's Y-flip applied, so a
-		// light-space VP a shader samples with matches the depth map it was rasterized into.
-		_frameViews.Clear();
-		foreach (var (key, view) in inputs.Views)
-			_frameViews[key] = ClipSpace(view);
 		_frameTime = inputs.Time;
 		_frameDrawLists = inputs.DrawLists;
 		DrawFrame((float)inputs.DeltaSeconds);

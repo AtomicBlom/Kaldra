@@ -9,14 +9,13 @@ namespace Loom.Core.Hosting;
 /// <summary>
 /// A single raster draw command for <see cref="IRenderContext.Draw"/>. Collapses the per-axis overloads into
 /// one descriptor: geometry source (mesh / skinned / procedural), instancing (none / CPU / GPU), material,
-/// view, and extra inputs (uniforms or sampled). All fields default to their zero/null values.
+/// and extra inputs (uniforms or sampled). All fields default to their zero/null values.
 /// </summary>
 /// <remarks>
 /// A <c>ref struct</c> so CPU instance spans are held without heap allocation. Construct via
 /// <see cref="Create"/> for the common mesh+technique case, or with an object initializer for richer calls:
 /// <code>
 /// ctx.Draw(DrawCall.Create(cube, "gbuffer"));
-/// ctx.Draw(new DrawCall { Mesh = quad, Technique = "light", View = ctx.Views[ViewKeys.Sun] });
 /// ctx.Draw(new DrawCall { Mesh = quad, Technique = "sprite", Instances = DrawCall.From(sprites) });
 /// </code>
 /// </remarks>
@@ -54,12 +53,6 @@ public ref struct DrawCall
 	/// untextured techniques (depth-only, shadow, wire overlay).
 	/// </summary>
 	public Material? Material;
-
-	/// <summary>
-	/// The view to render from. <c>null</c> uses the frame's default view (<see cref="IRenderContext.View"/>).
-	/// Shadow passes supply <c>ctx.Views[ViewKeys.Sun]</c>; cascade passes supply <c>ctx.Views[ViewKeys.Cascade(i)]</c>.
-	/// </summary>
-	public Camera? View;
 
 	/// <summary>
 	/// The per-draw uniform block, staged into the technique's per-draw constant buffer (the uniform seam) — raw

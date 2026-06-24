@@ -7,10 +7,12 @@ namespace Loom.Tests;
 /// <summary>The optional CPU frustum cull: AABB transform, frustum extraction, and the Scene cull helper.</summary>
 public class FrustumCullTests
 {
-	// A camera at (0,0,5) looking toward -Z (origin), 60° vertical FOV, square aspect — the neutral convention.
-	private static Camera LookAtOrigin() => new(
-		Matrix4x4.CreateLookAt(new Vector3(0, 0, 5), Vector3.Zero, Vector3.UnitY),
-		Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3f, 1f, 0.1f, 100f));
+	// The world-space frustum of a camera at (0,0,5) looking toward -Z (origin), 60° vertical FOV, square aspect —
+	// the neutral convention (right-handed, +Y up). Built straight from the view-projection via ToFrustum, the same
+	// math an app-side camera's ExtractFrustum uses.
+	private static Frustum FrustumLookingAtOrigin() =>
+		(Matrix4x4.CreateLookAt(new Vector3(0, 0, 5), Vector3.Zero, Vector3.UnitY)
+			* Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3f, 1f, 0.1f, 100f)).ToFrustum();
 
 	private static Bounds UnitBox => Bounds.FromCenterExtents(Vector3.Zero, new Vector3(0.5f));
 
@@ -37,14 +39,14 @@ public class FrustumCullTests
 	[Test]
 	public void A_box_at_the_focus_is_inside_the_frustum()
 	{
-		var frustum = LookAtOrigin().ExtractFrustum();
+		var frustum = FrustumLookingAtOrigin();
 		frustum.Intersects(UnitBox).ShouldBeTrue();
 	}
 
 	[Test]
 	public void A_box_far_to_the_side_is_culled()
 	{
-		var frustum = LookAtOrigin().ExtractFrustum();
+		var frustum = FrustumLookingAtOrigin();
 		var offscreen = UnitBox.Transform(Matrix4x4.CreateTranslation(100, 0, 0));
 		frustum.Intersects(offscreen).ShouldBeFalse();
 	}
@@ -52,7 +54,7 @@ public class FrustumCullTests
 	[Test]
 	public void A_box_behind_the_camera_is_culled()
 	{
-		var frustum = LookAtOrigin().ExtractFrustum();
+		var frustum = FrustumLookingAtOrigin();
 		// The camera sits at z=5 looking toward -Z, so z=20 is well behind it.
 		var behind = UnitBox.Transform(Matrix4x4.CreateTranslation(0, 0, 20));
 		frustum.Intersects(behind).ShouldBeFalse();
@@ -69,7 +71,7 @@ public class FrustumCullTests
 		group.Add(atFocus, UnitBox);
 
 		var visible = new Matrix4x4[group.Count];
-		var drawn = group.Cull(LookAtOrigin().ExtractFrustum(), visible);
+		var drawn = group.Cull(FrustumLookingAtOrigin(), visible);
 
 		group.Count.ShouldBe(3);
 		drawn.ShouldBe(2); // the two at the focus survive; the offscreen one is culled
