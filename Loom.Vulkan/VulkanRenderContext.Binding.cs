@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices;
-
 using Loom.Core.Graph;
 using Loom.Core.Materials;
 using Silk.NET.Vulkan;
@@ -148,10 +146,10 @@ internal sealed unsafe partial class VulkanRenderContext
 		}
 	}
 
-	// Stage a per-frame uniform block into the uniform ring and resolve it to a bindable descriptor.
-	private UniformBinding UploadUniforms(ReadOnlySpan<float> data)
+	// Stage a per-frame uniform block (raw bytes matching the technique's cbuffer) into the uniform ring and
+	// resolve it to a bindable descriptor.
+	private UniformBinding UploadUniforms(ReadOnlySpan<byte> bytes)
 	{
-		var bytes = MemoryMarshal.AsBytes(data);
 		var (buffer, offset) = _uniformUpload.Upload(_frameSlot, bytes);
 		return new UniformBinding(buffer, offset, (ulong)bytes.Length);
 	}

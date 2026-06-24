@@ -240,7 +240,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		{
 			if (template.UniformBufferCount > uboCount && uboCount < MaxUniformBuffers)
 			{
-				ubos[uboCount++] = UploadUniforms(push);
+				ubos[uboCount++] = UploadUniforms(System.Runtime.InteropServices.MemoryMarshal.AsBytes(push));
 			}
 			else if (template.UniformBufferCount == 0)
 			{

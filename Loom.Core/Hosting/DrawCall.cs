@@ -62,10 +62,12 @@ public ref struct DrawCall
 	public Camera? View;
 
 	/// <summary>
-	/// Per-frame scalar uniforms staged into the technique's constant buffer (the uniform seam). The technique
-	/// must declare a uniform buffer; values are read in the vertex stage (e.g. wind direction + strength).
+	/// The per-draw uniform block, staged into the technique's per-draw constant buffer (the uniform seam) — raw
+	/// bytes matching the shader's cbuffer layout, so any type rides it (a model matrix, a <c>uint</c> object id,
+	/// wind parameters), not only floats. Build it from a typed value or span with <see cref="Bytes{T}"/>. The
+	/// technique must declare a uniform buffer for this slot; empty means the draw supplies no per-draw block.
 	/// </summary>
-	public ReadOnlySpan<float> Uniforms;
+	public ReadOnlySpan<byte> Uniforms;
 
 	/// <summary>
 	/// Graph resources bound as sampled inputs 0..N-1, in the same order as <c>FullScreen</c> supplies them.
@@ -75,6 +77,14 @@ public ref struct DrawCall
 
 	/// <summary>Short form for the common single-mesh, no-material, primary-view draw.</summary>
 	public static DrawCall Create(Mesh mesh, string technique) => new() { Mesh = mesh, Technique = technique };
+
+	/// <summary>
+	/// Type-erase a typed value or span to the byte block for <see cref="Uniforms"/> — the uniform-channel parallel
+	/// of <see cref="From{T}"/>. The bytes alias the caller's storage (no copy), so keep that storage alive until the
+	/// draw is submitted (the engine uploads synchronously). Lay <typeparamref name="T"/> out to match the shader's
+	/// per-draw constant-buffer layout.
+	/// </summary>
+	public static ReadOnlySpan<byte> Bytes<T>(ReadOnlySpan<T> values) where T : unmanaged => MemoryMarshal.AsBytes(values);
 
 	/// <summary>
 	/// Type-erase <paramref name="instances"/> to bytes + stride for use as <see cref="Instances"/>. The engine

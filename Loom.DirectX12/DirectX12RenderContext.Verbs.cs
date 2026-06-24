@@ -36,7 +36,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 			for (var j = 0; j < _activeConstantsCount; j++)
 				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound++), _transients!.Resource(_slot, _activeConstantsIds[j]).GetGPUVirtualAddress());
 			if (call.Uniforms.Length > 0 && baked.UniformBufferCount > bound)
-				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound), _uniformUpload.Upload(_slot, MemoryMarshal.AsBytes(call.Uniforms)));
+				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound), _uniformUpload.Upload(_slot, call.Uniforms));
 		}
 
 		// Material textures or sampled graph resources fill the SRV table — mutually exclusive texture source.
