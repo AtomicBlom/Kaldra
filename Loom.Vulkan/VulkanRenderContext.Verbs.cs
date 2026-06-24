@@ -21,16 +21,26 @@ internal sealed unsafe partial class VulkanRenderContext
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit, 0, (uint)sizeof(Matrix4x4), &mvp);
 
-		// Bind material textures (+ optional UBO) or sampled graph resources — mutually exclusive.
+		// Bind material textures (+ optional UBO) or the neutral channels — mutually exclusive.
 		if (call.Material is { } material)
 		{
 			var ubo = call.Uniforms.Length > 0 ? UploadUniforms(call.Uniforms) : default;
 			if (template.SampleCount > 0 || ubo.Present)
 				BindMaterialTextures(baked, template, material, call.Technique, ubo);
 		}
-		else if (!call.Sampled.IsEmpty)
+		else
 		{
-			BindSampledInputs(baked, call.Sampled, template.LinearFilter);
+			// Per-pass constants the pass .Reads (e.g. a view-projection) fill the technique's uniform slots 0..K-1;
+			// the per-draw Uniforms block (model, object data) fills the next; sampled graph resources bind as the
+			// 0..N-1 sampler inputs. An empty combination leaves the draw unbound (the depth-only path).
+			Span<UniformBinding> ubos = stackalloc UniformBinding[MaxUniformBuffers];
+			var uboCount = 0;
+			for (var j = 0; j < _activeConstantsCount && uboCount < MaxUniformBuffers; j++)
+				ubos[uboCount++] = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[j]), 0, Vk.WholeSize);
+			if (call.Uniforms.Length > 0 && uboCount < MaxUniformBuffers)
+				ubos[uboCount++] = UploadUniforms(call.Uniforms);
+			if (!call.Sampled.IsEmpty || uboCount > 0)
+				BindSampledInputs(baked, call.Sampled, template.LinearFilter, default, ubos[..uboCount]);
 		}
 
 		if (call.Instances.IsEmpty)

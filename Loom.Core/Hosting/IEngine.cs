@@ -22,6 +22,15 @@ public interface IEngine : IDisposable
 	string DeviceName { get; }
 
 	/// <summary>
+	/// The engine's clip-space convention as a neutral matrix to compose into a host-built view-projection before
+	/// handing it to a shader (e.g. through a <see cref="GraphBuilder.Constants{T}"/> buffer the pass reads): the app
+	/// computes <c>view * projection * ClipSpaceCorrection</c> so the result lands in the engine's clip space on
+	/// every backend, without the host ever naming a backend's NDC convention. A right-handed, +Y-up projection
+	/// composes correctly on both Vulkan and DirectX12.
+	/// </summary>
+	System.Numerics.Matrix4x4 ClipSpaceCorrection { get; }
+
+	/// <summary>
 	/// Register a technique under a logical <paramref name="name"/> the pass closures reference
 	/// (<c>ctx.FullScreen(name, …)</c>). Idempotent per name. Call before the graph draws with it; the backend
 	/// resolves the shader bytecode and bakes pipelines lazily, cached for the engine's lifetime.

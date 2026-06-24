@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Loom.Core.Animation;
@@ -27,6 +28,14 @@ public abstract class EngineBase : IEngine
 
 	/// <summary>A human-readable name of the GPU the engine runs on.</summary>
 	public abstract string DeviceName { get; }
+
+	/// <summary>
+	/// The engine family's clip-space convention: negate clip-space Y. Both current backends adopt it (Vulkan's
+	/// native +Y-down NDC; DirectX12 pairs it with a negative-height viewport), so the shared shaders need no
+	/// per-backend branch. A backend with a different convention overrides this; the app composes it into its
+	/// view-projection rather than hardcoding any NDC.
+	/// </summary>
+	public virtual Matrix4x4 ClipSpaceCorrection => Matrix4x4.CreateScale(1f, -1f, 1f);
 
 	/// <summary>
 	/// Enable per-pass GPU timestamp collection. Enabling is refused when the device/queue can't time
