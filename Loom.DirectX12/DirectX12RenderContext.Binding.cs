@@ -91,15 +91,6 @@ internal sealed unsafe partial class DirectX12RenderContext
 		_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
 	}
 
-	// Stage a per-frame uniform block into the uniform ring and bind it as the technique's root CBV (b1).
-	// The UPLOAD-heap GPU address is bound directly — no descriptor heap entry needed for a root CBV.
-	private void BindUniforms(DirectX12Technique baked, ReadOnlySpan<float> data)
-	{
-		var bytes = MemoryMarshal.AsBytes(data);
-		var gpuAddress = _uniformUpload.Upload(_slot, bytes);
-		_cmd.SetGraphicsRootConstantBufferView((uint)baked.CbvRootParam, gpuAddress);
-	}
-
 	// Write the sampled inputs' SRVs into a fresh descriptor-ring range and bind it as the technique's SRV table.
 	private void BindInputs(DirectX12Technique baked, ReadOnlySpan<ResourceHandle> inputs)
 	{

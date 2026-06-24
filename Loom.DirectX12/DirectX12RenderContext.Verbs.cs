@@ -28,28 +28,26 @@ internal sealed unsafe partial class DirectX12RenderContext
 		if (baked.RootConstantParam >= 0)
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, &mvp, 0);
 
-		// Bind material textures (+ optional CBV) or the neutral channels — mutually exclusive.
+		// The technique's CBVs (b1..) in slot order: the pass's .Reads constants (e.g. a view-projection) first,
+		// then the per-draw Uniforms block (model, object data). Bound for material and sampled draws alike.
+		if (baked.CbvRootParam >= 0)
+		{
+			var bound = 0;
+			for (var j = 0; j < _activeConstantsCount; j++)
+				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound++), _transients!.Resource(_slot, _activeConstantsIds[j]).GetGPUVirtualAddress());
+			if (call.Uniforms.Length > 0 && baked.UniformBufferCount > bound)
+				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound), _uniformUpload.Upload(_slot, MemoryMarshal.AsBytes(call.Uniforms)));
+		}
+
+		// Material textures or sampled graph resources fill the SRV table — mutually exclusive texture source.
 		if (call.Material is { } material)
 		{
-			if (call.Uniforms.Length > 0 && baked.CbvRootParam >= 0)
-				BindUniforms(baked, call.Uniforms);
 			if (baked.TableParam >= 0 && baked.InputCount > 0)
 				BindMaterialTable(baked, material, call.Technique);
 		}
-		else
+		else if (!call.Sampled.IsEmpty)
 		{
-			// Per-pass constants the pass .Reads (e.g. a view-projection) fill the technique's CBVs b1..bK; the
-			// per-draw Uniforms block (model, object data) fills the next; sampled graph resources bind as the SRV table.
-			if (baked.CbvRootParam >= 0)
-			{
-				var bound = 0;
-				for (var j = 0; j < _activeConstantsCount; j++)
-					_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound++), _transients!.Resource(_slot, _activeConstantsIds[j]).GetGPUVirtualAddress());
-				if (call.Uniforms.Length > 0 && baked.UniformBufferCount > bound)
-					_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound), _uniformUpload.Upload(_slot, MemoryMarshal.AsBytes(call.Uniforms)));
-			}
-			if (!call.Sampled.IsEmpty)
-				BindInputs(baked, call.Sampled);
+			BindInputs(baked, call.Sampled);
 		}
 
 		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);

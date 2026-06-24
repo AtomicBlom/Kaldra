@@ -74,9 +74,10 @@ internal sealed unsafe partial class VulkanRenderContext
 
 	// Bind a material's loaded textures (VulkanTextureStore views) into the technique's reflected sampler slots 0..N-1,
 	// with the technique's address mode + filter. Shared by Draw(mesh, material), textured instancing, and
-	// textured particles. The caller checks SampleCount > 0 (or a present UBO). A present uniform buffer
-	// is written as the last binding (index SampleCount) — e.g. foliage's wind, read in the vertex stage.
-	private void BindMaterialTextures(VulkanTechnique baked, VulkanTechniqueTemplate template, Material material, string technique, in UniformBinding ubo = default)
+	// textured particles. The caller checks SampleCount > 0 (or any UBOs). The technique's uniform buffers follow
+	// the samplers at bindings SampleCount.. in slot order (a pass's .Reads constants, then the per-draw block —
+	// e.g. a view-projection then the model, or foliage's wind, read in the vertex stage).
+	private void BindMaterialTextures(VulkanTechnique baked, VulkanTechniqueTemplate template, Material material, string technique, ReadOnlySpan<UniformBinding> ubos = default)
 	{
 		var textures = _materials.TexturesOf(material.Id);
 		if (textures.Length < template.SampleCount)
@@ -92,9 +93,9 @@ internal sealed unsafe partial class VulkanRenderContext
 			_ => throw new VulkanException($"SamplerAddress '{template.Address}' is not mapped to a sampler."),
 		};
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-		var count = template.SampleCount + (ubo.Present ? 1 : 0);
+		var count = template.SampleCount + ubos.Length;
 		var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];
-		var bufferInfo = ubo.Info;
+		var bufferInfos = stackalloc DescriptorBufferInfo[ubos.Length];
 		var writes = stackalloc WriteDescriptorSet[count];
 		for (var i = 0; i < template.SampleCount; i++)
 		{
@@ -114,16 +115,20 @@ internal sealed unsafe partial class VulkanRenderContext
 				PImageInfo = &imageInfos[i],
 			};
 		}
-		if (ubo.Present)
-			writes[template.SampleCount] = new WriteDescriptorSet
+		// Uniform buffers follow the samplers at bindings SampleCount.. in slot order.
+		for (var u = 0; u < ubos.Length; u++)
+		{
+			bufferInfos[u] = ubos[u].Info;
+			writes[template.SampleCount + u] = new WriteDescriptorSet
 			{
 				SType = StructureType.WriteDescriptorSet,
 				DstSet = set,
-				DstBinding = (uint)template.SampleCount,
+				DstBinding = (uint)(template.SampleCount + u),
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.UniformBuffer,
-				PBufferInfo = &bufferInfo,
+				PBufferInfo = &bufferInfos[u],
 			};
+		}
 		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
 		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
 	}
