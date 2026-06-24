@@ -152,10 +152,38 @@ public abstract class EngineBase : IEngine
 				$"Storage '{handle.Name}' is not part of the active graph — call SetGraph with a graph that declares it before writing.");
 		var bytes = MemoryMarshal.AsBytes(values);
 		if (bytes.Length > shadow.Length)
-			throw new ArgumentException(
-				$"Storage '{handle.Name}' holds {shadow.Length} bytes but the written {values.Length} × {typeof(T).Name} is {bytes.Length} bytes — the data must fit the declared buffer size.", nameof(values));
+		{
+			if (!handle.Growable)
+				throw new ArgumentException(
+					$"Storage '{handle.Name}' holds {shadow.Length} bytes but the written {values.Length} × {typeof(T).Name} is {bytes.Length} bytes — the data must fit the declared buffer size. Declare it with growable: true to let it grow.", nameof(values));
+			shadow = GrowStorageBuffer(handle.Id, bytes.Length, shadow);
+		}
 		bytes.CopyTo(shadow);
 	}
+
+	// Grow a growable storage buffer to hold at least requiredBytes: enlarge the CPU shadow (geometric — at least
+	// double — so reallocations are amortised), preserving its current contents, then drain the GPU and have the
+	// backend reallocate the resource's per-slot GPU buffers to match. The drain is needed because the old buffers
+	// may still be read by a frame in flight; Write runs before Render (outside command recording), so it's safe here
+	// and rare (geometric growth). The next frame re-uploads the larger shadow and rebinds the new buffer.
+	private byte[] GrowStorageBuffer(int id, int requiredBytes, byte[] current)
+	{
+		var newCapacity = Math.Max(requiredBytes, current.Length * 2);
+		var grown = new byte[newCapacity];
+		current.CopyTo(grown.AsSpan());
+		_storage[id] = grown;
+		WaitIdle();
+		GrowStorage(id, newCapacity);
+		return grown;
+	}
+
+	/// <summary>
+	/// Reallocate a growable <see cref="ResourceKind.Storage"/> resource's per-slot GPU buffers to
+	/// <paramref name="newByteSize"/> bytes. Called after a GPU drain, so the backend may free and recreate the
+	/// buffers directly; the next frame re-uploads the (now larger) shadow and rebinds the new buffers (both backends
+	/// fetch the storage buffer afresh each draw).
+	/// </summary>
+	protected abstract void GrowStorage(int id, int newByteSize);
 
 	// CPU-side copy of each g.Readback target's contents (id → tightly-packed bytes in the resource's format),
 	// filled by the backend once a frame's slot fence signals and returned by Read. Empty until the backend first

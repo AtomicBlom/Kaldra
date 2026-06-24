@@ -310,6 +310,26 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		data.CopyTo(new Span<byte>((void*)ptr, data.Length));
 	}
 
+	/// <summary>Reallocate a growable storage resource's per-slot buffers to <paramref name="newByteSize"/> bytes. The
+	/// caller has drained the GPU, so freeing and recreating in place is safe; the next frame re-binds the new buffers
+	/// (each draw fetches the root SRV by GPU address) and re-uploads the enlarged shadow.</summary>
+	public void GrowStorage(DirectX12Context ctx, int id, int newByteSize, string name)
+	{
+		var size = (uint)newByteSize;
+		_byteSizes[id] = size;
+		for (uint slot = 0; slot < _targets.Length; slot++)
+		{
+			if (_targets[slot][id].Resource.Handle is not null)
+				_targets[slot][id].Resource.Dispose();
+			var buffer = CreateUploadBuffer(ctx, size);
+			ctx.SetObjectName((ID3D12Object*)buffer.Handle, $"{name}#{slot}");
+			void* mapped;
+			SilkMarshal.ThrowHResult(buffer.Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));
+			_storagePtr[slot][id] = (nint)mapped;
+			_targets[slot][id] = new Target { Resource = buffer, View = default, Format = DxgiFormat.FormatUnknown, SrvFormat = DxgiFormat.FormatUnknown, State = ResourceStates.GenericRead, IsDepth = false };
+		}
+	}
+
 	// Persistent resources live in slot 0 only (one shared instance); redirect their lookups there.
 	private uint SlotOf(uint slot, int id) => _isPersistent[id] ? 0u : slot;
 

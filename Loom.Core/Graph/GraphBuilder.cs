@@ -194,16 +194,18 @@ public sealed class GraphBuilder
 	/// Fill it by handle each frame (or only on change) with <c>IEngine.Write</c> passing a span; a pass that
 	/// <c>.Reads</c> it binds it to the technique's reflected storage-buffer slot, so its contents need no graph
 	/// rebuild. <typeparamref name="T"/>'s layout must match the shader's structured-buffer element on both backends.
-	/// Anchored to the backbuffer domain (it has no resolution of its own).
+	/// Anchored to the backbuffer domain (it has no resolution of its own). When <paramref name="growable"/> the
+	/// <paramref name="count"/> is an initial capacity and a larger <c>IEngine.Write</c> grows the GPU allocation
+	/// (geometrically) instead of throwing — the substrate for a dynamically-sized buffer.
 	/// </summary>
-	public StorageBufferHandle Storage<T>(string name, int count) where T : unmanaged
+	public StorageBufferHandle Storage<T>(string name, int count, bool growable = false) where T : unmanaged
 	{
 		if (count <= 0)
 			throw new ArgumentOutOfRangeException(nameof(count), "A storage buffer needs a positive element count.");
-		return (StorageBufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Storage, BackbufferDomainForPersistent(), scale: 1f, byteSize: count * Unsafe.SizeOf<T>());
+		return (StorageBufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Storage, BackbufferDomainForPersistent(), scale: 1f, byteSize: count * Unsafe.SizeOf<T>(), growable: growable);
 	}
 
-	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0)
+	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0, bool growable = false)
 	{
 		if (!_resourceNames.Add(name))
 			throw new InvalidOperationException($"Duplicate resource name '{name}'.");
@@ -213,7 +215,7 @@ public sealed class GraphBuilder
 			ResourceKind.Depth => new DepthHandle(id, name, format, domain, scale),
 			ResourceKind.Buffer => new BufferHandle(id, name, format, domain, byteSize),
 			ResourceKind.Constants => new ConstantsHandle(id, name, domain, byteSize),
-			ResourceKind.Storage => new StorageBufferHandle(id, name, domain, byteSize),
+			ResourceKind.Storage => new StorageBufferHandle(id, name, domain, byteSize, growable),
 			// Color / Persistent / Backbuffer are all colour-like images; the lifetime/role lives in Kind.
 			_ => new ColorHandle(id, name, format, kind, domain, scale, count),
 		};

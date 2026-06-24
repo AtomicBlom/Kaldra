@@ -43,10 +43,19 @@ public abstract class ResourceHandle
 	/// <summary>For <see cref="ResourceKind.Buffer"/>: the buffer's size in bytes. 0 for image resources.</summary>
 	public int ByteSize { get; }
 
+	/// <summary>
+	/// For a <see cref="ResourceKind.Storage"/> buffer: whether its GPU allocation may grow at runtime. When true,
+	/// <c>IEngine.Write</c> with a span larger than the current capacity reallocates the buffer (geometrically)
+	/// instead of throwing; <see cref="ByteSize"/> is then the <em>initial</em> capacity, not a fixed one. A storage
+	/// buffer's size is pure allocation — it doesn't feed the schedule, barriers, or aliasing — so growth is a local
+	/// reallocation, never a graph rebuild. False (the default) for every other kind and for fixed storage buffers.
+	/// </summary>
+	public bool Growable { get; }
+
 	/// <summary>True if this is the swapchain present target.</summary>
 	public bool IsBackbuffer => Kind == ResourceKind.Backbuffer;
 
-	private protected ResourceHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count, int byteSize)
+	private protected ResourceHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count, int byteSize, bool growable = false)
 	{
 		Id = id;
 		Name = name;
@@ -56,6 +65,7 @@ public abstract class ResourceHandle
 		Scale = scale;
 		Count = count;
 		ByteSize = byteSize;
+		Growable = growable;
 	}
 
 	/// <summary>The pixel dimensions of this resource, resolving <see cref="Scale"/> against its domain.</summary>

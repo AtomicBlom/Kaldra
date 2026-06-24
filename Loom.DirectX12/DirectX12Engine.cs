@@ -410,6 +410,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	// The base has already drained the GPU when a prior graph existed.
 	protected override void ReleaseGraphResources() => _transients?.Dispose();
 
+	protected override void GrowStorage(int id, int newByteSize) => _transients!.GrowStorage(_ctx, id, newByteSize, Graph!.Resources[id].Name);
+
 	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed)
 	{
 		// Members after a bucket's first reuse an earlier member's memory mid-frame and need an aliasing barrier on

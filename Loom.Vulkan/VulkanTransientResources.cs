@@ -298,6 +298,29 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 		}
 	}
 
+	/// <summary>Reallocate a growable storage resource's per-slot buffers to <paramref name="newByteSize"/> bytes. The
+	/// caller has drained the GPU, so freeing and recreating in place is safe; the next frame re-binds the new buffers
+	/// (each draw fetches the storage buffer afresh) and re-uploads the enlarged shadow.</summary>
+	public void GrowStorage(int id, int newByteSize)
+	{
+		BufferCreateInfo info = new()
+		{
+			SType = StructureType.BufferCreateInfo,
+			Size = (ulong)newByteSize,
+			Usage = BufferUsageFlags.StorageBufferBit,
+			SharingMode = SharingMode.Exclusive,
+		};
+		for (var slot = 0; slot < _storageBuffers.Length; slot++)
+		{
+			if (_storageBuffers[slot][id].Handle != 0)
+				_vk.DestroyBuffer(_ctx.Device, _storageBuffers[slot][id], null);
+			_storageAllocations[slot][id]?.Dispose();
+			_storageBuffers[slot][id] = _allocator.CreateBuffer(in info, new AllocationCreateInfo { Usage = MemoryUsage.CPU_Only }, out var allocation);
+			_storageAllocations[slot][id] = allocation;
+			_ctx.SetObjectName(ObjectType.Buffer, _storageBuffers[slot][id].Handle, $"{_graph.Resources[id].Name}#{slot}");
+		}
+	}
+
 	// One device-local buffer per Buffer resource per frame slot (multi-buffered: a frame's compute writes it
 	// while an earlier frame's draw may still read its own slot's copy). Usage covers storage (compute write)
 	// + vertex (draw read) — the GPU particle path.

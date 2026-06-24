@@ -239,6 +239,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_persistentState.Clear();
 	}
 
+	protected override void GrowStorage(int id, int newByteSize) => _transients!.GrowStorage(id, newByteSize);
+
 	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed)
 	{
 		// Every bucket member after the first reuses an earlier alias's memory this frame, so its Undefined→… birth
