@@ -59,6 +59,17 @@ public abstract class EngineBase : IEngine
 	/// <summary>The path the next presented frame should be captured to, or null. A backend's frame loop reads and clears it.</summary>
 	protected string? CapturePath { get; set; }
 
+	private readonly Action<string, TechniqueDescriptor> _defineTechniqueDelegate;
+	private readonly Action _waitIdleDelegate;
+	private readonly Action _resetPipelineCachesDelegate;
+
+	public EngineBase()
+	{
+		_defineTechniqueDelegate = DefineTechnique;
+		_waitIdleDelegate = WaitIdle;
+		_resetPipelineCachesDelegate = ResetPipelineCaches;
+	}
+
 	/// <summary>Capture the next presented frame to a PNG at <paramref name="path"/>.</summary>
 	public void RequestCapture(string path) => CapturePath = path;
 
@@ -83,7 +94,7 @@ public abstract class EngineBase : IEngine
 	/// Drain queued shader reloads on the render thread: drain the GPU, rebuild every affected technique, then reset
 	/// the backend's pipeline caches so the next frame re-bakes from the new bytecode. A no-op when nothing changed.
 	/// </summary>
-	protected void DrainShaderReloads() => _reload.Drain(WaitIdle, DefineTechnique, ResetPipelineCaches);
+	protected void DrainShaderReloads() => _reload.Drain(_waitIdleDelegate, _defineTechniqueDelegate, _resetPipelineCachesDelegate);
 
 	/// <summary>Evict the backend's baked pipelines/PSOs so the next bake rebuilds them from the re-registered templates.</summary>
 	protected abstract void ResetPipelineCaches();

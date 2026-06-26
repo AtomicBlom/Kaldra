@@ -36,7 +36,10 @@ internal sealed unsafe partial class VulkanRenderContext
 		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
 		_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
 
-		Viewport viewport = new() { X = 0, Y = 0, Width = _fbExtent.Width, Height = _fbExtent.Height, MinDepth = 0, MaxDepth = 1 };
+		// Use the current pass scope dimensions for the viewport; fall back to the framebuffer extent for
+		// passes that don't set a scope (e.g. direct screen passes without a domain).
+		var layerArea = _scopeArea.Width != 0 ? _scopeArea : _fbExtent;
+		Viewport viewport = new() { X = 0, Y = 0, Width = layerArea.Width, Height = layerArea.Height, MinDepth = 0, MaxDepth = 1 };
 		_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
 
 		// The shared per-list push fills the block's first slots; each command rewrites the slot right after it with
@@ -54,13 +57,12 @@ internal sealed unsafe partial class VulkanRenderContext
 			SamplerAddress.MirrorRepeat => template.LinearFilter ? _mirrorLinearSampler : _mirrorNearestSampler,
 			SamplerAddress.ClampToBorder => template.LinearFilter ? _borderLinearSampler : _borderNearestSampler,
 			SamplerAddress.MirrorClampToEdge => template.LinearFilter ? _mirrorEdgeLinearSampler : _mirrorEdgeNearestSampler,
-			_ => throw new VulkanException($"SamplerAddress '{template.Address}' is not mapped to a sampler."),
+			_ => throw new VulkanException($"SamplerAddress '{template.Address}' is not mapped to a sampler.")
 		};
 
 		// Group-opacity layers are only meaningful on an overlay-vertex list (the only producer of the markers); a
 		// scope to suspend; and a surface-pixel→clip push to size the composite quad. Without all three, markers fold
 		// to no-ops (a zero-index draw).
-		var layerArea = _scopeArea.Width != 0 ? _scopeArea : _fbExtent;
 		var layersSupported = Unsafe.SizeOf<TVertex>() == Unsafe.SizeOf<OverlayVertex>()
 			&& _scopeColorCount > 0 && _colorCount > 0 && push.Length >= 2 && push[0] != 0 && push[1] != 0;
 		var overlay = layersSupported ? MemoryMarshal.Cast<TVertex, OverlayVertex>(vertices) : default;
@@ -113,8 +115,8 @@ internal sealed unsafe partial class VulkanRenderContext
 			var clip = c.ClipRect;
 			var minX = MathF.Max(0, clip.X);
 			var minY = MathF.Max(0, clip.Y);
-			var maxX = MathF.Min(_fbExtent.Width, clip.X + clip.Width);
-			var maxY = MathF.Min(_fbExtent.Height, clip.Y + clip.Height);
+			var maxX = MathF.Min(layerArea.Width, clip.X + clip.Width);
+			var maxY = MathF.Min(layerArea.Height, clip.Y + clip.Height);
 			if (maxX <= minX || maxY <= minY)
 				continue;
 

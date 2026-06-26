@@ -1,0 +1,207 @@
+using System.Numerics;
+using Loom.Core.Hosting;
+using SUIsei;
+// SUIsei.Drawing and Loom.Core.Hosting both export DrawListId — alias to pin the SUIsei side (matches UIPainter.cs).
+using DrawListId = SUIsei.Drawing.DrawListId;
+
+namespace Loom.UI.SUIsei;
+
+/// <summary>
+/// An interactive UI panel placed in the 3D world — renders a SUIsei surface into an offscreen texture via the
+/// standard "ui" draw-list path, and maps screen-space pointer events onto the panel's 2D surface by intersecting
+/// a camera ray with the panel's world-space quad. From SUIsei's perspective it is just a 2D surface with its own
+/// <see cref="UIHost"/>; all 3D concerns (world transform, billboard, ray unprojection) live here in the bridge.
+/// </summary>
+/// <remarks>
+/// Usage pattern per frame:
+/// <list type="number">
+/// <item>Queue screen-space pointer events with <see cref="QueueScreenPointer"/> (alongside the main uiHost).</item>
+/// <item>Call <see cref="Tick"/> with the current camera matrices — projects hits onto the panel and drives layout.</item>
+/// <item>Call <see cref="Render"/> to composite the visual tree.</item>
+/// <item>Submit the composited draw list from a render-graph pass via <see cref="Draw"/>.</item>
+/// </list>
+/// </remarks>
+public sealed class InWorldPanel
+{
+	private readonly UIHost _host;
+	private readonly UIView _view;
+	private readonly UIPainter _painter;
+	private readonly Queue<PointerInput> _pendingPointers = new();
+	private readonly int _pixelWidth;
+	private readonly int _pixelHeight;
+	private readonly bool _billboard;
+
+	private InWorldPanel(UIHost host, UIView view, UIPainter painter,
+		int pixelWidth, int pixelHeight, Matrix4x4 worldTransform, bool billboard)
+	{
+		_host = host;
+		_view = view;
+		_painter = painter;
+		_pixelWidth = pixelWidth;
+		_pixelHeight = pixelHeight;
+		WorldTransform = worldTransform;
+		_billboard = billboard;
+	}
+
+	/// <summary>
+	/// Create an in-world panel. The panel texture's resolution is <paramref name="pixelWidth"/>×<paramref name="pixelHeight"/>.
+	/// The physical world size of the quad is expressed by the <b>scale baked into <paramref name="worldTransform"/></b> — use a
+	/// unit quad mesh (vertices at ±0.5 in XY) and let the transform's scale set the world dimensions.
+	/// </summary>
+	public static InWorldPanel Create(
+		IEngine engine,
+		int pixelWidth,
+		int pixelHeight,
+		Matrix4x4 worldTransform,
+		bool billboard = false,
+		float layoutScale = 1f,
+		FontAtlas? fontAtlas = null)
+	{
+		var host = new UIHost();
+		var view = host.CreateRoot(new UILayer(0, layoutScale), interactive: true);
+		var painter = UIPainter.Create(engine, host, fontAtlas);
+		return new InWorldPanel(host, view, painter, pixelWidth, pixelHeight, worldTransform, billboard);
+	}
+
+	/// <summary>The underlying <see cref="UIView"/>. Set <c>View.Root.Content</c> to assign the panel's UI tree.</summary>
+	public UIView View => _view;
+
+	/// <summary>The draw-list id this panel composites into. Pass to <see cref="Draw"/> from a render-graph pass.</summary>
+	public DrawListId Surface => _view.Surface;
+
+	/// <summary>The panel texture width in pixels.</summary>
+	public int PixelWidth => _pixelWidth;
+
+	/// <summary>The panel texture height in pixels.</summary>
+	public int PixelHeight => _pixelHeight;
+
+	/// <summary>
+	/// The panel's world transform. Scale determines the physical quad size; rotation sets orientation.
+	/// Updated each frame by billboard mode when <c>billboard: true</c> was passed to <see cref="Create"/>.
+	/// </summary>
+	public Matrix4x4 WorldTransform { get; set; }
+
+	/// <summary>
+	/// The last successful screen-to-panel projection for this frame, in panel pixels [0..PixelWidth) × [0..PixelHeight).
+	/// Null when no queued pointer event hit the quad. Reset at the start of each <see cref="Tick"/>.
+	/// </summary>
+	public Vector2? LastHitPixel { get; private set; }
+
+	/// <summary>
+	/// Queue a screen-space pointer event for this panel. Call alongside the main <c>uiHost.QueuePointer</c> for
+	/// every mouse/touch event. Events are stored; the hit-test happens in <see cref="Tick"/> once the camera
+	/// matrices are available.
+	/// </summary>
+	public void QueueScreenPointer(in PointerInput e) => _pendingPointers.Enqueue(e);
+
+	/// <summary>
+	/// Drive the panel for one frame: unprojects queued screen-pointer events onto the panel surface (discarding
+	/// misses), optionally updates <see cref="WorldTransform"/> for billboard, then drives internal layout and routing.
+	/// </summary>
+	/// <param name="deltaSeconds">Frame delta in seconds.</param>
+	/// <param name="time">Elapsed time in seconds (drives animations).</param>
+	/// <param name="view">Camera view matrix — used for billboard rotation and ray construction.</param>
+	/// <param name="viewProjection">Camera view-projection (clip-space-corrected) — used for ray unprojection.</param>
+	/// <param name="framebufferSize">Window framebuffer size in pixels — used to convert screen coords to NDC.</param>
+	public void Tick(double deltaSeconds, float time, Matrix4x4 view, Matrix4x4 viewProjection, Vector2 framebufferSize)
+	{
+		if (_billboard)
+			UpdateBillboard(view);
+
+		// Process screen-space events: project each onto the panel; queue remapped events for the internal host.
+		LastHitPixel = null;
+		while (_pendingPointers.TryDequeue(out var e))
+		{
+			if (TryUnprojectToPanel(e.Position, viewProjection, framebufferSize, out var uiLocal))
+			{
+				_host.QueuePointer(e with { Position = uiLocal });
+				LastHitPixel = uiLocal;
+			}
+		}
+
+		_host.Tick(deltaSeconds, time, new Vector2(_pixelWidth, _pixelHeight));
+	}
+
+	/// <summary>Composite the panel's visual tree to a draw list. Call once per frame after <see cref="Tick"/>.</summary>
+	public void Render() => _host.Render();
+
+	/// <summary>
+	/// Submit the composited draw list through a render-graph pass. Call from a pass that <c>.Writes</c> the panel
+	/// texture — this is the UI render into the offscreen target, before the world-space quad samples it.
+	/// </summary>
+	public void Draw(IRenderContext ctx) => _painter.Draw(ctx, Surface);
+
+	private void UpdateBillboard(Matrix4x4 view)
+	{
+		if (!Matrix4x4.Invert(view, out var inverseView))
+			return;
+
+		var cameraPos = inverseView.Translation;
+		var pos = WorldTransform.Translation;
+
+		// Preserve the transform's scale by measuring the row lengths.
+		var scaleX = new Vector3(WorldTransform.M11, WorldTransform.M12, WorldTransform.M13).Length();
+		var scaleY = new Vector3(WorldTransform.M21, WorldTransform.M22, WorldTransform.M23).Length();
+		var scaleZ = new Vector3(WorldTransform.M31, WorldTransform.M32, WorldTransform.M33).Length();
+
+		// Build a face-camera rotation: +Z faces the camera, +Y stays near world up.
+		var forward = Vector3.Normalize(cameraPos - pos);
+		var right = Vector3.Cross(Vector3.UnitY, forward);
+		if (right.LengthSquared() < 1e-6f)
+			right = Vector3.UnitX; // camera directly above/below — fall back to +X
+		else
+			right = Vector3.Normalize(right);
+		var up = Vector3.Cross(forward, right);
+
+		WorldTransform = new Matrix4x4(
+			right.X * scaleX,   right.Y * scaleX,   right.Z * scaleX,   0,
+			up.X * scaleY,      up.Y * scaleY,      up.Z * scaleY,      0,
+			forward.X * scaleZ, forward.Y * scaleZ, forward.Z * scaleZ, 0,
+			pos.X, pos.Y, pos.Z, 1);
+	}
+
+	private bool TryUnprojectToPanel(Vector2 screenPos, Matrix4x4 viewProjection, Vector2 framebufferSize, out Vector2 uiLocal)
+	{
+		uiLocal = default;
+
+		// Map screen coords to Vulkan NDC. camera.ViewProjection is clip-space-corrected (world +Y → Vulkan NDC
+		// Y=-1 = top), so we use the Vulkan convention here (no Y flip): screen Y=0 → NDC Y=-1 (top).
+		var ndc = new Vector2(
+			(screenPos.X / framebufferSize.X) * 2f - 1f,
+			(screenPos.Y / framebufferSize.Y) * 2f - 1f);
+
+		if (!Matrix4x4.Invert(viewProjection, out var invVP))
+			return false;
+
+		// Unproject near (Z=0) and far (Z=1) clip-space points to world space.
+		var nearH = Vector4.Transform(new Vector4(ndc.X, ndc.Y, 0f, 1f), invVP);
+		var farH  = Vector4.Transform(new Vector4(ndc.X, ndc.Y, 1f, 1f), invVP);
+		var nearW = new Vector3(nearH.X, nearH.Y, nearH.Z) / nearH.W;
+		var farW  = new Vector3(farH.X,  farH.Y,  farH.Z)  / farH.W;
+		var rayDir = Vector3.Normalize(farW - nearW);
+
+		// Transform ray into quad-local space. The quad is a unit XY plane (Z = 0, spanning [-0.5, 0.5]²).
+		if (!Matrix4x4.Invert(WorldTransform, out var invWorld))
+			return false;
+
+		var originL = Vector3.Transform(nearW, invWorld);
+		var dirL    = Vector3.TransformNormal(rayDir, invWorld);
+
+		if (MathF.Abs(dirL.Z) < 1e-6f)
+			return false; // ray parallel to quad plane
+
+		var t = -originL.Z / dirL.Z;
+		if (t <= 0)
+			return false; // intersection behind camera
+
+		var hit = originL + dirL * t;
+		// hit.XY is in quad-local [-0.5, 0.5]; map to UV [0, 1], then to panel pixels.
+		var u = hit.X + 0.5f;
+		var v = 0.5f - hit.Y; // +Y local = up → v increases downward to match screen convention
+		if (u is < 0 or > 1 || v is < 0 or > 1)
+			return false; // outside the quad
+
+		uiLocal = new Vector2(u * _pixelWidth, v * _pixelHeight);
+		return true;
+	}
+}

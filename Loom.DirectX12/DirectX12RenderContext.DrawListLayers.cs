@@ -46,7 +46,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 		_cmd.IASetIndexBuffer(&ibv);
 
 		// Negative-height viewport (origin at the bottom) so the same +Y-down clip math as the Vulkan backend applies.
-		var viewport = new Viewport { TopLeftX = 0, TopLeftY = _fbHeight, Width = _fbWidth, Height = -(float)_fbHeight, MinDepth = 0, MaxDepth = 1 };
+		// Use the current pass scope dimensions so DrawList targets off-screen domains at their native resolution.
+		var viewport = new Viewport { TopLeftX = 0, TopLeftY = _scopeHeight, Width = _scopeWidth, Height = -(float)_scopeHeight, MinDepth = 0, MaxDepth = 1 };
 		_cmd.RSSetViewports(1, &viewport);
 
 		// The shared per-list push fills the block's first slots; each command rewrites the slot right after it with
@@ -118,8 +119,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 			var clip = c.ClipRect;
 			var minX = MathF.Max(0, clip.X);
 			var minY = MathF.Max(0, clip.Y);
-			var maxX = MathF.Min(_fbWidth, clip.X + clip.Width);
-			var maxY = MathF.Min(_fbHeight, clip.Y + clip.Height);
+			var maxX = MathF.Min(_scopeWidth, clip.X + clip.Width);
+			var maxY = MathF.Min(_scopeHeight, clip.Y + clip.Height);
 			if (maxX <= minX || maxY <= minY)
 				continue;
 
