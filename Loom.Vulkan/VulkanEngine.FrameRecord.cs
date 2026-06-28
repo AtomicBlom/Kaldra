@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Numerics;
 
 using Loom.Core.Graph;
 using Loom.Graph;
@@ -245,7 +246,7 @@ internal sealed unsafe partial class VulkanEngine
 					ImageLayout = ImageLayout.ColorAttachmentOptimal,
 					LoadOp = ToLoadOp(attachment.Load),
 					StoreOp = ToStoreOp(attachment.Store),
-					ClearValue = ClearColor,
+					ClearValue = ToVkClearColor(attachment.ClearValue),
 				};
 			}
 			else
@@ -369,4 +370,7 @@ internal sealed unsafe partial class VulkanEngine
 
 	private static AttachmentStoreOp ToStoreOp(StoreAction store) =>
 		store == StoreAction.Store ? AttachmentStoreOp.Store : AttachmentStoreOp.DontCare;
+
+	private static ClearValue ToVkClearColor(Vector4? rgba) =>
+		rgba is { } cv ? new ClearValue(color: new ClearColorValue(cv.X, cv.Y, cv.Z, cv.W)) : default;
 }

@@ -1,3 +1,4 @@
+using System.Numerics;
 using Loom.Core.Graph;
 using Loom.Graph;
 
@@ -34,14 +35,15 @@ public class BarrierPlanTests
 	})));
 
 	[Test]
-	public void First_write_of_a_fresh_target_clears_and_stores_when_read_later()
+	public void First_write_of_a_fresh_target_clears_to_transparent_black_and_stores_when_read_later()
 	{
 		var gbuffer = Pass(ReferenceFrame(), "gbuffer");
 
 		HasTransition(gbuffer, "albedo", ResourceState.Undefined, ResourceState.ColorAttachment).ShouldBeTrue();
 		var albedo = Attachment(gbuffer, "albedo");
-		albedo.Load.ShouldBe(LoadAction.Clear);
-		albedo.Store.ShouldBe(StoreAction.Store); // sampled by lighting
+		albedo.Load.ShouldBe(LoadAction.Clear);         // default: clear to transparent black
+		albedo.ClearValue.ShouldBe(Vector4.Zero);
+		albedo.Store.ShouldBe(StoreAction.Store);       // sampled by lighting
 	}
 
 	[Test]
@@ -78,15 +80,33 @@ public class BarrierPlanTests
 	}
 
 	[Test]
-	public void First_backbuffer_write_clears_second_loads_over_it()
+	public void First_backbuffer_write_clears_to_transparent_black_second_loads_over_it()
 	{
 		var plan = ReferenceFrame();
 
-		Attachment(Pass(plan, "upscale"), "<backbuffer>").Load.ShouldBe(LoadAction.Clear);
+		// Default: backbuffer clears to transparent black on its first write.
+		var first = Attachment(Pass(plan, "upscale"), "<backbuffer>");
+		first.Load.ShouldBe(LoadAction.Clear);
+		first.ClearValue.ShouldBe(Vector4.Zero);
 		// The HUD draws on top of the upscaled image, so it must preserve (load) existing contents.
 		Attachment(Pass(plan, "hud"), "<backbuffer>").Load.ShouldBe(LoadAction.Load);
 		// Same-layout WAW barrier orders hud after upscale on the backbuffer.
 		HasTransition(Pass(plan, "hud"), "<backbuffer>", ResourceState.ColorAttachment, ResourceState.ColorAttachment).ShouldBeTrue();
+	}
+
+	[Test]
+	public void NoClear_target_uses_dont_care_on_first_write()
+	{
+		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var screen = g.Backbuffer;
+			var ao = g.Screen.Color("ao", Format.R16F, noClear: true);
+			g.Pass("ssao").Writes(ao);
+			g.Pass("view").Samples(ao).Writes(screen);
+			g.Present(screen);
+		})));
+
+		Attachment(Pass(plan, "ssao"), "ao").Load.ShouldBe(LoadAction.DontCare);
 	}
 
 	[Test]

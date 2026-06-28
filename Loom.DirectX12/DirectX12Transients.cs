@@ -1,3 +1,5 @@
+using System.Numerics;
+
 using Loom.Core;
 using Loom.Core.Graph;
 using Loom.Graph;
@@ -187,7 +189,7 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 				// A depth target is created TYPELESS (so it can also be sampled); its DSV/clear use the typed depth
 				// format (D32_FLOAT) and its SRV the typed colour-compatible format (R32_FLOAT). Colour: all the same.
 				var (_, viewFormat, srvFormat) = DirectX12FormatMapping.ToDxgiViews(resource.Format);
-				var clear = BuildClear(viewFormat, isDepth);
+				var clear = BuildClear(viewFormat, isDepth, (resource as ColorHandle)?.ClearValue);
 				ComPtr<ID3D12Resource> texture = default;
 				SilkMarshal.ThrowHResult(ctx.Device.CreatePlacedResource(heap, 0, &desc, ResourceStates.Common, &clear, out texture));
 				ctx.SetObjectName((ID3D12Object*)texture.Handle, $"{resource.Name}#{slot}");
@@ -367,15 +369,21 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		};
 	}
 
-	// Optimized clear value matching the executor's clear (black colour / depth 1.0), so the debug layer
-	// doesn't warn on ClearRenderTargetView / ClearDepthStencilView.
-	private static ClearValue BuildClear(DxgiFormat format, bool isDepth)
+	// Optimized clear value hint for the D3D12 resource, matched to the executor's ClearRenderTargetView call
+	// so the debug layer doesn't warn. For colour targets without a declared clear value, the runtime never
+	// clears, so any hint value is fine (we use all-zero).
+	private static ClearValue BuildClear(DxgiFormat format, bool isDepth, Vector4? colorClear = null)
 	{
 		var clear = new ClearValue { Format = format };
 		if (isDepth)
 			clear.Anonymous.DepthStencil = new DepthStencilValue { Depth = 1f, Stencil = 0 };
-		else
-			clear.Anonymous.Color[3] = 1f;
+		else if (colorClear is { } cv)
+		{
+			clear.Anonymous.Color[0] = cv.X;
+			clear.Anonymous.Color[1] = cv.Y;
+			clear.Anonymous.Color[2] = cv.Z;
+			clear.Anonymous.Color[3] = cv.W;
+		}
 		return clear;
 	}
 

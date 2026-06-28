@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Numerics;
 using System.Text;
 using Loom.Core.Graph;
 
@@ -75,17 +76,32 @@ public sealed class BarrierPlan
 				if (use.IsAttachment)
 				{
 					var first = !seen.Contains(id);
-					var load = (use.IsReadOnlyAttachment, use.IsBlend, first) switch
+					LoadAction load;
+					Vector4? clearValue = null;
+					if (use.IsReadOnlyAttachment)
+						load = LoadAction.Load;         // depth-read: existing depth is the input
+					else if (use.IsBlend)
+						load = LoadAction.Load;         // blend: accumulate onto existing contents
+					else if (first && use.Resource is ColorHandle ch)
 					{
-						(true, _, _) => LoadAction.Load,   // depth-read: existing depth is the input
-						(_, true, _) => LoadAction.Load,   // blend: accumulate onto existing contents
-						(_, _, true) => LoadAction.Clear,  // first write of a fresh target
-						_ => LoadAction.Load,               // write over an already-populated target
-					};
+						if (ch.NoClear)
+							load = LoadAction.DontCare; // opt-out: fullscreen pass covers every pixel
+						else
+						{
+							load = LoadAction.Clear;    // default: clear to declared colour or transparent black
+							clearValue = ch.ClearValue ?? Vector4.Zero;
+						}
+					}
+					else if (first && use.Resource is DepthHandle)
+						load = LoadAction.Clear;        // depth always clears to 1.0 on first write
+					else if (first)
+						load = LoadAction.DontCare;     // non-colour, non-depth first write (buffers etc.)
+					else
+						load = LoadAction.Load;         // write over an already-populated target
 					var store = use.IsReadOnlyAttachment
 						? StoreAction.DontCare
 						: (UsedAfter(usageOrders, id, scheduled.Order) || id == presentId ? StoreAction.Store : StoreAction.DontCare);
-					attachments.Add(new AttachmentAction(use.Resource, use.State, load, store));
+					attachments.Add(new AttachmentAction(use.Resource, use.State, load, store, clearValue));
 				}
 
 				currentState[id] = use.State;

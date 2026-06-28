@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace Loom.Core.Graph;
 
 /// <summary>
@@ -8,6 +10,24 @@ namespace Loom.Core.Graph;
 /// </summary>
 public sealed class ColorHandle : ResourceHandle, ITextureHandle, IStorageHandle
 {
-	internal ColorHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count)
-		: base(id, name, format, kind, domain, scale, count, byteSize: 0) { }
+	/// <summary>
+	/// The colour to clear this target to when a pass first writes it. <c>null</c> means clear to
+	/// <see cref="Vector4.Zero"/> (transparent black — the safe default for g-buffer targets and UI textures).
+	/// Only meaningful when <see cref="NoClear"/> is <c>false</c>.
+	/// </summary>
+	public Vector4? ClearValue { get; }
+
+	/// <summary>
+	/// When <c>true</c> the engine emits <c>LoadOp.DontCare</c> on the first write instead of clearing,
+	/// saving the GPU bandwidth of a clear. Only correct when the first pass that writes this target is
+	/// guaranteed to cover every pixel (fullscreen passes, bloom pyramid, SSAO output, etc.).
+	/// </summary>
+	public bool NoClear { get; }
+
+	internal ColorHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count, Vector4? clearValue = null, bool noClear = false)
+		: base(id, name, format, kind, domain, scale, count, byteSize: 0)
+	{
+		ClearValue = clearValue;
+		NoClear = noClear;
+	}
 }

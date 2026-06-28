@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Numerics;
 
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
@@ -129,7 +130,6 @@ public sealed unsafe partial class DirectX12Engine
 	{
 		var rtv = stackalloc CpuDescriptorHandle[8];
 		var formats = stackalloc DxgiFormat[8];
-		var black = stackalloc float[4] { 0f, 0f, 0f, 1f };
 		var colorCount = 0;
 		uint width = 0, height = 0;
 
@@ -138,6 +138,7 @@ public sealed unsafe partial class DirectX12Engine
 		var depthClear = false;
 		var depthReadOnly = false;
 		var depthFormat = DxgiFormat.FormatUnknown;
+		Span<float> clearFloats = stackalloc float[4];
 
 		foreach (var attachment in pass.Attachments)
 		{
@@ -159,8 +160,15 @@ public sealed unsafe partial class DirectX12Engine
 					formats[colorCount] = _transients.Format(index, id);
 					(width, height) = _transients.Extent(id);
 				}
-				if (attachment.Load == LoadAction.Clear)
-					_commandList.ClearRenderTargetView(rtv[colorCount], black, 0u, (Box2D<int>*)null);
+				if (attachment.Load == LoadAction.Clear && attachment.ClearValue is { } clearColor)
+				{
+					clearFloats[0] = clearColor.X;
+					clearFloats[1] = clearColor.Y;
+					clearFloats[2] = clearColor.Z;
+					clearFloats[3] = clearColor.W;
+					fixed (float* c = clearFloats)
+						_commandList.ClearRenderTargetView(rtv[colorCount], c, 0u, (Box2D<int>*)null);
+				}
 				colorCount++;
 			}
 			else // DepthAttachment or DepthReadOnly

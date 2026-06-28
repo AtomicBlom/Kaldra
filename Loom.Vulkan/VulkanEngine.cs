@@ -47,7 +47,6 @@ namespace Loom.Vulkan;
 internal sealed unsafe partial class VulkanEngine : EngineBase
 {
 	private const int MaxFramesInFlight = 2;
-	private static readonly ClearValue ClearColor = new(color: new ClearColorValue(0, 0, 0, 1));
 	private static readonly ClearValue ClearDepth = new(depthStencil: new ClearDepthStencilValue(1.0f, 0));
 
 	private readonly VulkanContext _ctx;

@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Numerics;
 
 namespace Loom.Core.Graph;
 
@@ -55,16 +56,22 @@ public sealed class Domain
 		Samples = samples;
 	}
 
-	/// <summary>Declare a colour target in this domain.</summary>
-	public ColorHandle Color(string name, Format format) =>
-		(ColorHandle)_graph.AddResource(name, format, ResourceKind.Color, this, scale: 1f);
+	/// <summary>
+	/// Declare a colour target in this domain. By default the engine clears it to <see cref="Vector4.Zero"/>
+	/// (transparent black) on first write — the safe choice for g-buffer targets and UI textures. Pass
+	/// <paramref name="clearValue"/> to use a specific colour instead. Set <paramref name="noClear"/> to skip
+	/// the clear entirely (<c>LoadOp.DontCare</c>) — only correct when the first pass covers every pixel
+	/// (fullscreen passes, bloom pyramid, SSAO output, etc.).
+	/// </summary>
+	public ColorHandle Color(string name, Format format, Vector4? clearValue = null, bool noClear = false) =>
+		(ColorHandle)_graph.AddResource(name, format, ResourceKind.Color, this, scale: 1f, clearValue: clearValue, noClear: noClear);
 
 	/// <summary>
 	/// Declare a colour target at a fraction of the domain's resolution (used for mip chains —
 	/// e.g. bloom's pyramid). <paramref name="scale"/> multiplies both width and height.
 	/// </summary>
-	public ColorHandle Color(string name, Format format, float scale) =>
-		(ColorHandle)_graph.AddResource(name, format, ResourceKind.Color, this, scale);
+	public ColorHandle Color(string name, Format format, float scale, Vector4? clearValue = null, bool noClear = false) =>
+		(ColorHandle)_graph.AddResource(name, format, ResourceKind.Color, this, scale, clearValue: clearValue, noClear: noClear);
 
 	/// <summary>Declare a depth target in this domain.</summary>
 	public DepthHandle Depth(string name, Format format) =>

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 
 namespace Loom.Core.Graph;
@@ -27,6 +28,8 @@ public sealed class GraphBuilder
 
 	private Domain? _backbufferDomain;
 	private ColorHandle? _backbuffer;
+	private Vector4? _backbufferClearValue;
+	private bool _backbufferNoClear;
 	private ResourceHandle? _presentTarget;
 
 	internal GraphBuilder() { }
@@ -91,6 +94,38 @@ public sealed class GraphBuilder
 	}
 
 	/// <summary>
+	/// The colour the engine clears the backbuffer to before the first pass writes it. <c>null</c> (the
+	/// default) clears to <see cref="Vector4.Zero"/> (transparent black). Must be set before the first
+	/// <see cref="Backbuffer"/> access — the handle is immutable once created.
+	/// </summary>
+	public Vector4? BackbufferClear
+	{
+		get => _backbufferClearValue;
+		set
+		{
+			if (_backbuffer is not null)
+				throw new InvalidOperationException("Set BackbufferClear before the first g.Backbuffer access — the handle is immutable once created.");
+			_backbufferClearValue = value;
+		}
+	}
+
+	/// <summary>
+	/// When <c>true</c>, the engine skips clearing the backbuffer on its first write (<c>LoadOp.DontCare</c>).
+	/// Only correct when the first pass that writes the backbuffer is guaranteed to cover every pixel.
+	/// Must be set before the first <see cref="Backbuffer"/> access.
+	/// </summary>
+	public bool BackbufferNoClear
+	{
+		get => _backbufferNoClear;
+		set
+		{
+			if (_backbuffer is not null)
+				throw new InvalidOperationException("Set BackbufferNoClear before the first g.Backbuffer access — the handle is immutable once created.");
+			_backbufferNoClear = value;
+		}
+	}
+
+	/// <summary>
 	/// The swapchain colour target (native resolution; backend-chosen format). This <em>is</em> the
 	/// present surface — hand it to <c>.Writes</c>/<c>.Blends</c> and to <see cref="Present"/>. Its
 	/// <see cref="ResourceHandle.Domain"/> is the native-resolution domain, for declaring sibling
@@ -105,7 +140,7 @@ public sealed class GraphBuilder
 
 			_backbufferDomain = new Domain(this, "<backbuffer>", width: 0, height: 0, isBackbuffer: true);
 			_domains.Add(_backbufferDomain);
-			_backbuffer = (ColorHandle)AddResource("<backbuffer>", Format.Rgba8Srgb, ResourceKind.Backbuffer, _backbufferDomain, scale: 1f);
+			_backbuffer = (ColorHandle)AddResource("<backbuffer>", Format.Rgba8Srgb, ResourceKind.Backbuffer, _backbufferDomain, scale: 1f, clearValue: _backbufferClearValue, noClear: _backbufferNoClear);
 			return _backbuffer;
 		}
 	}
@@ -205,7 +240,7 @@ public sealed class GraphBuilder
 		return (StorageBufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Storage, BackbufferDomainForPersistent(), scale: 1f, byteSize: count * Unsafe.SizeOf<T>(), growable: growable);
 	}
 
-	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0, bool growable = false)
+	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0, bool growable = false, Vector4? clearValue = null, bool noClear = false)
 	{
 		if (!_resourceNames.Add(name))
 			throw new InvalidOperationException($"Duplicate resource name '{name}'.");
@@ -217,7 +252,7 @@ public sealed class GraphBuilder
 			ResourceKind.Constants => new ConstantsHandle(id, name, domain, byteSize),
 			ResourceKind.Storage => new StorageBufferHandle(id, name, domain, byteSize, growable),
 			// Color / Persistent / Backbuffer are all colour-like images; the lifetime/role lives in Kind.
-			_ => new ColorHandle(id, name, format, kind, domain, scale, count),
+			_ => new ColorHandle(id, name, format, kind, domain, scale, count, clearValue, noClear)
 		};
 		_resources.Add(handle);
 		return handle;

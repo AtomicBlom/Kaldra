@@ -1,3 +1,4 @@
+using System.Numerics;
 using Loom.Core.Graph;
 
 namespace Loom.Graph;
@@ -11,4 +12,5 @@ namespace Loom.Graph;
 /// <param name="State">The attachment's role this pass (colour vs depth-write vs depth-read).</param>
 /// <param name="Load">How to treat existing contents on begin.</param>
 /// <param name="Store">Whether to keep the contents on end.</param>
-public readonly record struct AttachmentAction(ResourceHandle Resource, ResourceState State, LoadAction Load, StoreAction Store);
+/// <param name="ClearValue">The colour to clear to when <see cref="Load"/> is <see cref="LoadAction.Clear"/>; null for depth clears (the value is fixed at 1.0) or when the load action is not Clear.</param>
+public readonly record struct AttachmentAction(ResourceHandle Resource, ResourceState State, LoadAction Load, StoreAction Store, Vector4? ClearValue = null);
