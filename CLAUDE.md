@@ -113,3 +113,40 @@ For **objective, quantitative** checks that need no correctness judgment — "di
 Capture the frames headlessly with `--capture <path>` (frozen time), picking demo/backend via `--demo <name|index>` / `--backend dx12`. See `Scripts/Verification/README.md`.
 
 There is now **one host** (`Loom.Sandbox/Program.cs`) serving both backends — `--backend` swaps only the window surface + engine settings (`CreateWindow`/`CreateEngine`); the demo gallery and per-frame loop are shared, so the two backends can't drift out of sync. (Historically there were two hosts, `Program.cs` + `Dx12Smoke.cs`; a `GetCamera` divergence between them once cost a long hunt for a non-existent SPIR-V↔DXIL matrix-layout bug — the merged host removes that hazard.) When a demo renders on one backend but not the other, suspect the shared per-frame inputs or a genuine backend/shader difference, not host divergence.
+
+## Roslyn MCP
+
+A `roslyn-refactor` MCP server is configured in `.mcp.json` and **must be preferred over text-based tools for all C# work when available**. It is not installed by default — install it once with:
+
+```
+dotnet tool install -g RoslynMcp.Server
+```
+
+The command registered is `roslyn-mcp`. The server reads from disk on every call so the workspace is always current after a save — no reload needed between an edit and a query. The solution path for all calls is `d:\DotNet\Games\Loom\Loom.slnx`.
+
+**Never use `Grep` to search `.cs` files for symbols, usages, or callers** — text search misses renames, overloads, and implicit implementations. Use the semantic equivalents:
+
+| Task | Tool |
+|---|---|
+| Find a type/member by name | `search_symbols` |
+| Find all usages of a symbol | `find_references` |
+| Find call sites of a method | `find_callers` |
+| Find implementations of an interface/virtual | `find_implementations` |
+| Navigate to a definition | `go_to_definition` |
+| List all members of a file | `get_document_outline` |
+| Get type/member metadata | `get_symbol_info` |
+| Inspect inheritance hierarchy | `get_type_hierarchy` |
+
+**All refactoring operations must go through Roslyn** when a matching tool exists — not manual text edits:
+
+- **Rename** any symbol: `rename_symbol` (updates all references atomically)
+- **Extract** method / variable / constant / interface / base class: `extract_method`, `extract_variable`, `extract_constant`, `extract_interface`, `extract_base_class`
+- **Move** type to its own file or namespace: `move_type_to_file`, `move_type_to_namespace`
+- **Change** a method's signature: `change_signature`
+- **Convert** expression body ↔ block, `foreach` → LINQ, property kinds, sync → async, string concat → interpolation, `if`/`switch` → pattern matching: `convert_*`
+- **Generate** constructor / `Equals`+`GetHashCode` / overrides / `ToString`: `generate_*`
+- **Usings**: `add_missing_usings`, `remove_unused_usings`, `sort_usings`
+
+**After editing any `.cs` file**, call `get_diagnostics` (with `severityFilter: "Error"`) before declaring the change done — the server picks up saved files immediately.
+
+Make sure you tell this to ANY sub agents as well.
