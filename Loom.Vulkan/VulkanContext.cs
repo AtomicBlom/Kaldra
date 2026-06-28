@@ -387,7 +387,8 @@ public sealed unsafe class VulkanContext : IDisposable
 
 		Vk.GetPhysicalDeviceFeatures2(device, &features);
 		return f13.DynamicRendering && f13.Synchronization2
-			&& f12.TimelineSemaphore && f11.ShaderDrawParameters;
+			&& f12.TimelineSemaphore && f12.SamplerMirrorClampToEdge
+			&& f11.ShaderDrawParameters;
 	}
 
 	private void CreateLogicalDevice()
@@ -421,6 +422,7 @@ public sealed unsafe class VulkanContext : IDisposable
 		{
 			SType = StructureType.PhysicalDeviceVulkan12Features,
 			TimelineSemaphore = true,
+			SamplerMirrorClampToEdge = true,
 			PNext = &f11,
 		};
 		PhysicalDeviceVulkan13Features f13 = new()
