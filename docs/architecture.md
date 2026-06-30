@@ -5,8 +5,8 @@ Loom is a **declarative, render-graph-driven rendering engine for .NET**. You de
 ## Three layers
 
 ```
-Loom.Core  ──(Describe)──►  Loom.Graph  ──(Execute)──►  Loom.Vulkan
-(your code)                                              Loom.DirectX12
+Loom.Core  ──(Describe)──►  Loom.Graph  ──(Execute)──►  Loom.Backend.Vulkan
+(your code)                                              Loom.Backend.DirectX12
 ```
 
 ### Describe — `Loom.Core`
@@ -16,8 +16,9 @@ Immutable, hashable, fluent builders. You call `RenderGraph.Define` once per str
 - `GraphBuilder` — the root builder (`g => { … }`)
 - `Domain` — a named resolution domain (fixed size or backbuffer-relative)
 - `ColorHandle / DepthHandle / BufferHandle` — typed resource handles
-- `PassBuilder` — one GPU pass; declares `.Writes`, `.Blends`, `.Samples`, `.WritesDepth`, `.ReadsDepth`, `.ReadsVertex`, `.ReadWrites`
-- Pass callbacks (`.Draw`, `.Dispatch`) — closures that pull per-frame data from `IRenderContext`
+- `PassBuilder` — one GPU pass; declares `.Writes`, `.Blends`, `.Samples`, `.WritesDepth`, `.ReadsDepth`, `.ReadsVertex`, `.ReadWrites`, `.Reads`
+- `ConstantsHandle` / `StorageBufferHandle` — neutral per-frame channels the app fills by handle (`IEngine.Write`) and a pass `.Reads`; how view/light/time data reaches a pass without the engine naming a game concept
+- Pass callbacks (`.Draw`, `.Dispatch`) — closures that pull per-frame data from `IRenderContext` and from the `Constants`/`Storage` buffers the pass reads, rather than capturing it
 
 No graphics-API type appears here. This layer allocates freely and is safe to call from any thread.
 
@@ -27,7 +28,7 @@ Per-frame: topological sort from the read/write edges, barrier/layout-transition
 
 `EngineBase` owns the shared engine lifecycle: technique registration, shader hot-reload, GPU-timing decode, and frame capture. Backend-specific execution (command recording) stays in each backend.
 
-### Bake + Record — `Loom.Vulkan` / `Loom.DirectX12`
+### Bake + Record — `Loom.Backend.Vulkan` / `Loom.Backend.DirectX12`
 
 Translate the neutral schedule into real GPU work. Backends:
 
@@ -40,8 +41,8 @@ No graphics-API type leaks into `Loom.Core` or `Loom.Graph`. Introducing one is 
 ## Dependency direction
 
 ```
-Loom.Sandbox ──► Loom.Vulkan ──► Loom.Graph ──► Loom.Core
-             └──► Loom.DirectX12 ──►┘
+Loom.Sandbox ──► Loom.Backend.Vulkan ──► Loom.Graph ──► Loom.Core
+             └──► Loom.Backend.DirectX12 ──►┘
 ```
 
 `Loom.Assets` sits beside `Loom.Core` — both are backend-neutral and have no graphics-API references.
@@ -54,6 +55,6 @@ Engine shaders (blit, tonemap, auto-exposure) are **embedded** in the backend as
 
 ## Backend selection
 
-Backends self-register via `[ModuleInitializer]` into `Engine.AvailableEngines`. Including a backend assembly in your project is enough to make it available; which one runs is a runtime decision passed to `Engine.AvailableEngines[name].Create(settings)`.
+Backends self-register via `[ModuleInitializer]` into `Engine.AvailableEngines` (an `IReadOnlyList<IRenderBackend>`). Including a backend assembly in your project is enough to make it available; which one runs is a runtime decision — the host picks a registered backend by name (`Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)`) and calls `backend.Create(surface, width, height, settings)`, handing over the window's native surface (Vulkan `IVkSurface` / DirectX 12 `HWND`).
 
 When using `Loom.Sdk` (NuGet or submodule), the `UseVulkan` / `UseDirectX12` MSBuild properties control which backend assemblies are referenced and therefore which `[ModuleInitializer]` calls fire.

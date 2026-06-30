@@ -2,8 +2,8 @@
 // Usage: dotnet run --file tools/generate-llms-docs.cs [--level minimal|standard|full|all]
 //
 // Generates orientation files for LLMs at three token-budget levels:
-//   minimal  (~2KB)  llms-minimal.txt  — invariants + API vocabulary table
-//   standard (~8KB)  llms.txt          — architecture + vocabulary + invariants + getting-started
+//   minimal  (~2KB)  llms-minimal.txt  — pillars + API vocabulary table
+//   standard (~8KB)  llms.txt          — architecture + vocabulary + pillars + getting-started
 //   full     (~25KB) llms-full.txt     — all docs + XML doc summaries for public types
 //
 // Run from the repo root. XML docs are optional (omitted if assemblies not built yet).
@@ -102,10 +102,10 @@ string BuildMinimal()
     var sb = new StringBuilder();
     sb.AppendLine(header);
     sb.AppendLine();
-    // Invariant headlines only (## headings)
-    sb.AppendLine("## Core Invariants (abbreviated)");
+    // Pillar headlines only (## headings)
+    sb.AppendLine("## Pillars of Design (abbreviated)");
     sb.AppendLine();
-    foreach (var line in Doc("invariants").Split('\n'))
+    foreach (var line in Doc("pillars").Split('\n'))
     {
         if (line.StartsWith("## "))
             sb.AppendLine(line.TrimStart('#').Trim());
@@ -131,7 +131,7 @@ string BuildStandard()
     sb.AppendLine(Doc("api-vocabulary"));
     sb.AppendLine("---");
     sb.AppendLine();
-    sb.AppendLine(Doc("invariants"));
+    sb.AppendLine(Doc("pillars"));
     sb.AppendLine("---");
     sb.AppendLine();
     // getting-started up to (but not including) Loading assets
@@ -144,7 +144,7 @@ string BuildFull()
     var sb = new StringBuilder();
     sb.AppendLine(header);
     sb.AppendLine();
-    foreach (var name in new[] { "architecture", "api-vocabulary", "invariants", "getting-started", "effect-cookbook" })
+    foreach (var name in new[] { "architecture", "api-vocabulary", "pillars", "getting-started", "effect-cookbook" })
     {
         sb.AppendLine(Doc(name));
         sb.AppendLine("---");

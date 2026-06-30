@@ -1,13 +1,12 @@
 # Milestone 16 — implementation notes & decisions
 
 A running log of design decisions, judgment calls, and problems encountered while building
-M16 (Track C: large-world realistic). For review. The authoritative *what* is
-`PlanningPhase2.md §5`; the board (#6) is live status; this file records the *why* behind
-the choices made during implementation.
+M16 (large-world realistic). This file records the *why* behind the choices made during
+implementation; the roadmap and live status are tracked in the GitHub issues.
 
 ## Working agreement (this milestone)
 - On any problem: go with best intuition, choosing solutions that align with the engine's
-  design principles (`PlanningPhase2.md §6` / `Planning.md §8`): derived-not-declared,
+  Pillars of Design: derived-not-declared,
   backend isolation (Vulkan + DirectX12 at parity, no API type in Core/Graph), you-hand-me-
   draw-lists, pure per-frame closures, every feature ships its debug view.
 - Commit at each checkpoint (a buildable, ideally parity-verified slice).

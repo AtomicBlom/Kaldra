@@ -6,26 +6,33 @@
 
 | Type | Role |
 |---|---|
-| `GraphBuilder` | Fluent builder — declare passes, resources, and their dependencies |
-| `PassBuilder` | Per-pass builder: `.Writes`, `.Samples`, `.Blends`, `.ReadWrites`, `.ReadsVertex` |
+| `RenderGraph` | The immutable, hashable graph description; build one with `RenderGraph.Define(g => …)` |
+| `GraphBuilder` | The `g` inside `RenderGraph.Define` — declares passes, resources, and domains |
+| `PassBuilder` | Per-pass builder: `.Writes`, `.Samples`, `.Blends`, `.WritesDepth`, `.ReadWrites`, `.ReadsVertex`, `.Reads` |
 | `ColorHandle` / `DepthHandle` / `BufferHandle` | Typed resource handles — the graph tracks edges through these |
-| `Domain` | Fixed or backbuffer-relative resolution for a resource |
-| `RenderGraph` | The immutable, hashable description produced by `GraphBuilder.Build()` |
-| `IEngine` | Backend entry point (`SetGraph`, `DefineTechnique`, `Render`) |
+| `Domain` | Fixed or backbuffer-relative resolution; its `.Color` / `.Depth` verbs declare targets |
+| `IEngine` | Backend entry point (`SetGraph`, `DefineTechnique`, `Render`, `Write`) |
 
 ## Minimal example
 
 ```csharp
-var graph = new GraphBuilder()
-    .AddPass("scene", pass => pass
+var graph = RenderGraph.Define(g =>
+{
+    var color = g.Screen.Color("color", Format.Rgba16F);   // an HDR scene target
+    var depth = g.Screen.Depth("depth", Format.Depth32F);
+
+    g.Pass("scene")                                         // declare reads/writes — ordering & barriers are derived
         .Writes(color)
         .WritesDepth(depth)
-        .Draw((ctx, _) => ctx.Draw(mesh, "lit")))
-    .AddPass("tone", pass => pass
-        .Samples(color)
-        .Writes(GraphBuilder.Backbuffer)
-        .Draw((ctx, _) => ctx.FullScreen("tonemap", color)))
-    .Build();
+        .Draw(ctx => ctx.Draw(DrawCall.Create(mesh, "lit")));
+
+    g.Pass("tonemap")
+        .Samples(color)                                     // read the HDR target …
+        .Writes(g.Backbuffer)                               // … resolve it to the swapchain
+        .Draw(ctx => ctx.FullScreen("tonemap", color));
+
+    g.Present(g.Backbuffer);
+});
 
 engine.SetGraph(graph);
 ```
