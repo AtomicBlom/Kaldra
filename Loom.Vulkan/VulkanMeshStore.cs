@@ -12,7 +12,7 @@ namespace Loom.Vulkan;
 
 /// <summary>
 /// Owns GPU-resident geometry: device-local vertex + index buffers, uploaded once via a host-visible
-/// staging copy (Planning.md §12 M5). The app builds meshes up front through the engine and gets back an
+/// staging copy. The app builds meshes up front through the engine and gets back an
 /// opaque <see cref="Mesh"/> handle (a small id); recording resolves the handle to its buffers and emits the
 /// indexed draw. Buffers are allocated through the shared VMA allocator. No per-frame churn — meshes are
 /// long-lived resources, freed only on teardown.
@@ -26,7 +26,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		public Buffer IndexBuffer;
 		public Allocation IndexAllocation;
 		public uint IndexCount;
-		public uint VertexCount; // M15: skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
+		public uint VertexCount; // skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
 	}
 
 	private readonly VulkanContext _ctx;
@@ -48,7 +48,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		Create(MemoryMarshal.AsBytes(vertices), sizeof(Vertex), indices);
 
 	/// <summary>
-	/// Upload raw vertex bytes laid out at <paramref name="vertexStride"/> (M12 — arbitrary
+	/// Upload raw vertex bytes laid out at <paramref name="vertexStride"/> (arbitrary
 	/// <see cref="VertexLayout"/>s). The per-vertex stride lives in the technique's pipeline (Vulkan binds
 	/// vertex buffers without a stride), so the technique's layout must match the data the app uploaded here.
 	/// </summary>
@@ -71,7 +71,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	}
 
 	/// <summary>
-	/// Upload a skinned mesh's bind-pose vertices (M15) — like the byte-stride <see cref="Create(ReadOnlySpan{byte}, int, ReadOnlySpan{uint})"/>,
+	/// Upload a skinned mesh's bind-pose vertices — like the byte-stride <see cref="Create(ReadOnlySpan{byte}, int, ReadOnlySpan{uint})"/>,
 	/// but the vertex buffer also carries <see cref="BufferUsageFlags.StorageBufferBit"/> so the compute pre-skin
 	/// pass can read it as a structured buffer (<see cref="BindPoseBuffer"/>). The vertex count is recorded for the
 	/// dispatch's thread count.
@@ -95,15 +95,15 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		return new Mesh(id, indices.Length);
 	}
 
-	/// <summary>The skinned mesh's bind-pose vertex buffer, for the compute pre-skin pass to read as a structured buffer (M15).</summary>
+	/// <summary>The skinned mesh's bind-pose vertex buffer, for the compute pre-skin pass to read as a structured buffer.</summary>
 	public Buffer BindPoseBuffer(int meshId) => _meshes[meshId].VertexBuffer;
 
-	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count (M15).</summary>
+	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count.</summary>
 	public uint VertexCount(int meshId) => _meshes[meshId].VertexCount;
 
 	/// <summary>
 	/// Draw a mesh's index buffer with its per-vertex stream sourced from <paramref name="vertexBuffer"/> instead
-	/// of the mesh's own vertex buffer (M15 — the skinned draw: the compute pre-skin pass wrote a MeshStandard-shaped
+	/// of the mesh's own vertex buffer (the skinned draw: the compute pre-skin pass wrote a MeshStandard-shaped
 	/// output buffer). The mesh contributes only its index buffer + count.
 	/// </summary>
 	public void DrawSkinned(CommandBuffer cmd, int meshId, Buffer vertexBuffer)
@@ -128,7 +128,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// <summary>
 	/// Bind a mesh at binding 0 (per-vertex) plus <paramref name="instanceBuffer"/> at binding 1 (per-instance,
 	/// starting at <paramref name="instanceOffset"/> bytes) and record an instanced indexed draw of
-	/// <paramref name="instanceCount"/> copies (M12 — GPU instancing). The instance buffer is either an
+	/// <paramref name="instanceCount"/> copies (GPU instancing). The instance buffer is either an
 	/// engine-managed per-frame upload buffer (CPU-driven) or a graph storage buffer a compute filled.
 	/// </summary>
 	public void DrawInstanced(CommandBuffer cmd, int meshId, Buffer instanceBuffer, ulong instanceOffset, uint instanceCount)

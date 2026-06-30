@@ -15,7 +15,7 @@ namespace Loom.Core.Materials;
 /// <para>
 /// The <em>descriptor-binding counts</em> (how many sampled inputs, storage images, and storage buffers the
 /// shader binds) are <b>not stated here</b> — the backend derives them from the shader's reflection metadata,
-/// so the app no longer hand-counts them. What remains are the
+/// so the app does not hand-count them. What remains are the
 /// pieces reflection can't infer: the logical shader/entry names and the fixed-function pipeline <em>intent</em>
 /// (does it read geometry, how does it blend, which sampler filter).
 /// </para>

@@ -17,13 +17,13 @@ internal sealed unsafe partial class VulkanEngine
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
 			return; // Minimized — nothing to draw.
 
-		DrainShaderReloads(); // M13: pick up any hot-reloaded shaders before recording this frame
+		DrainShaderReloads(); // pick up any hot-reloaded shaders before recording this frame
 
 		_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
 
 		// The fence just signalled, so this slot's readback buffers hold the copies from when it last ran (~2
-		// frames ago). Hand them to StoreReadback before this frame overwrites them — that's the latency §7.4
-		// is upfront about. (Done before recording, so IEngine.Read always sees the freshest available.)
+		// frames ago). Hand them to StoreReadback before this frame overwrites them — that's the readback
+		// latency the design is upfront about. (Done before recording, so IEngine.Read always sees the freshest available.)
 		DownloadReadback(_currentFrame);
 		// Same story for the timing pool: the fence guarantees this slot's last timestamps are complete.
 		DownloadTimings(_currentFrame);
@@ -146,7 +146,7 @@ internal sealed unsafe partial class VulkanEngine
 		foreach (var (id, bytes) in StorageShadows)
 			_transients!.WriteStorage(_currentFrame, id, bytes);
 
-		// GPU timing (M13): reset this slot's pool on the device timeline, then bracket each pass's own work with a
+		// GPU timing: reset this slot's pool on the device timeline, then bracket each pass's own work with a
 		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).
 		var timing = GpuTimingEnabled && _timingPools.Length > 0;
 		if (timing)

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-
 using Loom.Assets;
 using Loom.Core;
 using Loom.Core.Animation;
@@ -12,9 +11,9 @@ using Silk.NET.Core.Contexts;
 using Silk.NET.Vulkan;
 using VMASharp;
 using Buffer = Silk.NET.Vulkan.Buffer;
+using GraphFormat = Loom.Core.Graph.Format;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 using VkFormat = Silk.NET.Vulkan.Format;
-using GraphFormat = Loom.Core.Graph.Format;
 
 namespace Loom.Vulkan;
 
@@ -26,8 +25,8 @@ namespace Loom.Vulkan;
 /// frame-stable, so the per-frame cost is recording, not deriving) and prepares the graph's transients; then
 /// each <see cref="Render"/> records the plan into a command buffer — emitting <c>vkCmdPipelineBarrier2</c> from
 /// the derived transitions, opening a dynamic-rendering scope per pass with the derived load/store ops, invoking
-/// the pass's record callback, and presenting. The barriers and layout transitions M0/M1 wrote by hand are now
-/// derived.
+/// the pass's record callback, and presenting. The barriers and layout transitions are derived rather than
+/// written by hand.
 /// <para>
 /// <b>Device vs graph.</b> Device-level resources (context, allocator, command buffers, sync, swapchain,
 /// pipeline cache, meshes, descriptors, ImGui) live for the engine's lifetime and survive a graph swap;
@@ -62,7 +61,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private readonly VulkanRenderContext _context;
 	private readonly Dictionary<string, VulkanTechniqueTemplate> _registry = []; // logical name → backend baked-input form
 
-	// Shader hot-reload (M13), opt-in. The watcher fires on a background thread and maps the changed artifact to a
+	// Shader hot-reload, opt-in. The watcher fires on a background thread and maps the changed artifact to a
 	// logical shader name; the base's reload registry queues it, and the render thread drains it (fence-safe).
 	private AssetWatcher? _shaderWatcher;
 
@@ -84,7 +83,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private Semaphore[] _renderFinished = []; // per swapchain image
 	private Fence[] _inFlight = [];           // per frame-in-flight
 
-	// GPU→CPU readback (§7.4): each g.Readback target is copied to a per-slot host-visible buffer every frame; the
+	// GPU→CPU readback: each g.Readback target is copied to a per-slot host-visible buffer every frame; the
 	// result is read back ~2 frames later (when the slot's fence next signals) and handed to StoreReadback as the
 	// raw, tightly-packed texels IEngine.Read returns. Rebuilt by SetGraph; empty when the graph declares no readback.
 	private readonly List<ReadbackBuffers> _readbacks = [];
@@ -101,7 +100,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		public bool[] Valid { get; } = new bool[buffers.Length];
 	}
 
-	// GPU per-pass timing (§12 M13 profiler): a TIMESTAMP query pool per frame slot, 2 queries (begin/end) per
+	// GPU per-pass timing: a TIMESTAMP query pool per frame slot, 2 queries (begin/end) per
 	// pass. Decoded after the slot's fence — like the picking readback above — so the numbers are a frame or two
 	// old. Runtime-toggled (off by default); device support (timestampPeriod / valid bits) is probed in the ctor.
 	private QueryPool[] _timingPools = [];   // per frame slot, each sized 2*passCount
@@ -130,7 +129,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_vk = _ctx.Vk;
 		_shaderDir = settings.ShaderDirectory;
 
-		// GPU-timing device support (M13). 0 valid bits ⇒ the graphics queue can't timestamp, so the profiler stays
+		// GPU-timing device support. 0 valid bits ⇒ the graphics queue can't timestamp, so the profiler stays
 		// permanently unavailable (the GpuTimingEnabled setter enforces this).
 		_timestampPeriod = _ctx.TimestampPeriod;
 		_timestampValidBits = _ctx.GraphicsTimestampValidBits;
@@ -155,7 +154,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		CreateCommandBuffers();
 		CreateSyncObjects();
 
-		// Shader hot-reload (M13), opt-in. An external process rewrites the loose .spv/.json on disk; this watcher
+		// Shader hot-reload, opt-in. An external process rewrites the loose .spv/.json on disk; this watcher
 		// (debounced) notifies us, and we pick up the new bytecode + rebuild affected pipelines. Off by default.
 		if (settings.WatchShaderDirectory)
 		{
@@ -177,14 +176,14 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	protected override void BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		// Resolve the logical shader name to backend bytecode + reflection, and fold the neutral descriptor into
-		// the backend's baked-input form. Shaders are named logically — no .spv path in app code (Planning.md §5).
-		// The descriptor-binding counts come from the shader's reflection, not the app (M7-B4): the author states
+		// the backend's baked-input form. Shaders are named logically — no .spv path in app code.
+		// The descriptor-binding counts come from the shader's reflection, not the app: the author states
 		// only the pipeline intent (geometry/blend/filter/compute), and Slang's reflection says how many things
 		// the shader binds.
 		var reflection = ShaderReflection.FromBytes(ResolveShaderAsset(descriptor.Shader, ".json"));
 		// Resolve the per-vertex layout: an explicit one, else the canonical pos/normal/uv when the technique
 		// reads geometry, else none (a fullscreen/compute technique). A non-null Instance marks it instanced
-		// (a second per-instance stream at binding 1). (M12 — per-technique vertex layouts.)
+		// (a second per-instance stream at binding 1).
 		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
 		_registry[name] = new VulkanTechniqueTemplate(
 			ResolveShaderAsset(descriptor.Shader, ".spv"),
@@ -263,7 +262,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_transients = new VulkanTransientResources(_ctx, executed, Aliases, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
 		_context.SetTransients(_transients);
 
-		// Readback staging (§7.4): one host-visible buffer per frame slot for each g.Readback target.
+		// Readback staging: one host-visible buffer per frame slot for each g.Readback target.
 		foreach (var target in authored.ReadbackTargets)
 		{
 			var (width, height) = target.Resolve();
@@ -275,7 +274,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			_readbacks.Add(new ReadbackBuffers(target.Id, width, height, bpt, buffers, memories));
 		}
 
-		// GPU-timing pools (M13): 2 timestamps (begin/end) per pass, one pool per frame slot. Sized to this graph's
+		// GPU-timing pools: 2 timestamps (begin/end) per pass, one pool per frame slot. Sized to this graph's
 		// pass count, so a swap to a graph with a different count reallocates (DisposeGraphResources freed the old).
 		_timingPassCount = Barriers.Passes.Length;
 		ResetTimings();
@@ -303,9 +302,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	public override void WaitIdle() => _vk.DeviceWaitIdle(_ctx.Device);
 
 	// Resolve a logical shader name (TechniqueDescriptor.Shader) + asset extension (".spv" or its ".json"
-	// reflection sidecar, M7-B4) to bytes. Engine shaders are embedded in this assembly; app shaders are loose
+	// reflection sidecar) to bytes. Engine shaders are embedded in this assembly; app shaders are loose
 	// files under VulkanEngineSettings.ShaderDirectory. Shaders are named logically — no .spv path in app code
-	// (Planning.md §5) — and the directory is a backend/host concern kept out of the describe layer.
+	// — and the directory is a backend/host concern kept out of the describe layer.
 	private byte[] ResolveShaderAsset(string name, string extension)
 	{
 		var assembly = typeof(VulkanEngine).Assembly;
@@ -443,7 +442,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 	public override void Dispose()
 	{
-		_shaderWatcher?.Dispose(); // stop the hot-reload watcher before tearing the device down (M13)
+		_shaderWatcher?.Dispose(); // stop the hot-reload watcher before tearing the device down
 		_vk.DeviceWaitIdle(_ctx.Device);
 
 		DisposeGraphResources();    // transients + readback staging (graph-level)

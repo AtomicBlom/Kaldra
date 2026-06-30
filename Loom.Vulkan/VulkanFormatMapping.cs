@@ -4,7 +4,7 @@ using VkFormat = Silk.NET.Vulkan.Format;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// Translates the backend-neutral <see cref="Format"/> vocabulary (Planning.md §5) into concrete
+/// Translates the backend-neutral <see cref="Format"/> vocabulary into concrete
 /// Vulkan formats. This is the only place the abstract formats become Vulkan-specific — keeping it out
 /// of Core/Graph is what lets a DirectX12 backend supply its own mapping later.
 /// </summary>

@@ -1,5 +1,5 @@
-using Silk.NET.Vulkan;
 using Loom.Graph;
+using Silk.NET.Vulkan;
 using Buffer = Silk.NET.Vulkan.Buffer;
 
 namespace Loom.Vulkan;
@@ -11,7 +11,7 @@ internal sealed unsafe partial class VulkanEngine
 		var id = transition.Resource.Id;
 
 		// Buffers have no layout — emit a buffer memory barrier scoped by the from/to stage+access. This is the
-		// compute(StorageWrite) → vertex-input(VertexAttributeRead) hand-off for GPU particles (§7.6).
+		// compute(StorageWrite) → vertex-input(VertexAttributeRead) hand-off for GPU particles.
 		if (_bufferIds.Contains(id))
 		{
 			EmitBufferBarrier(cmd, _transients!.GetBuffer(_currentFrame, id), VulkanStateMapping.For(transition.From), VulkanStateMapping.For(transition.To));

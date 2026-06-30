@@ -6,7 +6,7 @@ using Buffer = Silk.NET.Vulkan.Buffer;
 namespace Loom.Vulkan;
 
 /// <summary>
-/// A per-frame-in-flight host-visible vertex buffer for CPU-driven instancing (M12) — the place
+/// A per-frame-in-flight host-visible vertex buffer for CPU-driven instancing — the place
 /// <c>ctx.DrawInstanced(mesh, technique, span)</c> stages its per-instance data each frame: one mappable buffer
 /// per slot, grown with headroom, written map→copy→unmap, no fence wait (the executor waited the slot's fence
 /// before re-recording it).
@@ -34,7 +34,7 @@ internal sealed unsafe class VulkanInstanceUploadBuffer : IDisposable
 	/// <param name="allocator">The VMA allocator used to create and free the mappable buffers.</param>
 	/// <param name="framesInFlight">Number of frames-in-flight slots to allocate (one buffer per slot).</param>
 	/// <param name="usage">Buffer usage the ring's mappable buffers are created with — <see cref="BufferUsageFlags.VertexBufferBit"/>
-	/// for the instance stream (the default), or <see cref="BufferUsageFlags.UniformBufferBit"/> for the M15-0 uniform ring.</param>
+	/// for the instance stream (the default), or <see cref="BufferUsageFlags.UniformBufferBit"/> for the uniform ring.</param>
 	/// <param name="alignment">Per-append offset alignment — 16 for vertex streams; 256 for uniform buffers
 	/// (≥ any device's <c>minUniformBufferOffsetAlignment</c>, which is a power of two ≤ 256, so 256 is always valid).</param>
 	public VulkanInstanceUploadBuffer(VulkanContext ctx, VulkanMemoryAllocator allocator, int framesInFlight,

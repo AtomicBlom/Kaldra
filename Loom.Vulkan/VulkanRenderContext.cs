@@ -79,7 +79,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off VulkanTechniqueCache's
 	// per-call SPIR-V file read. Misses fall through to VulkanTechniqueCache (which bakes + content-hashes once).
 	// The key is a value type (PipelineKey) so the per-draw lookup allocates nothing (zero GC pressure
-	// in the render loop) — the old interpolated-string key heap-allocated on every draw.
+	// in the render loop).
 	private readonly Dictionary<PipelineKey, VulkanTechnique> _baked = [];
 
 	private CommandBuffer _cmd;
@@ -313,7 +313,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		private VkFormat _element0;
 	}
 
-	// Value-type, allocation-free replacement for the old interpolated-string pipeline-cache key. Distinct
+	// Value-type, allocation-free pipeline-cache key. Distinct
 	// attachment formats must map to distinct pipelines, so Equals compares the full key — never a hash-only
 	// collapse that could alias a wrong-format pipeline.
 	private struct PipelineKey : IEquatable<PipelineKey>

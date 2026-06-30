@@ -20,7 +20,7 @@ namespace Loom.DirectX12;
 /// attachments.
 /// <para>
 /// Implements the fullscreen verbs (from-scratch, sampling, and a scalar push block) and indexed mesh draw
-/// (vertex/index buffers + an MVP root constant). Compute and ImGui land in following slices.
+/// (vertex/index buffers + an MVP root constant).
 /// </para>
 /// </summary>
 internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, IDisposable

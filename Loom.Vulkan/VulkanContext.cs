@@ -40,7 +40,7 @@ public sealed unsafe class VulkanContext : IDisposable
 	public string DeviceName { get; private set; } = "<unknown>";
 
 	/// <summary>Nanoseconds per timestamp tick (<c>VkPhysicalDeviceLimits.timestampPeriod</c>) — converts query
-	/// ticks to wall time for the M13 GPU profiler.</summary>
+	/// ticks to wall time for the GPU profiler.</summary>
 	public float TimestampPeriod { get; private set; }
 
 	/// <summary>Valid bits in a timestamp written on the graphics queue (0 ⇒ the queue cannot timestamp, so GPU
@@ -49,7 +49,7 @@ public sealed unsafe class VulkanContext : IDisposable
 
 	/// <summary>
 	/// True if <c>VK_EXT_swapchain_colorspace</c> was enabled at instance creation — without it the surface
-	/// only reports the SDR sRGB colour space, so HDR swapchain colour spaces are unavailable (M7-A7). The
+	/// only reports the SDR sRGB colour space, so HDR swapchain colour spaces are unavailable. The
 	/// swapchain only attempts an HDR format when this is set.
 	/// </summary>
 	public bool HdrColorSpaceAvailable { get; private set; }
@@ -149,7 +149,7 @@ public sealed unsafe class VulkanContext : IDisposable
 			extensions = [.. extensions, ExtDebugUtils.ExtensionName];
 
 		// VK_EXT_swapchain_colorspace lets the surface report HDR colour spaces (scRGB, HDR10) so the swapchain
-		// can negotiate one when EngineSettings.HdrOutput is set (M7-A7). Opt-in only if the loader has it;
+		// can negotiate one when EngineSettings.HdrOutput is set. Opt-in only if the loader has it;
 		// absence is fine — the swapchain falls back to SDR sRGB.
 		const string swapchainColorspace = "VK_EXT_swapchain_colorspace";
 		if (AvailableInstanceExtensions().Contains(swapchainColorspace))
@@ -306,7 +306,7 @@ public sealed unsafe class VulkanContext : IDisposable
 			throw new VulkanException(
 				"No Vulkan 1.3 device with graphics+present queues, swapchain, and the required features was found.");
 
-		// The graphics family's timestamp support (M13 GPU profiler): 0 valid bits ⇒ no timing on this queue.
+		// The graphics family's timestamp support (GPU profiler): 0 valid bits ⇒ no timing on this queue.
 		uint queueCount = 0;
 		Vk.GetPhysicalDeviceQueueFamilyProperties(PhysicalDevice, ref queueCount, null);
 		var queueFamilies = new QueueFamilyProperties[queueCount];

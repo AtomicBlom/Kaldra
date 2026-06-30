@@ -1,15 +1,15 @@
 using Loom.Graph;
 using Silk.NET.Vulkan;
 using Buffer = Silk.NET.Vulkan.Buffer;
-using VkFormat = Silk.NET.Vulkan.Format;
 using GraphFormat = Loom.Core.Graph.Format;
+using VkFormat = Silk.NET.Vulkan.Format;
 
 namespace Loom.Vulkan;
 
 internal sealed unsafe partial class VulkanEngine
 {
 	// Copy each readback target (its last graph use is a .Samples, so it's in SHADER_READ) into this slot's
-	// host-visible buffer. The slot's fence guards them; DownloadReadback hands them to the app ~2 frames later. §7.4.
+	// host-visible buffer. The slot's fence guards them; DownloadReadback hands them to the app ~2 frames later.
 	private void RecordReadback(CommandBuffer cmd)
 	{
 		foreach (var readback in _readbacks)

@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace Loom.Core.Geometry;
 
 /// <summary>
-/// Loom's canonical interleaved vertex: position, normal, UV, and a tangent. One fixed layout for now — enough
+/// Loom's canonical interleaved vertex: position, normal, UV, and a tangent. A single fixed layout — enough
 /// to drive the reference frame's geometry plus normal mapping. Backend-neutral
 /// (<c>System.Numerics</c>, no graphics-API types), so the backend owns the vertex-layout description that
 /// mirrors these fields. Shaders that don't read the tangent simply ignore the extra attribute.
