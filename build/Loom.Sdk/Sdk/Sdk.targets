@@ -18,7 +18,7 @@
   </PropertyGroup>
 
   <ItemGroup Condition="'$(UseVulkan)' == 'true'">
-    <ProjectReference Include="$(_LoomRepoRoot)Loom.Vulkan\Loom.Vulkan.csproj" />
+    <ProjectReference Include="$(_LoomRepoRoot)Loom.Backend.Vulkan\Loom.Backend.Vulkan.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(UseDirectX12)' == 'true'">
