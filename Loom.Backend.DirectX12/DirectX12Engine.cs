@@ -24,7 +24,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private readonly DirectX12EngineSettings _settings;
 	private readonly DirectX12Context _ctx;
 	private readonly DirectX12Swapchain _swapchain;
-	private readonly DirectX12Triangle _triangle;
+	// The bootstrap triangle is only used on the no-graph fallback path (RenderLegacy), so it is created lazily
+	// on first use rather than in the constructor — a graph-driven engine never pays for it.
+	private DirectX12Triangle? _triangle;
 	private readonly DirectX12TechniqueCache _techniques;
 	private readonly DirectX12DescriptorRing _ring;
 	private readonly DirectX12MeshStore _meshes;
@@ -108,7 +110,6 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		if (_fenceEvent == 0)
 			throw new InvalidOperationException("CreateEvent failed for the DirectX12 frame-pacing fence.");
 
-		_triangle = new DirectX12Triangle(_ctx, _swapchain.Format);
 		_techniques = new DirectX12TechniqueCache(_ctx);
 		_ring = new DirectX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the resource viewer's debug SRVs
 		_meshes = new DirectX12MeshStore(_ctx);
@@ -150,12 +151,15 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	// Evict the baked PSOs after a hot-reload so the next GetOrBake rebuilds from the re-registered templates.
 	protected override void ResetPipelineCaches() => _techniques.Reset();
 
+	/// <inheritdoc />
 	public override string BackendName => "DirectX12";
+	/// <inheritdoc />
 	public override string DeviceName => _ctx.DeviceName;
 
 	// 0 timestamp frequency ⇒ the queue can't timestamp, so the profiler stays permanently unavailable.
 	protected override bool CanEnableGpuTiming => _timestampFrequency != 0;
 
+	/// <inheritdoc />
 	public override void Render(FrameInputs inputs)
 	{
 		if (Graph is not null)
@@ -188,6 +192,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		color[3] = 1f;
 		_commandList.ClearRenderTargetView(rtv, color, 0u, (Box2D<int>*)null);
 
+		_triangle ??= new DirectX12Triangle(_ctx, _swapchain.Format);
 		_triangle.Record(_commandList, _swapchain.Width, _swapchain.Height);
 
 		// When capturing, copy the rendered backbuffer into a readback buffer in the same submission, then
@@ -227,6 +232,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		}
 	}
 
+	/// <inheritdoc />
 	public override void Resize(int width, int height)
 	{
 		WaitIdle();
@@ -244,6 +250,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		}
 	}
 
+	/// <inheritdoc />
 	public override void WaitIdle()
 	{
 		_fenceValue++;
@@ -255,6 +262,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		}
 	}
 
+	/// <inheritdoc />
 	public override void Dispose()
 	{
 		if (_disposed)
@@ -289,7 +297,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_textures.Dispose();
 		_ring.Dispose();
 		_techniques.Dispose();
-		_triangle.Dispose();
+		_triangle?.Dispose(); // only ever created on the no-graph fallback path
 		_fence.Dispose();
 		_commandList.Dispose();
 		for (uint i = 0; i < BufferCount; i++)
@@ -474,8 +482,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		}
 	}
 
+	/// <inheritdoc />
 	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
+	/// <inheritdoc />
 	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
 	{
 		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
@@ -484,10 +494,13 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
+	/// <inheritdoc />
 	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
+	/// <inheritdoc />
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
 
+	/// <inheritdoc />
 	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	[DllImport("kernel32", SetLastError = true)]

@@ -51,6 +51,62 @@ public class VertexLayoutTests
 	}
 
 	[Test]
+	[Arguments(VertexFormat.Float, 4)]
+	[Arguments(VertexFormat.Float2, 4)]
+	[Arguments(VertexFormat.Float3, 4)]
+	[Arguments(VertexFormat.Float4, 4)]
+	[Arguments(VertexFormat.UInt4, 4)]
+	[Arguments(VertexFormat.Half4, 2)]
+	[Arguments(VertexFormat.UNorm4, 1)]
+	public void Format_alignment_is_the_natural_scalar_alignment(VertexFormat format, int expected) =>
+		format.Alignment().ShouldBe(expected);
+
+	[Test]
+	[Arguments("MeshStandard")]
+	[Arguments("MeshSkinned")]
+	[Arguments("Overlay")]
+	[Arguments("Transform")]
+	public void Built_in_layout_offsets_and_stride_respect_each_format_alignment(string name)
+	{
+		var layout = name switch
+		{
+			"MeshStandard" => VertexLayout.MeshStandard,
+			"MeshSkinned" => VertexLayout.MeshSkinned,
+			"Overlay" => VertexLayout.Overlay,
+			"Transform" => VertexLayout.Transform,
+			_ => throw new ArgumentOutOfRangeException(nameof(name)),
+		};
+
+		var maxAlignment = 1;
+		for (var i = 0; i < layout.Attributes.Length; i++)
+		{
+			var alignment = layout.Attributes[i].Format.Alignment();
+			(layout.Offsets[i] % alignment).ShouldBe(0, $"attribute {i} offset {layout.Offsets[i]} is not a multiple of its alignment {alignment}");
+			maxAlignment = Math.Max(maxAlignment, alignment);
+		}
+		(layout.Stride % maxAlignment).ShouldBe(0);
+	}
+
+	[Test]
+	public void Offsets_round_up_to_each_attribute_format_alignment()
+	{
+		// A byte-granular UNorm4 (align 1) followed by a 4-byte-aligned Float lands the Float at the tight offset 4,
+		// which is already aligned; then a second Float sits at 8, and the stride rounds up to the widest alignment (4).
+		var layout = new VertexLayout(
+			new VertexAttribute("COLOR", VertexFormat.UNorm4),
+			new VertexAttribute("A", VertexFormat.Float),
+			new VertexAttribute("B", VertexFormat.Float));
+
+		layout.Offsets.ToArray().ShouldBe(new[] { 0, 4, 8 });
+		layout.Stride.ShouldBe(12);
+
+		// Every offset lands on its format's alignment boundary and the stride is a multiple of the widest alignment.
+		for (var i = 0; i < layout.Attributes.Length; i++)
+			(layout.Offsets[i] % layout.Attributes[i].Format.Alignment()).ShouldBe(0);
+		(layout.Stride % 4).ShouldBe(0);
+	}
+
+	[Test]
 	public void Layouts_have_value_equality_over_attributes_rate_and_binding()
 	{
 		var a = new VertexLayout(new VertexAttribute("POSITION", VertexFormat.Float3));

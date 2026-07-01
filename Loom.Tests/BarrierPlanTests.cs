@@ -168,4 +168,54 @@ public class BarrierPlanTests
 
 		HasTransition(Pass(plan, "foliage"), "instances", ResourceState.Storage, ResourceState.VertexInput).ShouldBeTrue();
 	}
+
+	[Test]
+	public void Compute_to_compute_write_after_write_orders_the_second_dispatch_after_the_first()
+	{
+		// Two compute passes both .ReadWrites the same storage buffer. Storage is a writing state, so the second
+		// dispatch's use hazards with the first even at the same layout — a Storage -> Storage WAW barrier that
+		// makes the second wait on the first's writes.
+		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var scratch = g.Buffer("scratch", 1024);
+			g.Compute("first").ReadWrites(scratch);
+			g.Compute("second").ReadWrites(scratch);
+		})));
+
+		// The first dispatch takes the buffer into Storage from Undefined.
+		HasTransition(Pass(plan, "first"), "scratch", ResourceState.Undefined, ResourceState.Storage).ShouldBeTrue();
+		// The second stays in Storage but still gets a same-layout barrier because it writes what the first wrote.
+		HasTransition(Pass(plan, "second"), "scratch", ResourceState.Storage, ResourceState.Storage).ShouldBeTrue();
+	}
+
+	[Test]
+	public void Ping_pong_handle_swap_makes_each_iterations_reader_wait_on_the_prior_writer()
+	{
+		// The ping-pong idiom (bloom / JFA): two physical targets and a (read, write) tuple swapped each iteration.
+		// The derived barriers must follow the swapped handles — the buffer written last iteration is the buffer
+		// read this iteration, so its read transitions ColorAttachment -> ShaderRead (waiting on the prior writer)
+		// and its next write transitions ShaderRead -> ColorAttachment (waiting on the prior reader).
+		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var world = g.Domain("world", 64, 64);
+			var a = world.Color("a", Format.Rgba16F);
+			var b = world.Color("b", Format.Rgba16F);
+			g.Pass("seed").Writes(a);            // produce a
+			g.Pass("h1").Samples(a).Writes(b);   // a -> b
+			g.Pass("v1").Samples(b).Writes(a);   // b -> a  (read/write swapped)
+			g.Pass("h2").Samples(a).Writes(b);   // a -> b  (second iteration)
+			g.Pass("v2").Samples(b).Writes(a);   // b -> a
+		})));
+
+		// Iteration 1: h1 reads a (waits on seed's write of a); v1 reads b (waits on h1's write of b) and writes a
+		// again (waits on h1 having read a).
+		HasTransition(Pass(plan, "h1"), "a", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
+		HasTransition(Pass(plan, "v1"), "b", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
+		HasTransition(Pass(plan, "v1"), "a", ResourceState.ShaderRead, ResourceState.ColorAttachment).ShouldBeTrue();
+
+		// Iteration 2 follows the swapped handles identically: h2 reads a written by v1, v2 reads b written by h2.
+		HasTransition(Pass(plan, "h2"), "a", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
+		HasTransition(Pass(plan, "v2"), "b", ResourceState.ColorAttachment, ResourceState.ShaderRead).ShouldBeTrue();
+		HasTransition(Pass(plan, "v2"), "a", ResourceState.ShaderRead, ResourceState.ColorAttachment).ShouldBeTrue();
+	}
 }

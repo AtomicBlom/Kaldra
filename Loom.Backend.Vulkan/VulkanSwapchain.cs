@@ -12,12 +12,19 @@ public sealed unsafe class VulkanSwapchain : IDisposable
 	private readonly bool _vsync;
 	private readonly bool _hdrOutput;
 
+	/// <summary>The <c>VkSwapchainKHR</c> handle.</summary>
 	public SwapchainKHR Handle { get; private set; }
+	/// <summary>The negotiated swapchain image format.</summary>
 	public Format ImageFormat { get; private set; }
+	/// <summary>The negotiated colour space.</summary>
 	public ColorSpaceKHR ColorSpace { get; private set; }
+	/// <summary>The swapchain images' pixel size.</summary>
 	public Extent2D Extent { get; private set; }
+	/// <summary>The swapchain's images, owned by the swapchain and not destroyed individually.</summary>
 	public Image[] Images { get; private set; } = [];
+	/// <summary>One colour view per swapchain image; recreated on resize.</summary>
 	public ImageView[] ImageViews { get; private set; } = [];
+	/// <summary>The number of swapchain images.</summary>
 	public uint ImageCount => (uint)Images.Length;
 
 	/// <summary>

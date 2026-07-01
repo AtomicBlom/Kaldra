@@ -5,7 +5,8 @@ namespace Loom.Core.Geometry;
 
 /// <summary>
 /// A backend-neutral description of one vertex stream: an ordered attribute set, the byte offset of each
-/// attribute (tight-packed in declaration order), the resulting stride, and whether the input assembler
+/// attribute (placed in declaration order, each rounded up to its format's alignment), the resulting stride,
+/// and whether the input assembler
 /// advances <see cref="VertexInputRate.PerVertex"/> or <see cref="VertexInputRate.PerInstance"/> (and which
 /// binding slot it occupies). A <see cref="Mesh"/> is uploaded against a layout, a technique declares
 /// the layout(s) it consumes, and the backend builds its pipeline vertex-input + bind stride from them. The
@@ -22,7 +23,7 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 	/// <summary>The attributes, in declaration (and offset) order.</summary>
 	public ImmutableArray<VertexAttribute> Attributes { get; }
 
-	/// <summary>The byte offset of each attribute within one element — tight-packed in declaration order.</summary>
+	/// <summary>The byte offset of each attribute within one element — declaration order, each rounded up to its format's alignment.</summary>
 	public ImmutableArray<int> Offsets { get; }
 
 	/// <summary>The size of one element in bytes (the buffer's per-element stride).</summary>
@@ -45,15 +46,19 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 		var builder = ImmutableArray.CreateBuilder<VertexAttribute>(attributes.Length);
 		var offsets = ImmutableArray.CreateBuilder<int>(attributes.Length);
 		var offset = 0;
+		var maxAlignment = 1;
 		foreach (var attribute in attributes)
 		{
+			var alignment = attribute.Format.Alignment();
+			offset = AlignUp(offset, alignment);
+			maxAlignment = Math.Max(maxAlignment, alignment);
 			builder.Add(attribute);
 			offsets.Add(offset);
 			offset += attribute.Format.ByteSize();
 		}
 		Attributes = builder.MoveToImmutable();
 		Offsets = offsets.MoveToImmutable();
-		Stride = offset;
+		Stride = AlignUp(offset, maxAlignment);
 		InputRate = inputRate;
 		Binding = binding;
 	}
@@ -135,4 +140,7 @@ public sealed class VertexLayout : IEquatable<VertexLayout>
 			hash.Add(attribute);
 		return hash.ToHashCode();
 	}
+
+	/// <summary>Rounds <paramref name="value"/> up to the next multiple of <paramref name="alignment"/> (a power of two).</summary>
+	private static int AlignUp(int value, int alignment) => (value + alignment - 1) & ~(alignment - 1);
 }

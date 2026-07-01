@@ -113,7 +113,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private bool _framebufferResized;
 	private Extent2D _windowExtent;
 
+	/// <inheritdoc />
 	public override string BackendName => "Vulkan";
+	/// <inheritdoc />
 	public override string DeviceName => _ctx.DeviceName;
 
 	// 0 valid bits ⇒ the graphics queue can't timestamp, so the profiler stays permanently unavailable.
@@ -209,8 +211,10 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_techniques.Reset();   // dispose the stale VkPipelines; next Bake rebuilds from the new templates
 	}
 
+	/// <inheritdoc />
 	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
+	/// <inheritdoc />
 	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
 	{
 		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
@@ -219,10 +223,13 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
+	/// <inheritdoc />
 	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
+	/// <inheritdoc />
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
 
+	/// <inheritdoc />
 	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	// Tear down the previous graph's transients/readback/timing pools before the base binds a new graph; the device
@@ -289,12 +296,14 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		}
 	}
 
+	/// <inheritdoc />
 	public override void Resize(int width, int height)
 	{
 		_windowExtent = new Extent2D((uint)width, (uint)height);
 		_framebufferResized = true;
 	}
 
+	/// <inheritdoc />
 	public override void WaitIdle() => _vk.DeviceWaitIdle(_ctx.Device);
 
 	// Resolve a logical shader name (TechniqueDescriptor.Shader) + asset extension (".spv" or its ".json"
@@ -320,6 +329,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Vulkan?");
 	}
 
+	/// <inheritdoc />
 	public override void Render(FrameInputs inputs)
 	{
 		ArgumentNullException.ThrowIfNull(inputs);
@@ -436,6 +446,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_timingPassCount = 0;
 	}
 
+	/// <inheritdoc />
 	public override void Dispose()
 	{
 		_shaderWatcher?.Dispose(); // stop the hot-reload watcher before tearing the device down

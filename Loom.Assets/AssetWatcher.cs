@@ -78,6 +78,11 @@ public sealed class AssetWatcher : IDisposable
 			Changed?.Invoke(leaf);
 	}
 
+	/// <summary>
+	/// Stop watching and release the file-system watchers and debounce timer. Sets the disposed flag under the lock
+	/// first so a queued debounce callback bails in <see cref="Flush"/> rather than raising <see cref="Changed"/>
+	/// against half-torn-down consumer state.
+	/// </summary>
 	public void Dispose()
 	{
 		// Mark disposed under the gate first so a debounce callback already queued sees it and bails in Flush,
