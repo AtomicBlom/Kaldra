@@ -1,4 +1,5 @@
 using Loom.Core.Graph;
+using Loom.Core.Materials;
 
 namespace Loom.Backend.WebGPU;
 
@@ -36,6 +37,23 @@ internal static class WebGpuFormatMapping
 		Format.Depth32F => Depth32Float,
 		Format.R32F => R32Float,
 		_ => throw new WebGpuException($"No WebGPU format mapping for {format}."),
+	};
+
+	/// <summary>Map a source-image encoding to its WebGPU format id.</summary>
+	public static int ToWebGpu(TextureFormat format) => format switch
+	{
+		TextureFormat.Rgba8Srgb => Rgba8UnormSrgb,
+		TextureFormat.Rgba8Unorm => Rgba8Unorm,
+		TextureFormat.Rgba16F => Rgba16Float,
+		_ => throw new WebGpuException($"No WebGPU format mapping for texture format {format}."),
+	};
+
+	/// <summary>Bytes per texel of a source-image encoding — sizes each mip's upload row.</summary>
+	public static int BytesPerTexel(TextureFormat format) => format switch
+	{
+		TextureFormat.Rgba8Srgb or TextureFormat.Rgba8Unorm => 4,
+		TextureFormat.Rgba16F => 8,
+		_ => throw new WebGpuException($"No texel size for texture format {format}."),
 	};
 
 	/// <summary>Bytes per texel — sizes readback/capture buffer rows.</summary>

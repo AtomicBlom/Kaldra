@@ -24,6 +24,11 @@ internal sealed partial class WebGpuEngine : EngineBase
 	private readonly WebGpuCommandWriter _writer = new();
 	private readonly WebGpuUploadArena _arena = new();
 	private readonly WebGpuSamplerCache _samplers;
+	private readonly WebGpuMeshStore _meshes;
+	private readonly WebGpuTextureStore _textures;
+	private readonly MaterialStore _materials = new();
+	private readonly WebGpuBufferRing _uniformRing;
+	private readonly WebGpuBufferRing _instanceRing;
 	private readonly WebGpuRenderContext _context;
 	// Logical technique name → its format-agnostic baked inputs (shader module + layouts + binding model). Built at
 	// DefineTechnique, disposed on hot-reload/teardown; the per-attachment-format render pipelines are cached and
@@ -42,9 +47,18 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_width = Math.Max(1, width);
 		_height = Math.Max(1, height);
 		_samplers = new WebGpuSamplerCache(_handles);
+		_meshes = new WebGpuMeshStore(_handles);
+		_textures = new WebGpuTextureStore(_handles);
+		_uniformRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferUniform, surface.MinUniformBufferOffsetAlignment, "uniform-ring");
+		_instanceRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferVertex, minAlignment: 4, "instance-ring");
 		_context = new WebGpuRenderContext(this);
 		WebGpuInterop.ConfigureCanvas(_width, _height);
 	}
+
+	// WebGPU normalised-device Y points up (like DirectX12/Metal, unlike Vulkan's Y-down). The desktop backends
+	// negate clip-space Y and DirectX12 additionally flips the viewport to compensate; WebGPU has no negative-height
+	// viewport, so it takes the plain identity — its Y-up NDC already puts app-space up at the top of the screen.
+	public override System.Numerics.Matrix4x4 ClipSpaceCorrection => System.Numerics.Matrix4x4.Identity;
 
 	// Collaborators the per-frame render context reaches through the engine (all created here and stable, except
 	// the transients, which the engine rebinds on each graph swap).
@@ -52,7 +66,16 @@ internal sealed partial class WebGpuEngine : EngineBase
 	internal WebGpuUploadArena Arena => _arena;
 	internal WebGpuHandleAllocator Handles => _handles;
 	internal WebGpuSamplerCache Samplers => _samplers;
+	internal WebGpuMeshStore Meshes => _meshes;
+	internal WebGpuBufferRing UniformRing => _uniformRing;
+	internal WebGpuBufferRing InstanceRing => _instanceRing;
 	internal WebGpuTransientResources Transients => _transients ?? throw new WebGpuException("No active graph — SetGraph must run before a pass records.");
+
+	/// <summary>The texture ids (into the texture store) a material bundles, in bind order.</summary>
+	internal ReadOnlySpan<int> MaterialTextures(int materialId) => _materials.TexturesOf(materialId);
+
+	/// <summary>The sampled view handle of an uploaded texture.</summary>
+	internal int TextureView(int textureId) => _textures.View(textureId);
 
 	/// <summary>Look up a registered technique's format-agnostic template.</summary>
 	internal WebGpuTechniqueTemplate Template(string name) =>
@@ -155,20 +178,21 @@ internal sealed partial class WebGpuEngine : EngineBase
 	// without an explicit wait.
 	public override void WaitIdle() { }
 
-	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
-		throw new WebGpuException("CreateMesh is not yet implemented on the WebGPU backend.");
+	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
-	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) =>
-		throw new WebGpuException("CreateMesh is not yet implemented on the WebGPU backend.");
+	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
+	{
+		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
+		if (stride != layout.Stride)
+			throw new WebGpuException($"Vertex element size ({stride} bytes) does not match the layout stride ({layout.Stride} bytes).");
+		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
+	}
 
-	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) =>
-		throw new WebGpuException("CreateSkinnedMesh is not yet implemented on the WebGPU backend.");
+	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
-	public override Texture CreateTexture(TextureData data) =>
-		throw new WebGpuException("CreateTexture is not yet implemented on the WebGPU backend.");
+	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
 
-	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) =>
-		throw new WebGpuException("CreateMaterial is not yet implemented on the WebGPU backend.");
+	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	public override void Dispose()
 	{
@@ -179,5 +203,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 			template.Dispose();
 		_templates.Clear();
 		_samplers.Dispose();
+		_meshes.Dispose();
+		_textures.Dispose();
 	}
 }

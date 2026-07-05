@@ -44,6 +44,15 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 	private int _depthFormatId = -1;
 	private bool _depthReadOnly;
 
+	// The app-writable parameter/storage buffers the current pass .Reads (in .Reads order), bound to the technique's
+	// uniform / storage-buffer slots at draw time.
+	public const int MaxUniformBuffers = 8;
+	public const int MaxStorageBuffers = 8;
+	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
+	private int _activeConstantsCount;
+	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
+	private int _activeStorageCount;
+
 	public float DeltaTime { get; private set; }
 	public float Time { get; private set; }
 	public bool HdrOutput => false; // browser output is the SDR canvas; HDR canvas negotiation is a later concern
@@ -63,7 +72,7 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 	/// read-only — a read-only pass bakes with depth writes off so a transparent draw tests against, but does not
 	/// disturb, the opaque depth. Called by the engine before the pass's Record runs.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly)
+	public void BeginPass(ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
 	{
 		if (colorFormatIds.Length > MaxColorFormats)
 			throw new WebGpuException($"A pass has {colorFormatIds.Length} color attachments; the pipeline-key buffer holds {MaxColorFormats}.");
@@ -71,6 +80,10 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 		colorFormatIds.CopyTo(((Span<int>)_colorFormatIds)[.._colorCount]);
 		_depthFormatId = depthFormatId;
 		_depthReadOnly = depthReadOnly;
+		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
+		constantsIds[.._activeConstantsCount].CopyTo(_activeConstantsIds);
+		_activeStorageCount = Math.Min(storageIds.Length, MaxStorageBuffers);
+		storageIds[.._activeStorageCount].CopyTo(_activeStorageIds);
 	}
 
 	/// <summary>Resolve a technique to a render pipeline baked against the current pass's attachment formats.</summary>
@@ -106,9 +119,6 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 
 	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage) =>
 		throw new WebGpuException($"Dispatch('{technique}') is not yet implemented on the WebGPU backend.");
-
-	public void Draw(in DrawCall call) =>
-		throw new WebGpuException($"Draw('{call.Technique}') is not yet implemented on the WebGPU backend.");
 
 	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount) =>
 		throw new WebGpuException($"DispatchSkin('{technique}') is not yet implemented on the WebGPU backend.");

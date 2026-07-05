@@ -152,7 +152,9 @@ export function createBindGroupLayout(handle, entries) {
 		const binding = a[i], visibility = a[i + 1], kind = a[i + 2], extra = a[i + 3];
 		const entry = { binding, visibility };
 		switch (kind) {
-			case BGL_UNIFORM: entry.buffer = { type: "uniform" }; break;
+			// Every uniform binding is dynamic-offset: graph constants bind at offset 0, per-draw/push blocks ride
+			// the uniform ring, so a bind group stays valid across draws while only the offset changes.
+			case BGL_UNIFORM: entry.buffer = { type: "uniform", hasDynamicOffset: true }; break;
 			case BGL_SAMPLED_TEXTURE: entry.texture = { sampleType: "float" }; break;
 			case BGL_FILTERING_SAMPLER: entry.sampler = { type: "filtering" }; break;
 			case BGL_STORAGE_BUFFER_RO: entry.buffer = { type: "read-only-storage" }; break;
@@ -221,7 +223,15 @@ export function createBindGroup(handle, layoutHandle, entries) {
 	tables[T_BIND_GROUPS][handle] = device.createBindGroup({ layout: tables[T_BIND_GROUP_LAYOUTS][layoutHandle], entries: list });
 }
 
-export function writeTexture() { throw new Error("writeTexture: not yet implemented."); }
+export function writeTexture(textureHandle, mip, width, height, bytesPerRow, bytes) {
+	const u8 = bytes.slice();
+	queue.writeTexture(
+		{ texture: tables[T_TEXTURES][textureHandle], mipLevel: mip },
+		u8,
+		{ offset: 0, bytesPerRow, rowsPerImage: height },
+		{ width, height, depthOrArrayLayers: 1 });
+}
+
 export function beginReadbackMap() { throw new Error("beginReadbackMap: not yet implemented."); }
 export function tryFetchReadback() { throw new Error("tryFetchReadback: not yet implemented."); }
 
