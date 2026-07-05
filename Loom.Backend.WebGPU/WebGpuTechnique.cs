@@ -20,6 +20,9 @@ internal sealed class WebGpuTechnique : IDisposable
 	public required int Pipeline { get; init; }
 	public required WebGpuTechniqueTemplate Template { get; init; }
 
+	/// <summary>True for a compute pipeline (its handle lives in the compute-pipeline table, dispatched not drawn).</summary>
+	public required bool IsCompute { get; init; }
+
 	private WebGpuTechnique(WebGpuHandleAllocator handles) => _handles = handles;
 
 	/// <summary>Bake the render pipeline for a technique against a pass's attachment formats.</summary>
@@ -28,7 +31,15 @@ internal sealed class WebGpuTechnique : IDisposable
 		var pipeline = handles.Allocate(WebGpuHandleAllocator.RenderPipelines);
 		var json = BuildDescriptor(template, name, colorFormatIds, depthFormatId, depthWrite);
 		WebGpuInterop.CreateRenderPipeline(pipeline, json);
-		return new WebGpuTechnique(handles) { Pipeline = pipeline, Template = template };
+		return new WebGpuTechnique(handles) { Pipeline = pipeline, Template = template, IsCompute = false };
+	}
+
+	/// <summary>Bake the compute pipeline for a compute technique (no attachment formats — its single entry point).</summary>
+	public static WebGpuTechnique BakeCompute(WebGpuHandleAllocator handles, WebGpuTechniqueTemplate template, string name)
+	{
+		var pipeline = handles.Allocate(WebGpuHandleAllocator.ComputePipelines);
+		WebGpuInterop.CreateComputePipeline(pipeline, template.PipelineLayout, template.ShaderModule, template.FragmentEntry, name);
+		return new WebGpuTechnique(handles) { Pipeline = pipeline, Template = template, IsCompute = true };
 	}
 
 	// depthFormatId < 0 means the pass has no depth attachment.
@@ -144,5 +155,5 @@ internal sealed class WebGpuTechnique : IDisposable
 		_ => throw new WebGpuException($"No WebGPU vertex format mapping for {format}."),
 	};
 
-	public void Dispose() => _handles.Release(WebGpuHandleAllocator.RenderPipelines, Pipeline);
+	public void Dispose() => _handles.Release(IsCompute ? WebGpuHandleAllocator.ComputePipelines : WebGpuHandleAllocator.RenderPipelines, Pipeline);
 }

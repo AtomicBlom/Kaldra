@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using Loom.Core.Graph;
@@ -50,6 +51,56 @@ internal sealed partial class WebGpuRenderContext
 
 		BindAndSet(baked, views, call.Uniforms, default);
 		RecordGeometry(call);
+	}
+
+	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
+	{
+		var baked = BakeCompute(technique);
+		var bindings = baked.Template.Bindings;
+		var writer = _engine.Writer;
+		writer.SetComputePipeline(baked.Pipeline);
+
+		if (bindings.HasBindings)
+		{
+			var transients = _engine.Transients;
+			Span<int> entries = stackalloc int[bindings.Entries.Count * 5];
+			var e = 0;
+
+			var sampler = sampled.Length > 0 ? _engine.Samplers.Get(baked.Template.LinearFilter, baked.Template.Address) : 0;
+			for (var i = 0; i < sampled.Length && i < bindings.SampledTextureBindings.Length; i++)
+			{
+				AddEntry(entries, ref e, bindings.SampledTextureBindings[i], EntryView, transients.ViewHandle(sampled[i].Id), 0, 0);
+				AddEntry(entries, ref e, bindings.SampledSamplerBindings[i], EntrySampler, sampler, 0, 0);
+			}
+
+			// Storage resources are passed images-first then buffers (the shader's declaration order): a storage
+			// image binds its view, a storage buffer binds its buffer.
+			var imageCount = bindings.StorageImageBindings.Length;
+			for (var k = 0; k < storage.Length; k++)
+			{
+				if (k < imageCount)
+					AddEntry(entries, ref e, bindings.StorageImageBindings[k], EntryView, transients.ViewHandle(storage[k].Id), 0, 0);
+				else if (k - imageCount < bindings.StorageBufferBindings.Length)
+					AddEntry(entries, ref e, bindings.StorageBufferBindings[k - imageCount], EntryBuffer, transients.BufferHandle(storage[k].Id), 0, 0);
+			}
+
+			Span<int> dynOffsets = stackalloc int[1];
+			var dynCount = 0;
+			if (bindings.PushBinding >= 0)
+			{
+				Span<byte> pushBytes = stackalloc byte[bindings.PushByteSize];
+				pushBytes.Clear();
+				var src = MemoryMarshal.AsBytes(push);
+				src[..Math.Min(src.Length, pushBytes.Length)].CopyTo(pushBytes);
+				dynOffsets[dynCount++] = _engine.UniformRing.Reserve(pushBytes, bindings.PushByteSize);
+				AddEntry(entries, ref e, bindings.PushBinding, EntryBuffer, _engine.UniformRing.Buffer, 0, bindings.PushByteSize);
+			}
+
+			var bindGroup = GetOrCreateBindGroup(baked.Template.BindGroupLayout, entries[..e]);
+			writer.SetBindGroup(0, bindGroup, dynOffsets[..dynCount]);
+		}
+
+		writer.Dispatch((int)groups.X, (int)groups.Y, (int)groups.Z);
 	}
 
 	// Emit the geometry half of a draw: single mesh, skinned override, GPU-resident instances, CPU instances, or a

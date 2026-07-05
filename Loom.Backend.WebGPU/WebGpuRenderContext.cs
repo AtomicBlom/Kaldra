@@ -32,6 +32,8 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 	// Per-(name, attachment formats) baked pipelines — keyed by value so the per-draw lookup allocates nothing.
 	// Misses bake a render pipeline from the technique's template; cleared/disposed on hot-reload.
 	private readonly Dictionary<PipelineKey, WebGpuTechnique> _baked = [];
+	// Compute pipelines have no attachment formats, so they key on the technique name alone.
+	private readonly Dictionary<string, WebGpuTechnique> _computeBaked = [];
 	// Per-(technique, bound resources) bind groups. Transients are stable per graph, so a fullscreen/draw's inputs
 	// don't change frame to frame — the group is created once and reused. Cleared on graph swap (the view handles it
 	// references are recycled) and hot-reload.
@@ -100,12 +102,25 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 		return baked;
 	}
 
-	/// <summary>Drop the baked render pipelines (hot-reload); the templates are re-created by the engine before the next bake.</summary>
+	/// <summary>Resolve a compute technique to its baked compute pipeline (keyed by name — no attachment formats).</summary>
+	private WebGpuTechnique BakeCompute(string technique)
+	{
+		if (_computeBaked.TryGetValue(technique, out var cached))
+			return cached;
+		var baked = WebGpuTechnique.BakeCompute(_engine.Handles, _engine.Template(technique), technique);
+		_computeBaked[technique] = baked;
+		return baked;
+	}
+
+	/// <summary>Drop the baked render/compute pipelines (hot-reload); the templates are re-created by the engine before the next bake.</summary>
 	public void ClearBaked()
 	{
 		foreach (var baked in _baked.Values)
 			baked.Dispose();
 		_baked.Clear();
+		foreach (var baked in _computeBaked.Values)
+			baked.Dispose();
+		_computeBaked.Clear();
 		ClearBindGroups();
 	}
 
@@ -116,9 +131,6 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 			_engine.Handles.Release(WebGpuHandleAllocator.BindGroups, handle);
 		_bindGroups.Clear();
 	}
-
-	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage) =>
-		throw new WebGpuException($"Dispatch('{technique}') is not yet implemented on the WebGPU backend.");
 
 	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount) =>
 		throw new WebGpuException($"DispatchSkin('{technique}') is not yet implemented on the WebGPU backend.");
