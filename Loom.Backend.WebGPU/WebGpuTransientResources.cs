@@ -35,15 +35,17 @@ internal sealed class WebGpuTransientResources : IDisposable
 
 	private readonly WebGpuHandleAllocator _handles;
 	private readonly RenderGraph _graph;
+	private readonly Format _backbufferFormat;
 	private readonly ResourceTexture[] _textures; // indexed by ResourceHandle.Id (-1 handles for non-image kinds)
 	private readonly int[] _buffers;              // indexed by ResourceHandle.Id, -1 for non-buffer kinds
 	private int _swapWidth;
 	private int _swapHeight;
 
-	public WebGpuTransientResources(WebGpuHandleAllocator handles, RenderGraph graph, BarrierPlan barriers, int swapWidth, int swapHeight)
+	public WebGpuTransientResources(WebGpuHandleAllocator handles, RenderGraph graph, BarrierPlan barriers, Format backbufferFormat, int swapWidth, int swapHeight)
 	{
 		_handles = handles;
 		_graph = graph;
+		_backbufferFormat = backbufferFormat;
 		_swapWidth = swapWidth;
 		_swapHeight = swapHeight;
 		_textures = new ResourceTexture[graph.Resources.Length];
@@ -67,7 +69,9 @@ internal sealed class WebGpuTransientResources : IDisposable
 				tex.IsBackbuffer = true;
 				tex.SwapchainSized = true;
 				tex.ViewHandle = WebGpuHandleAllocator.BackbufferView;
-				tex.Format = resource.Format;
+				// The graph declares the backbuffer as sRGB RGBA, but the canvas is rendered through its own sRGB
+				// view (usually BGRA) — a pipeline writing the backbuffer must bake against that view's format.
+				tex.Format = _backbufferFormat;
 				(tex.Width, tex.Height) = (_swapWidth, _swapHeight);
 				return;
 

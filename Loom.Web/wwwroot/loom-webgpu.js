@@ -24,6 +24,16 @@ const FORMATS = {
 const LOAD_OPS = ["clear", "load", "clear"]; // Clear, Load, DontCare→clear (WebGPU has no don't-care load)
 const STORE_OPS = ["store", "discard"];
 
+// Sampler address-mode ids (mirror WebGpuSamplerCache): clamp-to-edge, repeat, mirror-repeat.
+const ADDRESS_MODES = ["clamp-to-edge", "repeat", "mirror-repeat"];
+
+// Shader-stage visibility flags (mirror WebGpuBindingModel.Visibility*).
+const VIS_VERTEX = 0x1, VIS_FRAGMENT = 0x2, VIS_COMPUTE = 0x4;
+
+// Bind-group-layout entry kinds (mirror WebGpuBindingModel.Layout*).
+const BGL_UNIFORM = 0, BGL_SAMPLED_TEXTURE = 1, BGL_FILTERING_SAMPLER = 2, BGL_STORAGE_BUFFER_RO = 3,
+	BGL_STORAGE_BUFFER_RW = 4, BGL_STORAGE_TEXTURE = 5, BGL_COMPARISON_SAMPLER = 6, BGL_DEPTH_TEXTURE = 7;
+
 // Command opcodes (must match WebGpuCommandWriter).
 const OP_END = 0, OP_BEGIN_RENDER_PASS = 1, OP_END_PASS = 2, OP_SET_RENDER_PIPELINE = 3,
 	OP_SET_BIND_GROUP = 4, OP_SET_VERTEX_BUFFER = 5, OP_SET_INDEX_BUFFER = 6, OP_DRAW = 7,
@@ -119,14 +129,98 @@ export function releaseHandle(table, handle) {
 	tables[table][handle] = undefined;
 }
 
-// Phase-2+ creation ops (filled in as the technique/mesh/compute paths land).
-export function createSampler() { throw new Error("createSampler: not yet implemented."); }
-export function createShaderModule() { throw new Error("createShaderModule: not yet implemented."); }
-export function createBindGroupLayout() { throw new Error("createBindGroupLayout: not yet implemented."); }
-export function createPipelineLayout() { throw new Error("createPipelineLayout: not yet implemented."); }
-export function createRenderPipeline() { throw new Error("createRenderPipeline: not yet implemented."); }
-export function createComputePipeline() { throw new Error("createComputePipeline: not yet implemented."); }
-export function createBindGroup() { throw new Error("createBindGroup: not yet implemented."); }
+export function createSampler(handle, linear, addressMode, compare) {
+	const filter = linear ? "linear" : "nearest";
+	const mode = ADDRESS_MODES[addressMode] ?? "clamp-to-edge";
+	const desc = {
+		magFilter: filter, minFilter: filter, mipmapFilter: filter,
+		addressModeU: mode, addressModeV: mode, addressModeW: mode,
+	};
+	if (compare) desc.compare = "less-equal";
+	tables[T_SAMPLERS][handle] = device.createSampler(desc);
+}
+
+export function createShaderModule(handle, wgsl, label) {
+	tables[T_SHADER_MODULES][handle] = device.createShaderModule({ code: wgsl, label });
+}
+
+// Entries arrive as flat (binding, visibility, kind, extra) int quads.
+export function createBindGroupLayout(handle, entries) {
+	const a = entries.slice();
+	const list = [];
+	for (let i = 0; i < a.length; i += 4) {
+		const binding = a[i], visibility = a[i + 1], kind = a[i + 2], extra = a[i + 3];
+		const entry = { binding, visibility };
+		switch (kind) {
+			case BGL_UNIFORM: entry.buffer = { type: "uniform" }; break;
+			case BGL_SAMPLED_TEXTURE: entry.texture = { sampleType: "float" }; break;
+			case BGL_FILTERING_SAMPLER: entry.sampler = { type: "filtering" }; break;
+			case BGL_STORAGE_BUFFER_RO: entry.buffer = { type: "read-only-storage" }; break;
+			case BGL_STORAGE_BUFFER_RW: entry.buffer = { type: "storage" }; break;
+			case BGL_STORAGE_TEXTURE: entry.storageTexture = { access: "read-write", format: FORMATS[extra] }; break;
+			case BGL_COMPARISON_SAMPLER: entry.sampler = { type: "comparison" }; break;
+			case BGL_DEPTH_TEXTURE: entry.texture = { sampleType: "depth" }; break;
+			default: throw new Error(`createBindGroupLayout: unknown kind ${kind}`);
+		}
+		list.push(entry);
+	}
+	tables[T_BIND_GROUP_LAYOUTS][handle] = device.createBindGroupLayout({ entries: list });
+}
+
+export function createPipelineLayout(handle, bindGroupLayoutHandles) {
+	const a = bindGroupLayoutHandles.slice();
+	const layouts = Array.from(a, h => tables[T_BIND_GROUP_LAYOUTS][h]);
+	tables[T_PIPELINE_LAYOUTS][handle] = device.createPipelineLayout({ bindGroupLayouts: layouts });
+}
+
+// The render-pipeline descriptor arrives as JSON (bake-time only): all module/layout references are int handles,
+// format references are format ids, and fixed-function state is WebGPU string literals built on the C# side.
+export function createRenderPipeline(handle, descriptorJson) {
+	const d = JSON.parse(descriptorJson);
+	const vertexBuffers = (d.vertexBuffers ?? []).map(b => ({
+		arrayStride: b.arrayStride,
+		stepMode: b.stepMode,
+		attributes: b.attributes.map(at => ({ shaderLocation: at.shaderLocation, offset: at.offset, format: at.format })),
+	}));
+	const targets = d.colorTargets.map(t => {
+		const target = { format: FORMATS[t.format], writeMask: GPUColorWrite.ALL };
+		if (t.blend) target.blend = t.blend;
+		return target;
+	});
+	const desc = {
+		label: d.label,
+		layout: tables[T_PIPELINE_LAYOUTS][d.layout],
+		vertex: { module: tables[T_SHADER_MODULES][d.module], entryPoint: d.vertexEntry, buffers: vertexBuffers },
+		fragment: { module: tables[T_SHADER_MODULES][d.module], entryPoint: d.fragmentEntry, targets },
+		primitive: { topology: d.topology, cullMode: d.cullMode, frontFace: d.frontFace },
+	};
+	if (d.depth) desc.depthStencil = { format: FORMATS[d.depth.format], depthWriteEnabled: d.depth.write, depthCompare: d.depth.compare };
+	tables[T_RENDER_PIPELINES][handle] = device.createRenderPipeline(desc);
+}
+
+export function createComputePipeline(handle, layoutHandle, moduleHandle, entryPoint, label) {
+	tables[T_COMPUTE_PIPELINES][handle] = device.createComputePipeline({
+		label,
+		layout: tables[T_PIPELINE_LAYOUTS][layoutHandle],
+		compute: { module: tables[T_SHADER_MODULES][moduleHandle], entryPoint },
+	});
+}
+
+// Entries arrive as flat (binding, kind, resourceHandle, offset, size) int quints; kind 0 = buffer, 1 = view, 2 = sampler.
+export function createBindGroup(handle, layoutHandle, entries) {
+	const a = entries.slice();
+	const list = [];
+	for (let i = 0; i < a.length; i += 5) {
+		const binding = a[i], kind = a[i + 1], res = a[i + 2], offset = a[i + 3], size = a[i + 4];
+		let resource;
+		if (kind === 0) resource = { buffer: tables[T_BUFFERS][res], offset, size: size > 0 ? size : undefined };
+		else if (kind === 1) resource = tables[T_VIEWS][res];
+		else resource = tables[T_SAMPLERS][res];
+		list.push({ binding, resource });
+	}
+	tables[T_BIND_GROUPS][handle] = device.createBindGroup({ layout: tables[T_BIND_GROUP_LAYOUTS][layoutHandle], entries: list });
+}
+
 export function writeTexture() { throw new Error("writeTexture: not yet implemented."); }
 export function beginReadbackMap() { throw new Error("beginReadbackMap: not yet implemented."); }
 export function tryFetchReadback() { throw new Error("tryFetchReadback: not yet implemented."); }

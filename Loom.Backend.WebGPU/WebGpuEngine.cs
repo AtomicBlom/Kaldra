@@ -23,8 +23,12 @@ internal sealed partial class WebGpuEngine : EngineBase
 	private readonly WebGpuHandleAllocator _handles = new();
 	private readonly WebGpuCommandWriter _writer = new();
 	private readonly WebGpuUploadArena _arena = new();
+	private readonly WebGpuSamplerCache _samplers;
 	private readonly WebGpuRenderContext _context;
-	private readonly Dictionary<string, TechniqueDescriptor> _techniques = [];
+	// Logical technique name → its format-agnostic baked inputs (shader module + layouts + binding model). Built at
+	// DefineTechnique, disposed on hot-reload/teardown; the per-attachment-format render pipelines are cached and
+	// baked lazily by the render context (WebGpuRenderContext.Bake).
+	private readonly Dictionary<string, WebGpuTechniqueTemplate> _templates = [];
 
 	private WebGpuTransientResources? _transients;
 	private int _width;
@@ -37,31 +41,104 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_settings = settings;
 		_width = Math.Max(1, width);
 		_height = Math.Max(1, height);
+		_samplers = new WebGpuSamplerCache(_handles);
 		_context = new WebGpuRenderContext(this);
 		WebGpuInterop.ConfigureCanvas(_width, _height);
 	}
 
+	// Collaborators the per-frame render context reaches through the engine (all created here and stable, except
+	// the transients, which the engine rebinds on each graph swap).
+	internal WebGpuCommandWriter Writer => _writer;
+	internal WebGpuUploadArena Arena => _arena;
+	internal WebGpuHandleAllocator Handles => _handles;
+	internal WebGpuSamplerCache Samplers => _samplers;
+	internal WebGpuTransientResources Transients => _transients ?? throw new WebGpuException("No active graph — SetGraph must run before a pass records.");
+
+	/// <summary>Look up a registered technique's format-agnostic template.</summary>
+	internal WebGpuTechniqueTemplate Template(string name) =>
+		_templates.TryGetValue(name, out var template) ? template : throw new WebGpuException($"No technique registered under the name '{name}'.");
+
 	public override string BackendName => "WebGPU";
 	public override string DeviceName => _surface.AdapterName;
+
+	// The engine's own WGSL shaders are embedded under "<assembly>.Shaders." (the build's LoomEmbedManifestPrefix).
+	private static readonly string EmbeddedShaderPrefix = typeof(WebGpuEngine).Assembly.GetName().Name + ".Shaders.";
 
 	// Timestamp queries are an optional WebGPU feature and unavailable on many browsers/adapters; timing lands
 	// once the feature is negotiated at device request.
 	protected override bool CanEnableGpuTiming => false;
 
-	// Phase-1 stub: record the descriptor so DefineTechnique succeeds. Real pipeline baking (WGSL module +
-	// explicit bind-group layouts from the emitted WGSL) replaces this body when the technique path lands.
-	protected override void BakeTechnique(string name, TechniqueDescriptor descriptor) => _techniques[name] = descriptor;
+	// Build the technique's format-agnostic inputs: resolve the logical shader to its WGSL module + reflection,
+	// parse the binding model, and create the shader module + group-0 layouts on the JS side. The render pipeline
+	// itself is baked lazily per attachment-format set (WebGpuRenderContext.Bake). Wrapped in a validation error
+	// scope so a malformed layout surfaces as a named error rather than a silently broken pipeline.
+	protected override void BakeTechnique(string name, TechniqueDescriptor descriptor)
+	{
+		if (_templates.Remove(name, out var previous))
+			previous.Dispose();
 
-	protected override void ResetPipelineCaches() => _techniques.Clear();
+		var wgsl = ResolveShaderText(descriptor.Shader);
+		var reflection = ResolveShaderAsset(descriptor.Shader, ".wgsl.json");
+
+		WebGpuInterop.PushErrorScope();
+		var template = WebGpuTechniqueTemplate.Create(_handles, descriptor.Shader, wgsl, reflection, descriptor);
+		WebGpuInterop.PopErrorScope($"bake technique '{name}'");
+		var errors = WebGpuInterop.TakeErrors();
+		if (!string.IsNullOrEmpty(errors))
+			Console.WriteLine($"[loom][webgpu] {errors}");
+
+		_templates[name] = template;
+	}
+
+	protected override void ResetPipelineCaches()
+	{
+		_context.ClearBaked();
+		foreach (var template in _templates.Values)
+			template.Dispose();
+		_templates.Clear();
+	}
+
+	// Resolve a logical shader name to its WGSL module text, decoded UTF-8 (the ".wgsl" asset is required, so
+	// ResolveShaderAsset throws rather than returning null for it).
+	private string ResolveShaderText(string name) =>
+		System.Text.Encoding.UTF8.GetString(ResolveShaderAsset(name, ".wgsl")!);
+
+	// Resolve a logical shader name + artifact extension (".wgsl" or its ".wgsl.json" reflection sidecar) to bytes.
+	// The engine's own infrastructure shaders are embedded in this assembly; app (demo) shaders resolve through the
+	// host-supplied ShaderResolver (a browser has no shader directory to fall back to). The reflection sidecar is
+	// optional — a shader with no bound resources needs none — so ".wgsl.json" may resolve to null.
+	private byte[]? ResolveShaderAsset(string name, string extension)
+	{
+		var assembly = typeof(WebGpuEngine).Assembly;
+		using var embedded = assembly.GetManifestResourceStream(EmbeddedShaderPrefix + name + extension);
+		if (embedded is not null)
+		{
+			var bytes = new byte[embedded.Length];
+			embedded.ReadExactly(bytes);
+			return bytes;
+		}
+
+		var resolved = _settings.ShaderResolver?.Invoke(name + extension);
+		if (resolved is not null)
+			return resolved;
+
+		if (extension == ".wgsl")
+			throw new WebGpuException(
+				$"Shader '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor resolved by the host ShaderResolver.");
+		return null; // an optional reflection sidecar
+	}
 
 	protected override void ReleaseGraphResources()
 	{
+		// The bind groups reference this graph's transient views; those handles are recycled when the transients are
+		// disposed, so drop the cache first or a later graph could bind a group onto the wrong (reused-handle) texture.
+		_context.ClearBindGroups();
 		_transients?.Dispose();
 		_transients = null;
 	}
 
 	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed) =>
-		_transients = new WebGpuTransientResources(_handles, executed, Barriers, _width, _height);
+		_transients = new WebGpuTransientResources(_handles, executed, Barriers, _surface.BackbufferFormat, _width, _height);
 
 	protected override void GrowStorage(int id, int newByteSize) => _transients!.GrowStorage(id, newByteSize);
 
@@ -97,5 +174,10 @@ internal sealed partial class WebGpuEngine : EngineBase
 	{
 		_transients?.Dispose();
 		_transients = null;
+		_context.Dispose();
+		foreach (var template in _templates.Values)
+			template.Dispose();
+		_templates.Clear();
+		_samplers.Dispose();
 	}
 }

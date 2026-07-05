@@ -68,18 +68,25 @@ internal sealed partial class WebGpuEngine
 		var attachments = pass.Attachments;
 		var colorCount = 0;
 		var hasDepth = false;
+		var depthReadOnly = false;
+		var depthFormatId = -1;
+		Span<int> colorFormatIds = stackalloc int[attachments.Length];
 		var area = (Width: 0, Height: 0);
 		foreach (var a in attachments)
 		{
+			ref var tex = ref _transients!.Texture(a.Resource.Id);
 			if (a.State == ResourceState.ColorAttachment)
-				colorCount++;
-			else
-				hasDepth = true;
-			if (area.Width == 0)
 			{
-				ref var tex = ref _transients!.Texture(a.Resource.Id);
-				area = (tex.Width, tex.Height);
+				colorFormatIds[colorCount++] = WebGpuFormatMapping.ToWebGpu(tex.Format);
 			}
+			else
+			{
+				hasDepth = true;
+				depthFormatId = WebGpuFormatMapping.ToWebGpu(tex.Format);
+				depthReadOnly = a.State == ResourceState.DepthReadOnly;
+			}
+			if (area.Width == 0)
+				area = (tex.Width, tex.Height);
 		}
 
 		_writer.BeginRenderPass(colorCount, hasDepth);
@@ -93,6 +100,8 @@ internal sealed partial class WebGpuEngine
 		_writer.SetViewport(0, 0, area.Width, area.Height);
 		_writer.SetScissor(0, 0, area.Width, area.Height);
 
+		// The technique pipelines this pass bakes must match the attachment formats declared above.
+		_context.BeginPass(colorFormatIds[..colorCount], depthFormatId, depthReadOnly);
 		pass.Pass.Record?.Invoke(_context);
 		_writer.EndPass();
 	}

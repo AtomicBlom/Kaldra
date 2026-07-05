@@ -27,6 +27,7 @@ internal static class WebGpuFormatMapping
 	{
 		Format.Rgba8Srgb => Rgba8UnormSrgb,
 		Format.Rgba8Unorm => Rgba8Unorm,
+		Format.Bgra8Srgb => Bgra8UnormSrgb,
 		Format.Rgb10A2 => Rgb10A2Unorm,
 		Format.Rgba16F => Rgba16Float,
 		Format.R16F => R16Float,
@@ -40,7 +41,7 @@ internal static class WebGpuFormatMapping
 	/// <summary>Bytes per texel — sizes readback/capture buffer rows.</summary>
 	public static int BytesPerTexel(Format format) => format switch
 	{
-		Format.Rgba8Srgb or Format.Rgba8Unorm or Format.Rgb10A2 or Format.R32Uint or Format.R32F or Format.Depth32F => 4,
+		Format.Rgba8Srgb or Format.Rgba8Unorm or Format.Bgra8Srgb or Format.Rgb10A2 or Format.R32Uint or Format.R32F or Format.Depth32F => 4,
 		Format.Rgba16F => 8,
 		Format.R16F => 2,
 		Format.Rg16F => 4,

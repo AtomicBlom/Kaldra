@@ -15,6 +15,7 @@ internal static class VulkanFormatMapping
 	{
 		Format.Rgba8Srgb => VkFormat.R8G8B8A8Srgb,
 		Format.Rgba8Unorm => VkFormat.R8G8B8A8Unorm,
+		Format.Bgra8Srgb => VkFormat.B8G8R8A8Srgb,
 		Format.Rgb10A2 => VkFormat.A2B10G10R10UnormPack32,
 		Format.Rgba16F => VkFormat.R16G16B16A16Sfloat,
 		Format.R16F => VkFormat.R16Sfloat,

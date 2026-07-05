@@ -15,6 +15,7 @@ internal static class DirectX12FormatMapping
 	{
 		Format.Rgba8Srgb => DxgiFormat.FormatR8G8B8A8UnormSrgb,
 		Format.Rgba8Unorm => DxgiFormat.FormatR8G8B8A8Unorm,
+		Format.Bgra8Srgb => DxgiFormat.FormatB8G8R8A8UnormSrgb,
 		Format.Rgb10A2 => DxgiFormat.FormatR10G10B10A2Unorm,
 		Format.Rgba16F => DxgiFormat.FormatR16G16B16A16Float,
 		Format.R16F => DxgiFormat.FormatR16Float,

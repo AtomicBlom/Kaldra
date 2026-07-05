@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+using Loom.Core.Graph;
+
 namespace Loom.Backend.WebGPU;
 
 /// <summary>
@@ -24,6 +26,14 @@ public sealed record WebGpuSurface
 
 	/// <summary>Whether the device granted <c>float32-filterable</c> (linear sampling of r32/rg32/rgba32 float).</summary>
 	public required bool Float32Filterable { get; init; }
+
+	/// <summary>
+	/// The abstract format the backbuffer's render pipelines must target. The canvas is rendered through an sRGB
+	/// <em>view</em> of its preferred format (so shader/clear values are sRGB-encoded on write, matching the desktop
+	/// backends' sRGB swapchains), so a pipeline that writes the backbuffer bakes against the sRGB view format —
+	/// <see cref="Format.Bgra8Srgb"/> for the usual BGRA canvas, <see cref="Format.Rgba8Srgb"/> for an RGBA one.
+	/// </summary>
+	public Format BackbufferFormat => PreferredFormat == "rgba8unorm" ? Format.Rgba8Srgb : Format.Bgra8Srgb;
 
 	/// <summary>Parse the JSON capability blob returned by the JS shim's <c>initDevice</c>.</summary>
 	public static WebGpuSurface FromCapsJson(string canvasSelector, string capsJson)

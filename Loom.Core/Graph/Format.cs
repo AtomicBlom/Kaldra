@@ -20,6 +20,11 @@ public enum Format
 	/// <summary>8-bit RGBA, linear. For data that isn't colour (packed material params, etc.).</summary>
 	Rgba8Unorm,
 
+	/// <summary>8-bit BGRA, sRGB-encoded — the channel-swapped sibling of <see cref="Rgba8Srgb"/>. Most WebGPU
+	/// (and many desktop) swapchains prefer a BGRA layout, so the backbuffer target takes this when the platform's
+	/// preferred canvas/swapchain format is BGRA; the sRGB encoding keeps parity with the RGBA sRGB path.</summary>
+	Bgra8Srgb,
+
 	/// <summary>10/10/10/2 packed. Cheap, higher-precision normals.</summary>
 	Rgb10A2,
 
