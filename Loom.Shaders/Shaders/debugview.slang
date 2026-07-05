@@ -5,23 +5,25 @@
 // is the normal path: a nearest sample of the final graded image (the §9 pixelation upscale). The samplers are
 // bound in the order the pass declares .Samples(...), which matches the View-menu index order.
 
+#include "loom_platform.module.slang"
+
 struct PushConstants
 {
 	float mode; // which buffer to present; index matches the host's view list
 };
 
-[[vk::push_constant]] PushConstants pc;
+LOOM_PUSH_CONSTANT PushConstants pc;
 
-[[vk::binding(0, 0)]] Sampler2D graded;    // 0 Final (the tonemapped, exposure-graded image)
-[[vk::binding(1, 0)]] Sampler2D albedo;    // 1
-[[vk::binding(2, 0)]] Sampler2D normalTex; // 2 (stored *0.5+0.5, so the raw sample IS the classic normal view)
-[[vk::binding(3, 0)]] Sampler2D position; // 3 world position
-[[vk::binding(4, 0)]] Sampler2D depthTex;  // 4 perspective depth
-[[vk::binding(5, 0)]] Sampler2D ao;        // 5 SSAO (single channel)
-[[vk::binding(6, 0)]] Sampler2D lit;       // 6 deferred lit (HDR)
-[[vk::binding(7, 0)]] Sampler2D outlined;  // 7 lit + JFA hover ring (HDR)
-[[vk::binding(8, 0)]] Sampler2D glow;      // 8 bloom result (HDR)
-[[vk::binding(9, 0)]] Sampler2D shadowTex; // 9 sun shadow map (ortho depth)
+LOOM_BINDING(0) Sampler2D graded;    // 0 Final (the tonemapped, exposure-graded image)
+LOOM_BINDING(1) Sampler2D albedo;    // 1
+LOOM_BINDING(2) Sampler2D normalTex; // 2 (stored *0.5+0.5, so the raw sample IS the classic normal view)
+LOOM_BINDING(3) Sampler2D position; // 3 world position
+LOOM_BINDING(4) Sampler2D depthTex;  // 4 perspective depth
+LOOM_BINDING(5) Sampler2D ao;        // 5 SSAO (single channel)
+LOOM_BINDING(6) Sampler2D lit;       // 6 deferred lit (HDR)
+LOOM_BINDING(7) Sampler2D outlined;  // 7 lit + JFA hover ring (HDR)
+LOOM_BINDING(8) Sampler2D glow;      // 8 bloom result (HDR)
+LOOM_BINDING(9) Sampler2D shadowTex; // 9 sun shadow map (ortho depth)
 
 struct VsOut
 {

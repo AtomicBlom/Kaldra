@@ -40,6 +40,16 @@ public static class ImageLoader
 		return TextureData.FromRgba8(image.Width, image.Height, image.Data, format, generateMips);
 	}
 
+	/// <summary>Decode an encoded image from bytes already in memory (e.g. fetched over HTTP by a browser host,
+	/// where there is no file system to <see cref="Load"/> from) to neutral <see cref="TextureData"/>.</summary>
+	public static TextureData Decode(byte[] encoded, TextureFormat format, bool generateMips = true)
+	{
+		var image = ImageResult.FromMemory(encoded, ColorComponents.RedGreenBlueAlpha);
+		if (image is null || image.Width <= 0 || image.Height <= 0 || image.Data is null)
+			throw new InvalidDataException("Image decode produced no pixels (unsupported or corrupt image data).");
+		return TextureData.FromRgba8(image.Width, image.Height, image.Data, format, generateMips);
+	}
+
 	/// <summary>
 	/// Decode a Radiance HDR (<c>.hdr</c>) / floating-point image file to neutral RGBA16F <see cref="TextureData"/>
 	/// — the source for an image-based-lighting environment / equirectangular map, whose values exceed 1 and so

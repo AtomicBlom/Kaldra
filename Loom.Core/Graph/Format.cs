@@ -30,6 +30,11 @@ public enum Format
 	/// reference-frame's object-id picking target (small ids are exact in F16 — see <see cref="R32Uint"/>).</summary>
 	R16F,
 
+	/// <summary>32-bit float, single channel. Like <see cref="R16F"/> but full precision — and the only
+	/// single-channel float format WebGPU allows for <em>read-write</em> storage textures, so a persistent
+	/// scalar that a compute pass reads and rewrites in place (the auto-exposure value) must use this.</summary>
+	R32F,
+
 	/// <summary>32-bit unsigned integer, single channel. The format for **true** integer object ids — exact
 	/// for any id range, where <see cref="R16F"/> is only exact below 2048. (The reference frame's picking path
 	/// uses <see cref="R16F"/>: its ids are tiny and a float id composes directly with the float-based JFA

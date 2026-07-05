@@ -4,15 +4,17 @@
 // texture. Alpha-blended over the final image as the screen-space HUD (Planning.md §6/§9: the HUD is native
 // resolution, on top, untouched by bloom/pixelation).
 
+#include "loom_platform.module.slang"
+
 struct PushConstants
 {
 	float2 scale;
 	float2 translate;
 };
 
-[[vk::push_constant]] PushConstants pc;
+LOOM_PUSH_CONSTANT PushConstants pc;
 
-[[vk::binding(0, 0)]] Sampler2D fontTex;
+LOOM_BINDING(0) Sampler2D fontTex;
 
 struct VsIn
 {

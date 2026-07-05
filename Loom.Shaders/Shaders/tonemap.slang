@@ -3,14 +3,16 @@
 // gentle Reinhard shoulder so the now-exposed HDR rolls off instead of hard-clipping on the LDR backbuffer.
 // Runs in the world domain before the nearest upscale, so it stays pixel-consistent.
 
-[[vk::binding(0, 0)]] Sampler2D sceneTex;    // bloomed scene (HDR)
-[[vk::binding(1, 0)]] Sampler2D exposureTex; // 1×1 auto-exposure multiplier
+#include "loom_platform.module.slang"
+
+LOOM_BINDING(0) Sampler2D sceneTex;    // bloomed scene (HDR)
+LOOM_BINDING(1) Sampler2D exposureTex; // 1×1 auto-exposure multiplier
 
 // hdr != 0 selects the HDR-display output path (M7-B6): the engine sets it from the negotiated swapchain
 // (ctx.HdrOutput). On an scRGB (linear) swapchain the terminal pass writes these values straight through, so
 // the only difference HDR makes is here — preserve the extended range instead of compressing it to SDR.
 struct PushConstants { float hdr; };
-[[vk::push_constant]] PushConstants pc;
+LOOM_PUSH_CONSTANT PushConstants pc;
 
 struct VsOut
 {

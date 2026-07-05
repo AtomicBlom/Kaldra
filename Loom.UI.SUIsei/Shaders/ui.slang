@@ -17,6 +17,8 @@
 // render-to-texture composite below the graph seam; they never reach this shader, and the composite blit reuses
 // KIND_IMAGE (sample the resolved layer, tint by the group alpha). A layer effect id rides the BeginLayer marker
 // for a future blur branch — MU4 ships effect id 0 (opacity only), so no KIND_LAYER_* branch exists yet.
+#include "loom_platform.module.slang"
+
 static const uint KIND_FILL = 0;
 static const uint KIND_ROUNDED_RECT = 1;
 static const uint KIND_BORDER = 2;
@@ -33,11 +35,11 @@ struct PushConstants
 	                       // final push slot per command with the command's tag, so the per-command field sits here.
 };
 
-[[vk::push_constant]] PushConstants pc;
+LOOM_PUSH_CONSTANT PushConstants pc;
 
 // One combined sampler, bound per command to the white texel (fills) or an atlas page (glyph/image) — mirrors
 // ImGui's per-command texture bind. Slang lowers Sampler2D to a Texture2D+SamplerState pair for the DXIL target.
-[[vk::binding(0, 0)]] Sampler2D tex;
+LOOM_BINDING(0) Sampler2D tex;
 
 struct VsIn
 {

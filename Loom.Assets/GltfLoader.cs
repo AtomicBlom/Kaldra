@@ -21,9 +21,15 @@ namespace Loom.Assets;
 public static class GltfLoader
 {
 	/// <summary>Load and flatten a glTF/GLB file at <paramref name="path"/> into drawable primitives (plus a skeleton + clips when rigged).</summary>
-	public static LoadedModel Load(string path)
+	public static LoadedModel Load(string path) => FromModel(ModelRoot.Load(path));
+
+	/// <summary>Load a binary glTF (<c>.glb</c>) already in memory (e.g. fetched over HTTP by a browser host,
+	/// where there is no file system to <see cref="Load"/> from). GLB only: a text <c>.gltf</c> references
+	/// sibling files, which bytes alone cannot resolve.</summary>
+	public static LoadedModel LoadGlb(byte[] glb) => FromModel(ModelRoot.ParseGLB(glb));
+
+	private static LoadedModel FromModel(ModelRoot model)
 	{
-		var model = ModelRoot.Load(path);
 		var primitives = new List<ModelPrimitive>();
 		var materialCache = new Dictionary<GltfMaterial, ModelMaterial?>();
 

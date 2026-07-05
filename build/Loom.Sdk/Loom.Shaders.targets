@@ -26,6 +26,10 @@
   <ItemGroup Condition="'$(LoomShaderOutputMode)' != 'None'">
     <LoomSlangEntry  Include="$(LoomShaderSourceDir)\**\*.slang" Exclude="$(LoomShaderSourceDir)\**\*.module.slang;$(LoomShaderExclude)" />
     <LoomSlangModule Include="$(LoomShaderSourceDir)\**\*.module.slang" />
+    <!-- Shared includes (the LOOM_BINDING/LOOM_PUSH_CONSTANT header) live outside app shader dirs;
+         track them as modules so editing one rebuilds every dependent shader. Duplicates (when the
+         source dir IS the include dir, i.e. the engine) are harmless in an Inputs list. -->
+    <LoomSlangModule Include="$(LoomShaderIncludeDir)\*.module.slang" Condition="Exists('$(LoomShaderIncludeDir)')" />
     <LoomSlangSource Include="@(LoomSlangEntry);@(LoomSlangModule)" />
 
     <!-- Keep the IDE FastUpToDateCheck aware of shader inputs/outputs so it never skips a build and runs
@@ -33,6 +37,8 @@
     <UpToDateCheckInput Include="@(LoomSlangSource)" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')" />
+    <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'" />
+    <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true'" />
   </ItemGroup>
 
   <!-- Incremental: recompile when ANY .slang (entry OR shared module) is newer than ANY .spv. Listing every
@@ -49,7 +55,7 @@
     <Message Importance="high" Text="Slang -&gt; SPIR-V (+reflection): %(LoomSlangEntry.Filename).slang" />
     <!-- Emit reflection JSON beside the SPIR-V (M7-B4): the backend reads it at DefineTechnique to derive
          the descriptor-binding layout, so the app states only pipeline intent. -->
-    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target spirv -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).spv&quot; -reflection-json &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).json&quot;" />
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target spirv -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).spv&quot; -reflection-json &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).json&quot;" />
 
     <!-- DirectX12: also emit SIGNED DXIL here (same target as SPIR-V, so the single LoomCompileShaders dependency
          covers BOTH and the registration below always sees every produced stage — a separate emit target
@@ -83,9 +89,18 @@
         <HasCompute>$([System.IO.File]::ReadAllText('%(FullPath)').Contains('computeMain'))</HasCompute>
       </_LoomDxilEntry>
     </ItemGroup>
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry vertexMain -stage vertex -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).vs.dxil&quot;" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry fragmentMain -stage fragment -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).ps.dxil&quot;" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -entry computeMain -stage compute -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).cs.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry vertexMain -stage vertex -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).vs.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry fragmentMain -stage fragment -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).ps.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry computeMain -stage compute -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).cs.dxil&quot;" />
+
+    <!-- WebGPU: also emit WGSL (whole module — Slang's WGSL target handles multi-entry) plus the
+         WGSL-target reflection sidecar. -DLOOM_WGSL flips the loom_platform.module.slang macros: explicit
+         [[vk::binding]] slots are dropped (Slang auto-assigns unique WGSL bindings in declaration order —
+         explicit Vulkan numbers would collide because a combined Sampler2D needs TWO slots) and the
+         push-constant block lowers to an ordinary uniform. The WebGPU backend derives its bind-group
+         layouts from the emitted WGSL text + this sidecar, never from the Vulkan slot scheme. -->
+    <Message Condition="'$(LoomEmitWgsl)' == 'true'" Importance="high" Text="Slang -&gt; WGSL (+reflection): %(LoomSlangEntry.Filename).slang" />
+    <Exec Condition="'$(LoomEmitWgsl)' == 'true'" Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target wgsl -DLOOM_WGSL -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).wgsl&quot; -reflection-json &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).wgsl.json&quot;" />
   </Target>
 
   <!-- No Inputs/Outputs => ALWAYS runs (even when the compile targets are up to date), so the outputs are
@@ -143,6 +158,20 @@
         <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
+      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(Filename).wgsl</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(Filename).wgsl</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
+        <Visible>false</Visible>
+      </Content>
+      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true'">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(Filename).wgsl.json</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(Filename).wgsl.json</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
+        <Visible>false</Visible>
+      </Content>
     </ItemGroup>
 
     <!-- Embed (engine): .spv/.json (+ HLSL) become EmbeddedResource with a STABLE flat manifest name the engine
@@ -162,6 +191,16 @@
            satellite-assembly resource and drop it from the main manifest — leaving only ".vs" (not a culture). -->
       <EmbeddedResource Include="@(LoomDxilFile)">
         <LogicalName>$(LoomEmbedManifestPrefix)%(Filename)%(Extension)</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).wgsl</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true'">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).wgsl.json</LogicalName>
         <WithCulture>false</WithCulture>
         <Visible>false</Visible>
       </EmbeddedResource>

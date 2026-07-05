@@ -6,6 +6,8 @@
 // doubles as the §9 pixelation upscale), NOT vkCmdBlitImage. The sampled resource is bound as
 // a single combined image sampler at set 0, binding 0.
 
+#include "loom_platform.module.slang"
+
 struct VsOut
 {
 	float4 position : SV_Position;
@@ -24,7 +26,7 @@ VsOut vertexMain(uint vertexId : SV_VertexID)
 }
 
 // set 0, binding 0: a combined image sampler (the resource declared via .Samples(input)).
-[[vk::binding(0, 0)]]
+LOOM_BINDING(0)
 Sampler2D source;
 
 [shader("fragment")]

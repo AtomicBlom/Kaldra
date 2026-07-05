@@ -8,15 +8,17 @@
 // prove the compute + persistent path through the graph; a proper parallel multi-stage reduction is a later
 // optimisation. Compute has no implicit derivatives, so sampling uses SampleLevel.
 
-[[vk::binding(0, 0)]] Sampler2D litTex;            // the HDR lit scene (sampled)
-[[vk::binding(1, 0)]] RWTexture2D<float> exposure; // 1×1 persistent storage image (read-modify-write)
+#include "loom_platform.module.slang"
+
+LOOM_BINDING(0) Sampler2D litTex;            // the HDR lit scene (sampled)
+LOOM_BINDING(1) RWTexture2D<float> exposure; // 1×1 persistent storage image (read-modify-write)
 
 struct PushConstants
 {
 	float4 p; // x = adaptation rate this frame (≈ rate * dt, saturated)
 };
 
-[[vk::push_constant]] PushConstants pc;
+LOOM_PUSH_CONSTANT PushConstants pc;
 
 [shader("compute")]
 [numthreads(1, 1, 1)]

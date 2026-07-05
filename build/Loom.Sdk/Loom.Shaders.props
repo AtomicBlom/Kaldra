@@ -23,6 +23,19 @@
     <LoomEmitDxil Condition="'$(LoomEmitDxil)' == '' And '$(UseDirectX12)' == 'true'">true</LoomEmitDxil>
     <LoomEmitDxil Condition="'$(LoomEmitDxil)' == ''">false</LoomEmitDxil>
 
+    <!-- Also emit WGSL beside the SPIR-V (for the WebGPU backend / browser). Unlike DXIL, Slang's WGSL
+         target compiles a multi-entry module in one invocation, so one .wgsl per shader. A WGSL-target
+         reflection sidecar (<name>.wgsl.json) is emitted too: binding ASSIGNMENTS differ per target
+         (WGSL splits each combined Sampler2D into texture+sampler slots and folds the push-constant
+         block into an ordinary uniform), so the SPIR-V reflection JSON cannot be reused for layout. -->
+    <LoomEmitWgsl Condition="'$(LoomEmitWgsl)' == '' And '$(UseWebGPU)' == 'true'">true</LoomEmitWgsl>
+    <LoomEmitWgsl Condition="'$(LoomEmitWgsl)' == ''">false</LoomEmitWgsl>
+
+    <!-- Directory of shared cross-project shader includes (loom_platform.module.slang: the per-target
+         LOOM_BINDING / LOOM_PUSH_CONSTANT macros). Passed to every slangc invocation via -I so app and
+         UI shader dirs resolve the same header the engine shaders use. -->
+    <LoomShaderIncludeDir Condition="'$(LoomShaderIncludeDir)' == ''">$(MSBuildThisFileDirectory)..\..\Loom.Shaders\Shaders</LoomShaderIncludeDir>
+
     <!-- slangc emits DXIL by handing off to DXC, which it loads only from its own module dir or a path we give
          it (NOT the PATH env var). The Microsoft.Direct3D.DXC NuGet package ships architecture-matched
          dxcompiler.dll + dxil.dll; Loom.Shaders.targets picks it up via $(PkgMicrosoft_Direct3D_DXC) when the
