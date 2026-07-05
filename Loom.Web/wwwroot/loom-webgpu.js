@@ -83,12 +83,25 @@ export async function initDevice(canvasSelector, protocolVersion) {
 	});
 }
 
+// The backing-store size IS the render resolution the engine drives (its transients and viewport match it), so
+// set it verbatim — the host derives it from the canvas's CSS display size × devicePixelRatio (getCanvasSize), so
+// the content fills the canvas crisply rather than underfilling it by the DPR factor.
 export function configureCanvas(width, height) {
 	if (!canvas || !context) return;
-	const dpr = Math.min(window.devicePixelRatio || 1, 2);
-	canvas.width = Math.max(1, Math.floor(width * dpr));
-	canvas.height = Math.max(1, Math.floor(height * dpr));
+	canvas.width = Math.max(1, width);
+	canvas.height = Math.max(1, height);
 	context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), viewFormats: [canvasViewFormat], alphaMode: "opaque" });
+}
+
+// The canvas's current display resolution in device pixels — its CSS size (100vw×100vh) times the (capped) device
+// pixel ratio. The host reads this to size the engine so one rendered pixel maps to one device pixel.
+export function getCanvasSize(canvasSelector) {
+	const c = document.querySelector(canvasSelector);
+	if (!c) return "1280,720";
+	const dpr = Math.min(window.devicePixelRatio || 1, 2);
+	const w = Math.max(1, Math.round((c.clientWidth || 1280) * dpr));
+	const h = Math.max(1, Math.round((c.clientHeight || 720) * dpr));
+	return `${w},${h}`;
 }
 
 // ── Object creation (C#-allocated handles) ──
