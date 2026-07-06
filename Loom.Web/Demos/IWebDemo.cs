@@ -23,6 +23,7 @@ internal static class WebDemos
 	{
 		["cube"] = engine => new CubeLightingDemo(engine),
 		["particles"] = engine => new ParticlesDemo(engine),
+		["highlighting"] = engine => new HighlightingDemo(engine),
 	};
 
 	public static IEnumerable<string> Names => Factories.Keys;
