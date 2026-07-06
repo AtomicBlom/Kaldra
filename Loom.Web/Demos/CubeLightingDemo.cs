@@ -58,6 +58,10 @@ internal sealed class CubeLightingDemo
 		});
 	}
 
+	/// <summary>Update the projection's aspect ratio after a canvas resize (the swapchain-sized depth target and the
+	/// backbuffer are resized by the engine; only the camera aspect is the demo's to refresh).</summary>
+	public void Resize(int width, int height) => _aspect = height > 0 ? width / (float)height : _aspect;
+
 	/// <summary>Advance the orbiting camera and publish its view-projection for the scene pass to read.</summary>
 	public void Update(float time)
 	{

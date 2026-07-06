@@ -354,6 +354,18 @@ export function startFrameLoop(dotnetFrame) {
 	requestAnimationFrame(tick);
 }
 
+// Notify C# on window resize, coalesced to one call per animation frame so a drag-resize doesn't thrash the
+// engine's transient reallocation. C# re-reads getCanvasSize and drives engine.Resize.
+export function startResizeHandler(dotnetResize) {
+	let pending = false;
+	const onResize = () => {
+		if (pending) return;
+		pending = true;
+		requestAnimationFrame(() => { pending = false; dotnetResize(); });
+	};
+	window.addEventListener("resize", onResize);
+}
+
 function align4(n) { return (n + 3) & ~3; }
 
 // Diagnostic hook (read via the CDP verification harness): the pending error queue plus device/canvas state.
