@@ -205,5 +205,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_samplers.Dispose();
 		_meshes.Dispose();
 		_textures.Dispose();
+		if (_captureBuffer >= 0)
+			_handles.Release(WebGpuHandleAllocator.Buffers, _captureBuffer);
 	}
 }

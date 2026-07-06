@@ -16,4 +16,11 @@ public sealed class WebGpuEngineSettings : EngineSettings
 	/// app's entry-assembly embedded shaders — a browser host has no shader directory to fall back to.
 	/// </summary>
 	public Func<string, byte[]?>? ShaderResolver { get; set; }
+
+	/// <summary>
+	/// How a requested frame capture is delivered: <c>false</c> (the default) triggers a browser download of the
+	/// PNG — for manual inspection; <c>true</c> POSTs it to the diff harness's local server (<c>/capture</c>). The
+	/// capture is always produced by reading the backbuffer texture on the CPU, so it is compositor-independent.
+	/// </summary>
+	public bool CaptureViaPost { get; set; }
 }

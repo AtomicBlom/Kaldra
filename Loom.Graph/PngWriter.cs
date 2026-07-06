@@ -17,6 +17,13 @@ public static class PngWriter
 	public static void WriteRgba(string path, int width, int height, ReadOnlySpan<byte> rgba)
 	{
 		using var stream = File.Create(path);
+		WriteRgba(stream, width, height, rgba);
+	}
+
+	/// <summary>Encode an 8-bit RGBA image to <paramref name="stream"/> — the filesystem-free path (a browser
+	/// capture encodes into a <see cref="MemoryStream"/> before handing the bytes to JS).</summary>
+	public static void WriteRgba(Stream stream, int width, int height, ReadOnlySpan<byte> rgba)
+	{
 		stream.Write(Signature);
 
 		Span<byte> ihdr = stackalloc byte[13];

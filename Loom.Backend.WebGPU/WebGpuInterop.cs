@@ -84,6 +84,15 @@ internal static partial class WebGpuInterop
 	[JSImport("tryFetchReadback", Module)]
 	public static partial bool TryFetchReadback(int slot, [JSMarshalAs<JSType.MemoryView>] Span<byte> destination);
 
+	/// <summary>Trigger a browser download of a captured frame's PNG bytes under <paramref name="fileName"/>.</summary>
+	[JSImport("downloadCapture", Module)]
+	public static partial void DownloadCapture(string fileName, [JSMarshalAs<JSType.MemoryView>] Span<byte> png);
+
+	/// <summary>POST a captured frame's PNG bytes to the harness endpoint (<c>/capture?name=…</c>) for the automated
+	/// diff loop; falls back to a download if no server is listening.</summary>
+	[JSImport("postCapture", Module)]
+	public static partial void PostCapture(string name, [JSMarshalAs<JSType.MemoryView>] Span<byte> png);
+
 	// ── Housekeeping ──
 
 	[JSImport("releaseHandle", Module)]

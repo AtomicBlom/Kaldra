@@ -38,8 +38,14 @@ internal sealed partial class WebGpuEngine
 		foreach (var pass in Barriers.Passes)
 			RecordPass(pass);
 
+		// A requested capture copies the backbuffer into a map-read buffer at the tail of this frame's stream.
+		RecordCaptureIfRequested();
+
 		var commands = _writer.Finish();
 		WebGpuInterop.SubmitFrame(commands, _arena.Used);
+
+		// Drive the async capture map (started the frame after its copy submits, then polled to completion).
+		ServiceCapture();
 
 		var errors = WebGpuInterop.TakeErrors();
 		if (!string.IsNullOrEmpty(errors))

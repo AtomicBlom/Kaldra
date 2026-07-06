@@ -71,7 +71,9 @@ export async function initDevice(canvasSelector, protocolVersion) {
 	// Render through an sRGB view of the canvas so shader/clear values are sRGB-encoded on write, matching the
 	// other backends' sRGB swapchains (their shared shaders assume it).
 	canvasViewFormat = preferred === "rgba8unorm" ? "rgba8unorm-srgb" : "bgra8unorm-srgb";
-	context.configure({ device, format: preferred, viewFormats: [canvasViewFormat], alphaMode: "opaque" });
+	// COPY_SRC lets the capture path read the backbuffer straight off the swapchain texture (compositor-independent).
+	context.configure({ device, format: preferred, viewFormats: [canvasViewFormat], alphaMode: "opaque",
+		usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
 
 	const info = adapter.info ?? {};
 	const adapterName = [info.vendor, info.architecture, info.description].filter(Boolean).join(" ") || "WebGPU adapter";
@@ -90,7 +92,8 @@ export function configureCanvas(width, height) {
 	if (!canvas || !context) return;
 	canvas.width = Math.max(1, width);
 	canvas.height = Math.max(1, height);
-	context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), viewFormats: [canvasViewFormat], alphaMode: "opaque" });
+	context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), viewFormats: [canvasViewFormat], alphaMode: "opaque",
+		usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
 }
 
 // The canvas's current display resolution in device pixels — its CSS size (100vw×100vh) times the (capped) device
@@ -245,8 +248,40 @@ export function writeTexture(textureHandle, mip, width, height, bytesPerRow, byt
 		{ width, height, depthOrArrayLayers: 1 });
 }
 
-export function beginReadbackMap() { throw new Error("beginReadbackMap: not yet implemented."); }
-export function tryFetchReadback() { throw new Error("tryFetchReadback: not yet implemented."); }
+// Async GPU→CPU readback: mapAsync resolves on a later task, so C# starts a map then polls until it lands. Each
+// slot tracks its buffer and state (pending → mapped) independently.
+const readbackSlots = [];
+export function beginReadbackMap(slot, bufferHandle) {
+	const buffer = tables[T_BUFFERS][bufferHandle];
+	const s = readbackSlots[slot] = { buffer, mapped: false };
+	buffer.mapAsync(GPUMapMode.READ).then(() => { s.mapped = true; }).catch(e => { errors.push(`mapAsync: ${e.message}`); });
+}
+
+export function tryFetchReadback(slot, destination) {
+	const s = readbackSlots[slot];
+	if (!s || !s.mapped) return false;
+	const src = new Uint8Array(s.buffer.getMappedRange());
+	destination.set(src.subarray(0, Math.min(src.length, destination.length)));
+	s.buffer.unmap();
+	readbackSlots[slot] = null;
+	return true;
+}
+
+// Save a captured frame's PNG to a file via a transient object-URL anchor (manual verification).
+export function downloadCapture(fileName, png) {
+	const blob = new Blob([png.slice()], { type: "image/png" });
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url; a.download = fileName;
+	document.body.appendChild(a); a.click(); a.remove();
+	URL.revokeObjectURL(url);
+}
+
+// POST a captured frame's PNG to the harness (fire-and-forget); the diff loop's local server saves it.
+export function postCapture(name, png) {
+	fetch(`/capture?name=${encodeURIComponent(name)}`, { method: "POST", body: png.slice(), headers: { "Content-Type": "image/png" } })
+		.catch(e => errors.push(`postCapture: ${e.message}`));
+}
 
 // ── Error plumbing ──
 
@@ -276,9 +311,10 @@ export function submitFrame(commandsView, arenaView) {
 
 	const encoder = device.createCommandEncoder();
 	let pass = null;
-	let backbufferView = null;
+	let currentTexture = null, backbufferView = null;
 	let renderPasses = 0, firstClear = null;
-	const resolveView = h => h === -1 ? (backbufferView ??= context.getCurrentTexture().createView({ format: canvasViewFormat })) : tables[T_VIEWS][h];
+	const getCurrentTexture = () => currentTexture ??= context.getCurrentTexture();
+	const resolveView = h => h === -1 ? (backbufferView ??= getCurrentTexture().createView({ format: canvasViewFormat })) : tables[T_VIEWS][h];
 
 	while (p < totalWords) {
 		const op = i32[p++];
@@ -329,8 +365,10 @@ export function submitFrame(commandsView, arenaView) {
 			}
 			case OP_COPY_TEXTURE_TO_BUFFER: {
 				const tex = i32[p++], w = i32[p++], h = i32[p++], buf = i32[p++], bufOff = i32[p++], bpr = i32[p++];
+				// Sentinel -1 = the swapchain's current texture (the capture path reads the backbuffer directly).
+				const srcTexture = tex === -1 ? getCurrentTexture() : tables[T_TEXTURES][tex];
 				encoder.copyTextureToBuffer(
-					{ texture: tables[T_TEXTURES][tex] },
+					{ texture: srcTexture },
 					{ buffer: tables[T_BUFFERS][buf], offset: bufOff, bytesPerRow: bpr },
 					{ width: w, height: h, depthOrArrayLayers: 1 });
 				break;
