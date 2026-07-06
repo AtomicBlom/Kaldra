@@ -17,3 +17,15 @@
 #define LOOM_BINDING(slot) [[vk::binding(slot, 0)]]
 #define LOOM_PUSH_CONSTANT [[vk::push_constant]]
 #endif
+
+// Clip-space position for a fullscreen-triangle pass, from its 0..2 uv. A fullscreen technique fabricates its
+// triangle from SV_VertexID and never goes through the camera's clip-space correction, so the NDC-Y convention
+// has to be baked in here: Vulkan/DX12 map uv 0..1 straight to NDC -1..1 (their Y-down NDC, plus DirectX12's
+// negative-height viewport, put uv-row 0 at the top), but WebGPU has a Y-up NDC and no negative viewport, so its
+// fullscreen triangle must flip Y — otherwise every sampled post pass comes out upside down. Sampled uv is
+// unchanged; only the emitted position differs.
+#ifdef LOOM_WGSL
+#define LOOM_FULLSCREEN_POS(uv) float4((uv).x * 2.0 - 1.0, 1.0 - (uv).y * 2.0, 0.0, 1.0)
+#else
+#define LOOM_FULLSCREEN_POS(uv) float4((uv) * 2.0 - 1.0, 0.0, 1.0)
+#endif

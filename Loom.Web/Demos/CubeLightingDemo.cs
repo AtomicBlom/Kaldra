@@ -15,7 +15,7 @@ namespace Loom.Web.Demos;
 /// is dropped (draw lists land in a later phase); an orbiting camera replaces the fly camera so it animates without
 /// input.
 /// </summary>
-internal sealed class CubeLightingDemo
+internal sealed class CubeLightingDemo : IWebDemo
 {
 	private readonly IEngine _engine;
 	private readonly Camera _camera;

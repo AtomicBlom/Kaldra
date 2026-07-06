@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Text.Json;
 
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
@@ -71,12 +72,18 @@ internal sealed class WebGpuTechniqueTemplate : IDisposable
 			WebGpuInterop.CreatePipelineLayout(pipelineLayout, []);
 		}
 
+		// The WGSL entry-point names are authoritative — Slang names them by stage (vertexMain / fragmentMain /
+		// computeMain), which can differ from the descriptor's desktop-oriented names (a compute technique's SPIR-V
+		// entry may be "main" while its WGSL entry is "computeMain"). Read them from the reflection, falling back to
+		// the descriptor. A compute technique's single entry rides FragmentEntry (BakeCompute reads it there).
+		var (vertexEntry, fragmentEntry) = ResolveEntryPoints(reflectionJson, descriptor);
+
 		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
 		return new WebGpuTechniqueTemplate(handles)
 		{
 			Bindings = bindings,
-			VertexEntry = descriptor.VertexEntry,
-			FragmentEntry = descriptor.FragmentEntry,
+			VertexEntry = vertexEntry,
+			FragmentEntry = fragmentEntry,
 			HasVertexInput = descriptor.HasVertexInput,
 			Blend = descriptor.Blend,
 			LinearFilter = descriptor.LinearFilter,
@@ -89,6 +96,36 @@ internal sealed class WebGpuTechniqueTemplate : IDisposable
 			BindGroupLayout = bindGroupLayout,
 			PipelineLayout = pipelineLayout,
 		};
+	}
+
+	// Read the emitted WGSL entry-point names by stage from the reflection sidecar. Returns (vertexEntry,
+	// fragmentEntry); for a compute technique the compute entry is returned as fragmentEntry (BakeCompute's slot).
+	private static (string Vertex, string Fragment) ResolveEntryPoints(byte[]? reflectionJson, in TechniqueDescriptor descriptor)
+	{
+		var vertex = descriptor.VertexEntry;
+		var fragment = descriptor.FragmentEntry;
+		if (reflectionJson is null)
+			return (vertex, fragment);
+
+		using var doc = JsonDocument.Parse(reflectionJson);
+		if (!doc.RootElement.TryGetProperty("entryPoints", out var entries) || entries.ValueKind != JsonValueKind.Array)
+			return (vertex, fragment);
+
+		foreach (var entry in entries.EnumerateArray())
+		{
+			if (!entry.TryGetProperty("name", out var nameElem) || !entry.TryGetProperty("stage", out var stageElem))
+				continue;
+			var name = nameElem.GetString();
+			if (name is null)
+				continue;
+			switch (stageElem.GetString())
+			{
+				case "vertex": vertex = name; break;
+				case "fragment": fragment = name; break;
+				case "compute": fragment = name; break; // the compute entry rides FragmentEntry
+			}
+		}
+		return (vertex, fragment);
 	}
 
 	public void Dispose()
