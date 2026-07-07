@@ -29,3 +29,15 @@
 #else
 #define LOOM_FULLSCREEN_POS(uv) float4((uv) * 2.0 - 1.0, 0.0, 1.0)
 #endif
+
+// Screen uv (0..1, top-left origin) of a clip-space position, for a shader that reprojects a world point back to
+// screen to sample a G-buffer there (SSAO, screen-space reflections, …). Same NDC-Y convention split as
+// LOOM_FULLSCREEN_POS: Vulkan/DX12 carry the clip-space correction in their view-projection so uv.y = ndc.y·0.5+0.5,
+// but WebGPU renders with an uncorrected (Y-up NDC) view-projection, so the same screen row is at the opposite ndc.y
+// and uv.y must flip. uv.x is unaffected (the correction only flips Y). Takes the raw clip vector (before the
+// perspective divide) and divides internally.
+#ifdef LOOM_WGSL
+#define LOOM_CLIP_TO_UV(clip) float2((clip).x / (clip).w * 0.5 + 0.5, 0.5 - (clip).y / (clip).w * 0.5)
+#else
+#define LOOM_CLIP_TO_UV(clip) (((clip).xy / (clip).w) * 0.5 + 0.5)
+#endif
