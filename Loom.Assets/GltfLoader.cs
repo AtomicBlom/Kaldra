@@ -28,6 +28,16 @@ public static class GltfLoader
 	/// sibling files, which bytes alone cannot resolve.</summary>
 	public static LoadedModel LoadGlb(byte[] glb) => FromModel(ModelRoot.ParseGLB(glb));
 
+	/// <summary>Load a text <c>.gltf</c> together with the sibling files it references (external buffers and images),
+	/// supplied as an in-memory name→bytes map. This is the browser equivalent of <see cref="Load"/>: a WASM host has
+	/// no file system, so the <c>.gltf</c> and its siblings are embedded resources resolved from this map rather than
+	/// from disk. <paramref name="entryName"/> is the <c>.gltf</c>'s key in <paramref name="files"/>.</summary>
+	public static LoadedModel LoadGltf(IReadOnlyDictionary<string, byte[]> files, string entryName)
+	{
+		var dictionary = files.ToDictionary(kv => kv.Key, kv => new ArraySegment<byte>(kv.Value));
+		return FromModel(ReadContext.CreateFromDictionary(dictionary).ReadSchema2(entryName));
+	}
+
 	private static LoadedModel FromModel(ModelRoot model)
 	{
 		var primitives = new List<ModelPrimitive>();

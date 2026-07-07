@@ -29,6 +29,7 @@ internal static class WebDemos
 		["ssao"] = engine => new SsaoDemo(engine),
 		["cascadedshadows"] = engine => new CascadedShadowsDemo(engine),
 		["skinning"] = engine => new SkinningDemo(engine),
+		["gltf"] = engine => new GltfDemo(engine),
 	};
 
 	public static IEnumerable<string> Names => Factories.Keys;
