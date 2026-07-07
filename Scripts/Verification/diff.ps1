@@ -1,5 +1,7 @@
 # Pixel-diff two PNGs (same size). Crops the top strip (Vulkan's ImGui HUD bar). Writes a heatmap and prints
-# mean/max per-channel abs difference + the fraction of pixels differing by more than a threshold.
+# mean/max per-channel abs difference + the fraction of pixels differing by more than a threshold. All FOUR
+# channels are compared (including alpha) so a backend that stores a different backbuffer alpha — e.g. a
+# cleared-to-transparent region captured as opaque — is caught, not silently averaged away.
 param(
   [Parameter(Mandatory=$true)][string]$A,
   [Parameter(Mandatory=$true)][string]$B,
@@ -37,7 +39,8 @@ for ($y = $CropTop; $y -lt $h; $y++) {
     $db = [Math]::Abs($ia.Bytes[$oa]   - $ib.Bytes[$ob])
     $dg = [Math]::Abs($ia.Bytes[$oa+1] - $ib.Bytes[$ob+1])
     $dr = [Math]::Abs($ia.Bytes[$oa+2] - $ib.Bytes[$ob+2])
-    $d = [int](($dr + $dg + $db) / 3)
+    $da = [Math]::Abs($ia.Bytes[$oa+3] - $ib.Bytes[$ob+3])
+    $d = [int](($dr + $dg + $db + $da) / 4)
     $total += $d; $count++
     if ($d -gt $maxd) { $maxd = $d }
     if ($d -gt $Threshold) { $over++ }

@@ -97,7 +97,7 @@ internal sealed partial class WebGpuEngine
 					rgba[d + 1] = padded[s + 1];
 					rgba[d + 2] = padded[s + 2];
 				}
-				rgba[d + 3] = 255; // opaque — the alpha channel isn't meaningful for a screen capture
+				rgba[d + 3] = padded[s + 3]; // preserve the backbuffer alpha (matches the desktop capture — a cleared-to-transparent region reads back transparent, not forced opaque)
 			}
 		}
 
