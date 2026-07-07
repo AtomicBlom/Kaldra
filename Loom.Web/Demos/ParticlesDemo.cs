@@ -86,9 +86,7 @@ internal sealed class ParticlesDemo : IWebDemo
 
 	public void Update(float time)
 	{
-		var angle = time * 0.4f;
-		var eye = new Vector3(MathF.Sin(angle) * 4.0f, 2.2f, MathF.Cos(angle) * 4.0f);
-		_camera.LookAt(eye, new Vector3(0, 0.5f, 0)).Perspective(MathF.PI / 4f, _aspect, 0.1f, 100f);
+		DemoCamera.Orbit(_camera, time, _aspect);
 		_engine.Write(_viewproj, _camera.ViewProjection);
 	}
 

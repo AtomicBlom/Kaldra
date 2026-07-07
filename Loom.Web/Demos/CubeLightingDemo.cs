@@ -40,7 +40,6 @@ internal sealed class CubeLightingDemo : IWebDemo
 		_aspect = height > 0 ? width / (float)height : 16f / 9f;
 		return RenderGraph.Define(g =>
 		{
-			g.BackbufferClear = new Vector4(0.10f, 0.12f, 0.16f, 1.0f);
 			var screen = g.Backbuffer;
 			var depth = g.Screen.Depth("depth", Format.Depth32F);
 			_viewproj = g.Constants<Matrix4x4>("cubelighting.viewproj");
@@ -65,9 +64,7 @@ internal sealed class CubeLightingDemo : IWebDemo
 	/// <summary>Advance the orbiting camera and publish its view-projection for the scene pass to read.</summary>
 	public void Update(float time)
 	{
-		var angle = time * 0.6f;
-		var eye = new Vector3(MathF.Sin(angle) * 3.5f, 2.0f, MathF.Cos(angle) * 3.5f);
-		_camera.LookAt(eye, Vector3.Zero).Perspective(MathF.PI / 4f, _aspect, 0.1f, 100f);
+		DemoCamera.Orbit(_camera, time, _aspect);
 		_engine.Write(_viewproj, _camera.ViewProjection);
 	}
 
