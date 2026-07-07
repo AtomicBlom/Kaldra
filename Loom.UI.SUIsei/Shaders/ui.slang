@@ -63,7 +63,9 @@ struct VsOut
 VsOut vertexMain(VsIn input)
 {
 	VsOut output;
-	output.position = float4(input.position * pc.scale + pc.translate, 0.0, 1.0);
+	// Map surface pixels to clip space; WGSL flips clip Y (WebGPU has Y-up NDC + no negative viewport), desktop maps
+	// straight (Vulkan Y-down NDC / DX12 negative viewport). The desktop expansion is byte-identical to the old form.
+	output.position = LOOM_OVERLAY_POS(input.position, pc.scale, pc.translate);
 	output.uv = input.uv;
 	output.colour = input.colour;
 	output.params = input.params;

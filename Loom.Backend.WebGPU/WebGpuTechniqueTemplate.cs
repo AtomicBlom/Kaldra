@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
@@ -31,6 +32,16 @@ internal sealed class WebGpuTechniqueTemplate : IDisposable
 	public required VertexLayout? Layout { get; init; }
 	public required VertexLayout? Instance { get; init; }
 	public required CullMode Cull { get; init; }
+
+	/// <summary>
+	/// The WGSL <c>@location</c> Slang assigned to each vertex-input attribute, in the shader's field-declaration
+	/// order (which matches the technique's stream attribute order: per-vertex stream then per-instance). Slang's
+	/// WGSL target does not always number vertex inputs sequentially — with mixed HLSL semantics (e.g. the overlay's
+	/// POSITION/TEXCOORD0/COLOR0/TEXCOORD1) it can permute them — so the pipeline must feed each attribute to the
+	/// location the emitted WGSL actually declared, not a running counter. Empty when the parse found no vertex input
+	/// (a fullscreen or compute technique), in which case a sequential assignment is used.
+	/// </summary>
+	public required int[] VertexInputLocations { get; init; }
 
 	/// <summary>The shader-module handle (both entry points).</summary>
 	public required int ShaderModule { get; init; }
@@ -84,6 +95,7 @@ internal sealed class WebGpuTechniqueTemplate : IDisposable
 			Bindings = bindings,
 			VertexEntry = vertexEntry,
 			FragmentEntry = fragmentEntry,
+			VertexInputLocations = ParseVertexInputLocations(wgsl, vertexEntry),
 			HasVertexInput = descriptor.HasVertexInput,
 			Blend = descriptor.Blend,
 			LinearFilter = descriptor.LinearFilter,
@@ -126,6 +138,36 @@ internal sealed class WebGpuTechniqueTemplate : IDisposable
 			}
 		}
 		return (vertex, fragment);
+	}
+
+	private static readonly Regex LocationField = new(@"@location\(\s*(?<n>\d+)\s*\)\s*\w+\s*:", RegexOptions.Compiled);
+
+	// Parse the vertex entry's input struct(s) and return the @location of each field in declaration order. Slang emits
+	// the vertex stage's input as one or more struct-typed parameters on the entry function (plus @builtin scalars,
+	// which are skipped); each struct's fields carry the @location attributes assigned for the WGSL target. The fields
+	// appear in source order, so the returned list lines up positionally with the technique's stream attributes.
+	private static int[] ParseVertexInputLocations(string wgsl, string vertexEntry)
+	{
+		var entry = new Regex($@"fn\s+{Regex.Escape(vertexEntry)}\s*\((?<params>[^)]*)\)").Match(wgsl);
+		if (!entry.Success)
+			return [];
+
+		var locations = new List<int>();
+		foreach (var param in entry.Groups["params"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries))
+		{
+			var colon = param.LastIndexOf(':');
+			if (colon < 0)
+				continue;
+			var typeName = param[(colon + 1)..].Trim();
+			// A struct parameter — its fields are the vertex inputs. A @builtin scalar (vertex_index) types to a
+			// scalar with no matching struct declaration, so it contributes nothing.
+			var structMatch = new Regex($@"struct\s+{Regex.Escape(typeName)}\s*\{{(?<body>[^}}]*)\}}").Match(wgsl);
+			if (!structMatch.Success)
+				continue;
+			foreach (Match f in LocationField.Matches(structMatch.Groups["body"].Value))
+				locations.Add(int.Parse(f.Groups["n"].Value));
+		}
+		return [.. locations];
 	}
 
 	public void Dispose()

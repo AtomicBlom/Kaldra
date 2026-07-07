@@ -30,6 +30,13 @@ internal sealed partial class WebGpuEngine : EngineBase
 	private readonly WebGpuBufferRing _uniformRing;
 	private readonly WebGpuBufferRing _instanceRing;
 	private readonly WebGpuBufferRing _storageRing;
+	// The dynamic geometry a draw list stages each frame: one ring for its vertices, one for its 16-bit indices.
+	// Several draw lists in a frame bump-append at successive offsets rather than overwrite each other.
+	private readonly WebGpuBufferRing _listVertexRing;
+	private readonly WebGpuBufferRing _listIndexRing;
+	// Renderer-private offscreen targets backing UI group-opacity layers (below the graph seam, so the graph still
+	// sees one ui pass). Sized/formatted to a pass on demand when a draw list carries layer markers.
+	private readonly WebGpuLayerTargets _layerTargets;
 	private readonly WebGpuRenderContext _context;
 	// Logical technique name → its format-agnostic baked inputs (shader module + layouts + binding model). Built at
 	// DefineTechnique, disposed on hot-reload/teardown; the per-attachment-format render pipelines are cached and
@@ -55,6 +62,9 @@ internal sealed partial class WebGpuEngine : EngineBase
 		// Feeds the pre-skin compute pass its per-frame bone palette. 256-byte alignment is WebGPU's default
 		// minStorageBufferOffsetAlignment ceiling, so a ring offset is always a valid storage-buffer binding offset.
 		_storageRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferStorage, minAlignment: 256, "storage-ring");
+		_listVertexRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferVertex, minAlignment: 4, "ui-vertex-ring");
+		_listIndexRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferIndex, minAlignment: 4, "ui-index-ring");
+		_layerTargets = new WebGpuLayerTargets(_handles);
 		_context = new WebGpuRenderContext(this);
 		WebGpuInterop.ConfigureCanvas(_width, _height);
 	}
@@ -74,6 +84,9 @@ internal sealed partial class WebGpuEngine : EngineBase
 	internal WebGpuBufferRing UniformRing => _uniformRing;
 	internal WebGpuBufferRing InstanceRing => _instanceRing;
 	internal WebGpuBufferRing StorageRing => _storageRing;
+	internal WebGpuBufferRing ListVertexRing => _listVertexRing;
+	internal WebGpuBufferRing ListIndexRing => _listIndexRing;
+	internal WebGpuLayerTargets LayerTargets => _layerTargets;
 	internal WebGpuTransientResources Transients => _transients ?? throw new WebGpuException("No active graph — SetGraph must run before a pass records.");
 
 	/// <summary>The texture ids (into the texture store) a material bundles, in bind order.</summary>
@@ -210,6 +223,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_samplers.Dispose();
 		_meshes.Dispose();
 		_textures.Dispose();
+		_layerTargets.Dispose();
 		if (_captureBuffer >= 0)
 			_handles.Release(WebGpuHandleAllocator.Buffers, _captureBuffer);
 	}

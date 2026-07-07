@@ -25,6 +25,8 @@ internal sealed partial class WebGpuEngine
 		_uniformRing.BeginFrame();
 		_instanceRing.BeginFrame();
 		_storageRing.BeginFrame();
+		_listVertexRing.BeginFrame();
+		_listIndexRing.BeginFrame();
 		_context.BeginFrame((float)inputs.DeltaSeconds, inputs.Time, inputs.DrawLists);
 
 		// Flush each app-writable buffer's CPU shadow into the frame's upload arena. These become queue-level
@@ -77,7 +79,7 @@ internal sealed partial class WebGpuEngine
 		{
 			_writer.BeginComputePass();
 			// No colour/depth targets; keeps the bake key stable and supplies the pass's read buffers.
-			_context.BeginPass([], -1, false, constantsIds[..constantsCount], storageIds[..storageCount]);
+			_context.BeginPass([], -1, false, [], 0, 0, constantsIds[..constantsCount], storageIds[..storageCount]);
 			pass.Pass.Record?.Invoke(_context);
 			_writer.EndPass();
 			return;
@@ -89,12 +91,14 @@ internal sealed partial class WebGpuEngine
 		var depthReadOnly = false;
 		var depthFormatId = -1;
 		Span<int> colorFormatIds = stackalloc int[attachments.Length];
+		Span<int> colorViews = stackalloc int[attachments.Length];
 		var area = (Width: 0, Height: 0);
 		foreach (var a in attachments)
 		{
 			ref var tex = ref _transients!.Texture(a.Resource.Id);
 			if (a.State == ResourceState.ColorAttachment)
 			{
+				colorViews[colorCount] = _transients!.ViewHandle(a.Resource.Id);
 				colorFormatIds[colorCount++] = WebGpuFormatMapping.ToWebGpu(tex.Format);
 			}
 			else
@@ -118,8 +122,10 @@ internal sealed partial class WebGpuEngine
 		_writer.SetViewport(0, 0, area.Width, area.Height);
 		_writer.SetScissor(0, 0, area.Width, area.Height);
 
-		// The technique pipelines this pass bakes must match the attachment formats declared above.
-		_context.BeginPass(colorFormatIds[..colorCount], depthFormatId, depthReadOnly, constantsIds[..constantsCount], storageIds[..storageCount]);
+		// The technique pipelines this pass bakes must match the attachment formats declared above. The colour
+		// attachment views + pass area are handed through too, so a draw list's group-opacity layers can suspend and
+		// resume this exact scope below the graph seam.
+		_context.BeginPass(colorFormatIds[..colorCount], depthFormatId, depthReadOnly, colorViews[..colorCount], area.Width, area.Height, constantsIds[..constantsCount], storageIds[..storageCount]);
 		pass.Pass.Record?.Invoke(_context);
 		_writer.EndPass();
 	}

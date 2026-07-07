@@ -409,6 +409,20 @@ export function startResizeHandler(dotnetResize) {
 	window.addEventListener("resize", onResize);
 }
 
+// Forward canvas pointer events to C# in device pixels (CSS position × the capped device-pixel ratio, matching
+// getCanvasSize), so a hit-test lands on the same geometry the engine rendered. phase: 0 = move, 1 = down, 2 = up.
+export function startPointerHandler(dotnetPointer) {
+	if (!canvas) return;
+	const send = (e, phase) => {
+		const rect = canvas.getBoundingClientRect();
+		const dpr = Math.min(window.devicePixelRatio || 1, 2);
+		dotnetPointer((e.clientX - rect.left) * dpr, (e.clientY - rect.top) * dpr, phase);
+	};
+	canvas.addEventListener("pointermove", e => send(e, 0));
+	canvas.addEventListener("pointerdown", e => send(e, 1));
+	canvas.addEventListener("pointerup", e => send(e, 2));
+}
+
 function align4(n) { return (n + 3) & ~3; }
 
 // Diagnostic hook (read via the CDP verification harness): the pending error queue plus device/canvas state.

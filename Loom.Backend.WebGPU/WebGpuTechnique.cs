@@ -88,8 +88,16 @@ internal sealed class WebGpuTechnique : IDisposable
 	// sequential locations in stream order (per-vertex first, then per-instance) — matching the WGSL @location(n).
 	private static void AppendVertexBuffers(StringBuilder sb, WebGpuTechniqueTemplate template)
 	{
+		// The shader location each attribute feeds is the one Slang emitted for it (parsed from the WGSL vertex input),
+		// not a running counter: Slang's WGSL target can permute vertex-input locations relative to the stream order.
+		// The parsed list lines up positionally with the streams (per-vertex then per-instance); fall back to a
+		// sequential assignment when it is unavailable or its count disagrees (fullscreen/compute have no inputs).
+		var wgslLocations = template.VertexInputLocations;
+		var totalAttributes = (template.Layout?.Attributes.Length ?? 0) + (template.Instance?.Attributes.Length ?? 0);
+		var useParsed = wgslLocations.Length == totalAttributes;
+
 		sb.Append('[');
-		var location = 0;
+		var attribute = 0;
 		var first = true;
 		foreach (var stream in new[] { template.Layout, template.Instance })
 		{
@@ -105,7 +113,9 @@ internal sealed class WebGpuTechnique : IDisposable
 			{
 				if (i > 0)
 					sb.Append(',');
-				sb.Append("{\"shaderLocation\":").Append(location++)
+				var location = useParsed ? wgslLocations[attribute] : attribute;
+				attribute++;
+				sb.Append("{\"shaderLocation\":").Append(location)
 					.Append(",\"offset\":").Append(stream.Offsets[i])
 					.Append(",\"format\":\"").Append(VertexFormatString(stream.Attributes[i].Format)).Append("\"}");
 			}

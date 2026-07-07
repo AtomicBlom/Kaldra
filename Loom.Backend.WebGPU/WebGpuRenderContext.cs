@@ -47,6 +47,12 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 	private int _depthFormatId = -1;
 	private bool _depthReadOnly;
 
+	// The current pass's colour-attachment view handles + render area — captured so a draw list's group-opacity
+	// layers can suspend this scope (end pass), render children offscreen, then resume it (LoadOp.Load) and composite.
+	private FormatIdBuffer _colorViews;
+	private int _scopeWidth;
+	private int _scopeHeight;
+
 	// The app-writable parameter/storage buffers the current pass .Reads (in .Reads order), bound to the technique's
 	// uniform / storage-buffer slots at draw time.
 	public const int MaxUniformBuffers = 8;
@@ -75,12 +81,15 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 	/// read-only — a read-only pass bakes with depth writes off so a transparent draw tests against, but does not
 	/// disturb, the opaque depth. Called by the engine before the pass's Record runs.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
+	public void BeginPass(ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly, ReadOnlySpan<int> colorViews, int areaWidth, int areaHeight, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
 	{
 		if (colorFormatIds.Length > MaxColorFormats)
 			throw new WebGpuException($"A pass has {colorFormatIds.Length} color attachments; the pipeline-key buffer holds {MaxColorFormats}.");
 		_colorCount = colorFormatIds.Length;
 		colorFormatIds.CopyTo(((Span<int>)_colorFormatIds)[.._colorCount]);
+		colorViews.CopyTo(((Span<int>)_colorViews)[..Math.Min(colorViews.Length, MaxColorFormats)]);
+		_scopeWidth = areaWidth;
+		_scopeHeight = areaHeight;
 		_depthFormatId = depthFormatId;
 		_depthReadOnly = depthReadOnly;
 		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
@@ -179,9 +188,6 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 		writer.SetBindGroup(0, bindGroup, dynOffsets[..dynCount]);
 		writer.Dispatch((vertexCount + 63) / 64, 1, 1);
 	}
-
-	public void DrawList<TVertex>(string technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged =>
-		throw new WebGpuException($"DrawList('{technique}') is not yet implemented on the WebGPU backend.");
 
 	public Texture? ResolveInspectable(int resourceId) => null;
 

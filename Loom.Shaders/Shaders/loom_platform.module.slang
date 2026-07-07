@@ -41,3 +41,14 @@
 #else
 #define LOOM_CLIP_TO_UV(clip) (((clip).xy / (clip).w) * 0.5 + 0.5)
 #endif
+
+// Clip-space position for a 2D overlay/UI vertex, from its surface-pixel position and the pixel->clip scale +
+// translate push (2/w, 2/h, -1, -1). Like a fullscreen pass, an overlay maps to clip space directly rather than
+// through the camera's clip-space correction, and the same NDC-Y split applies: Vulkan's Y-down NDC (and DX12's
+// negative-height viewport) put pixel-row 0 at the top with the plain mapping, but WebGPU's Y-up NDC + no negative
+// viewport must flip the resulting clip Y — otherwise the whole overlay renders upside down. Only clip Y differs.
+#ifdef LOOM_WGSL
+#define LOOM_OVERLAY_POS(px, scale, translate) float4((px).x * (scale).x + (translate).x, -((px).y * (scale).y + (translate).y), 0.0, 1.0)
+#else
+#define LOOM_OVERLAY_POS(px, scale, translate) float4((px) * (scale) + (translate), 0.0, 1.0)
+#endif
