@@ -24,6 +24,7 @@ internal static class WebDemos
 		["cube"] = engine => new CubeLightingDemo(engine),
 		["particles"] = engine => new ParticlesDemo(engine),
 		["highlighting"] = engine => new HighlightingDemo(engine),
+		["bloom"] = engine => new BloomDemo(engine),
 	};
 
 	public static IEnumerable<string> Names => Factories.Keys;
