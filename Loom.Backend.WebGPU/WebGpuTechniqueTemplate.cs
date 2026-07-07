@@ -63,7 +63,7 @@ internal sealed class WebGpuTechniqueTemplate : IDisposable
 		if (bindings.HasBindings)
 		{
 			bindGroupLayout = handles.Allocate(WebGpuHandleAllocator.BindGroupLayouts);
-			WebGpuInterop.CreateBindGroupLayout(bindGroupLayout, bindings.LayoutEntryData(descriptor.IsCompute));
+			WebGpuInterop.CreateBindGroupLayout(bindGroupLayout, bindings.LayoutEntryData(descriptor.IsCompute, descriptor.LinearFilter));
 			Span<int> layouts = [bindGroupLayout];
 			WebGpuInterop.CreatePipelineLayout(pipelineLayout, layouts);
 		}

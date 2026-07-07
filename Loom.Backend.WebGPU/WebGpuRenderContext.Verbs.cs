@@ -23,7 +23,11 @@ internal sealed partial class WebGpuRenderContext
 			views[i] = transients.ViewHandle(inputs[i].Id);
 
 		_engine.Writer.SetRenderPipeline(baked.Pipeline);
-		BindAndSet(baked, views, default, push);
+		// The float span fills the technique's per-draw block. A LOOM_PUSH_CONSTANT block (≤16 floats) is filled
+		// through the push channel; a larger per-draw constant buffer (e.g. CSM's cascade matrices, register(b2)) is a
+		// descriptor-bound uniform and is filled through the per-draw-uniform channel. A technique has one or the
+		// other, so passing the same bytes to both lets its binding model bind whichever slot it actually declares.
+		BindAndSet(baked, views, MemoryMarshal.AsBytes(push), push);
 		_engine.Writer.Draw(3, 1, 0, 0); // three fabricated verts cover the target; no vertex buffer
 	}
 

@@ -32,7 +32,8 @@ const VIS_VERTEX = 0x1, VIS_FRAGMENT = 0x2, VIS_COMPUTE = 0x4;
 
 // Bind-group-layout entry kinds (mirror WebGpuBindingModel.Layout*).
 const BGL_UNIFORM = 0, BGL_SAMPLED_TEXTURE = 1, BGL_FILTERING_SAMPLER = 2, BGL_STORAGE_BUFFER_RO = 3,
-	BGL_STORAGE_BUFFER_RW = 4, BGL_STORAGE_TEXTURE = 5, BGL_COMPARISON_SAMPLER = 6, BGL_DEPTH_TEXTURE = 7;
+	BGL_STORAGE_BUFFER_RW = 4, BGL_STORAGE_TEXTURE = 5, BGL_COMPARISON_SAMPLER = 6, BGL_DEPTH_TEXTURE = 7,
+	BGL_UNFILTERABLE_TEXTURE = 8, BGL_NON_FILTERING_SAMPLER = 9;
 
 // Command opcodes (must match WebGpuCommandWriter).
 const OP_END = 0, OP_BEGIN_RENDER_PASS = 1, OP_END_PASS = 2, OP_SET_RENDER_PIPELINE = 3,
@@ -178,6 +179,10 @@ export function createBindGroupLayout(handle, entries) {
 			case BGL_STORAGE_TEXTURE: entry.storageTexture = { access: "read-write", format: FORMATS[extra] }; break;
 			case BGL_COMPARISON_SAMPLER: entry.sampler = { type: "comparison" }; break;
 			case BGL_DEPTH_TEXTURE: entry.texture = { sampleType: "depth" }; break;
+			// A non-filtering technique's textures bind as unfilterable-float (accepts depth AND colour formats — a
+			// depth32float shadow map has no filterable-float sample type) paired with a non-filtering sampler.
+			case BGL_UNFILTERABLE_TEXTURE: entry.texture = { sampleType: "unfilterable-float" }; break;
+			case BGL_NON_FILTERING_SAMPLER: entry.sampler = { type: "non-filtering" }; break;
 			default: throw new Error(`createBindGroupLayout: unknown kind ${kind}`);
 		}
 		list.push(entry);

@@ -79,13 +79,23 @@ internal sealed class WebGpuBindingModel
 	public const int LayoutStorageTexture = 5;
 	public const int LayoutComparisonSampler = 6;
 	public const int LayoutDepthTexture = 7;
+	public const int LayoutUnfilterableTexture = 8;
+	public const int LayoutNonFilteringSampler = 9;
 
 	/// <summary>
 	/// Flatten the layout into the <c>(binding, visibility, kind, extra)</c> int quads the shim's
 	/// <c>createBindGroupLayout</c> consumes. Visibility is the whole graphics or compute stage set; the storage
 	/// texture's extra carries its format id (for the shim's <c>access</c>/<c>format</c>), zero otherwise.
+	/// <para>
+	/// When <paramref name="linearFilter"/> is false the technique samples with a nearest sampler, so its sampled
+	/// textures bind as <c>unfilterable-float</c> and their sampler as <c>non-filtering</c>. That sample type is a
+	/// superset — it accepts a depth-format texture (a <c>depth32float</c> shadow map has no filterable-float sample
+	/// type, only depth/unfilterable-float) as well as an ordinary colour texture — and nearest sampling is identical
+	/// either way, so it never changes a pixel while letting a nearest technique read a depth map as a plain texture.
+	/// A linear-filtering technique keeps the filterable <c>float</c> type (and never samples a depth texture).
+	/// </para>
 	/// </summary>
-	public int[] LayoutEntryData(bool isCompute)
+	public int[] LayoutEntryData(bool isCompute, bool linearFilter)
 	{
 		var visibility = isCompute ? VisibilityCompute : VisibilityVertex | VisibilityFragment;
 		var data = new int[Entries.Count * 4];
@@ -97,9 +107,9 @@ internal sealed class WebGpuBindingModel
 			data[i++] = entry.Kind switch
 			{
 				WebGpuBindingKind.UniformBuffer => LayoutUniformBuffer,
-				WebGpuBindingKind.Texture => LayoutSampledTexture,
+				WebGpuBindingKind.Texture => linearFilter ? LayoutSampledTexture : LayoutUnfilterableTexture,
 				WebGpuBindingKind.DepthTexture => LayoutDepthTexture,
-				WebGpuBindingKind.Sampler => LayoutFilteringSampler,
+				WebGpuBindingKind.Sampler => linearFilter ? LayoutFilteringSampler : LayoutNonFilteringSampler,
 				WebGpuBindingKind.ComparisonSampler => LayoutComparisonSampler,
 				WebGpuBindingKind.StorageBufferReadOnly => LayoutStorageBufferReadOnly,
 				WebGpuBindingKind.StorageBufferReadWrite => LayoutStorageBufferReadWrite,
