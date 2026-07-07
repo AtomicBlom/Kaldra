@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using Loom.Core.Animation;
@@ -132,8 +133,52 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 		_bindGroups.Clear();
 	}
 
-	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount) =>
-		throw new WebGpuException($"DispatchSkin('{technique}') is not yet implemented on the WebGPU backend.");
+	/// <summary>
+	/// Pre-skin a mesh's bind-pose vertices by the bone palette into <paramref name="output"/> with a compute
+	/// dispatch (one thread per vertex). Binds three storage buffers at slots 0,1,2 — the bind-pose vertices (the
+	/// mesh's own long-lived buffer, which carries storage usage), the per-frame bone palette (staged into the storage
+	/// ring), and the skinned output (the transient the pass ReadWrites) — and pushes the vertex count. The palette's
+	/// ring offset is deterministic across frames (the ring resets each frame and this is its only user), so the bound
+	/// bind group stays cache-stable while its contents refresh.
+	/// </summary>
+	public void DispatchSkin(string technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)
+	{
+		if (vertexCount <= 0 || palette.Length == 0)
+			return;
+
+		var baked = BakeCompute(technique);
+		var bindings = baked.Template.Bindings;
+		var writer = _engine.Writer;
+		writer.SetComputePipeline(baked.Pipeline);
+
+		var bindPose = _engine.Meshes.BindPoseBuffer(skinnedMesh.Id);
+		var paletteBytes = MemoryMarshal.AsBytes(palette);
+		var paletteOffset = _engine.StorageRing.Reserve(paletteBytes, paletteBytes.Length);
+		var outputBuffer = _engine.Transients.BufferHandle(output.Id);
+
+		Span<int> entries = stackalloc int[bindings.Entries.Count * 5];
+		var e = 0;
+		var storage = bindings.StorageBufferBindings;
+		AddEntry(entries, ref e, storage[0], EntryBuffer, bindPose, 0, 0);
+		AddEntry(entries, ref e, storage[1], EntryBuffer, _engine.StorageRing.Buffer, paletteOffset, paletteBytes.Length);
+		AddEntry(entries, ref e, storage[2], EntryBuffer, outputBuffer, 0, 0);
+
+		Span<int> dynOffsets = stackalloc int[1];
+		var dynCount = 0;
+		if (bindings.PushBinding >= 0)
+		{
+			Span<float> push = [vertexCount];
+			Span<byte> pushBytes = stackalloc byte[bindings.PushByteSize];
+			pushBytes.Clear();
+			MemoryMarshal.AsBytes(push)[..Math.Min(sizeof(float), pushBytes.Length)].CopyTo(pushBytes);
+			dynOffsets[dynCount++] = _engine.UniformRing.Reserve(pushBytes, bindings.PushByteSize);
+			AddEntry(entries, ref e, bindings.PushBinding, EntryBuffer, _engine.UniformRing.Buffer, 0, bindings.PushByteSize);
+		}
+
+		var bindGroup = GetOrCreateBindGroup(baked.Template.BindGroupLayout, entries[..e]);
+		writer.SetBindGroup(0, bindGroup, dynOffsets[..dynCount]);
+		writer.Dispatch((vertexCount + 63) / 64, 1, 1);
+	}
 
 	public void DrawList<TVertex>(string technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged =>
 		throw new WebGpuException($"DrawList('{technique}') is not yet implemented on the WebGPU backend.");

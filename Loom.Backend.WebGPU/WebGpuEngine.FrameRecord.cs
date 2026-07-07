@@ -24,6 +24,7 @@ internal sealed partial class WebGpuEngine
 		_arena.Reset();
 		_uniformRing.BeginFrame();
 		_instanceRing.BeginFrame();
+		_storageRing.BeginFrame();
 		_context.BeginFrame((float)inputs.DeltaSeconds, inputs.Time, inputs.DrawLists);
 
 		// Flush each app-writable buffer's CPU shadow into the frame's upload arena. These become queue-level

@@ -29,6 +29,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 	private readonly MaterialStore _materials = new();
 	private readonly WebGpuBufferRing _uniformRing;
 	private readonly WebGpuBufferRing _instanceRing;
+	private readonly WebGpuBufferRing _storageRing;
 	private readonly WebGpuRenderContext _context;
 	// Logical technique name → its format-agnostic baked inputs (shader module + layouts + binding model). Built at
 	// DefineTechnique, disposed on hot-reload/teardown; the per-attachment-format render pipelines are cached and
@@ -51,6 +52,9 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_textures = new WebGpuTextureStore(_handles);
 		_uniformRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferUniform, surface.MinUniformBufferOffsetAlignment, "uniform-ring");
 		_instanceRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferVertex, minAlignment: 4, "instance-ring");
+		// Feeds the pre-skin compute pass its per-frame bone palette. 256-byte alignment is WebGPU's default
+		// minStorageBufferOffsetAlignment ceiling, so a ring offset is always a valid storage-buffer binding offset.
+		_storageRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferStorage, minAlignment: 256, "storage-ring");
 		_context = new WebGpuRenderContext(this);
 		WebGpuInterop.ConfigureCanvas(_width, _height);
 	}
@@ -69,6 +73,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 	internal WebGpuMeshStore Meshes => _meshes;
 	internal WebGpuBufferRing UniformRing => _uniformRing;
 	internal WebGpuBufferRing InstanceRing => _instanceRing;
+	internal WebGpuBufferRing StorageRing => _storageRing;
 	internal WebGpuTransientResources Transients => _transients ?? throw new WebGpuException("No active graph — SetGraph must run before a pass records.");
 
 	/// <summary>The texture ids (into the texture store) a material bundles, in bind order.</summary>
