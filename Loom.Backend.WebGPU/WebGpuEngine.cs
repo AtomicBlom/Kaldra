@@ -176,10 +176,14 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_context.ClearBindGroups();
 		_transients?.Dispose();
 		_transients = null;
+		ReleaseGraphReadbacks();
 	}
 
-	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed) =>
+	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed)
+	{
 		_transients = new WebGpuTransientResources(_handles, executed, Barriers, _surface.BackbufferFormat, _width, _height);
+		RebuildGraphReadbacks(authored);
+	}
 
 	protected override void GrowStorage(int id, int newByteSize) => _transients!.GrowStorage(id, newByteSize);
 

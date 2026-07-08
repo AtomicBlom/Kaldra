@@ -387,8 +387,25 @@ export function submitFrame(commandsView, arenaView) {
 
 // ── Host helpers ──
 
-export function setStatus(text) { const el = document.querySelector("#status"); if (el) el.textContent = text; }
+// The successful-boot message fades the on-page status line to near-invisible: the in-canvas SUIsei shell's top/
+// bottom bars now show the device name and status, so the fixed bottom-left HTML div would otherwise sit right on
+// top of the shell's bottom bar. Its text stays in the DOM (unfaded) for the verification harness's CDP reads —
+// only its opacity changes. Loading/error text (anything else) stays fully visible.
+export function setStatus(text) {
+	const el = document.querySelector("#status");
+	if (!el) return;
+	el.textContent = text;
+	// Error text carries a full stack trace and is otherwise hard to read against the canvas — give it a
+	// background box and full opacity instead of the normal near-invisible status line.
+	const isError = text.includes("ERROR");
+	el.classList.toggle("status-error", isError);
+	el.style.opacity = isError ? "1" : (text.startsWith("Loom running on") ? "0" : "0.65");
+}
 export function getLocationSearch() { return globalThis.location?.search ?? ""; }
+
+// Mirrors an error's full formatted text (message + stack trace + inner exceptions) to devtools, for interactive
+// debugging — the on-page #status line carries the same text so headless captures see it too.
+export function consoleError(text) { console.error(text); }
 
 let frameCallback = null;
 export function startFrameLoop(dotnetFrame) {

@@ -18,6 +18,8 @@
   <Project Path="Loom.Vulkan/Loom.Vulkan.csproj" />
   <Folder Name="/SUIsei/">
     <Project Path="external\SUIsei\SUIsei\SUIsei.csproj" />
+    <Project Path="external/SUIsei/SUIsei.HarfBuzz/SUIsei.HarfBuzz.csproj" />
+    <Project Path="external/SUIsei/SUIsei.Text/SUIsei.Text.csproj" />
     <Project Path="external\SUIsei\SUIsei.SourceGen\SUIsei.SourceGen.csproj" />
     <Project Path="external\SUIsei\SUIsei.Tests\SUIsei.Tests.csproj" />
   </Folder>

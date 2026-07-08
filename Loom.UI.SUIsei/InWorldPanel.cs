@@ -30,9 +30,15 @@ public sealed class InWorldPanel
 	private readonly int _pixelWidth;
 	private readonly int _pixelHeight;
 	private readonly bool _billboard;
+	// The screen-to-NDC Y multiplier TryUnprojectToPanel needs, derived from the same ClipSpaceCorrection the camera
+	// composed into viewProjection (so this can never drift out of sync with a backend's actual convention the way a
+	// hardcoded assumption would): +1 when the correction negates Y (Vulkan/DirectX12 — screen Y=0 already lands on
+	// NDC Y=-1, the top, with no further flip needed), -1 when it's Identity (WebGPU's native Y-up NDC — screen Y=0
+	// must map to NDC Y=+1, the top, so the plain screen-to-NDC formula needs negating).
+	private readonly float _ndcYSign;
 
 	private InWorldPanel(UIHost host, UIView view, UIPainter painter,
-		int pixelWidth, int pixelHeight, Matrix4x4 worldTransform, bool billboard)
+		int pixelWidth, int pixelHeight, Matrix4x4 worldTransform, bool billboard, float ndcYSign)
 	{
 		_host = host;
 		_view = view;
@@ -41,6 +47,7 @@ public sealed class InWorldPanel
 		_pixelHeight = pixelHeight;
 		WorldTransform = worldTransform;
 		_billboard = billboard;
+		_ndcYSign = ndcYSign;
 	}
 
 	/// <summary>
@@ -60,7 +67,8 @@ public sealed class InWorldPanel
 		var host = new UIHost();
 		var view = host.CreateRoot(new UILayer(0, layoutScale), interactive: true);
 		var painter = UIPainter.Create(engine, host, fontAtlas);
-		return new InWorldPanel(host, view, painter, pixelWidth, pixelHeight, worldTransform, billboard);
+		var ndcYSign = engine.ClipSpaceCorrection.M22 < 0f ? 1f : -1f;
+		return new InWorldPanel(host, view, painter, pixelWidth, pixelHeight, worldTransform, billboard, ndcYSign);
 	}
 
 	/// <summary>The underlying <see cref="UIView"/>. Set <c>View.Root.Content</c> to assign the panel's UI tree.</summary>
@@ -164,11 +172,12 @@ public sealed class InWorldPanel
 	{
 		uiLocal = default;
 
-		// Map screen coords to Vulkan NDC. camera.ViewProjection is clip-space-corrected (world +Y → Vulkan NDC
-		// Y=-1 = top), so we use the Vulkan convention here (no Y flip): screen Y=0 → NDC Y=-1 (top).
+		// Map screen coords to the engine's NDC. viewProjection is clip-space-corrected, so its Y convention matches
+		// _ndcYSign (derived from that same correction at construction) — screen Y=0 (top) always lands on whichever
+		// NDC Y the active backend puts at the top, on every backend.
 		var ndc = new Vector2(
 			(screenPos.X / framebufferSize.X) * 2f - 1f,
-			(screenPos.Y / framebufferSize.Y) * 2f - 1f);
+			_ndcYSign * ((screenPos.Y / framebufferSize.Y) * 2f - 1f));
 
 		if (!Matrix4x4.Invert(viewProjection, out var invVP))
 			return false;

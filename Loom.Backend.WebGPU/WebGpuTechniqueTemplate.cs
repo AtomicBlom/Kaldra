@@ -17,7 +17,7 @@ namespace Loom.Backend.WebGPU;
 /// and the fixed-function intent (blend/cull/filter/vertex layout) the pipeline bakes in.
 /// </summary>
 [SupportedOSPlatform("browser")]
-internal sealed class WebGpuTechniqueTemplate : IDisposable
+internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 {
 	private readonly WebGpuHandleAllocator _handles;
 
@@ -140,7 +140,17 @@ internal sealed class WebGpuTechniqueTemplate : IDisposable
 		return (vertex, fragment);
 	}
 
-	private static readonly Regex LocationField = new(@"@location\(\s*(?<n>\d+)\s*\)\s*\w+\s*:", RegexOptions.Compiled);
+	// Source-generated matchers (emitted at build time, so they run under WASM AOT, which has no dynamic-code support).
+	// The function/struct patterns capture the name generically — a WGSL identifier is `\w+`, so a name is matched and
+	// then compared by string equality, which also removes the need to escape it into the pattern.
+	[GeneratedRegex(@"fn\s+(?<name>\w+)\s*\((?<params>[^)]*)\)")]
+	private static partial Regex FunctionSignature();
+
+	[GeneratedRegex(@"struct\s+(?<name>\w+)\s*\{(?<body>[^}]*)\}")]
+	private static partial Regex StructDecl();
+
+	[GeneratedRegex(@"@location\(\s*(?<n>\d+)\s*\)\s*\w+\s*:")]
+	private static partial Regex LocationField();
 
 	// Parse the vertex entry's input struct(s) and return the @location of each field in declaration order. Slang emits
 	// the vertex stage's input as one or more struct-typed parameters on the entry function (plus @builtin scalars,
@@ -148,9 +158,20 @@ internal sealed class WebGpuTechniqueTemplate : IDisposable
 	// appear in source order, so the returned list lines up positionally with the technique's stream attributes.
 	private static int[] ParseVertexInputLocations(string wgsl, string vertexEntry)
 	{
-		var entry = new Regex($@"fn\s+{Regex.Escape(vertexEntry)}\s*\((?<params>[^)]*)\)").Match(wgsl);
-		if (!entry.Success)
+		Match? entry = null;
+		foreach (Match fn in FunctionSignature().Matches(wgsl))
+			if (fn.Groups["name"].Value == vertexEntry)
+			{
+				entry = fn;
+				break;
+			}
+		if (entry is null)
 			return [];
+
+		// Index every struct body by name so a parameter's declared type resolves without re-scanning the module.
+		var structBodies = new Dictionary<string, string>();
+		foreach (Match s in StructDecl().Matches(wgsl))
+			structBodies[s.Groups["name"].Value] = s.Groups["body"].Value;
 
 		var locations = new List<int>();
 		foreach (var param in entry.Groups["params"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries))
@@ -161,10 +182,9 @@ internal sealed class WebGpuTechniqueTemplate : IDisposable
 			var typeName = param[(colon + 1)..].Trim();
 			// A struct parameter — its fields are the vertex inputs. A @builtin scalar (vertex_index) types to a
 			// scalar with no matching struct declaration, so it contributes nothing.
-			var structMatch = new Regex($@"struct\s+{Regex.Escape(typeName)}\s*\{{(?<body>[^}}]*)\}}").Match(wgsl);
-			if (!structMatch.Success)
+			if (!structBodies.TryGetValue(typeName, out var body))
 				continue;
-			foreach (Match f in LocationField.Matches(structMatch.Groups["body"].Value))
+			foreach (Match f in LocationField().Matches(body))
 				locations.Add(int.Parse(f.Groups["n"].Value));
 		}
 		return [.. locations];

@@ -43,12 +43,15 @@ internal sealed partial class WebGpuEngine
 
 		// A requested capture copies the backbuffer into a map-read buffer at the tail of this frame's stream.
 		RecordCaptureIfRequested();
+		// Every g.Readback target (e.g. the picking id buffer) copies into its own map-read buffer the same way.
+		RecordGraphReadbacks();
 
 		var commands = _writer.Finish();
 		WebGpuInterop.SubmitFrame(commands, _arena.Used);
 
-		// Drive the async capture map (started the frame after its copy submits, then polled to completion).
+		// Drive the async maps (started the frame after their copy submits, then polled to completion).
 		ServiceCapture();
+		ServiceGraphReadbacks();
 
 		var errors = WebGpuInterop.TakeErrors();
 		if (!string.IsNullOrEmpty(errors))

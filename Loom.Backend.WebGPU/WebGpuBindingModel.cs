@@ -35,7 +35,7 @@ internal readonly record struct WebGpuLayoutEntry(int Binding, WebGpuBindingKind
 /// descriptor-bound uniform list, and is bound explicitly by the backend (never counted as a uniform slot).
 /// </para>
 /// </summary>
-internal sealed class WebGpuBindingModel
+internal sealed partial class WebGpuBindingModel
 {
 	/// <summary>Every bind-group-layout entry, ascending by binding (group 0 only — every Loom shader binds group 0).</summary>
 	public required IReadOnlyList<WebGpuLayoutEntry> Entries { get; init; }
@@ -128,23 +128,27 @@ internal sealed class WebGpuBindingModel
 
 	// var<class> declarations: `@binding(0) @group(0) var<uniform> name : Type;` and the attribute-less texture /
 	// sampler form `@binding(1) @group(0) var name : texture_2d<f32>;`. Attributes are matched as a leading block so
-	// the parse is order-independent (@binding before @group or vice-versa).
-	private static readonly Regex DeclRegex = new(
-		@"((?:@\w+\([^)]*\)\s*)+)var(?:<(?<class>[^>]*)>)?\s+(?<name>\w+)\s*:\s*(?<type>[^;{]+);",
-		RegexOptions.Compiled);
-	private static readonly Regex BindingAttr = new(@"@binding\(\s*(?<n>\d+)\s*\)", RegexOptions.Compiled);
-	private static readonly Regex GroupAttr = new(@"@group\(\s*(?<n>\d+)\s*\)", RegexOptions.Compiled);
+	// the parse is order-independent (@binding before @group or vice-versa). Source-generated (not runtime-compiled):
+	// the matcher is emitted at build time, so it works under WASM AOT, which has no dynamic-code support.
+	[GeneratedRegex(@"((?:@\w+\([^)]*\)\s*)+)var(?:<(?<class>[^>]*)>)?\s+(?<name>\w+)\s*:\s*(?<type>[^;{]+);")]
+	private static partial Regex DeclRegex();
+
+	[GeneratedRegex(@"@binding\(\s*(?<n>\d+)\s*\)")]
+	private static partial Regex BindingAttr();
+
+	[GeneratedRegex(@"@group\(\s*(?<n>\d+)\s*\)")]
+	private static partial Regex GroupAttr();
 
 	/// <summary>Parse a technique's WGSL module and its reflection sidecar into a binding model.</summary>
 	public static WebGpuBindingModel Parse(string wgsl, byte[]? reflectionJson, string name)
 	{
 		// 1. The WGSL text: the authoritative set of (binding → kind) declarations Slang emitted for group 0.
 		var declared = new SortedDictionary<int, WgslDecl>();
-		foreach (Match m in DeclRegex.Matches(wgsl))
+		foreach (Match m in DeclRegex().Matches(wgsl))
 		{
 			var attrs = m.Groups[1].Value;
-			var groupMatch = GroupAttr.Match(attrs);
-			var bindingMatch = BindingAttr.Match(attrs);
+			var groupMatch = GroupAttr().Match(attrs);
+			var bindingMatch = BindingAttr().Match(attrs);
 			if (!groupMatch.Success || !bindingMatch.Success || int.Parse(groupMatch.Groups["n"].Value) != 0)
 				continue; // a non-group-0 binding (none today) or a plain module-scope var — not a bound resource
 			var binding = int.Parse(bindingMatch.Groups["n"].Value);
