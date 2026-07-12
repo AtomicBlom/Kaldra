@@ -1,6 +1,7 @@
 using System.Numerics;
 using Loom.Core.Hosting;
 using SUIsei;
+using SUIsei.Input;
 // SUIsei.Drawing and Loom.Core.Hosting both export DrawListId — alias to pin the SUIsei side (matches UIPainter.cs).
 using DrawListId = SUIsei.Drawing.DrawListId;
 
@@ -162,8 +163,8 @@ public sealed class InWorldPanel
 		var up = Vector3.Cross(forward, right);
 
 		WorldTransform = new Matrix4x4(
-			right.X * scaleX,   right.Y * scaleX,   right.Z * scaleX,   0,
-			up.X * scaleY,      up.Y * scaleY,      up.Z * scaleY,      0,
+			right.X * scaleX, right.Y * scaleX, right.Z * scaleX, 0,
+			up.X * scaleY, up.Y * scaleY, up.Z * scaleY, 0,
 			forward.X * scaleZ, forward.Y * scaleZ, forward.Z * scaleZ, 0,
 			pos.X, pos.Y, pos.Z, 1);
 	}
@@ -184,9 +185,9 @@ public sealed class InWorldPanel
 
 		// Unproject near (Z=0) and far (Z=1) clip-space points to world space.
 		var nearH = Vector4.Transform(new Vector4(ndc.X, ndc.Y, 0f, 1f), invVP);
-		var farH  = Vector4.Transform(new Vector4(ndc.X, ndc.Y, 1f, 1f), invVP);
+		var farH = Vector4.Transform(new Vector4(ndc.X, ndc.Y, 1f, 1f), invVP);
 		var nearW = new Vector3(nearH.X, nearH.Y, nearH.Z) / nearH.W;
-		var farW  = new Vector3(farH.X,  farH.Y,  farH.Z)  / farH.W;
+		var farW = new Vector3(farH.X, farH.Y, farH.Z) / farH.W;
 		var rayDir = Vector3.Normalize(farW - nearW);
 
 		// Transform ray into quad-local space. The quad is a unit XY plane (Z = 0, spanning [-0.5, 0.5]²).
@@ -194,7 +195,7 @@ public sealed class InWorldPanel
 			return false;
 
 		var originL = Vector3.Transform(nearW, invWorld);
-		var dirL    = Vector3.TransformNormal(rayDir, invWorld);
+		var dirL = Vector3.TransformNormal(rayDir, invWorld);
 
 		if (MathF.Abs(dirL.Z) < 1e-6f)
 			return false; // ray parallel to quad plane

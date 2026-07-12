@@ -15,22 +15,13 @@
 
   <PropertyGroup>
     <_LoomRepoRoot>$(MSBuildThisFileDirectory)..\..\..\</_LoomRepoRoot>
-    <_LoomDirectX12Csproj>$(_LoomRepoRoot)Loom.DirectX12\Loom.DirectX12.csproj</_LoomDirectX12Csproj>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(UseVulkan)' == 'true'">
     <ProjectReference Include="$(_LoomRepoRoot)Loom.Vulkan\Loom.Vulkan.csproj" />
   </ItemGroup>
 
-  <!-- DirectX12 is inert until the backend exists: reference it only when BOTH the flag is on AND the project is
-       present, so UseDirectX12=true can be flipped today without breaking the build (warn, never error). -->
-  <ItemGroup Condition="'$(UseDirectX12)' == 'true' And Exists('$(_LoomDirectX12Csproj)')">
-    <ProjectReference Include="$(_LoomDirectX12Csproj)" />
+  <ItemGroup Condition="'$(UseDirectX12)' == 'true'">
+    <ProjectReference Include="$(_LoomRepoRoot)Loom.Backend.DirectX12\Loom.Backend.DirectX12.csproj" />
   </ItemGroup>
-  <Target Name="_LoomWarnInertDirectX12"
-          BeforeTargets="ResolveProjectReferences"
-          Condition="'$(UseDirectX12)' == 'true' And !Exists('$(_LoomDirectX12Csproj)')">
-    <Warning Text="UseDirectX12=true but Loom.DirectX12 does not exist yet; the DirectX12 backend reference is inert." />
-  </Target>
-
 </Project>

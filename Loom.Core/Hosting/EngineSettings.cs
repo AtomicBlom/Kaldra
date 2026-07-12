@@ -2,8 +2,8 @@ namespace Loom.Core.Hosting;
 
 /// <summary>
 /// Backend-neutral engine configuration — the canonical config object a host populates and hands to
-/// <see cref="IRenderBackend.Create"/>, replacing the scattered constructor args and environment variables of
-/// earlier milestones. A host <em>may</em> read environment variables into it, but the object
+/// <see cref="IRenderBackend.Create"/>, in lieu of scattered constructor args and environment variables.
+/// A host <em>may</em> read environment variables into it, but the object
 /// is the source of truth. Subclass it per backend (<c>VulkanEngineSettings</c>, a future
 /// <c>DirectX12EngineSettings</c>) to carry backend-only knobs (preferred adapter, required extensions); the neutral
 /// engine surface only ever reads the base properties, and a backend down-casts to read its own.

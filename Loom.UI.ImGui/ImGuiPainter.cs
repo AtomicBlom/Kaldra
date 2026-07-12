@@ -21,7 +21,7 @@ public sealed class ImGuiPainter
 {
 	private const string Technique = "imgui";
 	private const uint White = 0xFFFFFFFFu;
-	// IM_COL32 yellow — the frustum-freeze wireframe colour, matching the old engine-drawn overlay.
+	// IM_COL32 yellow — the frustum-freeze wireframe colour.
 	private const uint LineColor = 0xFF00FFFFu;
 	private const float LineThickness = 2f;
 

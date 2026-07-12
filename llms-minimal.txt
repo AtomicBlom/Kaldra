@@ -1,72 +1,74 @@
 Loom 0.1.0-preview.1 — render-graph engine for .NET
-Generated: 2026-06-22
+Generated: 2026-06-28
 Source: https://github.com/AtomicBlom/Loom
 
-## Core Invariants (abbreviated)
+## Pillars of Design (abbreviated)
 
-1. Derived, not declared
-2. `.Writes` vs `.Blends`
-3. Backend isolation
-4. Pure per-frame closures
-5. Handle swap for ping-pong resources
-6. Vulkan 1.3 baseline
-7. Structural changes are cheap and cached
+Derived, not declared
+`.Writes` vs `.Blends`
+Backend isolation / portability
+Pure per-frame closures
+No allocations on the hot path
+The engine names no game concepts
+Ping-pong via handle swap
+Fail loud, never silently degrade
+Other load-bearing properties
 
 # Loom API Vocabulary
 
-Quick reference for every key type in the public API.
+A reference for every key type in Loom's public API — *how to use it*. You author against `Loom.Core` (the Describe layer); the engine derives ordering, barriers, layout transitions, and aliasing for you. Verbs read as intent — you state what a pass reads and writes, never the order.
 
-## Graph description (`Loom.Core`)
+## Graph description (`Loom.Core.Graph`)
 
-| Type | Role |
+A graph is built once with `RenderGraph.Define(g => { … })` and set on the engine with `engine.SetGraph`. The closure receives a `GraphBuilder` (`g`); you declare domains, resources, and passes on it.
+
+| Type / member | Role |
 |---|---|
-| `RenderGraph` | Immutable, hashable description of your full render graph. Produced by `RenderGraph.Define`; passed to `IEngine.SetGraph`. |
-| `GraphBuilder` | Fluent root builder (`g => { … }`). Declares domains, resources, and passes. |
-| `Domain` | A named resolution domain. Fixed (`g.Domain(name, w, h)`) or backbuffer-relative (`g.Domain(name, scale)`). `g.Screen` is the backbuffer-size domain. |
-| `ColorHandle` | Typed handle for a colour texture resource. Returned by `g.Color(name, format, domain)`. |
-| `DepthHandle` | Typed handle for a depth/stencil texture. Returned by `g.Depth(name, format, domain)`. |
-| `BufferHandle` | Typed handle for a GPU buffer (structured storage). Returned by `g.Buffer(name, stride, count)`. |
-| `PassBuilder` | One GPU pass inside `g.Pass(name, pb => { … })`. Declares resource accesses and a draw/dispatch callback. |
+| `RenderGraph.Define(g => …)` | The one entry point: runs the authoring closure and returns an immutable, hashable `RenderGraph`. Hand it to `engine.SetGraph`. |
+| `g.Pass("name")` | Begin a raster pass → `PassBuilder`. Chain access verbs, then `.Draw(ctx => …)`. |
+| `g.Compute("name")` | Begin a compute pass → `PassBuilder`. Chain access verbs, then `.Dispatch(ctx => …)`. |
+| `g.Present(colorHandle)` | The terminal: declare which colour resource is shown this frame (returns void). |
+| `g.Readback(handle)` | Declare a GPU→CPU readback of a resource; returns the same handle. Read it later with `engine.Read`. |
+| `g.Buffer("name", byteSize)` | A GPU storage buffer of `byteSize` bytes (not resolution-bound) → `BufferHandle`. |
+| `g.Constants<T>("name")` | An app-written uniform/constant block of `sizeof(T)` bytes → `ConstantsHandle`. Fill with `engine.Write`. |
+| `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. |
+| `g.Persistent("name", format, size=1)` | A cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. |
 
-### Pass access declarations
+### Pass access declarations (`PassBuilder`, all chainable)
 
-| Method | Semantics |
+You declare intent; the engine derives ordering, barriers, and layout transitions.
+
+| Verb | Meaning |
 |---|---|
-| `.Writes(handle)` | Produce a colour target. The engine may clear it first (`LoadOp.Clear`). |
-| `.Blends(handle)` | Accumulate onto an existing colour target (`LoadOp.Load`). The pass is both the last reader and the next writer. |
-| `.WritesDepth(handle)` | Produce a depth target (`LoadOp.Clear`). |
-| `.ReadsDepth(handle)` | Sample the depth buffer read-only (depth test without write). |
-| `.Samples(handle)` | Declare a shader-read dependency on a texture or buffer. The engine inserts the read barrier / layout transition. |
-| `.ReadWrites(handle)` | Read and write a buffer in the same pass (compute UAV). |
-| `.ReadsVertex(handle)` | Bind a buffer as a vertex/index input for a draw pass. |
-| `.Present()` | Mark this pass's write as the final swapchain present. |
-| `.Draw(callback)` | Supply the per-frame draw callback (receives `IRenderContext`). |
-| `.Dispatch(callback)` | Supply the per-frame dispatch callback (receives `IRenderContext`). |
+| `.Writes(params ColorHandle[])` | Produce colour target(s) (the engine may clear). Multiple handles = MRT. |
+| `.Blends(ColorHandle)` | Read-modify-write: load existing contents + blend onto them (the pass is last reader and next writer). |
+| `.Samples(params ITextureHandle[])` | Bind colour/depth image(s) as shader-read (sampled) inputs. |
+| `.WritesDepth(DepthHandle)` / `.ReadsDepth(DepthHandle)` | Depth write / depth test without write. |
+| `.ReadWrites(params IStorageHandle[])` | Read-modify-write storage images or buffers (compute UAV). |
+| `.ReadsVertex(BufferHandle)` | Bind a buffer as a vertex / instance stream (a compute pass filled it). |
+| `.Reads(IUniformHandle)` | Read a `g.Constants` block as the technique's uniform input. |
+| `.Reads(IStorageBufferHandle)` | Read a `g.Storage` SSBO read-only (an overload of `.Reads`). |
+| `.Queue(Queue)` | Assign the pass to a queue (see `Queue` below). |
+| `.Draw(Action<IRenderContext>)` / `.Dispatch(Action<IRenderContext>)` | The per-frame record callback (raster / compute). Pull from `ctx`; never capture per-frame data. |
 
-### Special handles
+### Special handles & domains
 
-| Property | Description |
-|---|---|
-| `g.Backbuffer` | The swapchain colour target (`ColorHandle`). A pass that `.Writes(g.Backbuffer).Present()` presents that frame. |
-| `g.Backbuffer.Domain` | The native-resolution `Domain` (same as `g.Screen`). |
-
-## Engine hosting (`Loom.Core.Hosting`)
-
-| Type | Role |
-|---|---|
-| `IEngine` | The live rendering engine. Create via `Engine.AvailableEngines["Vulkan"].Create(settings)`. Owns the device and pipeline cache. Survives graph swaps (`SetGraph`). |
-| `Engine` | Static registry of available backends (`Engine.AvailableEngines`). Populated by each backend assembly's `[ModuleInitializer]`. |
-| `IRenderContext` | Per-frame execution context passed to `.Draw` / `.Dispatch` closures. Closures *pull* from it rather than capturing, keeping the graph description frame-independent. |
-| `EngineSettings` | Backend-neutral engine settings: `HdrOutput`, `UseNamedGPUObjects`, `WatchShaderDirectory`, etc. |
-| `FrameInputs` | Per-frame host data supplied to `IEngine.Render`: `Camera`, `SunView`, `DeltaTime`, `HoverId`, overlay draw lists. |
-| `TechniqueDescriptor` | Shader technique definition: vertex shader name, fragment shader name, blend mode, depth state. Registered via `IEngine.DefineTechnique`. |
-
-### `IRenderContext` members
+`Domain`s decide where each resource lives. Declare a colour/depth target *on* a domain — there is no standalone `g.Color`.
 
 | Member | Description |
 |---|---|
-| `ctx.Camera` | The primary view + projection camera. |
-| `ctx.SunView` | The sun's view + projection (single shadow map). |
+| `g.Backbuffer` | The swapchain colour target (`ColorHandle`) — *is* the present surface. Hand it to `.Writes`/`.Blends` and `g.Present`. |
+| `g.Screen` | The native-resolution `Domain` (alias for `g.Backbuffer.Domain`); declare full-res sibling targets here. |
+| `g.Domain("name", width, height, samples=1)` | A fixed-size `Domain` (a constant-size pixel-art world); `samples` is the MSAA count (power of two). |
+| `g.Domain("name", scale, samples=1)` | A backbuffer-relative `Domain` — `scale × native`, re-resolved on resize (e.g. `0.5f` for half-res). |
+| `domain.Color("name", format, clearValue?=null, noClear?=false)` | A colour target in this domain → `ColorHandle`. `noClear: true` skips the clear (only when the first pass covers every pixel). |
+| `domain.Color("name", format, scale, …)` | A colour target at a fraction of the domain's resolution (mip chains, bloom pyramid). |
+| `domain.Depth("name", format)` | A depth target in this domain → `DepthHandle`. |
+| `domain.Persistent("name", format)` | A cross-frame target sized to this domain (use a tiny domain for a scalar history). |
+| `g.BackbufferClear` / `g.BackbufferNoClear` | Set the backbuffer's first-write clear colour / skip the clear — before the first `g.Backbuffer` access. |
+
+So a target is declared `g.Screen.Color("hdr", Format.Rgba16F)` or `g.Screen.Depth("depth", Format.Depth32F)`.
+
 
 ## Minimal example
 

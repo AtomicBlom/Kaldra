@@ -2,8 +2,23 @@
   "permissions": {
     "allow": [
       "Bash(dotnet build *)",
-      "mcp__roslyn-refactor__*",
-      "mcp__roslyn-refactor__get_diagnostics"
+      "Bash(dotnet format *)",
+      "mcp__roslyn-refactor__*"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "cs=\"$(git diff --name-only --diff-filter=ACMR HEAD -- '*.cs' 2>/dev/null; git ls-files -o --exclude-standard -- '*.cs' 2>/dev/null)\"; [ -z \"$cs\" ] && exit 0; printf '%s\\n' \"$cs\" | sort -u | tr '\\n' '\\0' | xargs -0 -r dotnet format Loom.slnx --include >/dev/null 2>&1 || true",
+            "timeout": 300,
+            "statusMessage": "Formatting changed C# (dotnet format)"
+          }
+        ]
+      }
     ]
   }
 }

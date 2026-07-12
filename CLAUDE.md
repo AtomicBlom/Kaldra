@@ -6,23 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Loom is a declarative, render-graph-driven rendering engine for .NET 10. You declare *what* each pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient memory aliasing, and CPU↔GPU sync. The procedural, struct-heavy graphics-API code is quarantined in a backend layer and never leaks into the authoring API.
 
-**`Planning.md` is the design bible and the source of truth — read it before any non-trivial work.** It is long but authoritative: architecture (§2), platform/deps (§3), the canonical API vocabulary (§5), the reference frame (§6), the effect cookbook (§7), the load-bearing design principles (§8), and the milestone roadmap (§12). This file is the operational layer on top of it: how the code is written, where the project is now, and the invariants that must survive a context reset.
+**[`Planning.md`](Planning.md) is the design bible — read it before any non-trivial work:** the core idea, the architecture, the Pillars of Design, the backend-portability posture, and the remaining roadmap. **[`README.md`](README.md)** covers the implemented features and how to use the API. This file (`CLAUDE.md`) is the operational layer: how the code is written, where the project is now, and the design pillars that must survive a context reset.
 
 ## Current state
 
-**Milestones M0–M11 are complete; M9 (deferred generalization) is partial.** Loom runs a full reference frame on **two backends at pixel parity — Vulkan and DX12**. **M11 (asset & material foundation) shipped:** texture loading + CPU-generated mips, a `Material` / multi-texture binding abstraction, tangent-space normal mapping in the deferred path, the neutral `Loom.Assets` project (StbImageSharp image + SharpGLTF model loaders), and normal-map + glTF reference demos at cross-backend parity. The next work is the **M12–M16** roadmap (geometry generalization + debug spine, then the three game-archetype tracks), tracked on the board.
+Loom runs a full reference frame on **two backends at pixel parity — Vulkan and DirectX 12** — with Metal and WebGPU under investigation as further backends. The implemented-feature list and usage examples live in `README.md`; the design and remaining roadmap live in `Planning.md`.
 
-What's shipped:
-- **Projects:** `Loom.Core` (Describe, library) → `Loom.Graph` (Execute) → `Loom.Vulkan` + `Loom.DirectX12` (backends); `Loom.Assets` (neutral image/glTF loaders, beside Core); `SUIsei` (retained WinUI-like control tree + compositor) + `SUIsei.SourceGen` (Roslyn XAML source generator) + `SUIsei.Tests`; the optional UI bridges `Loom.UI.SUIsei` and `Loom.UI.ImGui` (each renders a UI through the public draw-list API, so neither backend references a UI library — reference the package or omit it); `Loom.Shaders` (build step); `Loom.Tests` (TUnit + Shouldly; graph-layer + mip + opt-in golden-image tests); `Loom.Sandbox` (the only `Exe`, demos). All target `net10.0`; the solution is `Loom.slnx`; NuGet versions are centralized via Central Package Management (`Directory.Packages.props`).
-- **Host/windowing:** Silk.NET **2.23.0** (Vulkan + `Extensions.KHR`/`Extensions.EXT` + Maths in `Loom.Vulkan`; Windowing + Input in `Loom.Sandbox`). The host hands the backend the window's `IVkSurface`, so the backends carry **no** `Silk.NET.Windowing` reference.
-- **Describe layer:** `GraphBuilder`/`PassBuilder` with `.Writes`/`.Blends`/`.Samples`/`.ReadWrites`/`.WritesDepth`/`.ReadsDepth`/`.ReadsVertex`; typed handles (`ColorHandle`/`DepthHandle`/`BufferHandle`); fixed + backbuffer-relative `Domain`s; persistent + buffer resources; present/readback. Immutable + hashable (drives the bake cache).
-- **Execute layer:** topological scheduling, derived barriers/layout transitions, transient memory aliasing, lifetime analysis — all backend-neutral.
-- **Shipped effects (8):** deferred G-buffer + multi-light lighting, single shadow map, SSAO + blur, forward alpha-blend transparency, GPU particles (compute→vertex), JFA outlines + GPU→CPU picking readback, bloom pyramid, auto-exposure + tonemap. Plus HDR (scRGB) output, low-res world domain + upscale, ImGui HUD. `FullReferenceDemo` composes them all.
-- **Assets & materials (M11):** `Loom.Assets` decodes images (StbImageSharp) and glTF models (SharpGLTF) into neutral `Loom.Core` descriptions; `TextureData` builds the mip chain on the CPU (deterministic box filter → byte-identical across backends); each backend has a `TextureStore` (multi-mip upload) + `MaterialStore`; a `Material` fills a technique's reflected sampler slots via `ctx.Draw(mesh, material, technique)`; `Vertex` carries a tangent; `gbuffer_normalmap.slang` does tangent-space normal mapping into the existing deferred G-buffer. Demos: `NormalMappingDemo`, `GltfDemo`.
-- **Shaders:** offline Slang → SPIR-V (Vulkan) + signed DXIL (DX12); reflection-derived descriptor layouts.
-- **Backend baseline (both):** dynamic rendering / no renderpass objects, sync2-style barriers, 2 frames in flight, Vulkan 1.3 device features (dynamic rendering / synchronization2 / timeline semaphores); DX12 mirrors via fences + PSOs + placed-resource aliasing.
+Projects (dependency direction `Sandbox → {backends} → Graph → Core`):
+- **`Loom.Core`** — the Describe layer (library): `GraphBuilder`/`PassBuilder`, typed handles, `Domain`, technique & vertex-layout builders, `Material`, the neutral draw-list types.
+- **`Loom.Graph`** — the Execute layer: topological scheduling and derived barrier/layout/aliasing/lifetime plans, all backend-neutral.
+- **`Loom.Vulkan` / `Loom.DirectX12`** — the backends (the marshaling seam). *(Being renamed to `Loom.Backend.Vulkan` / `Loom.Backend.DirectX12` — see `Planning.md` §6.)*
+- **`Loom.Assets`** — neutral image (StbImageSharp) + glTF (SharpGLTF) loaders, beside Core.
+- **`Loom.Concepts`** — app-side helpers (`Camera`, `Frustum`, `Scene`); **not** part of Core/Graph.
+- **`SUIsei`** (the `external/SUIsei` submodule) — a standalone, GPU-free XAML UI runtime + `SUIsei.SourceGen` + `SUIsei.Tests`; integrated through `Loom.UI.SUIsei`. `Loom.UI.ImGui` is the debug-HUD bridge. Both reach the GPU only through the neutral draw-list verb, so neither backend references a UI library.
+- **`Loom.Tests`** — TUnit + Shouldly; describe/execute-layer + mip + opt-in golden/parity tests.
+- **`Loom.Sandbox`** — the only `Exe`; the demo gallery (see below).
 
-**The gap (what M12+ adds):** M11 delivered texture/model loading, materials, and normal mapping. Still missing — the rest of the asset/scene/geometry half: per-technique vertex layouts, instancing/indirect, a `Scene` draw-list + culling, the debug/profiling spine, and the per-track features (sprites/2D, skinning/CSM/sky, PBR/terrain/GPU-driven). That's the M12–M16 roadmap.
+All target `net10.0`; the solution is `Loom.slnx`. Key operational facts: the host hands the backend the window's surface opaquely (Vulkan `IVkSurface`, DX12 `HWND`); 2 frames in flight; shaders are Slang compiled offline to SPIR-V + signed DXIL with reflection-derived descriptor layouts; backends self-register into `Engine.AvailableEngines` guarded by an `IsSupported()` probe.
 
 Dev-environment notes:
 - **Don't assume the host architecture or GPU** — this repo is developed across more than one machine (both Windows-on-ARM and x64 boxes have been used). Detect it at the start of a session rather than hard-coding: `dotnet --info` (or `$env:PROCESSOR_ARCHITECTURE`) for the CPU arch, and `Get-CimInstance Win32_VideoController | Select-Object Name` for the GPU. Keep engine code arch/GPU-agnostic (or behind a capability check).
@@ -30,89 +30,104 @@ Dev-environment notes:
 - A benign `[vk:WARN]` about duplicate `VK_LAYER_MSFT_driver_sorting` manifests (Microsoft `D3DMappingLayers`) prints at startup; it's a loader/environment quirk, not a Loom issue.
 - `Loom.Sandbox` is configured entirely by command-line options — **no `LOOM_*` environment variables** (run `dotnet run --project Loom.Sandbox -- --help` for the list). Headless verification: `--smoke-frames N` (render N frames then exit) and `--capture <path>` (capture one frame to PNG with frozen time + fixed delta, for deterministic cross-backend diffing); `--backend <vulkan|directx12>` (`dx12` is an accepted alias) and `--demo <name|index|substring>` pick the target. (The `LOOM_VULKAN`/`LOOM_DIRECTX12`/… symbols are *compile-time* build constants, not runtime vars; `LOOM_GOLDEN_DIR` configures `dotnet test`, not the sandbox.)
   - ⚠️ **A sandbox run with neither `--capture` nor `--smoke-frames` is interactive — it opens a window and blocks until that window is closed.** A headless/agent invocation MUST pass one of those two, or the command hangs forever (`dotnet run … -- --demo bloom` alone never returns; `--demo bloom --capture out.png` does). `--demo` resolves an index, an exact (case-insensitive) name, or a unique case-insensitive substring; an ambiguous or unmatched value is reported and the sandbox exits without rendering (so a typo fails fast rather than silently running the wrong demo).
+## Loom.Sandbox
+
+`Loom.Sandbox` is the runnable demo gallery and the shared host for both backends — `--backend` swaps only the window surface + engine settings (`CreateWindow`/`CreateEngine`); the demo gallery and per-frame loop are shared, so the two backends can't drift out of sync. When a demo renders on one backend but not the other, suspect the shared per-frame inputs or a genuine backend/shader difference.
+
+It is configured entirely by command-line options (`-- --help` for the full list):
+- `--backend <vulkan|directx12>` (`dx12` is an accepted alias) — pick the backend.
+- `--demo <name|index|substring>` — pick the demo (an exact case-insensitive name, an index, or a unique case-insensitive substring; an ambiguous or unmatched value is reported and the sandbox exits without rendering, so a typo fails fast).
+- `--capture <path>` — render one frame to a PNG with frozen time + fixed delta (deterministic cross-backend diffing).
+- `--smoke-frames N` — render N frames then exit (must be positive).
+- `--max-fps N` — cap the frame rate.
+
+⚠️ **A run with neither `--capture` nor `--smoke-frames` is interactive** — it opens a window and blocks until that window is closed. A headless/agent invocation MUST pass one of those two, or the command hangs forever (`dotnet run … -- --demo bloom` alone never returns; `--demo bloom --capture out.png` does).
+
+## Dev environment
+
+- The repo targets **both x64 and Windows-on-ARM** (the maintainer's box is a Snapdragon X / Adreno X1-85). **Don't assume a CPU architecture** — detect it (`RuntimeInformation.ProcessArchitecture`) before relying on arch-specific behaviour, and don't assume the machine you're on is either one.
+- **Vulkan SDK 1.4.350.0** provides the validation layers. `winget` can't install it from a non-interactive shell (the UAC elevation gets cancelled) — install from an interactive elevated terminal.
+- On the ARM box a benign `[vk:WARN]` about a duplicate `VK_LAYER_MSFT_driver_sorting` manifest (Microsoft `D3DMappingLayers`) prints at startup — a loader/environment quirk, not a Loom issue.
 
 ## Progress tracking
 
-Milestone progress is tracked on the **GitHub Projects (v2) board "Loom – Render Graph Engine"** (board #6, owner `AtomicBlom`, linked to `AtomicBlom/Loom`): <https://github.com/users/AtomicBlom/projects/6>. `Planning.md` §12 remains the source of truth for *what* each milestone is; the board is the live status of the work.
-
-- **One board, draft-issue cards**, grouped by two custom single-select fields: **Stage** (`M0`…`M16`; M0–M10 map to Planning.md §12, M11–M16 are the asset/scene + game-track roadmap) and **Kind** (`Implementation` / `Cross-cutting` / `Decision`). Status is the usual `Todo` / `In Progress` / `Done`.
-- **Milestones are a mix of tracking and task cards;** M0–M1, M7, and the whole **M11–M16** roadmap are broken into per-task cards, while some earlier milestones carry a single tracking card with a deliverable checklist. Expand any tracking-only milestone into task cards when work on it begins. **M16 is an umbrella** that should split into sub-milestones when started.
-- **Stage colours encode done/not-done:** **GREEN = done**, **ORANGE = not done**. Keep new/in-flight stages orange and flip to green when shipped.
-- **Keep the board current as you work:** move a card to **In Progress** when you start it and to **Done** once its acceptance bar is met; check off the sub-tasks in the card body as they land. When a milestone needs a choice, that's a `Decision` card — resolve it (and record the decision) before the implementation cards it gates.
-- The board needs the `gh` `project` scope (plain `repo` scope is not enough). Add/edit cards with `gh project item-create` / `gh project item-edit` against board number `6`, owner `AtomicBlom`. ⚠️ **Editing the Stage option set via `updateProjectV2Field` regenerates every option ID** (GitHub does not match by name), which orphans existing cards' Stage values — back up item→Stage assignments first, then remap by name.
+Progress is tracked as **GitHub issues** on `AtomicBlom/Loom`. (The Projects v2 board was used for milestone-era planning and is being retired; once `Planning.md` settles, its roadmap is distilled into issues.) `Planning.md` is the source of truth for the design + remaining roadmap.
 
 ## Commands
 
     dotnet build Loom.slnx                            # build the whole solution
-    dotnet run --project Loom.Sandbox                 # run the sandbox (the runnable sample / demo)
+    dotnet run   --project Loom.Sandbox               # run the sandbox demo gallery (interactive)
     dotnet build Loom.Core                            # build a single project
-    dotnet test --project Loom.Tests/Loom.Tests.csproj # run the unit tests (TUnit on Microsoft.Testing.Platform)
+    dotnet run   --project Loom.Tests                 # run the unit tests (TUnit on Microsoft.Testing.Platform)
     dotnet format Loom.slnx                           # apply the .editorconfig conventions
 
 **Packages:** versions are centralized via **Central Package Management** — `Directory.Packages.props` at the repo root holds every `<PackageVersion>`, and the project `.csproj` files carry version-less `<PackageReference>`s. The vendored `external/VMASharp` submodule opts out (its own `external/Directory.Packages.props` sets `ManagePackageVersionsCentrally=false`) and keeps its inline versions — don't add its packages to the root file.
 
-Tests live in `Loom.Tests` and cover the describe/execute layers — scheduling, barrier derivation, aliasing, lifetimes, graph hashing. They run on **TUnit** (Microsoft.Testing.Platform) with **Shouldly** assertions. The repo-root `global.json` opts `dotnet test` into MTP mode, so the project is passed with `--project` (the bare-path `dotnet test Loom.Tests/...` form is VSTest-only and was removed in the .NET 10 SDK). Run a single class/test with `dotnet test --project Loom.Tests/Loom.Tests.csproj --treenode-filter "/*/*/<ClassName>/<MethodName>"`, or run the MTP test app directly with `dotnet run --project Loom.Tests`. A golden-image / rendered-output harness **ships**: `GoldenImageTests` (opt-in via the `LOOM_GOLDEN_DIR` env var) diffs freshly captured frames against committed baselines under `Loom.Tests/Goldens/`, captured by `tools/golden.ps1` (`--capture` + frozen time). It is GPU-gated, so CI (no GPU) skips it. A direct **Vulkan-vs-DX12** pixel diff is still the manual `Scripts/Verification/diff.ps1` loop — there is no automated cross-backend parity assertion yet.
+## Tests
+
+Tests live in `Loom.Tests` (and `external/SUIsei/SUIsei.Tests`) and cover the describe/execute layers — scheduling, barrier derivation, aliasing, lifetimes, graph hashing, mip generation — on **TUnit** (Microsoft.Testing.Platform) with **Shouldly** assertions.
+
+- Run them with **`dotnet run --project Loom.Tests`** (the MTP test app). Run a single class/test with `dotnet run --project Loom.Tests -- --treenode-filter "/*/*/<ClassName>/<MethodName>"`.
+- **Also run them NativeAOT-published** to guard AOT/trim-safety (the engine and SUIsei must stay NativeAOT-clean): `dotnet publish Loom.Tests -c Release -p:PublishAot=true` and run the emitted native test executable. Treat new trim/AOT warnings as failures.
+- A golden-image / rendered-output harness ships: `GoldenImageTests` (opt-in via `LOOM_GOLDEN_DIR`) diffs freshly captured frames against committed baselines under `Loom.Tests/Goldens/` (captured by `tools/golden.ps1`), and `CrossBackendParityTests` diffs Vulkan vs DX12 captures. Both are GPU-gated, so CI (no GPU) skips them.
 
 ## Coding conventions
 
 Enforced by `.editorconfig` at the repo root; the essentials:
 - **File-scoped namespaces** (`namespace Loom.Core;`), never block-scoped.
-- **Tabs, not spaces** for `.cs`, `.csproj`, `.slnx`, `.json`
+- **Tabs, not spaces** for `.cs`, `.csproj`, `.slnx`, `.json`.
 - **Braces where appropriate** — required around multi-line blocks; a single-line `if (cond) return;` may omit them.
-- **Single class per file** - Inner classes are permissible where appropriate
-- **Modern .NET / C#** 
-  - `var` when the type is apparent
-  - target-typed `new`
-  - collection expressions
-  - pattern matching / switch expressions
-  - primary constructors
-  - expression-bodied members
-  - `using` declarations
-  - null-propagation and coalescing.
-  - Nullable reference types and implicit usings are on. 
-  - `field` in properties instead of `_customField`s
-  - `with` to copy records with changes
+- **Single class per file** — inner classes permissible where appropriate.
+- **Modern .NET / C#:**
+  - `var` when the type is apparent; target-typed `new`; collection expressions.
+  - pattern matching / switch expressions; primary constructors; expression-bodied members.
+  - `using` declarations; null-propagation and coalescing.
+  - Nullable reference types and implicit usings are on.
+  - `field` in properties instead of a backing `_field`.
+  - `with` to copy records with changes.
+  - **C# 14 extension members** — `extension` blocks (extension properties, indexers, and static members), not just extension methods.
 - Allman braces; `System.*` usings sorted first; usings outside the namespace.
-- **UI-track naming.** The two-letter acronym `UI` is always uppercase in identifiers — matching WinUI's own `UIElement` and the .NET two-letter-acronym guideline: `UIElement`, `UIRoot`, `UIVertex`, `UIDrawData`, `UISurfaceId`, `UIPrimKind`, `IUICompositor`, `UIRenderer`, `IRenderContext.DrawUI`, `IEngine.EnableUI`. (In camelCase a leading `ui` stays lowercase, e.g. the `uiSurfaces` local.) `Loom.sln.DotSettings` registers `UI` as a known abbreviation so Rider/ReSharper accepts it — keep that file.
-- **Comments are self-contained.** A comment describes what the code does or *why* — never the context in which it was written. Do **not** reference a milestone, phase, or planning-doc section (`M13`, `MU1`, `Phase B`, `M7-B4`, `Planning.md §8`, `§D2.1`), and do **not** narrate project history or schedule (`for now`, `previously`, `no longer`, `lands in MU2`, `arrives later`) — that belongs in commit messages and the board, not the source, because it goes stale and forces the reader to look something up. **Do** keep XML docs on public APIs, and explanations of a non-obvious algorithm, gotcha, or "why this and not that". When a real explanation carries a milestone tag, strip the tag and keep the explanation.
+- **UI-track naming.** The two-letter acronym `UI` is always uppercase in identifiers — matching WinUI's own `UIElement` and the .NET two-letter-acronym guideline: `UIElement`, `UIRoot`, `UIVertex`, `UIDrawData`, `UISurfaceId`, `UIPrimKind`, `IUICompositor`, `UIRenderer`. (In camelCase a leading `ui` stays lowercase, e.g. the `uiSurfaces` local.) `Loom.sln.DotSettings` registers `UI` as a known abbreviation so Rider/ReSharper accepts it — keep that file.
+- **Comments are self-contained.** A comment describes what the code does or *why* — never the context in which it was written. Do **not** reference a milestone, phase, or planning-doc section (`M13`, `MU1`, `M7-B4`, `§D2.1`, `Planning.md §8`), and do **not** narrate project history or schedule (`for now`, `previously`, `no longer`, `lands in MU2`, `arrives later`) — that belongs in commit messages, not the source, because it goes stale and forces the reader to look something up. **Do** keep XML docs on public APIs, and explanations of a non-obvious algorithm, gotcha, or "why this and not that". When a real explanation carries a milestone tag, strip the tag and keep the explanation.
+
+**Don't hand-fix formatting.** Run `dotnet format Loom.slnx` rather than manually matching tabs/braces/usings, and never loop on your own formatting mistakes — a `Stop` hook in `.claude/settings.json` auto-runs `dotnet format` on changed C# at the end of each turn, so let the tool own formatting.
 
 ## Goals & constraints
 
 - **Cross-platform from the start.** Windows, Linux, and macOS. Silk.NET, Vulkan, and the windowing/input stack are cross-platform — keep OS-specific APIs out of the engine (or behind a capability check). Don't bake in Win32-only assumptions.
-- **Backend-portable by design.** Vulkan was the first backend; **DirectX12 is now a second backend at pixel parity** (`Loom.DirectX12`). This makes the backend-isolation invariant load-bearing in practice, not just in principle: every new GPU feature must land in (or be `<Use…>`-gated for) both backends, and no graphics-API type may enter the describe/execute layers.
+- **Backend-portable by design.** Loom runs on **Vulkan and DirectX 12 in parallel at pixel parity**, with **Metal and WebGPU under investigation** as further backends. This makes backend isolation load-bearing in practice: every new GPU feature must land in (or be `<Use…>`-gated for) every backend, and **no graphics-API type may enter the describe/execute layers**.
 
 ## Architecture in one screen
 
-Three layers, mapped to projects and kept strictly separate — this separation is what makes the design tractable, so protect it:
+Three layers, mapped to projects and kept strictly separate — this separation is what keeps the design manageable, so protect it:
 
-- **Describe** (`Loom.Core`) — immutable, hashable, fluent builders: `GraphBuilder`, `ResourceHandle`, `Domain`, `PassBuilder`, technique builders. The only layer authored against directly; allocates freely.
-- **Execute** (`Loom.Graph`) — per frame: topological sort from the read/write edges, *derive* the barrier/layout-transition and aliasing decisions, drive command recording. Produces **backend-neutral** scheduling decisions (no graphics-API types) so the same plan targets Vulkan or DX12.
-- **Bake + record** (`Loom.Vulkan` and `Loom.DirectX12`) — the *backends*. Marshal descriptions transiently to native structs, create pipelines/descriptor layouts (cached by hash), and translate Execute's neutral decisions into real GPU work (Vulkan: `vkCmdPipelineBarrier2`, dynamic rendering; DX12: resource barriers, PSOs, placed-resource aliasing). The "marshaling seam" — the only place procedural graphics-API code lives. (`vkCreate*` / D3D12 create calls copy their inputs, so the struct soup only exists transiently in pinned native memory, then is freed.)
-- `Loom.Shaders` — build step producing SPIR-V + signed DXIL + reflection metadata consumed at bake time.
+- **Describe** (`Loom.Core`) — immutable, hashable, fluent builders. The only layer authored against directly; allocates freely.
+- **Execute** (`Loom.Graph`) — per frame: topological sort from the read/write edges, *derive* the barrier/layout-transition and aliasing decisions, drive command recording. Produces **backend-neutral** decisions (no graphics-API types) so the same plan targets any backend.
+- **Bake + record** (the backends) — marshal descriptions transiently to native structs, create pipelines/descriptor layouts (cached by hash), and translate Execute's neutral decisions into real GPU work. The "marshaling seam" — the only place procedural graphics-API code lives.
 
-**Dependency direction: `Sandbox → {Vulkan, DX12} → Graph → Core`.** `Loom.Core` and `Loom.Graph` carry **no** Vulkan/DX12/Silk.NET reference. Introducing a graphics-API type into Core or Graph is the cardinal architectural violation — it breaks backend portability.
+**Dependency direction: `Sandbox → {backends} → Graph → Core`.** `Loom.Core` and `Loom.Graph` carry **no** graphics-API / Silk.NET reference. Introducing a graphics-API type into Core or Graph is the cardinal architectural violation — it breaks backend portability.
 
-## Invariants to protect (Planning.md §8)
+## The Pillars of Design
 
-Load-bearing; violating them silently breaks the design:
+Load-bearing; violating one silently breaks the design (the full statement is in `Planning.md` §3):
 - **Derived, not declared.** Users state reads/writes only. Any API that asks the user to specify *order* is a smell.
 - **`.Writes` vs `.Blends`.** `.Writes` = produce (engine may clear). `.Blends` = accumulate onto existing contents (`LoadOp.Load` + blend; the pass is both last-reader and next-writer). Barrier derivation needs the distinction.
-- **Backend isolation / portability.** All procedural, struct-heavy, API-specific code stays in the backends (`Loom.Vulkan`, `Loom.DirectX12`). Core/Graph speak in abstract resources and intents so both backends stay swappable (and a third could join).
-- **Pure per-frame closures.** `.Draw` / `.Dispatch` callbacks pull from `ctx` (`ctx.Camera`, `ctx.Time`, `ctx.DeltaTime`, `ctx.SunView`, `ctx.HoverId`) instead of capturing, keeping the graph description frame-independent and cacheable. (A first-class `ctx.Scene` draw-list is the M12 target; demos submit meshes directly today.)
+- **Backend isolation / portability.** All procedural, struct-heavy, API-specific code stays in the backends. Core/Graph speak in abstract resources and intents so every backend stays swappable.
+- **Pure per-frame closures.** `.Draw` / `.Dispatch` callbacks pull from `ctx` and neutral `Constants`/`Storage` buffers instead of capturing, keeping the graph description frame-independent and cacheable.
+- **No allocations on the hot path.** The steady per-frame render loop allocates no managed memory (especially in Release) — preallocated/pooled buffers and `ref struct`s, and the graph is built once and cached. Applies to SUIsei's per-frame tick/route/composite path too.
+- **The engine names no game concepts.** No `Camera`/`Sun`/`Scene` in Core/Graph; per-frame view/light/time data rides neutral channels, and the app names its own views.
 - **Ping-pong via handle swap.** Two physical resources + a `(read, write)` tuple swapped in a normal loop; the graph follows the handles (bloom, JFA).
-- **Vulkan 1.3 baseline.** Dynamic rendering, synchronization2, and timeline semaphores are enabled as device features — no renderpass/framebuffer objects; emit `vkCmdPipelineBarrier2`.
+- **Fail loud, never silently degrade.** Backend mapping switches throw on an unmapped value; over-promised APIs throw at derive time rather than doing the wrong thing.
 
-## Agent Behaviour
-A note on using image captures to determine whether something has worked or not, images take up a LOT of context
-When verifying whether an image is **correct** or not, use a subagent and tell it what you're expecting the image to contain in as much detail as possible, the sub-agent should return whether it met your expectations or not.
+## Agent behaviour
+
+Image captures take up a LOT of context. When verifying whether an image is **correct**, use a subagent and tell it what you expect the image to contain in as much detail as possible; the subagent returns whether it met your expectations.
 
 For **objective, quantitative** checks that need no correctness judgment — "did anything render?", "are the two backends at pixel parity?" — prefer the checked-in `Scripts/Verification/` helpers over ad-hoc `System.Drawing` snippets; they keep image bytes out of context entirely:
 - `pwsh Scripts/Verification/colorcount.ps1 -Path <png>` — distinct-RGB count (a black/empty frame is ~1 colour; a real scene is thousands).
 - `pwsh Scripts/Verification/diff.ps1 -A <png> -B <png> -Out <heatmap.png>` — mean/max per-channel abs diff + the fraction of pixels over `-Threshold`, plus a heatmap. Cross-backend parity bar: 4/255 per channel, <0.5% of pixels.
 
-Capture the frames headlessly with `--capture <path>` (frozen time), picking demo/backend via `--demo <name|index>` / `--backend dx12`. See `Scripts/Verification/README.md`.
-
-There is now **one host** (`Loom.Sandbox/Program.cs`) serving both backends — `--backend` swaps only the window surface + engine settings (`CreateWindow`/`CreateEngine`); the demo gallery and per-frame loop are shared, so the two backends can't drift out of sync. (Historically there were two hosts, `Program.cs` + `Dx12Smoke.cs`; a `GetCamera` divergence between them once cost a long hunt for a non-existent SPIR-V↔DXIL matrix-layout bug — the merged host removes that hazard.) When a demo renders on one backend but not the other, suspect the shared per-frame inputs or a genuine backend/shader difference, not host divergence.
+Capture the frames headlessly with `--capture <path>` (frozen time), picking demo/backend via `--demo` / `--backend`. See `Scripts/Verification/README.md`.
 
 ## Roslyn MCP
 
@@ -122,8 +137,7 @@ A `roslyn-refactor` MCP server is configured in `.mcp.json` and **must be prefer
 dotnet tool install -g RoslynMcp.Server
 ```
 
-The command registered is `roslyn-mcp`. The server reads from disk on every call so the workspace is always current after a save — no reload needed between an edit and a query. The solution path for all calls is the repo-root-relative `Loom.slnx` (resolve it against the current working directory so calls hit whichever worktree you're in — never a hard-coded main-worktree path). **Exception — the browser half:** `Loom.Web` (the WASM host) is kept out of `Loom.slnx` so the wasm-tools workload stays off the desktop build; it lives in `Loom.Web.slnx` alongside the WebGPU backend and the engine layers it references. Use `Loom.Web.slnx` for Roslyn calls that touch `Loom.Web`. Two known limitations on the web solution: (1) design-time diagnostics report spurious `CS8795` "partial method must have an implementation" errors for the `[JSImport]` host partials, because the JSImport source generator only runs in the wasm build — verify the browser projects with `dotnet build`/`publish`, not Roslyn diagnostics; (2) **loading a solution through the Roslyn MCP rewrites its member `.csproj` files** — it materialises the SDK's implicit analyzers as explicit `<Analyzer Include="C:\...absolute machine path...">` entries and reformats the file (BOM, blank-line stripping). After any Roslyn call, check `git status` and `git restore` that csproj churn before committing — those absolute paths must never land in the repo.
-
+The command registered is `roslyn-mcp`. The server reads from disk on every call so the workspace is always current after a save — no reload needed between an edit and a query. The solution path for all calls is the repo-root-relative `Loom.slnx` (resolve it against the current working directory so calls hit whichever worktree you're in — never a hard-coded main-worktree path). **Exception — the browser half:** `Loom.Web` (the WASM host) is kept out of `Loom.slnx` so the wasm-tools workload stays off the desktop build; it lives in `Loom.Web.slnx` alongside the WebGPU backend and the engine layers it references. Use `Loom.Web.slnx` for Roslyn calls that touch `Loom.Web`. Two known limitations on the web solution: (1) design-time diagnostics report spurious `CS8795` "partial method must have an implementation" errors for the `[JSImport]` host partials, because the JSImport source generator only runs in the wasm build — verify the browser projects with `dotnet build`/`publish`, not Roslyn diagnostics;
 **Never use `Grep` to search `.cs` files for symbols, usages, or callers** — text search misses renames, overloads, and implicit implementations. Use the semantic equivalents:
 
 | Task | Tool |

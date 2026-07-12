@@ -5,7 +5,7 @@ namespace Loom.Tests;
 
 /// <summary>
 /// Minimal, dependency-free PNG decoder (8-bit RGBA/RGB) — the inverse of the backends' <c>PngWriter</c>, for the
-/// M13 golden-image harness (decode a capture + its committed baseline, then diff). Handles the standard scanline
+/// golden-image harness (decode a capture + its committed baseline, then diff). Handles the standard scanline
 /// filters (0–4) so it reads any conforming 8-bit non-interlaced PNG, not just our writer's filter-0 output.
 /// </summary>
 internal static class PngReader

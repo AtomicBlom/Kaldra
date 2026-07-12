@@ -4,29 +4,40 @@
 
 ## Design
 
-ImGui draw data is routed through `IRenderContext.DrawList`, the same path as SUIsei and any other overlay. This means:
+ImGui draw data is routed through `IRenderContext.DrawList`, the same path SUIsei and any other overlay use. An ImGui draw list is the same shape as any other (vertices + 16-bit indices + clip/texture/range commands), so the backends need no ImGui-specific renderer. This means:
 
-- **Opt-in**: reference this package to add the overlay; omit it and the engine is wholly ImGui-free
-- **Backend-neutral**: works with both `Loom.Backend.Vulkan` and `Loom.Backend.DirectX12` without changes
-- Includes UI shaders distributed as content files alongside the package
+- **Opt-in** — reference this package to add the overlay; omit it and the engine is wholly ImGui-free.
+- **Backend-neutral** — works with both `Loom.Backend.Vulkan` and `Loom.Backend.DirectX12` without changes.
+- Includes the UI shader (compiled from Slang) distributed as a content file alongside the package.
 
 ## Usage
 
-```csharp
-// In your host:
-engine.EnableImGui();
+The bridge is `ImGuiPainter`. Create it once after the engine and the ImGui context exist — `Create` registers the `imgui` technique and uploads the current context's font atlas through the public engine API — then keep it for the engine's lifetime. A painter is a stable handle bundle, so a pass closure may capture it without breaking the frame-independent-graph rule.
 
-// In your graph (add an overlay pass):
-builder.AddPass("imgui", pass => pass
-    .Blends(GraphBuilder.Backbuffer)
-    .Draw((ctx, _) =>
-    {
-        ImGui.Begin("Debug");
-        // ...
-        ImGui.End();
-        ctx.DrawImGui();
-    }));
+```csharp
+// Once, after the engine and the ImGui context are set up (fonts added, style set):
+var hud = ImGuiPainter.Create(engine);
+
+var graph = RenderGraph.Define(g =>
+{
+    // … your scene passes write g.Backbuffer …
+
+    // The HUD blends on top of the finished frame:
+    g.Pass("hud")
+        .Blends(g.Backbuffer)
+        .Draw(ctx => hud.Draw(ctx));
+
+    g.Present(g.Backbuffer);
+});
+engine.SetGraph(graph);
 ```
+
+Each frame, drive ImGui as usual on the host (`ImGui.NewFrame()` → widgets → `ImGui.Render()`) **before** `engine.Render(...)`; `hud.Draw(ctx)` submits the draw data `ImGui.Render()` produced. It is a no-op when there is nothing to draw.
+
+`ImGuiPainter` also carries the engine's two debug overlays, refreshed per frame:
+
+- `SetThumbnails(resourceIds)` — preview graph resources (`IEngine.InspectableResources` ids) as a thumbnail grid: the resource / G-buffer channel viewer.
+- `SetDebugLines(segments)` — overlay line segments (the detached-camera frustum-freeze wireframe).
 
 ## Dependencies
 
