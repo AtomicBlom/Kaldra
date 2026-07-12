@@ -7,7 +7,7 @@
     (+ a reflection-JSON sidecar) hermetically via the slangc bundled in Slang.Sdk, then registers the
     outputs in one of two modes:
       Content -> loose <Content> copied to the output under shaders\  (an app, e.g. Loom.Sandbox)
-      Embed   -> <EmbeddedResource> with a stable manifest name        (the engine, Loom.Vulkan)
+      Embed   -> <EmbeddedResource> with a stable manifest name        (the engine, Loom.Backend.Vulkan)
 
     When $(LoomEmitHlsl) is set (the DirectX12 backend is in the build) it ALSO emits per-stage HLSL beside the
     SPIR-V — <name>.vs.hlsl / <name>.ps.hlsl / <name>.cs.hlsl. Slang's HLSL target is per-entry-point (a

@@ -50,8 +50,10 @@ jobs:
         run: |
           $projects = @(
             "external/SUIsei/SUIsei/SUIsei.csproj",
-            "Loom.Vulkan/Loom.Vulkan.csproj",
-            "Loom.DirectX12/Loom.DirectX12.csproj",
+            "Loom.Concepts/Loom.Concepts.csproj",
+            "Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj",
+            "Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj",
+            "Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj",
             "Loom.UI.SUIsei/Loom.UI.SUIsei.csproj",
             "Loom.UI.ImGui/Loom.UI.ImGui.csproj",
             "build/Loom.Sdk/Loom.Sdk.csproj"
@@ -66,8 +68,10 @@ jobs:
         run: |
           $flags = "-c", "Release", "--no-restore", "-p:UseDebugVisualization=false"
           dotnet build external/SUIsei/SUIsei/SUIsei.csproj @flags
-          dotnet build Loom.Vulkan/Loom.Vulkan.csproj      @flags
-          dotnet build Loom.DirectX12/Loom.DirectX12.csproj @flags
+          dotnet build Loom.Concepts/Loom.Concepts.csproj                 @flags
+          dotnet build Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj     @flags
+          dotnet build Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj @flags
+          dotnet build Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj     @flags
           dotnet build Loom.UI.SUIsei/Loom.UI.SUIsei.csproj @flags
           dotnet build Loom.UI.ImGui/Loom.UI.ImGui.csproj   @flags
           dotnet build build/Loom.Sdk/Loom.Sdk.csproj       @flags
@@ -90,9 +94,11 @@ jobs:
           dotnet pack Loom.Core/Loom.Core.csproj                               $noBuild
           dotnet pack Loom.Graph/Loom.Graph.csproj                             $noBuild
           dotnet pack Loom.Assets/Loom.Assets.csproj                           $noBuild
+          dotnet pack Loom.Concepts/Loom.Concepts.csproj                       $noBuild
           # Backends (embed shaders as EmbeddedResource — no runtime Content items needed)
-          dotnet pack Loom.Vulkan/Loom.Vulkan.csproj                           $noBuild
-          dotnet pack Loom.DirectX12/Loom.DirectX12.csproj                     $noBuild
+          dotnet pack Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj           $noBuild
+          dotnet pack Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj     $noBuild
+          dotnet pack Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj           $noBuild
           # UI integrations: Content-mode shaders are added by LoomRegisterShaders (a Build target),
           # so --no-build would skip that target and produce a package with no shaders.
           # The build step above already compiled everything; this incremental build is instant.

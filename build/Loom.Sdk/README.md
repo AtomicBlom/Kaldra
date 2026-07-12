@@ -13,11 +13,12 @@
 <!-- Directory.Build.props or game.csproj -->
 <UseVulkan>true</UseVulkan>
 <UseDirectX12>false</UseDirectX12>
+<UseWebGPU>false</UseWebGPU>
 <UseSUIsei>false</UseSUIsei>
 <UseImGui>false</UseImGui>
 ```
 
-Setting a flag to `true` causes `Loom.Sdk.props` to add the corresponding `PackageReference` automatically — you never need to reference `Loom.Backend.Vulkan` or `Loom.UI.SUIsei` directly.
+Setting a flag to `true` causes `Loom.Sdk.props` to add the corresponding `PackageReference` automatically — you never need to reference `Loom.Backend.Vulkan` or `Loom.UI.SUIsei` directly. `UseWebGPU` targets browser/WASM hosts (e.g. Blazor WebAssembly); it's independent of the desktop backend flags, though a given app typically enables only one.
 
 ## Shader compilation
 
@@ -34,5 +35,6 @@ Place Slang source files under your project and set `LoomShaderOutputMode=Conten
 |---|---|
 | `UseVulkan=true` | `Loom.Backend.Vulkan` |
 | `UseDirectX12=true` | `Loom.Backend.DirectX12` |
+| `UseWebGPU=true` | `Loom.Backend.WebGPU` |
 | `UseSUIsei=true` | `Loom.UI.SUIsei` (brings `SUIsei` transitively) |
 | `UseImGui=true` | `Loom.UI.ImGui` + `ImGui.NET` |

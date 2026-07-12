@@ -27,7 +27,7 @@
 
     <!-- Engine shaders are backend-neutral Slang source shared by every backend (..\Loom.Shaders\Shaders); each
          backend compiles + embeds its own artifact from them (Vulkan → .spv here, DX12 → signed .dxil), so the
-         shaders aren't owned by any one backend. Embedded under the manifest prefix "Loom.Vulkan.Shaders." (= $(AssemblyName).Shaders.). -->
+         shaders aren't owned by any one backend. Embedded under the manifest prefix "Loom.Backend.Vulkan.Shaders." (= $(AssemblyName).Shaders.). -->
     <LoomShaderSourceDir>$(MSBuildProjectDirectory)\..\Loom.Shaders\Shaders</LoomShaderSourceDir>
     <LoomShaderOutputMode>Embed</LoomShaderOutputMode>
     <!-- The Vulkan backend emits SPIR-V only; never DXIL (even in a -p:UseDX12=true build, where the flag would

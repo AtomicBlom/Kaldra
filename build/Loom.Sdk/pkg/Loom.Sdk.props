@@ -11,13 +11,16 @@
     project file above the <PackageReference Include="Loom.Sdk" />):
         <UseVulkan>true</UseVulkan>
         <UseDirectX12>false</UseDirectX12>
+        <UseWebGPU>false</UseWebGPU>
         <UseSUIsei>true</UseSUIsei>
   -->
 
-  <!-- Backend flag defaults. -->
+  <!-- Backend flag defaults. UseWebGPU is browser/WASM-only (Blazor WebAssembly consumers) — off by
+       default like the desktop backends' opt-out flags, since a given app targets one runtime. -->
   <PropertyGroup>
     <UseVulkan     Condition="'$(UseVulkan)'     == ''">true</UseVulkan>
     <UseDirectX12  Condition="'$(UseDirectX12)'  == ''">false</UseDirectX12>
+    <UseWebGPU     Condition="'$(UseWebGPU)'     == ''">false</UseWebGPU>
     <UseSUIsei     Condition="'$(UseSUIsei)'     == ''">false</UseSUIsei>
   </PropertyGroup>
 
@@ -36,6 +39,9 @@
   </ItemGroup>
   <ItemGroup Condition="'$(UseDirectX12)' == 'true'">
     <PackageReference Include="Loom.Backend.DirectX12" Version="0.1.0-preview.1" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseWebGPU)' == 'true'">
+    <PackageReference Include="Loom.Backend.WebGPU" Version="0.1.0-preview.1" />
   </ItemGroup>
 
   <!-- SUIsei UI integration (optional). Loom.UI.SUIsei depends on the standalone SUIsei runtime, so both

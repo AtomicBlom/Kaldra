@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- The second backend (Planning.md §2 portability invariant). Like Loom.Vulkan, the DirectX 12 / Silk.NET
-       stack is quarantined here: nothing graphics-API-specific reaches Loom.Core / Loom.Graph. Backend
+  <!-- The second backend (Planning.md §2 portability invariant). Like Loom.Backend.Vulkan, the DirectX 12 /
+       Silk.NET stack is quarantined here: nothing graphics-API-specific reaches Loom.Core / Loom.Graph. Backend
        *selection* (UseDirectX12) is the app SDK's job — this project only exists to be referenced when
        UseDirectX12=true. -->
 
@@ -13,7 +13,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!-- The marshaling seam is pointer-heavy COM interop, exactly as in Loom.Vulkan. -->
+    <!-- The marshaling seam is pointer-heavy COM interop, exactly as in Loom.Backend.Vulkan. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
@@ -27,8 +27,8 @@
 
   <PropertyGroup>
 
-    <!-- The SAME backend-neutral engine shaders Loom.Vulkan compiles (..\Loom.Shaders\Shaders); this backend
-         emits + embeds them as signed DXIL (manifest prefix "Loom.DirectX12.Shaders.", = $(AssemblyName).Shaders.).
+    <!-- The SAME backend-neutral engine shaders Loom.Backend.Vulkan compiles (..\Loom.Shaders\Shaders); this backend
+         emits + embeds them as signed DXIL (manifest prefix "Loom.Backend.DirectX12.Shaders.", = $(AssemblyName).Shaders.).
          UI shaders are NOT here — each optional UI package ships its own, resolved at runtime by the backend's
          loose-file fallback. -->
     <LoomShaderSourceDir>$(MSBuildProjectDirectory)\..\Loom.Shaders\Shaders</LoomShaderSourceDir>
