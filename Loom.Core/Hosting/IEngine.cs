@@ -35,6 +35,9 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// </summary>
 	Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
 
+	/// <summary>Async counterpart to <see cref="CreateMesh(ReadOnlySpan{Vertex}, ReadOnlySpan{uint})"/> — see <see cref="CreateTextureAsync"/>'s remarks (the same "any calling thread, one GPU-servicing thread" contract applies to every <c>*Async</c> creation method, not just textures).</summary>
+	Task<Mesh> CreateMeshAsync(Vertex[] vertices, uint[] indices);
+
 	/// <summary>
 	/// Upload geometry with an explicit <paramref name="layout"/>. The
 	/// vertex element type <typeparamref name="T"/> must be laid out to match <paramref name="layout"/>
@@ -53,6 +56,9 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// </summary>
 	Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices);
 
+	/// <summary>Async counterpart to <see cref="CreateSkinnedMesh"/> — see <see cref="CreateTextureAsync"/>'s remarks.</summary>
+	Task<Mesh> CreateSkinnedMeshAsync(SkinnedVertex[] vertices, uint[] indices);
+
 	/// <summary>
 	/// Upload a texture (and its mip chain) once and get a stable <see cref="Texture"/> handle to bundle into a
 	/// <see cref="Material"/>. Takes neutral <see cref="TextureData"/> — no graphics-API type crosses the
@@ -62,12 +68,38 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	Texture CreateTexture(TextureData data);
 
 	/// <summary>
+	/// Queue a texture upload and return a <see cref="Task{Texture}"/> that completes once <see cref="ServicePendingUploads"/>
+	/// drains it — safe to call from any thread (e.g. a background decode, or a demo's <c>PreloadAsync</c> racing
+	/// another demo's), unlike <see cref="CreateTexture"/>, which is not safe to call concurrently with any other
+	/// GPU-creating call. The actual GPU upload still only ever runs on whichever single thread calls
+	/// <see cref="ServicePendingUploads"/>; this only decouples requesting an upload from performing it. Use for
+	/// bytes fetched/decoded off the calling thread; keep using <see cref="CreateTexture"/> directly for
+	/// already-in-memory data (e.g. a procedurally generated texture) created from code that's already on the one
+	/// thread driving <see cref="ServicePendingUploads"/> (e.g. a demo's synchronous <c>Build</c>).
+	/// </summary>
+	Task<Texture> CreateTextureAsync(TextureData data);
+
+	/// <summary>
+	/// Run every GPU creation call queued by a <c>*Async</c> method (<see cref="CreateMeshAsync"/>,
+	/// <see cref="CreateSkinnedMeshAsync"/>, <see cref="CreateTextureAsync"/>, <see cref="CreateMaterialAsync"/>)
+	/// since the last call, completing each one's <see cref="Task"/>. Every backend calls this once per frame from
+	/// <see cref="Render"/>; call it explicitly (in a small pump loop) while awaiting an async load before any frame
+	/// loop is running yet — e.g. at startup, or the first demo a host builds. Draining every backend's GPU-creating
+	/// calls from this single method, on whichever one thread calls it, is what makes it safe for several demos'
+	/// <c>PreloadAsync</c> to genuinely run concurrently (their I/O overlaps; their GPU calls never do).
+	/// </summary>
+	void ServicePendingUploads();
+
+	/// <summary>
 	/// Bundle textures into a stable <see cref="Material"/> handle, in the order a material technique's shader
 	/// binds them (texture 0 → sampler slot 0, …). Passed to <see cref="IRenderContext.Draw"/>;
 	/// the technique still picks the pipeline, so a depth-only/shadow pass (no reflected samplers) ignores the
 	/// material. Call up front like <see cref="CreateMesh"/>; the handle lives for the engine's lifetime.
 	/// </summary>
 	Material CreateMaterial(params ReadOnlySpan<Texture> textures);
+
+	/// <summary>Async counterpart to <see cref="CreateMaterial"/> — see <see cref="CreateTextureAsync"/>'s remarks.</summary>
+	Task<Material> CreateMaterialAsync(params Texture[] textures);
 
 	/// <summary>
 	/// Make <paramref name="graph"/> the active graph: derive its schedule, barriers, and transient-memory plan

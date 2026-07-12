@@ -49,6 +49,24 @@ const errors = [];
 
 export function isWebGpuAvailable() { return typeof navigator !== "undefined" && !!navigator.gpu; }
 
+// A demo asset (model/texture bytes), fetched over HTTP from a static file under wwwroot — the browser
+// counterpart to a desktop File.ReadAllBytesAsync. `url` is relative to the served root (e.g.
+// "assets/kenney/castle/tree-large.glb"), matching the desktop host's on-disk relative path. Returns base64: the
+// JSImport source generator doesn't support byte[]/MemoryView as an async (Promise-returning) return type, only
+// as an argument — base64 text rides the same Task<string> channel initDevice already proves works.
+export async function fetchAsset(url) {
+	const res = await fetch(url);
+	if (!res.ok)
+		throw new Error(`Fetching asset '${url}' failed: ${res.status} ${res.statusText}`);
+	const bytes = new Uint8Array(await res.arrayBuffer());
+	// Chunked (not one String.fromCharCode.apply over the whole array) so a large asset doesn't blow the call stack.
+	let binary = "";
+	const chunkSize = 0x8000;
+	for (let i = 0; i < bytes.length; i += chunkSize)
+		binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+	return btoa(binary);
+}
+
 export async function initDevice(canvasSelector, protocolVersion) {
 	if (protocolVersion !== PROTOCOL_VERSION)
 		throw new Error(`Loom WebGPU protocol mismatch: host ${protocolVersion}, shim ${PROTOCOL_VERSION} (stale cached loom-webgpu.js?).`);

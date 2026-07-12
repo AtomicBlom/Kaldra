@@ -328,6 +328,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	public override void Render(FrameInputs inputs)
 	{
 		ArgumentNullException.ThrowIfNull(inputs);
+		ServicePendingUploads();
 		if (Graph is null || _transients is null)
 			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
 

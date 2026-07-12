@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -297,4 +298,52 @@ public abstract class EngineBase : IEngine
 	public abstract Texture CreateTexture(TextureData data);
 	public abstract Material CreateMaterial(params ReadOnlySpan<Texture> textures);
 	public abstract void Dispose();
+
+	// ── Async GPU resource creation: a caller (any thread — a background decode, or a concurrently-preloading demo)
+	// asks for a mesh/texture/material and gets a Task back; the actual GPU call only ever runs when
+	// ServicePendingUploads drains the queue, which every backend's Render calls once per frame, and which host
+	// setup code calls explicitly while no frame loop is running yet. GPU calls are NOT safe to issue from multiple
+	// threads concurrently (a backend's command pool/queue isn't externally synchronized) — and since several
+	// demos' PreloadAsync can genuinely run concurrently (their I/O overlaps by design), it's not just the upload
+	// bytes that need marshaling onto one thread, it's every *Async creation call. Draining this one queue from one
+	// place is what keeps that invariant intact without any backend needing its own queue/synchronization. ──
+	private readonly ConcurrentQueue<Action> _pendingGpuWork = new();
+
+	private Task<T> EnqueueGpuWork<T>(Func<T> work)
+	{
+		var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+		_pendingGpuWork.Enqueue(() =>
+		{
+			try { tcs.SetResult(work()); }
+			catch (Exception ex) { tcs.SetException(ex); }
+		});
+		return tcs.Task;
+	}
+
+	/// <summary>Async counterpart to <see cref="CreateMesh(ReadOnlySpan{Vertex}, ReadOnlySpan{uint})"/> — see the class-level remarks above.</summary>
+	public Task<Mesh> CreateMeshAsync(Vertex[] vertices, uint[] indices) => EnqueueGpuWork(() => CreateMesh(vertices, indices));
+
+	/// <summary>Async counterpart to <see cref="CreateSkinnedMesh"/> — see the class-level remarks above.</summary>
+	public Task<Mesh> CreateSkinnedMeshAsync(SkinnedVertex[] vertices, uint[] indices) => EnqueueGpuWork(() => CreateSkinnedMesh(vertices, indices));
+
+	/// <summary>
+	/// Queue a texture upload and return a <see cref="Task{Texture}"/> that completes once <see cref="ServicePendingUploads"/>
+	/// drains it — safe to call from any thread (e.g. a background decode). See the class-level remarks above.
+	/// </summary>
+	public Task<Texture> CreateTextureAsync(TextureData data) => EnqueueGpuWork(() => CreateTexture(data));
+
+	/// <summary>Async counterpart to <see cref="CreateMaterial"/> — see the class-level remarks above.</summary>
+	public Task<Material> CreateMaterialAsync(params Texture[] textures) => EnqueueGpuWork(() => CreateMaterial(textures));
+
+	/// <summary>
+	/// Run every GPU creation call queued by a <c>*Async</c> method since the last call, completing each one's
+	/// <see cref="Task"/>. Called once per frame by every backend's <see cref="Render"/> (so calls requested during
+	/// live rendering complete within a frame or two), and by host setup code in a small pump loop while awaiting a
+	/// demo's preload before any frame loop exists yet.
+	/// </summary>
+	public void ServicePendingUploads()
+	{
+		while (_pendingGpuWork.TryDequeue(out var work))
+			work();
+	}
 }

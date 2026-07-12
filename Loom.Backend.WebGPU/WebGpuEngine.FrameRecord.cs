@@ -16,6 +16,7 @@ internal sealed partial class WebGpuEngine
 	public override void Render(FrameInputs inputs)
 	{
 		DrainShaderReloads();
+		ServicePendingUploads();
 		if (_transients is null || Graph is null)
 			return;
 

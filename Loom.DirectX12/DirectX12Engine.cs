@@ -166,6 +166,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 	public override void Render(FrameInputs inputs)
 	{
+		ServicePendingUploads();
 		if (Graph is not null)
 			RenderGraphFrame(inputs);
 		else
