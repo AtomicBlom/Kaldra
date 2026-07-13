@@ -1,0 +1,100 @@
+<Project>
+
+  <!--
+    Spike: proves `dotnet build -r browser-wasm` vs. no RID (desktop) produces two working deployables from ONE
+    project, differentiated only by RID. Relies on build/Loom.Sdk/Sdk/Sdk.props|targets' RID-conditional base-SDK
+    delegation. Deliberately a bare <Project> (no outer Sdk= attribute) — Loom.Sdk's own Sdk.props/Sdk.targets
+    (imported below) are what choose and import the real base SDK (Microsoft.NET.Sdk or
+    Microsoft.NET.Sdk.WebAssembly); an outer Sdk="Microsoft.NET.Sdk" here would resolve the desktop SDK before
+    this file's own conditional import ever got a chance to run, pre-empting the RID switch entirely.
+  -->
+
+  <!--
+    Backend selection by RID: exactly one desktop backend (Vulkan) for the spike, or WebGPU for browser-wasm.
+    DirectX12 is deliberately skipped — proving the RID mechanism needs only one desktop backend. OS-aware
+    defaulting (Vulkan-only on Linux, Vulkan + DirectX12 on Windows, matching Directory.Build.props's existing
+    desktop default) is explicit follow-up work, not this spike's job.
+
+    MUST come before the Sdk.props import below: Loom.Shaders.props (imported at Sdk.props's tail) derives
+    LoomEmitDxil/LoomEmitWgsl from UseDirectX12/UseWebGPU eagerly, at the moment that line evaluates — setting
+    these flags afterward in this project's own body is too late and silently leaves the wrong shader targets
+    (un)emitted (caught here: DXIL still came out with UseDirectX12=false when this PropertyGroup was below the
+    import, which would have meant a browser build silently emitting no WGSL at all).
+  -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+    <UseVulkan>false</UseVulkan>
+    <UseDirectX12>false</UseDirectX12>
+    <UseWebGPU>true</UseWebGPU>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != 'browser-wasm'">
+    <UseVulkan>true</UseVulkan>
+    <UseDirectX12>false</UseDirectX12>
+    <UseWebGPU>false</UseWebGPU>
+  </PropertyGroup>
+
+  <Import Project="..\..\build\Loom.Sdk\Sdk\Sdk.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!--
+    Shader compile: loose Content files next to the desktop exe (Loom.Sandbox's convention), embedded resources
+    in the browser bundle (Loom.Web's convention) — LoomEmitWgsl/LoomEmitDxil already default from
+    UseWebGPU/UseDirectX12 above (Loom.Shaders.props), so only the source dir and output mode need setting here.
+  -->
+  <PropertyGroup>
+    <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+    <LoomShaderOutputMode>Embed</LoomShaderOutputMode>
+    <!-- index.html hand-authors a fingerprinted <script> src itself (main#[.{fingerprint}].js); tell the static
+         web assets pipeline that's deliberate rather than something for it to template. -->
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm' and '$(Configuration)' == 'Release'">
+    <RunAOTCompilation>true</RunAOTCompilation>
+    <WasmStripILAfterAOT>true</WasmStripILAfterAOT>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != 'browser-wasm'">
+    <LoomShaderOutputMode>Content</LoomShaderOutputMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
+  <!-- Desktop-only: the window. The browser flavor has no equivalent (the canvas + JS shim own that). -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' != 'browser-wasm'">
+    <PackageReference Include="Silk.NET.Windowing" />
+  </ItemGroup>
+
+  <!-- Declares the WebGPU backend's [SupportedOSPlatform("browser")]-guarded API as intentionally used here, so
+       CA1416 doesn't flag every call to it as reachable from an unguarded (desktop) context — matching
+       Loom.Backend.WebGPU.csproj's own SupportedPlatform declaration. -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <!--
+    Platform-specific entry point, picked by RID. Both files are already picked up by the SDK's default compile
+    glob (**/*.cs) regardless of RID, so this removes whichever one doesn't match — an explicit, filename-keyed
+    exclusion. Flagged in the plan as accepted for this spike only, not signed off as the long-term answer for a
+    real game project (magic names: nothing enforces them, a typo silently leaves a platform with no entry point
+    rather than failing the build).
+  -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+    <Compile Remove="Program.Desktop.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(RuntimeIdentifier)' != 'browser-wasm'">
+    <Compile Remove="Program.Web.cs" />
+  </ItemGroup>
+
+  <Import Project="..\..\build\Loom.Sdk\Sdk\Sdk.targets" />
+
+</Project>

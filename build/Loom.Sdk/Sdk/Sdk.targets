@@ -17,15 +17,27 @@
     <_LoomRepoRoot>$(MSBuildThisFileDirectory)..\..\..\</_LoomRepoRoot>
   </PropertyGroup>
 
-  <ItemGroup Condition="'$(UseVulkan)' == 'true'">
+  <ItemGroup Condition="'$(UseVulkan)' == 'true' and '$(_LoomTargetsBrowser)' != 'true'">
     <ProjectReference Include="$(_LoomRepoRoot)Loom.Backend.Vulkan\Loom.Backend.Vulkan.csproj" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(UseDirectX12)' == 'true'">
+  <ItemGroup Condition="'$(UseDirectX12)' == 'true' and '$(_LoomTargetsBrowser)' != 'true'">
     <ProjectReference Include="$(_LoomRepoRoot)Loom.Backend.DirectX12\Loom.Backend.DirectX12.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(UseWebGPU)' == 'true'">
     <ProjectReference Include="$(_LoomRepoRoot)Loom.Backend.WebGPU\Loom.Backend.WebGPU.csproj" />
   </ItemGroup>
+
+  <!--
+    Close out the RID-conditional base-SDK delegation started in Sdk.props (same guard properties, still in
+    scope — MSBuild properties persist across one project's whole evaluation). For the traditional
+    fixed-outer-Sdk usage (e.g. Loom.Sandbox) both imports are skipped: the outer Sdk="Microsoft.NET.Sdk"
+    already resolved Microsoft.NET.Sdk's real targets, which MSBuild auto-imports last regardless, so nothing
+    here would run anyway. For the bare-<Project> usage this is the only place the real base SDK's targets get
+    imported at all, since there's no outer Sdk to do it implicitly.
+  -->
+  <Import Sdk="Microsoft.NET.Sdk.WebAssembly" Project="Sdk.targets" Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(_LoomSdkImportsWebAssembly)' == 'true'" />
+  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.targets" Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(_LoomSdkImportsNetSdk)' == 'true'" />
+
 </Project>

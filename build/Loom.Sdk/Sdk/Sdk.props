@@ -3,19 +3,56 @@
   <!--
     The app-facing Loom MSBuild SDK (Milestone 8) — props half.
 
-    An app consumes it SDK-style, writing the two imports itself:
+    An app that already knows its target (desktop only, e.g. Loom.Sandbox) consumes it the traditional way,
+    with its own fixed outer Sdk and two manual imports:
         <Project Sdk="Microsoft.NET.Sdk">
           <Import Project="..\build\Loom.Sdk\Sdk\Sdk.props" />
           ... body ...
           <Import Project="..\build\Loom.Sdk\Sdk\Sdk.targets" />
         </Project>
-    This is equivalent to declaring Sdk="Loom.Sdk" once the SDK is packaged (the nested Sdk/ folder mirrors
-    a real MSBuild SDK package, so the promotion is import-line-only).
+    Here the outer Sdk has already resolved Microsoft.NET.Sdk before this file even runs, so the
+    RID-conditional delegation below (UsingMicrosoftNETSdk is already true) is a guaranteed no-op — this usage
+    is unaffected by anything below.
 
-    It brings in the shared shader-compile machinery (here) and the UseVulkan/UseDirectX12 backend-reference
-    selection (in Sdk.targets). The engine feature flags + their compile constants are NOT here — they live
-    in the repo-root Directory.Build.props because they must also reach the engine assembly's own compile.
+    An app that wants ONE project to build as either a desktop exe or a browser-wasm app, picked purely by RID
+    (-r browser-wasm vs. no RID / a desktop RID), consumes it with NO outer Sdk at all — a bare <Project> — so
+    this file's own conditional import is what resolves the real base SDK, not an already-fixed outer choice:
+        <Project>
+          <Import Project="..\build\Loom.Sdk\Sdk\Sdk.props" />
+          ... body ...
+          <Import Project="..\build\Loom.Sdk\Sdk\Sdk.targets" />
+        </Project>
+    Both forms are equivalent to declaring Sdk="Loom.Sdk" once the SDK is packaged (the nested Sdk/ folder
+    mirrors a real MSBuild SDK package, so the promotion is import-line-only) — the bare-<Project> form is
+    simply what makes the RID switch meaningful, since there's no other outer Sdk pre-empting it.
+
+    It brings in the shared shader-compile machinery (here) and the UseVulkan/UseDirectX12/UseWebGPU
+    backend-reference selection (in Sdk.targets). The engine feature flags + their compile constants are NOT
+    here — they live in the repo-root Directory.Build.props because they must also reach the engine assembly's
+    own compile.
   -->
+
+  <!--
+    RID-conditional base-SDK delegation. '$(RuntimeIdentifier)' must already be visible as a global/command-line
+    property (-r browser-wasm / -p:RuntimeIdentifier=browser-wasm) by the time this file runs — a default set
+    in Directory.Build.props can't reach here in time, because Directory.Build.props's own auto-import is
+    provided BY whichever base SDK gets chosen below, so it hasn't happened yet at this decision point.
+
+    Guarded with the exact idiom Microsoft.NET.Sdk.WebAssembly's own Sdk.props uses (UsingMicrosoftNETSdk /
+    UsingMicrosoftNETSdkWebAssembly, verified against the installed SDK's
+    Sdks\Microsoft.NET.Sdk.WebAssembly\Sdk\Sdk.props) so a project that already resolved its own outer Sdk
+    before additively importing this file never gets a redundant, order-sensitive second import — that's what
+    makes the traditional fixed-outer-Sdk usage above a true no-op.
+  -->
+  <PropertyGroup>
+    <_LoomTargetsBrowser Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">true</_LoomTargetsBrowser>
+    <_LoomTargetsBrowser Condition="'$(_LoomTargetsBrowser)' == ''">false</_LoomTargetsBrowser>
+    <_LoomSdkImportsWebAssembly Condition="'$(UsingMicrosoftNETSdkWebAssembly)' != 'true'">true</_LoomSdkImportsWebAssembly>
+    <_LoomSdkImportsNetSdk Condition="'$(UsingMicrosoftNETSdk)' != 'true' and '$(UsingMicrosoftNETSdkWebAssembly)' != 'true'">true</_LoomSdkImportsNetSdk>
+  </PropertyGroup>
+
+  <Import Sdk="Microsoft.NET.Sdk.WebAssembly" Project="Sdk.props" Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(_LoomSdkImportsWebAssembly)' == 'true'" />
+  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.props" Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(_LoomSdkImportsNetSdk)' == 'true'" />
 
   <Import Project="$(MSBuildThisFileDirectory)..\Loom.Shaders.props" />
 
