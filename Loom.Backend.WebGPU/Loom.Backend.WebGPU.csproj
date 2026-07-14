@@ -1,10 +1,16 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <!-- The browser WebGPU backend. Like the other backends it owns the engine's infrastructure shaders as
        embedded resources, but compiled to WGSL (the only shader language browsers accept) instead of SPIR-V.
-       All GPU work is issued through a JavaScript shim (wwwroot/loom-webgpu.js in the host app) reached via
-       [JSImport]: object creation as individual calls at bake time, per-frame work as ONE binary command
-       buffer replayed on the JS side — so the WASM↔JS boundary is crossed once per frame, not per draw. -->
+       All GPU work is issued through a JavaScript shim (wwwroot/loom-webgpu.js) reached via [JSImport]: object
+       creation as individual calls at bake time, per-frame work as ONE binary command buffer replayed on the
+       JS side — so the WASM↔JS boundary is crossed once per frame, not per draw.
+
+       Razor SDK (not plain Sdk) so the JS shim ships as a static web asset: the [JSImport("…","loom-webgpu")]
+       surface in WebGpuInterop is dead without it, so it must travel with this backend wherever it's
+       referenced (a host framework OR an embedder using the backend with their own bootstrap). It surfaces in
+       a consuming WASM app at _content/Loom.Backend.WebGPU/loom-webgpu.js — the RCL default base path. No
+       Razor components are compiled here; this SDK is purely for the static-web-asset pipeline. -->
   <Import Project="..\build\Loom.Sdk\Loom.Shaders.props" />
 
   <PropertyGroup>

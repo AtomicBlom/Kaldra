@@ -3,7 +3,9 @@
 // [JSImport]s reference; the device bring-up and render loop are driven from C# (Program.Web.cs).
 
 import { dotnet } from './_framework/dotnet.js'
-import * as loomWebgpu from './loom-webgpu.js'
+// loom-webgpu.js ships with the WebGPU backend package as a static web asset — consumed from its RCL path,
+// not carried by this app.
+import * as loomWebgpu from './_content/Loom.Backend.WebGPU/loom-webgpu.js'
 
 const { setModuleImports, runMain } = await dotnet.create();
 
