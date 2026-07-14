@@ -33,8 +33,11 @@
 
     <!-- Directory of shared cross-project shader includes (loom_platform.module.slang: the per-target
          LOOM_BINDING / LOOM_PUSH_CONSTANT macros). Passed to every slangc invocation via -I so app and
-         UI shader dirs resolve the same header the engine shaders use. -->
-    <LoomShaderIncludeDir Condition="'$(LoomShaderIncludeDir)' == ''">$(MSBuildThisFileDirectory)..\..\Loom.Shaders\Shaders</LoomShaderIncludeDir>
+         UI shader dirs resolve the same header the engine shaders use. In the repo this is Loom.Shaders/Shaders;
+         shipped inside the Loom.Sdk package (where that repo path doesn't exist) it's the header packed beside
+         this file under Shaders/. -->
+    <LoomShaderIncludeDir Condition="'$(LoomShaderIncludeDir)' == '' and Exists('$(MSBuildThisFileDirectory)..\..\Loom.Shaders\Shaders')">$(MSBuildThisFileDirectory)..\..\Loom.Shaders\Shaders</LoomShaderIncludeDir>
+    <LoomShaderIncludeDir Condition="'$(LoomShaderIncludeDir)' == ''">$(MSBuildThisFileDirectory)Shaders</LoomShaderIncludeDir>
 
     <!-- slangc emits DXIL by handing off to DXC, which it loads only from its own module dir or a path we give
          it (NOT the PATH env var). The Microsoft.Direct3D.DXC NuGet package ships architecture-matched

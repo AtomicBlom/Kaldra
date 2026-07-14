@@ -53,10 +53,6 @@
     <LoomShaderOutputMode>Content</LoomShaderOutputMode>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
-  </ItemGroup>
-
   <Import Project="..\..\build\Loom.Sdk\Sdk\Sdk.targets" />
 
 </Project>

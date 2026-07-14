@@ -40,13 +40,26 @@
     <!-- Neutral asset layer: the M13 shader hot-reload watcher (no graphics types). -->
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <!-- VMASharp: pure-managed VMA port on Silk.NET 2.23/net10, MIT, as a submodule. Deliberately NOT in
-         Loom.slnx so `dotnet format` never reformats vendored code. PrivateAssets=all bundles VMASharp.dll
-         into the Loom.Backend.Vulkan nupkg rather than listing it as a separate NuGet dependency — consumers
-         never reference VMASharp directly. -->
+         Loom.slnx so `dotnet format` never reformats vendored code. PrivateAssets=all keeps it off the package's
+         dependency list (consumers never reference VMASharp directly); the _BundleVMASharp target below then
+         packs its DLL into lib/ so it ships inside the Loom.Backend.Vulkan package and reaches a consumer's
+         output at runtime — PrivateAssets alone does NOT bundle the DLL, only drops the dependency. -->
     <ProjectReference Include="..\external\VMASharp\VMASharp\VMASharp.csproj">
       <PrivateAssets>all</PrivateAssets>
     </ProjectReference>
   </ItemGroup>
+
+  <!-- Bundle VMASharp.dll into this package's lib/<tfm>/ (it isn't a NuGet dependency, so nothing else carries
+       it). A DLL in lib/ is a compile+runtime asset a consumer copies to its own output, which is what the
+       backend needs at runtime. Hooked via TargetsForTfmSpecificBuildOutput so pack picks it up per framework. -->
+  <PropertyGroup>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);_BundleVMASharp</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+  <Target Name="_BundleVMASharp" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)%(Extension)' == 'VMASharp.dll'" />
+    </ItemGroup>
+  </Target>
 
   <!-- The first backend. The Vulkan/Silk.NET stack is quarantined here. -->
   <ItemGroup>

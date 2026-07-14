@@ -13,20 +13,40 @@
 
   <Import Project="$(MSBuildThisFileDirectory)..\Loom.Shaders.targets" />
 
+  <!--
+    Source vs. packaged. In the repo, this file lives at build/Loom.Sdk/Sdk/ and the sibling Loom projects exist
+    beside it — so it references them as ProjectReferences. Shipped inside the Loom.Sdk MSBuild-SDK package (and
+    resolved via Sdk="Loom.Sdk"), those projects don't exist, so it references the sibling Loom NuGet packages by
+    version instead. Detected by whether Loom.Core's csproj is reachable from here.
+  -->
   <PropertyGroup>
     <_LoomRepoRoot>$(MSBuildThisFileDirectory)..\..\..\</_LoomRepoRoot>
+    <_LoomFromSource Condition="Exists('$(_LoomRepoRoot)Loom.Core\Loom.Core.csproj')">true</_LoomFromSource>
+    <!-- Version for sibling Loom package references in packaged mode (matches Version.props / the pack version). -->
+    <LoomPackageVersion Condition="'$(LoomPackageVersion)' == ''">0.1.0-preview.1</LoomPackageVersion>
+    <!-- slangc version for packaged mode (matches Directory.Packages.props). -->
+    <LoomSlangVersion Condition="'$(LoomSlangVersion)' == ''">0.5.1</LoomSlangVersion>
   </PropertyGroup>
 
+  <!-- slangc, to compile this app's own shaders. Source mode rides the repo's central package management
+       (version-less); packaged mode pins the version so an external consumer needs no Slang reference of its own. -->
+  <ItemGroup>
+    <PackageReference Condition="'$(_LoomFromSource)' == 'true'" Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Slang.Sdk" Version="$(LoomSlangVersion)" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
+  <!-- Backends by RID/flags: ProjectReference in the repo, versioned PackageReference when packaged. -->
   <ItemGroup Condition="'$(UseVulkan)' == 'true' and '$(_LoomTargetsBrowser)' != 'true'">
-    <ProjectReference Include="$(_LoomRepoRoot)Loom.Backend.Vulkan\Loom.Backend.Vulkan.csproj" />
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Backend.Vulkan\Loom.Backend.Vulkan.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Backend.Vulkan" Version="$(LoomPackageVersion)" />
   </ItemGroup>
-
   <ItemGroup Condition="'$(UseDirectX12)' == 'true' and '$(_LoomTargetsBrowser)' != 'true'">
-    <ProjectReference Include="$(_LoomRepoRoot)Loom.Backend.DirectX12\Loom.Backend.DirectX12.csproj" />
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Backend.DirectX12\Loom.Backend.DirectX12.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Backend.DirectX12" Version="$(LoomPackageVersion)" />
   </ItemGroup>
-
   <ItemGroup Condition="'$(UseWebGPU)' == 'true'">
-    <ProjectReference Include="$(_LoomRepoRoot)Loom.Backend.WebGPU\Loom.Backend.WebGPU.csproj" />
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Backend.WebGPU\Loom.Backend.WebGPU.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Backend.WebGPU" Version="$(LoomPackageVersion)" />
   </ItemGroup>
 
   <!--
@@ -36,10 +56,12 @@
     LoomApplication + one LoomApplication.Run(...) line, no platform bootstrap.
   -->
   <ItemGroup Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(UseLoomHost)' != 'false'">
-    <ProjectReference Include="$(_LoomRepoRoot)Loom.Hosting.Desktop\Loom.Hosting.Desktop.csproj" />
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Hosting.Desktop\Loom.Hosting.Desktop.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Hosting.Desktop" Version="$(LoomPackageVersion)" />
   </ItemGroup>
   <ItemGroup Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseLoomHost)' != 'false'">
-    <ProjectReference Include="$(_LoomRepoRoot)Loom.Hosting.Web\Loom.Hosting.Web.csproj" />
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Hosting.Web\Loom.Hosting.Web.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Hosting.Web" Version="$(LoomPackageVersion)" />
   </ItemGroup>
 
   <!--
@@ -49,7 +71,7 @@
     Loom.Hosting.Web package's build/ folder.
   -->
   <Import Project="$(_LoomRepoRoot)Loom.Hosting.Web\build\Loom.Hosting.Web.targets"
-          Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseLoomHost)' != 'false'" />
+          Condition="'$(_LoomFromSource)' == 'true' and '$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseLoomHost)' != 'false'" />
 
   <!--
     Host registration bootstrap. The app names no host type (that's the whole point — it writes only a

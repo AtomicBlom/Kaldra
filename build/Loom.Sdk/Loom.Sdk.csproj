@@ -10,21 +10,25 @@
 
   <PropertyGroup Label="NuGet">
     <PackageId>Loom.Sdk</PackageId>
-    <Description>MSBuild SDK for Loom game projects. Reference this package to pull in the selected backends (UseVulkan, UseDirectX12, UseSUIsei flags) and compile Slang shaders in Content mode (set LoomShaderSourceDir + LoomShaderOutputMode=Content).</Description>
-    <PackageTags>sdk;msbuild;rendergraph;gamedev;dotnet;slang;shaders</PackageTags>
+    <Description>MSBuild project SDK for Loom apps. Use it as Sdk="Loom.Sdk" and one project builds a native desktop exe (dotnet build) or a WebGPU browser app (dotnet publish -r browser-wasm) from the same source — the RID selects the base SDK, backend, and host. Set Use* flags to pick backends; compile Slang shaders by setting LoomShaderSourceDir + LoomShaderOutputMode.</Description>
+    <PackageTags>sdk;msbuild;rendergraph;gamedev;dotnet;slang;shaders;webgpu;wasm</PackageTags>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <!-- NU5128: no lib/net10.0 folder by design — this is a build-tool / MSBuild SDK package. -->
     <NoWarn>$(NoWarn);NU5128</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Consumer entry points: NuGet auto-injects build/<PackageId>.{props,targets} into every
-         project that references this package — props early (before the project body), targets late. -->
-    <None Include="pkg\Loom.Sdk.props"    Pack="true" PackagePath="build\Loom.Sdk.props" />
-    <None Include="pkg\Loom.Sdk.targets"  Pack="true" PackagePath="build\Loom.Sdk.targets" />
-    <!-- Shader-compile machinery shipped under build/Sdk/ and imported by the props/targets above. -->
-    <None Include="Loom.Shaders.props"    Pack="true" PackagePath="build\Sdk\Loom.Shaders.props" />
-    <None Include="Loom.Shaders.targets"  Pack="true" PackagePath="build\Sdk\Loom.Shaders.targets" />
+    <!-- MSBuild project SDK entry: NuGet SDK resolution (Sdk="Loom.Sdk") imports Sdk/Sdk.props at the top of the
+         consuming project and Sdk/Sdk.targets at the bottom. Sdk.props does the RID-conditional base-SDK
+         delegation (Microsoft.NET.Sdk vs Microsoft.NET.Sdk.WebAssembly); Sdk.targets adds the backend + host
+         packages and the shader-compile targets. -->
+    <None Include="Sdk\Sdk.props"    Pack="true" PackagePath="Sdk\Sdk.props" />
+    <None Include="Sdk\Sdk.targets"  Pack="true" PackagePath="Sdk\Sdk.targets" />
+    <!-- Shader-compile machinery the Sdk files import as ..\Loom.Shaders.* (package root), plus the shared
+         include header (LoomShaderIncludeDir falls back to Shaders/ when the repo's Loom.Shaders path is absent). -->
+    <None Include="Loom.Shaders.props"    Pack="true" PackagePath="Loom.Shaders.props" />
+    <None Include="Loom.Shaders.targets"  Pack="true" PackagePath="Loom.Shaders.targets" />
+    <None Include="..\..\Loom.Shaders\Shaders\loom_platform.module.slang" Pack="true" PackagePath="Shaders\loom_platform.module.slang" />
   </ItemGroup>
 
 </Project>
