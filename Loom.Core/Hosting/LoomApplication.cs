@@ -1,4 +1,4 @@
-using Loom.Core.Graph;
+﻿using Loom.Core.Graph;
 
 namespace Loom.Core.Hosting;
 
@@ -16,7 +16,7 @@ namespace Loom.Core.Hosting;
 ///         Engine.DefineTechnique("lit", new TechniqueDescriptor("lit", HasVertexInput: true));
 ///         SetGraph(BuildGraph());
 ///     }
-///     protected override void Update(AppTime time) { /* publish view-projection etc. */ }
+///     protected override void Update(FrameTime time) { /* publish view-projection etc. */ }
 /// }
 /// // Program.cs (one line, shared by every platform):
 /// LoomApplication.Run(new MyApp(), args);
@@ -43,7 +43,7 @@ public abstract class LoomApplication : IHostedApplication
 	protected virtual void LoadContent() { }
 
 	/// <summary>Per-frame CPU work: publish view-projection / per-object data into the graph's app-writable buffers via <c>Engine.Write</c>. Runs before <see cref="Draw"/> and the frame's render.</summary>
-	protected virtual void Update(AppTime time) { }
+	protected virtual void Update(FrameTime time) { }
 
 	/// <summary>
 	/// Supplementary per-frame hook that runs immediately <em>before</em> the framework's always-happens
@@ -53,7 +53,7 @@ public abstract class LoomApplication : IHostedApplication
 	/// with the frame's final state resolved: projecting a pointer hit, compositing an in-world UI panel, writing
 	/// debug overlay lines. If you're looking for "the render callback", build a render graph instead.
 	/// </summary>
-	protected virtual void Draw(AppTime time) { }
+	protected virtual void Draw(FrameTime time) { }
 
 	/// <summary>Make <paramref name="graph"/> the active graph (see <see cref="IEngine.SetGraph"/>). Call from <see cref="LoadContent"/>, or later to swap graphs at runtime.</summary>
 	protected void SetGraph(RenderGraph graph) => Engine.SetGraph(graph);
@@ -71,7 +71,7 @@ public abstract class LoomApplication : IHostedApplication
 		LoadContent();
 	}
 
-	void IHostedApplication.Tick(AppTime time)
+	void IHostedApplication.Tick(FrameTime time)
 	{
 		Update(time);
 		Draw(time);

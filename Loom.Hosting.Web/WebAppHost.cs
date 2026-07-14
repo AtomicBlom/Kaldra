@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
@@ -138,7 +138,7 @@ public sealed partial class WebAppHost : IAppHost
 
 		try
 		{
-			app.Tick(new AppTime(delta, _time));
+			app.Tick(new FrameTime(delta, _time));
 			if (_captureName is not null && _frame == CaptureFrame)
 				engine.RequestCapture(_captureName); // late enough that any delta-driven state has settled
 		}

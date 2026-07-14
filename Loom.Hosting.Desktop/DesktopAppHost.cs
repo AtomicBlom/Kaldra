@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Runtime.CompilerServices;
 
 using Loom.Core.Hosting;
@@ -59,7 +59,7 @@ public sealed class DesktopAppHost : IAppHost
 		window.Render += delta =>
 		{
 			total += (float)delta;
-			driver.Tick(new AppTime(delta, total));
+			driver.Tick(new FrameTime(delta, total));
 			frame++;
 			if (capturePath is { Length: > 0 })
 			{

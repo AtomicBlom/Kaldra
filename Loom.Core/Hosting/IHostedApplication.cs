@@ -1,4 +1,4 @@
-namespace Loom.Core.Hosting;
+﻿namespace Loom.Core.Hosting;
 
 /// <summary>
 /// The driving surface an <see cref="IAppHost"/> uses to run a <see cref="LoomApplication"/>: read its startup
@@ -16,5 +16,5 @@ public interface IHostedApplication
 	void Load(IEngine engine);
 
 	/// <summary>Advance one frame: the app's <c>Update</c>, then <c>Draw</c>, then the framework's own unconditional <see cref="IEngine.Render"/>.</summary>
-	void Tick(AppTime time);
+	void Tick(FrameTime time);
 }
