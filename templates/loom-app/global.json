@@ -1,0 +1,5 @@
+{
+  "msbuild-sdks": {
+    "Loom.Sdk": "0.1.0-preview.1"
+  }
+}
