@@ -54,6 +54,13 @@
   <Import Sdk="Microsoft.NET.Sdk.WebAssembly" Project="Sdk.props" Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(_LoomSdkImportsWebAssembly)' == 'true'" />
   <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.props" Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(_LoomSdkImportsNetSdk)' == 'true'" />
 
+  <!-- The web host provides a hand-authored index.html (its <script>/canvas are fixed, not templated), so tell
+       the static-web-assets pipeline not to rewrite HTML asset placeholders. Harmless for an app that authored
+       its own index.html too. -->
+  <PropertyGroup Condition="'$(_LoomTargetsBrowser)' == 'true'">
+    <OverrideHtmlAssetPlaceholders Condition="'$(OverrideHtmlAssetPlaceholders)' == ''">true</OverrideHtmlAssetPlaceholders>
+  </PropertyGroup>
+
   <Import Project="$(MSBuildThisFileDirectory)..\Loom.Shaders.props" />
 
 </Project>

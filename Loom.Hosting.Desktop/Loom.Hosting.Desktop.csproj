@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Desktop application host: owns the Silk.NET window + engine bring-up + blocking frame loop for a
+       LoomApplication. Backend-neutral by design — it references NO backend assembly, only Silk.NET.Windowing
+       and Loom.Core. It selects whatever backend shipped next to the app (Engine.AvailableEngines) and branches
+       on the backend's Name to build the matching window (a Vulkan-surface window, or a context-less window for
+       DirectX12's HWND). The RID + the Loom SDK's Use* flags decide which backend is actually present. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>Loom.Hosting.Desktop</PackageId>
+    <Description>Desktop application host for the Loom render-graph engine — a Silk.NET window + engine bring-up + frame loop behind LoomApplication.Run. Backend-neutral; selects whichever Loom backend ships with the app.</Description>
+    <PackageTags>rendergraph;gamedev;desktop;hosting;silk.net;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Silk.NET.Windowing" />
+    <PackageReference Include="Silk.NET.Maths" />
+  </ItemGroup>
+
+</Project>

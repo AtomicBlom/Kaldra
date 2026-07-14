@@ -2,9 +2,9 @@
 <html lang="en">
 
 <head>
-  <!-- Relative base so the app works from an unpredictable sub-path (and from a local server). -->
+  <!-- Relative base so the app works from an unpredictable sub-path (e.g. an itch.io page, a local server). -->
   <base href="./" />
-  <title>Loom — Hello Triangle</title>
+  <title>Loom</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="preload" id="webassembly" />
@@ -18,7 +18,7 @@
     #status.status-error { background: rgba(20, 12, 14, 0.9); border: 1px solid rgba(255, 100, 100, 0.5);
                border-radius: 4px; padding: 8px 10px; color: #ffb0b0; }
   </style>
-  <script type='module' src="main#[.{fingerprint}].js"></script>
+  <script type="module" src="main.js"></script>
 </head>
 
 <body>

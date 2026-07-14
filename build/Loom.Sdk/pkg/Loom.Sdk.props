@@ -44,6 +44,17 @@
     <PackageReference Include="Loom.Backend.WebGPU" Version="0.1.0-preview.1" />
   </ItemGroup>
 
+  <!-- Application host: the desktop host for a backend-on-a-window build, the web host for a WebGPU/WASM build.
+       Referencing it is what makes LoomApplication.Run resolve a host. Loom.Hosting.Web's build/ targets
+       auto-import (NuGet convention) to inject the default web shell when the app authored none. Set
+       UseLoomHost=false to opt out (a custom host, or driving the engine directly). -->
+  <ItemGroup Condition="('$(UseVulkan)' == 'true' or '$(UseDirectX12)' == 'true') and '$(UseWebGPU)' != 'true' and '$(UseLoomHost)' != 'false'">
+    <PackageReference Include="Loom.Hosting.Desktop" Version="0.1.0-preview.1" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseWebGPU)' == 'true' and '$(UseLoomHost)' != 'false'">
+    <PackageReference Include="Loom.Hosting.Web" Version="0.1.0-preview.1" />
+  </ItemGroup>
+
   <!-- SUIsei UI integration (optional). Loom.UI.SUIsei depends on the standalone SUIsei runtime, so both
        arrive transitively from this one reference. -->
   <ItemGroup Condition="'$(UseSUIsei)' == 'true'">

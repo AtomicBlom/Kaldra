@@ -30,6 +30,53 @@
   </ItemGroup>
 
   <!--
+    Application host by RID. The desktop host runs on any non-browser target (it selects whichever desktop
+    backend shipped at runtime); the web host runs for browser-wasm. Referencing the host is what makes
+    LoomApplication.Run resolve a host (each self-registers via a module initializer), so an app writes only its
+    LoomApplication + one LoomApplication.Run(...) line, no platform bootstrap.
+  -->
+  <ItemGroup Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(UseLoomHost)' != 'false'">
+    <ProjectReference Include="$(_LoomRepoRoot)Loom.Hosting.Desktop\Loom.Hosting.Desktop.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseLoomHost)' != 'false'">
+    <ProjectReference Include="$(_LoomRepoRoot)Loom.Hosting.Web\Loom.Hosting.Web.csproj" />
+  </ItemGroup>
+
+  <!--
+    Default web shell injection (copy-if-absent): for a browser app that authored no wwwroot/index.html, the web
+    host provides a runnable full-screen index.html + main.js at the app's wwwroot root. Imported here for
+    source-mode (in-repo) consumers; a packaged consumer gets the same target auto-imported by NuGet from the
+    Loom.Hosting.Web package's build/ folder.
+  -->
+  <Import Project="$(_LoomRepoRoot)Loom.Hosting.Web\build\Loom.Hosting.Web.targets"
+          Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseLoomHost)' != 'false'" />
+
+  <!--
+    Host registration bootstrap. The app names no host type (that's the whole point — it writes only a
+    LoomApplication + LoomApplication.Run), so nothing forces the host assembly to load and register. Generate a
+    tiny [ModuleInitializer] into the app that registers the selected host: reliable on desktop (JIT), and a
+    harmless fast-path on the browser (where LoomApplication.Current is the real mechanism, since WASM-AOT module
+    initializers are unreliable). The host type is chosen by the same RID/flags that added the host reference.
+  -->
+  <PropertyGroup Condition="'$(UseLoomHost)' != 'false'">
+    <_LoomHostType Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true'">Loom.Hosting.Web.WebAppHost</_LoomHostType>
+    <_LoomHostType Condition="'$(_LoomTargetsBrowser)' != 'true'">Loom.Hosting.Desktop.DesktopAppHost</_LoomHostType>
+  </PropertyGroup>
+
+  <Target Name="_LoomGenerateHostBootstrap" BeforeTargets="CoreCompile" Condition="'$(_LoomHostType)' != ''">
+    <PropertyGroup>
+      <_LoomHostBootstrapFile>$(IntermediateOutputPath)LoomHostBootstrap.g.cs</_LoomHostBootstrapFile>
+      <!-- One line; MSBuild-escaped: %3B = ';', %3E = '>'. Registers the SDK-selected host at module init. -->
+      <_LoomHostBootstrapCode>namespace Loom.Generated { internal static class LoomHostBootstrap { [System.Runtime.CompilerServices.ModuleInitializer] internal static void Register() =%3E Loom.Core.Hosting.AppHost.Register(new $(_LoomHostType)())%3B } }</_LoomHostBootstrapCode>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_LoomHostBootstrapFile)" Lines="$(_LoomHostBootstrapCode)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(_LoomHostBootstrapFile)" />
+      <FileWrites Include="$(_LoomHostBootstrapFile)" />
+    </ItemGroup>
+  </Target>
+
+  <!--
     Close out the RID-conditional base-SDK delegation started in Sdk.props (same guard properties, still in
     scope — MSBuild properties persist across one project's whole evaluation). For the traditional
     fixed-outer-Sdk usage (e.g. Loom.Sandbox) both imports are skipped: the outer Sdk="Microsoft.NET.Sdk"
