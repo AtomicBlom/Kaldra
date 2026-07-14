@@ -49,9 +49,12 @@
          always-excluded *.module.slang). Used to drop ImGui's shader when the engine is built without ImGui. -->
     <LoomShaderExclude Condition="'$(LoomShaderExclude)' == ''"></LoomShaderExclude>
 
-    <!-- Config-agnostic + timing-independent: MSBuildProjectDirectory is always set, and shaders don't
-         vary by Debug/Release. (Per-shader incremental precision via slangc -depfile is a later refinement.) -->
-    <LoomShaderOutDir Condition="'$(LoomShaderOutDir)' == ''">$(MSBuildProjectDirectory)\obj\shaders\</LoomShaderOutDir>
+    <!-- Config-agnostic (shaders don't vary by Debug/Release) but RID-qualified: a desktop build emits SPIR-V
+         (+DXIL) and a browser build emits WGSL, and without separate output dirs the two collide in one obj —
+         building one flavor then the other (without a clean) fails reading the other's artifacts. RuntimeIdentifier
+         is a global property set early, so this stays timing-independent. Empty RID (desktop) → obj\shaders\;
+         browser-wasm → obj\shaders\browser-wasm\. -->
+    <LoomShaderOutDir Condition="'$(LoomShaderOutDir)' == ''">$(MSBuildProjectDirectory)\obj\shaders\$(RuntimeIdentifier)\</LoomShaderOutDir>
 
     <!-- The manifest-name prefix for Embed mode. Defaults to "<AssemblyName>.Shaders." so the runtime can
          derive the same key from its own assembly name (no hardcoded string drift). -->
