@@ -37,6 +37,10 @@ public sealed record HostOptions
 	/// <summary>Watch the loose shader directory and hot-reload rebuilt artifacts (dev only). Maps onto <see cref="EngineSettings.WatchShaderDirectory"/>.</summary>
 	public bool WatchShaderDirectory { get; init; }
 
+	/// <summary>Request a CPU/software rendering adapter (DX12 WARP; a Vulkan CPU device) for GPU-less CI or
+	/// deterministic software rendering. Maps onto <see cref="EngineSettings.PreferSoftwareAdapter"/>.</summary>
+	public bool SoftwareAdapter { get; init; }
+
 	/// <summary>Headless: render N frames (real delta) then exit. 0 = run interactively.</summary>
 	public int SmokeFrames { get; init; }
 
@@ -70,6 +74,8 @@ public sealed record HostOptions
 
 		Dev / debug:
 		  --watch-shaders           Hot-reload rebuilt shader artifacts.
+		  --software-adapter        Force a CPU/software rendering adapter (DX12 WARP; a Vulkan CPU device) for
+		                            GPU-less CI or deterministic software rendering.
 
 		Headless / capture:
 		  --smoke-frames <n>        Render N frames then exit.
@@ -95,6 +101,7 @@ public sealed record HostOptions
 		var maxFps = 0.0;
 		var hdr = false;
 		var watchShaders = false;
+		var softwareAdapter = false;
 		var smokeFrames = 0;
 		string? capture = null;
 		var help = false;
@@ -143,6 +150,7 @@ public sealed record HostOptions
 						break;
 					case "--hdr": hdr = Flag(); break;
 					case "--watch-shaders": watchShaders = Flag(); break;
+					case "--software-adapter": softwareAdapter = Flag(); break;
 					case "--smoke-frames":
 						smokeFrames = int.Parse(Value(), CultureInfo.InvariantCulture);
 						if (smokeFrames <= 0) return Fail("--smoke-frames must be a positive frame count (a headless run needs N > 0 frames to render then exit).");
@@ -169,6 +177,7 @@ public sealed record HostOptions
 			MaxFramesPerSecond = maxFps,
 			HdrOutput = hdr,
 			WatchShaderDirectory = watchShaders,
+			SoftwareAdapter = softwareAdapter,
 			SmokeFrames = smokeFrames,
 			Capture = capture,
 			ShowHelp = help,
@@ -192,6 +201,7 @@ public sealed record HostOptions
 		settings.MaxFramesPerSecond = MaxFramesPerSecond;
 		settings.HdrOutput = HdrOutput;
 		settings.WatchShaderDirectory = WatchShaderDirectory;
+		settings.PreferSoftwareAdapter = SoftwareAdapter;
 	}
 
 	private static string ParseBackend(string value) => value.ToLowerInvariant() switch

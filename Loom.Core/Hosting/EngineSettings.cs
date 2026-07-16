@@ -55,6 +55,13 @@ public class EngineSettings
 	public bool WatchShaderDirectory { get; set; }
 
 	/// <summary>
+	/// Request a CPU/software rendering adapter (DX12 WARP; a Vulkan CPU device type) instead of a real GPU —
+	/// for GPU-less CI runners or deterministic software rendering. Falls back to the best available adapter
+	/// when no software one exists, rather than failing engine creation.
+	/// </summary>
+	public bool PreferSoftwareAdapter { get; set; }
+
+	/// <summary>
 	/// Copy every base setting onto <paramref name="target"/> — used by a backend when the host passed the neutral
 	/// base type rather than the backend's own settings subclass, so the backend builds its subclass and inherits
 	/// all the base knobs. Centralised so a newly-added base setting can't be silently dropped by a backend's
@@ -69,5 +76,6 @@ public class EngineSettings
 		target.HdrOutput = HdrOutput;
 		target.PreferredBackend = PreferredBackend;
 		target.WatchShaderDirectory = WatchShaderDirectory;
+		target.PreferSoftwareAdapter = PreferSoftwareAdapter;
 	}
 }

@@ -99,6 +99,34 @@
   </Target>
 
   <!--
+    Backend registration bootstrap. Referencing a backend assembly makes its module initializer run under JIT
+    (first type touch triggers it lazily), but a NativeAOT-published app may never touch a backend type directly —
+    it only ever sees Engine.AvailableEngines through the host — so nothing forces the constructor to run and the
+    backend never registers. Generate a tiny [ModuleInitializer] into the app that forces each SELECTED backend's
+    module constructor via a compile-time typeof (no Assembly.LoadFrom, so this stays AOT-safe: no reflection-emit,
+    no probing the output directory). Each backend's own module initializer still runs its IsSupported() probe
+    before registering, so forcing it here doesn't bypass that gate — an unsupported backend still won't register.
+  -->
+  <PropertyGroup>
+    <_LoomBackendBootstrapCalls Condition="'$(UseVulkan)' == 'true' and '$(_LoomTargetsBrowser)' != 'true'">$(_LoomBackendBootstrapCalls)System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(typeof(Loom.Backend.Vulkan.VulkanBackend).Module.ModuleHandle)%3B </_LoomBackendBootstrapCalls>
+    <_LoomBackendBootstrapCalls Condition="'$(UseDirectX12)' == 'true' and '$(_LoomTargetsBrowser)' != 'true'">$(_LoomBackendBootstrapCalls)System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(typeof(Loom.Backend.DirectX12.DirectX12Backend).Module.ModuleHandle)%3B </_LoomBackendBootstrapCalls>
+    <_LoomBackendBootstrapCalls Condition="'$(UseWebGPU)' == 'true'">$(_LoomBackendBootstrapCalls)System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(typeof(Loom.Backend.WebGPU.WebGpuBackend).Module.ModuleHandle)%3B </_LoomBackendBootstrapCalls>
+  </PropertyGroup>
+
+  <Target Name="_LoomGenerateBackendBootstrap" BeforeTargets="CoreCompile" Condition="'$(_LoomBackendBootstrapCalls)' != ''">
+    <PropertyGroup>
+      <_LoomBackendBootstrapFile>$(IntermediateOutputPath)LoomBackendBootstrap.g.cs</_LoomBackendBootstrapFile>
+      <!-- MSBuild-escaped: %3B = ';'. Forces every selected backend's module constructor at app module init. -->
+      <_LoomBackendBootstrapCode>namespace Loom.Generated { internal static class LoomBackendBootstrap { [System.Runtime.CompilerServices.ModuleInitializer] internal static void Register() { $(_LoomBackendBootstrapCalls) } } }</_LoomBackendBootstrapCode>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_LoomBackendBootstrapFile)" Lines="$(_LoomBackendBootstrapCode)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(_LoomBackendBootstrapFile)" />
+      <FileWrites Include="$(_LoomBackendBootstrapFile)" />
+    </ItemGroup>
+  </Target>
+
+  <!--
     Close out the RID-conditional base-SDK delegation started in Sdk.props (same guard properties, still in
     scope — MSBuild properties persist across one project's whole evaluation). For the traditional
     fixed-outer-Sdk usage (e.g. Loom.Sandbox) both imports are skipped: the outer Sdk="Microsoft.NET.Sdk"

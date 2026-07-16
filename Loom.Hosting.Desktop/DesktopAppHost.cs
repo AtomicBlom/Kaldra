@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 
 using Loom.Core.Hosting;
@@ -11,9 +12,10 @@ namespace Loom.Hosting.Desktop;
 /// <summary>
 /// The desktop <see cref="IAppHost"/>: creates a Silk.NET window for whichever backend shipped with the app,
 /// brings up the engine, and drives the application's frame loop until the window closes. Backend-neutral — it
-/// names no backend type; it force-loads the <c>Loom.Backend.*</c> assemblies present next to the app (so their
-/// module initializers register into <see cref="Engine.AvailableEngines"/>), then picks the first available and
-/// branches on its <see cref="IRenderBackend.Name"/> to build the right window surface.
+/// names no backend type; it reads whichever backends have already self-registered into
+/// <see cref="Engine.AvailableEngines"/> (the Loom SDK's generated bootstrap forces their module initializers to
+/// run), falling back to a reflective <c>Loom.Backend.*.dll</c> scan under JIT only if none did, then picks the
+/// first available and branches on its <see cref="IRenderBackend.Name"/> to build the right window surface.
 /// </summary>
 public sealed class DesktopAppHost : IAppHost
 {
@@ -137,27 +139,18 @@ public sealed class DesktopAppHost : IAppHost
 		engine.WaitIdle();
 	}
 
-	// Load every Loom.Backend.*.dll beside the app and run its module initializer so the backend self-registers,
-	// then honor the app's preferred backend (falling back to the first one available). The RID + Use* flags
-	// decided which backend DLLs shipped, so this loads exactly those. LoadFrom alone doesn't fire a module
-	// initializer (that's lazy, on first type access), so RunModuleConstructor forces it — mirroring how the
-	// SDK-generated app bootstrap registers the host.
+	// The Loom SDK generates a [ModuleInitializer] into the app (LoomBackendBootstrap.g.cs) that forces every
+	// selected backend's module constructor via a compile-time typeof, so Engine.AvailableEngines is normally
+	// already populated by the time this runs — no scan needed. Only a non-SDK/hand-authored project (no generated
+	// bootstrap) or a plugin DLL dropped beside the app falls through to the reflective scan below, and only under
+	// JIT: Assembly.LoadFrom throws NotSupportedException on NativeAOT, so the scan is skipped entirely there
+	// (IsDynamicCodeSupported == false) rather than risk that exception crashing startup.
 	private static IRenderBackend ResolveBackend(string? preferredBackend)
 	{
-		foreach (var dll in Directory.EnumerateFiles(AppContext.BaseDirectory, "Loom.Backend.*.dll"))
-		{
-			try
-			{
-				var assembly = Assembly.LoadFrom(dll);
-				RuntimeHelpers.RunModuleConstructor(assembly.ManifestModule.ModuleHandle);
-			}
-			catch (Exception ex) when (ex is BadImageFormatException or FileLoadException or TypeInitializationException)
-			{
-				// Not a loadable managed backend (or its initializer opted out) — skip; a real backend still registers.
-			}
-		}
-
 		var backends = Engine.AvailableEngines;
+		if (backends.Count == 0 && RuntimeFeature.IsDynamicCodeSupported)
+			backends = ScanForBackends();
+
 		if (backends.Count == 0)
 			throw new InvalidOperationException(
 				"No rendering backend is available. Ensure a Loom backend package (Loom.Backend.Vulkan / " +
@@ -169,6 +162,33 @@ public sealed class DesktopAppHost : IAppHost
 					return candidate;
 
 		return backends[0];
+	}
+
+	// JIT-only fallback: load every Loom.Backend.*.dll beside the app and run its module initializer so the
+	// backend self-registers. LoadFrom alone doesn't fire a module initializer (that's lazy, on first type
+	// access), so RunModuleConstructor forces it — mirroring how the SDK-generated app bootstrap registers the
+	// host. Broadened to swallow NotSupportedException too, in case a caller invokes this without the
+	// IsDynamicCodeSupported guard.
+	[UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+		Justification = "Reached only under RuntimeFeature.IsDynamicCodeSupported (JIT). A NativeAOT or trimmed app " +
+			"registers its backends through the SDK-generated LoomBackendBootstrap module initializer, which roots the " +
+			"backend assemblies statically, so Engine.AvailableEngines is already populated and this reflective scan is unreachable.")]
+	private static IReadOnlyList<IRenderBackend> ScanForBackends()
+	{
+		foreach (var dll in Directory.EnumerateFiles(AppContext.BaseDirectory, "Loom.Backend.*.dll"))
+		{
+			try
+			{
+				var assembly = Assembly.LoadFrom(dll);
+				RuntimeHelpers.RunModuleConstructor(assembly.ManifestModule.ModuleHandle);
+			}
+			catch (Exception ex) when (ex is BadImageFormatException or FileLoadException or TypeInitializationException or NotSupportedException)
+			{
+				// Not a loadable managed backend (or its initializer opted out) — skip; a real backend still registers.
+			}
+		}
+
+		return Engine.AvailableEngines;
 	}
 
 	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,

@@ -124,7 +124,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private VulkanSwapchain WindowSwapchain => (VulkanSwapchain)_presentTarget;
 
 	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
-		: this(new VulkanContext(surface, settings.EnableValidation, settings.PreferDiscreteGpu), offscreen: false, width, height, settings)
+		: this(new VulkanContext(surface, settings.EnableValidation, settings.PreferDiscreteGpu, settings.PreferSoftwareAdapter), offscreen: false, width, height, settings)
 	{
 	}
 
@@ -134,7 +134,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	/// reads back an owned image rather than a presented one — no window, no <c>VkSurfaceKHR</c>.
 	/// </summary>
 	public VulkanEngine(int width, int height, VulkanEngineSettings settings)
-		: this(new VulkanContext(settings.EnableValidation, settings.PreferDiscreteGpu), offscreen: true, width, height, settings)
+		: this(new VulkanContext(settings.EnableValidation, settings.PreferDiscreteGpu, settings.PreferSoftwareAdapter), offscreen: true, width, height, settings)
 	{
 	}
 
