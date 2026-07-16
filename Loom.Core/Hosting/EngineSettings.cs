@@ -24,8 +24,11 @@ public class EngineSettings
 	public bool VSync { get; set; } = true;
 
 	/// <summary>
-	/// Frame-rate cap for the host's render loop (0 = unlimited). Only meaningful with <see cref="VSync"/> off;
-	/// a host-loop concern the engine merely records so the configuration lives in one place.
+	/// Frame-rate cap for the host's render loop (0 = unlimited). Only meaningful with <see cref="VSync"/> off.
+	/// The host owns this: it reads the value and applies the cap to its own loop (e.g. <c>DesktopAppHost</c> sets
+	/// it on the window's frame-rate limiter before the first frame); the engine itself never paces against it.
+	/// It lives here rather than as a separate host-only option so backend/presentation/frame-pacing configuration
+	/// stays in one object.
 	/// </summary>
 	public double MaxFramesPerSecond { get; set; }
 

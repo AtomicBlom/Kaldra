@@ -28,7 +28,18 @@ public sealed class DesktopAppHost : IAppHost
 	{
 		ArgumentNullException.ThrowIfNull(app);
 		var driver = (IHostedApplication)app;
+
+		var hostOptions = HostOptions.Parse(args);
+		if (hostOptions.ShowHelp)
+		{
+			Console.WriteLine(HostOptions.Usage);
+			return;
+		}
+
 		var options = driver.ReadOptions();
+		// Apply before ResolveBackend/engine creation so --backend/--vsync/--max-fps/--hdr/--watch-shaders take
+		// effect; --backend overrides the app's own preference, the rest are the command line's to own outright.
+		hostOptions.ApplyTo(options.EngineSettings);
 
 		var backend = ResolveBackend(options.EngineSettings.PreferredBackend);
 		// Record which backend actually got resolved (the app may have left PreferredBackend unset).
@@ -36,11 +47,14 @@ public sealed class DesktopAppHost : IAppHost
 
 		// A context-less window for DirectX12 (it binds its swapchain to the raw HWND); a Vulkan-surface window
 		// otherwise. Both option sets are plain Silk types, so this needs no backend reference — only the name.
+		// FramesPerSecond caps the render loop to EngineSettings.MaxFramesPerSecond (0 = unlimited) — the host, not
+		// the engine, applies the cap.
 		var size = new Vector2D<int>(options.Width, options.Height);
 		var isDirectX12 = string.Equals(backend.Name, "DirectX12", StringComparison.OrdinalIgnoreCase);
+		var fps = options.EngineSettings.MaxFramesPerSecond;
 		var window = Window.Create(isDirectX12
-			? WindowOptions.Default with { Size = size, Title = options.Title, API = GraphicsAPI.None }
-			: WindowOptions.DefaultVulkan with { Size = size, Title = options.Title });
+			? WindowOptions.Default with { Size = size, Title = options.Title, API = GraphicsAPI.None, FramesPerSecond = fps }
+			: WindowOptions.DefaultVulkan with { Size = size, Title = options.Title, FramesPerSecond = fps });
 		window.Initialize();
 
 		object surface = isDirectX12
@@ -68,26 +82,54 @@ public sealed class DesktopAppHost : IAppHost
 		};
 		window.FocusChanged += focused => driver.SetFocus(focused);
 
-		// A minimal built-in headless capture (--capture <path>): render a few frames so any delta-driven state
-		// settles, grab one, then close. Not the full launch-option surface — that's a later unification.
-		var capturePath = ArgValue(args, "--capture");
-		var total = 0.0;
-		var frame = 0;
-		window.Render += delta =>
+		if (hostOptions.Capture is { Length: > 0 } capturePath)
 		{
-			if (minimized)
-				return;
-			total += delta;
-			driver.Tick(new FrameTime(delta, total));
-			frame++;
-			if (capturePath is { Length: > 0 })
+			// The frozen-time capture protocol, matching Loom.Sandbox's --capture: drive a fixed 1/60 delta with
+			// time held at a constant 1 second rather than the wall clock, so any delta-driven state (auto-exposure,
+			// temporal filters) converges identically on every run — a game captured this way is pixel-comparable
+			// with the engine's own golden/parity pipeline. Captured at frame 60 — late enough for that
+			// convergence — then two more ticks before exit so the capture's write has finished before teardown.
+			const double captureDelta = 1.0 / 60.0;
+			const double captureTime = 1.0;
+			var frame = 0;
+			window.Render += _ =>
 			{
-				if (frame == 3)
+				if (minimized)
+					return;
+				frame++;
+				if (frame == 60)
 					engine.RequestCapture(capturePath);
-				else if (frame == 4)
+				driver.Tick(new FrameTime(captureDelta, captureTime));
+				if (frame >= 62)
 					host.RequestExit();
-			}
-		};
+			};
+		}
+		else if (hostOptions.SmokeFrames > 0)
+		{
+			var total = 0.0;
+			var frame = 0;
+			window.Render += delta =>
+			{
+				if (minimized)
+					return;
+				total += delta;
+				frame++;
+				driver.Tick(new FrameTime(delta, total));
+				if (frame >= hostOptions.SmokeFrames)
+					host.RequestExit();
+			};
+		}
+		else
+		{
+			var total = 0.0;
+			window.Render += delta =>
+			{
+				if (minimized)
+					return;
+				total += delta;
+				driver.Tick(new FrameTime(delta, total));
+			};
+		}
 
 		window.Run();
 
@@ -127,14 +169,6 @@ public sealed class DesktopAppHost : IAppHost
 					return candidate;
 
 		return backends[0];
-	}
-
-	private static string? ArgValue(string[] args, string name)
-	{
-		for (var i = 0; i < args.Length - 1; i++)
-			if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
-				return args[i + 1];
-		return null;
 	}
 
 	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,
