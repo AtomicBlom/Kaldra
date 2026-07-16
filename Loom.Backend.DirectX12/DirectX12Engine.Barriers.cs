@@ -1,4 +1,4 @@
-using Loom.Graph;
+﻿using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 
@@ -17,7 +17,7 @@ public sealed unsafe partial class DirectX12Engine
 		{
 			if (_backbufferState[index] == target)
 				return;
-			Transition(_swapchain.BackBuffer(index), _backbufferState[index], target);
+			Transition(_presentTarget.BackBuffer(index), _backbufferState[index], target);
 			_backbufferState[index] = target;
 			return;
 		}

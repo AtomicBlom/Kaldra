@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using Loom.Assets;
 using Loom.Core.Animation;
 using Loom.Core.Geometry;
@@ -23,7 +23,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 	private readonly DirectX12EngineSettings _settings;
 	private readonly DirectX12Context _ctx;
-	private readonly DirectX12Swapchain _swapchain;
+	private readonly IDirectX12PresentTarget _presentTarget;
 	private readonly DirectX12Triangle _triangle;
 	private readonly DirectX12TechniqueCache _techniques;
 	private readonly DirectX12DescriptorRing _ring;
@@ -86,10 +86,27 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private AssetWatcher? _shaderWatcher;
 
 	public DirectX12Engine(nint hwnd, int width, int height, DirectX12EngineSettings settings)
+		: this(settings, new DirectX12Context(settings), offscreen: false, hwnd, width, height)
+	{
+	}
+
+	/// <summary>
+	/// Bring up a windowless engine (<see cref="Loom.Core.Hosting.Surface.Offscreen"/>): the present target is an
+	/// owned <see cref="DirectX12OffscreenTarget"/> instead of a swapchain, so <see cref="IEngine.RequestCapture"/>
+	/// reads back an owned resource rather than a presented one — no window, no <c>HWND</c>.
+	/// </summary>
+	public DirectX12Engine(int width, int height, DirectX12EngineSettings settings)
+		: this(settings, new DirectX12Context(settings), offscreen: true, 0, width, height)
+	{
+	}
+
+	private DirectX12Engine(DirectX12EngineSettings settings, DirectX12Context ctx, bool offscreen, nint hwnd, int width, int height)
 	{
 		_settings = settings;
-		_ctx = new DirectX12Context(settings);
-		_swapchain = new DirectX12Swapchain(_ctx, hwnd, width, height, BufferCount);
+		_ctx = ctx;
+		_presentTarget = offscreen
+			? new DirectX12OffscreenTarget(_ctx, width, height, BufferCount)
+			: new DirectX12Swapchain(_ctx, hwnd, width, height, BufferCount);
 
 		for (uint i = 0; i < BufferCount; i++)
 		{
@@ -108,7 +125,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		if (_fenceEvent == 0)
 			throw new InvalidOperationException("CreateEvent failed for the DirectX12 frame-pacing fence.");
 
-		_triangle = new DirectX12Triangle(_ctx, _swapchain.Format);
+		_triangle = new DirectX12Triangle(_ctx, _presentTarget.Format);
 		_techniques = new DirectX12TechniqueCache(_ctx);
 		_ring = new DirectX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the resource viewer's debug SRVs
 		_meshes = new DirectX12MeshStore(_ctx);
@@ -168,16 +185,16 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	// Pre-executor path (slices 1-2): a fixed clear + hand-baked triangle, used when no graph is set.
 	private void RenderLegacy(FrameInputs inputs)
 	{
-		var index = _swapchain.CurrentIndex;
+		var index = _presentTarget.CurrentIndex;
 		WaitForFrame(index); // the allocator we're about to reset must be free on the GPU
 
 		SilkMarshal.ThrowHResult(_allocators[index].Reset());
 		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
 
-		var backbuffer = _swapchain.BackBuffer(index);
+		var backbuffer = _presentTarget.BackBuffer(index);
 		Transition(backbuffer, ResourceStates.Present, ResourceStates.RenderTarget);
 
-		var rtv = _swapchain.RtvHandle(index);
+		var rtv = _presentTarget.RtvHandle(index);
 		_commandList.OMSetRenderTargets(1, &rtv, false, (CpuDescriptorHandle*)null);
 
 		// Animated clear so a headless smoke run visibly varies frame-to-frame (and proves the loop is live).
@@ -189,7 +206,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		color[3] = 1f;
 		_commandList.ClearRenderTargetView(rtv, color, 0u, (Box2D<int>*)null);
 
-		_triangle.Record(_commandList, _swapchain.Width, _swapchain.Height);
+		_triangle.Record(_commandList, _presentTarget.Width, _presentTarget.Height);
 
 		// When capturing, copy the rendered backbuffer into a readback buffer in the same submission, then
 		// present; otherwise just transition straight to PRESENT.
@@ -202,7 +219,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		var list = (ID3D12CommandList*)_commandList.Handle;
 		_ctx.GraphicsQueue.ExecuteCommandLists(1, &list);
 
-		_swapchain.Present(_settings.VSync);
+		_presentTarget.Present(_settings.VSync);
 
 		_fenceValue++;
 		SilkMarshal.ThrowHResult(_ctx.GraphicsQueue.Signal(_fence, _fenceValue));
@@ -231,14 +248,14 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	public override void Resize(int width, int height)
 	{
 		WaitIdle();
-		_swapchain.Resize(width, height);
+		_presentTarget.Resize(width, height);
 		Array.Clear(_frameFenceValues);
 
 		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size).
 		if (Graph is not null)
 		{
 			_transients?.Dispose();
-			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _swapchain.Width, _swapchain.Height);
+			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height);
 			_context.SetTransients(_transients);
 			for (uint i = 0; i < BufferCount; i++)
 				_backbufferState[i] = ResourceStates.Present;
@@ -295,7 +312,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_commandList.Dispose();
 		for (uint i = 0; i < BufferCount; i++)
 			_allocators[i].Dispose();
-		_swapchain.Dispose();
+		_presentTarget.Dispose();
 		_ctx.Dispose();
 	}
 
@@ -416,7 +433,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		// Build transients from `executed` (same resources/ids; the injected edges only affect derived state). The
 		// AliasPlan (the transient-memory partition) is the SAME backend-neutral product the Vulkan engine consumes;
 		// this backend turns each bucket into a placed-resource heap shared by its members.
-		_transients = new DirectX12Transients(_ctx, executed, Aliases, BufferCount, _swapchain.Width, _swapchain.Height);
+		_transients = new DirectX12Transients(_ctx, executed, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height);
 		_context.SetTransients(_transients);
 		SetupReadback(authored);
 		SetupTiming();

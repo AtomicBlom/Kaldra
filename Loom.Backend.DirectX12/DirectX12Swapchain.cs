@@ -11,7 +11,7 @@ namespace Loom.Backend.DirectX12;
 /// flip model), which keeps the type at <c>IDXGISwapChain1</c> — <c>GetCurrentBackBufferIndex</c> is an
 /// <c>IDXGISwapChain3</c>-only method we don't need.
 /// </summary>
-internal sealed unsafe class DirectX12Swapchain : IDisposable
+internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 {
 	private readonly DirectX12Context _ctx;
 	private readonly nint _hwnd;

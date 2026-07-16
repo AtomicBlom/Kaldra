@@ -66,19 +66,22 @@ public sealed class DirectX12Backend : IRenderBackend
 		ArgumentNullException.ThrowIfNull(surface);
 		ArgumentNullException.ThrowIfNull(settings);
 
-		if (surface is not nint hwnd)
-			throw new ArgumentException(
-				$"The DirectX12 backend needs the window's Win32 HWND (as an nint); got {surface.GetType().Name}.",
-				nameof(surface));
-		if (hwnd == 0)
-			throw new ArgumentException("The DirectX12 backend was given a null HWND.", nameof(surface));
-
 		var dx12Settings = settings as DirectX12EngineSettings;
 		if (dx12Settings is null)
 		{
 			dx12Settings = new DirectX12EngineSettings();
 			settings.CopyBaseSettingsTo(dx12Settings);
 		}
+
+		if (surface is OffscreenSurface)
+			return new DirectX12Engine(width, height, dx12Settings);
+
+		if (surface is not nint hwnd)
+			throw new ArgumentException(
+				$"The DirectX12 backend needs the window's Win32 HWND (as an nint, or an {nameof(OffscreenSurface)} for windowless creation); got {surface.GetType().Name}.",
+				nameof(surface));
+		if (hwnd == 0)
+			throw new ArgumentException("The DirectX12 backend was given a null HWND.", nameof(surface));
 
 		return new DirectX12Engine(hwnd, width, height, dx12Settings);
 	}

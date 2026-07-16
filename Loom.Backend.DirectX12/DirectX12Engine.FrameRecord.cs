@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Graph;
@@ -18,7 +18,7 @@ public sealed unsafe partial class DirectX12Engine
 	{
 		DrainShaderReloads(); // pick up any hot-reloaded shaders before recording this frame
 
-		var index = _swapchain.CurrentIndex;
+		var index = _presentTarget.CurrentIndex;
 		WaitForFrame(index);
 
 		// This slot's GPU work (a couple frames back) is now done, so its readback buffers are safe to map — repack
@@ -35,7 +35,7 @@ public sealed unsafe partial class DirectX12Engine
 		_commandList.SetDescriptorHeaps(1, &heap);
 		_ring.Reset(index); // this slot's own region — must not clobber the other in-flight frame's live descriptors
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
-		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _swapchain.Width, _swapchain.Height);
+		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _presentTarget.Width, _presentTarget.Height);
 
 		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it (write-on-change:
 		// the last IEngine.Write persists, re-uploaded each frame so the slot the GPU reads is always current).
@@ -89,7 +89,7 @@ public sealed unsafe partial class DirectX12Engine
 		uint rowPitch = 0;
 		if (capturing)
 		{
-			var backbuffer = _swapchain.BackBuffer(index);
+			var backbuffer = _presentTarget.BackBuffer(index);
 			if (_backbufferState[index] != ResourceStates.CopySource)
 			{
 				Transition(backbuffer, _backbufferState[index], ResourceStates.CopySource);
@@ -104,7 +104,7 @@ public sealed unsafe partial class DirectX12Engine
 		SilkMarshal.ThrowHResult(_commandList.Close());
 		var list = (ID3D12CommandList*)_commandList.Handle;
 		_ctx.GraphicsQueue.ExecuteCommandLists(1, &list);
-		_swapchain.Present(_settings.VSync);
+		_presentTarget.Present(_settings.VSync);
 
 		_fenceValue++;
 		SilkMarshal.ThrowHResult(_ctx.GraphicsQueue.Signal(_fence, _fenceValue));
@@ -145,10 +145,10 @@ public sealed unsafe partial class DirectX12Engine
 					throw new NotSupportedException("DirectX12: a pass declares more than 8 colour attachments; D3D12 caps simultaneous render targets at 8 (D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT).");
 				if (attachment.Resource.IsBackbuffer)
 				{
-					rtv[colorCount] = _swapchain.RtvHandle(index);
-					formats[colorCount] = _swapchain.RenderTargetFormat; // the sRGB RTV format — the PSO must match the actual view
-					width = _swapchain.Width;
-					height = _swapchain.Height;
+					rtv[colorCount] = _presentTarget.RtvHandle(index);
+					formats[colorCount] = _presentTarget.RenderTargetFormat; // the sRGB RTV format — the PSO must match the actual view
+					width = _presentTarget.Width;
+					height = _presentTarget.Height;
 				}
 				else
 				{

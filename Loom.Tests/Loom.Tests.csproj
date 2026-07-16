@@ -40,4 +40,12 @@
     <ProjectReference Include="..\Loom.Concepts\Loom.Concepts.csproj" />
   </ItemGroup>
 
+  <!-- Referenced so their module initializers self-register into Engine.AvailableEngines (each guarded by its own
+       IsSupported() probe — a box/OS lacking one degrades to it simply not appearing, never a build/runtime
+       failure) for OffscreenEngineTests, which is GPU-gated and skips whichever backend isn't present. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Loom.Backend.Vulkan\Loom.Backend.Vulkan.csproj" />
+    <ProjectReference Include="..\Loom.Backend.DirectX12\Loom.Backend.DirectX12.csproj" />
+  </ItemGroup>
+
 </Project>

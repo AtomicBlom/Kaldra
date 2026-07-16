@@ -1,4 +1,4 @@
-using Loom.Graph;
+﻿using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
@@ -24,8 +24,8 @@ public sealed unsafe partial class DirectX12Engine
 	/// <summary>Record the copy of <paramref name="backbuffer"/> (already in COPY_SOURCE) into the readback buffer; returns the row pitch.</summary>
 	private uint CopyBackbufferToReadback(ComPtr<ID3D12Resource> backbuffer)
 	{
-		var width = _swapchain.Width;
-		var height = _swapchain.Height;
+		var width = _presentTarget.Width;
+		var height = _presentTarget.Height;
 		var rowPitch = Align(width * 4, 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
 		EnsureReadback((ulong)rowPitch * height);
 
@@ -38,7 +38,7 @@ public sealed unsafe partial class DirectX12Engine
 				PlacedFootprint = new PlacedSubresourceFootprint
 				{
 					Offset = 0,
-					Footprint = new SubresourceFootprint { Format = _swapchain.Format, Width = width, Height = height, Depth = 1, RowPitch = rowPitch }
+					Footprint = new SubresourceFootprint { Format = _presentTarget.Format, Width = width, Height = height, Depth = 1, RowPitch = rowPitch }
 				}
 			}
 		};
@@ -87,8 +87,8 @@ public sealed unsafe partial class DirectX12Engine
 
 	private void WriteCapture(string path, uint rowPitch)
 	{
-		var width = (int)_swapchain.Width;
-		var height = (int)_swapchain.Height;
+		var width = (int)_presentTarget.Width;
+		var height = (int)_presentTarget.Height;
 
 		void* mapped;
 		SilkMarshal.ThrowHResult(_readback.Map(0, (Silk.NET.Direct3D12.Range*)null, &mapped));

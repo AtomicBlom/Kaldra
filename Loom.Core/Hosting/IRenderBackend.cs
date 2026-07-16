@@ -19,5 +19,6 @@ public interface IRenderBackend
 	/// handle. <paramref name="settings"/> may be the base <see cref="EngineSettings"/> or this backend's
 	/// subclass (which it down-casts to read backend-specific knobs).
 	/// </summary>
+	/// <remarks><paramref name="surface"/> may instead be an <see cref="OffscreenSurface"/> (<see cref="Surface.Offscreen"/>) for windowless creation — a backend that supports it renders into an owned readable image rather than a swapchain.</remarks>
 	IEngine Create(object surface, int width, int height, EngineSettings settings);
 }
