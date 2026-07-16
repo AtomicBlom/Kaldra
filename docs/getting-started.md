@@ -209,14 +209,17 @@ var graph = RenderGraph.Define(g =>
     // A per-frame uniform channel the scene pass reads (filled each frame via engine.Write).
     var viewProj = g.Constants<Matrix4x4>("camera.viewproj");
 
-    // Scene pass: read the view-projection, write HDR colour + depth.
+    // Scene pass: read the view-projection, write HDR colour + depth. The body only needs `scene` — a
+    // stable producer, not a per-frame value — so pass it as pass state via the Draw<TState> overload:
+    // a `static` lambda can then reach only `scene` and `ctx`, so a per-frame value can't accidentally
+    // be captured and frozen at build time.
     g.Pass("scene")
         .Reads(viewProj)
         .Writes(hdr)
         .WritesDepth(depth)
-        .Draw(ctx =>
+        .Draw(scene, static (ctx, scene) =>
         {
-            // Your own draw list, however you build it.
+            // Your own draw list, however you build it — scene.VisibleObjects is read live each frame.
             foreach (var obj in scene.VisibleObjects)
             {
                 var call = DrawCall.Create(obj.Mesh, "scene");
@@ -226,7 +229,8 @@ var graph = RenderGraph.Define(g =>
             }
         });
 
-    // Tonemap pass: sample HDR, write the swapchain.
+    // Tonemap pass: sample HDR, write the swapchain. `hdr` is a build-time resource handle (not
+    // per-frame data), so capturing it directly is fine — only per-frame values need the state overload.
     g.Pass("tonemap")
         .Samples(hdr)
         .Writes(g.Backbuffer)
@@ -243,14 +247,14 @@ The pass-builder verbs are the whole scheduling vocabulary — `.Writes` (produc
 
 ### 4. Render loop
 
-`FrameInputs` carries only `DeltaSeconds`, `Time`, and `DrawLists` — there is no engine `Camera` or `Scene`. View, light, and time data flow in through the neutral channels your passes read: write them by handle each frame *before* `Render`. Driven by Silk.NET's render callback:
+`FrameInputs` carries only `DeltaSeconds` and `Time` (both `double`) — there is no engine `Camera` or `Scene`. View, light, and time data flow in through the neutral channels your passes read: write them by handle each frame *before* `Render`. Driven by Silk.NET's render callback:
 
 ```csharp
-var elapsed = 0f;
+var elapsed = 0.0;   // double: an accumulator kept as float loses precision over a long session
 
 window.Render += delta =>
 {
-    elapsed += (float)delta;
+    elapsed += delta;
 
     // Publish the matrix the "scene" pass reads. (Loom.Concepts.Camera folds in the
     // clip-space correction so the same matrix is correct on both backends.)
@@ -259,7 +263,7 @@ window.Render += delta =>
     engine.Render(new FrameInputs
     {
         DeltaSeconds = delta,    // double, seconds since the previous frame
-        Time         = elapsed,  // float, seconds since startup
+        Time         = elapsed,  // double, seconds since startup
     });
 };
 

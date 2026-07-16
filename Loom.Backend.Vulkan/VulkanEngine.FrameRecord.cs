@@ -10,7 +10,7 @@ namespace Loom.Backend.Vulkan;
 
 internal sealed unsafe partial class VulkanEngine
 {
-	private void DrawFrame(float deltaSeconds)
+	private void DrawFrame(double deltaSeconds)
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
 			return; // Minimized — nothing to draw.
@@ -128,12 +128,12 @@ internal sealed unsafe partial class VulkanEngine
 		_currentFrame = (_currentFrame + 1) % MaxFramesInFlight;
 	}
 
-	private void RecordGraph(CommandBuffer cmd, Buffer captureBuffer, float deltaTime)
+	private void RecordGraph(CommandBuffer cmd, Buffer captureBuffer, double deltaTime)
 	{
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _swapchain.Extent, _swapchain.HdrActive);
 
 		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it. Re-uploading
 		// every frame (cheap — these are tiny) means the last IEngine.Write persists across frames, so a static

@@ -174,17 +174,15 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 | `DispatchSkin(technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)` | Compute pre-skin a bind pose by a bone palette into `output` (a `.ReadWrites` buffer). |
 | `DrawList<TVertex>(technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push)` | Submit a per-frame batched indexed draw list (the overlay/UI path). |
 | `ResolveInspectable(int resourceId)` | Resolve an inspectable resource id to a `Texture?` bindable in a draw list this frame. |
-| `DrawLists` | This frame's draw lists — `IReadOnlyList<(DrawListId Id, DrawListData Data)>` the host supplied via `FrameInputs`. |
 
 ### `FrameInputs`
 
-A fresh immutable record per frame. The single channel for everything frame-varying — there is no engine `Camera`/`Sun`/`Scene`:
+A fresh value per frame (a `readonly record struct`, no allocation). The single channel for everything frame-varying — there is no engine `Camera`/`Sun`/`Scene`:
 
 | Member | Description |
 |---|---|
 | `DeltaSeconds` (`double`) | Seconds since the previous frame; surfaced as `ctx.DeltaTime`. |
-| `Time` (`float`) | Elapsed seconds since startup; surfaced as `ctx.Time`. |
-| `DrawLists` | `IReadOnlyList<(DrawListId, DrawListData)>` of composited overlay/UI lists (default empty). |
+| `Time` (`double`) | Elapsed seconds since startup; surfaced as `ctx.Time`. |
 
 View-projections, light, and time-of-day data are *not* here — publish them through `g.Constants`/`g.Storage` with `engine.Write(handle, value)` and read them in a pass with `.Reads`.
 
@@ -276,10 +274,8 @@ Neutral loaders beside `Loom.Core` (no graphics-API reference). They emit `Textu
 
 ## Overlay draw lists (`Loom.Core.Hosting`)
 
-The cross-backend path for overlay rendering (game UI via SUIsei, ImGui, debug lines). A producer composites a `DrawListData` per channel and the host hands them in via `FrameInputs.DrawLists`; a pass pulls one out of `ctx.DrawLists` by id and submits it with `ctx.DrawList<TVertex>(...)`.
+The cross-backend verb behind overlay/UI-style rendering (game UI via SUIsei, ImGui, debug lines): a pass stages a per-frame, variable-size indexed vertex stream and submits it with `ctx.DrawList<TVertex>(...)`. There is no `FrameInputs`/`ctx` channel for this — a pass gets its geometry from whatever stable producer it holds as pass state (a painter), reading its live contents each frame.
 
 | Type | Role |
 |---|---|
-| `DrawListId` | An opaque `record struct (int Value)` — a producer-assigned id per list (the screen overlay and each in-world surface gets a distinct one). |
-| `DrawListData` | One frame's flattened list: `Vertices` (`ReadOnlyMemory<OverlayVertex>`), `Indices` (`ReadOnlyMemory<ushort>`), `Commands` (`ReadOnlyMemory<DrawCommand>`), `CoordinateSize`, `IsHdrTarget`, `Revision`; `Dump()` yields a deterministic text snapshot. `DrawListData.Empty` is the no-op. |
 | `DrawCommand` | One run within a list — `record struct (Rect ClipRect, int TextureIndex, int IndexOffset, int IndexCount, int VertexOffset, uint Tag)`. `Tag` is the per-command value a list-push technique reads. |

@@ -53,9 +53,6 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	private DirectX12Transients? _transients;
 	private ComPtr<ID3D12GraphicsCommandList> _cmd;
 	private uint _slot;
-	// This frame's draw lists, pulled from FrameInputs.DrawLists and surfaced as ctx.DrawLists; a producer (the UI
-	// painter) looks one up by id and submits it through DrawList.
-	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _drawLists = [];
 	private uint _fbWidth;
 	private uint _fbHeight;
 	private DxgiFormat[] _colorFormats = [];
@@ -63,10 +60,9 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	private DxgiFormat _depthFormat;
 	private bool _depthReadOnly;
 
-	public float DeltaTime { get; private set; }
-	public float Time { get; private set; }
+	public double DeltaTime { get; private set; }
+	public double Time { get; private set; }
 	public bool HdrOutput { get; private set; }
-	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists => _drawLists;
 
 	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, MaterialStore materials, int frameCount)
 	{
@@ -105,10 +101,9 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	{
 		_cmd = cmd;
 		_slot = slot;
-		_drawLists = inputs.DrawLists;
 		_fbWidth = fbWidth;
 		_fbHeight = fbHeight;
-		DeltaTime = (float)inputs.DeltaSeconds;
+		DeltaTime = inputs.DeltaSeconds;
 		Time = inputs.Time;
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(slot); // reset this slot's per-frame instance staging

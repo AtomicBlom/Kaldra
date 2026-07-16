@@ -181,7 +181,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_commandList.OMSetRenderTargets(1, &rtv, false, (CpuDescriptorHandle*)null);
 
 		// Animated clear so a headless smoke run visibly varies frame-to-frame (and proves the loop is live).
-		var t = inputs.Time;
+		var t = (float)inputs.Time;
 		var color = stackalloc float[4];
 		color[0] = 0.10f + 0.06f * MathF.Sin(t);
 		color[1] = 0.11f;

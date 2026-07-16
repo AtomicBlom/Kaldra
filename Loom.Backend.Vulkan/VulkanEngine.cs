@@ -106,8 +106,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private uint _timestampValidBits;        // 0 ⇒ the graphics queue can't timestamp (timing unavailable)
 
 	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
-	private float _frameTime;
-	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _frameDrawLists = [];
+	private double _frameTime;
 
 	private int _currentFrame;
 	private bool _framebufferResized;
@@ -322,14 +321,12 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 	public override void Render(FrameInputs inputs)
 	{
-		ArgumentNullException.ThrowIfNull(inputs);
 		ServicePendingUploads();
 		if (Graph is null || _transients is null)
 			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
 
 		_frameTime = inputs.Time;
-		_frameDrawLists = inputs.DrawLists;
-		DrawFrame((float)inputs.DeltaSeconds);
+		DrawFrame(inputs.DeltaSeconds);
 	}
 
 	private void CreateCommandPool()

@@ -62,18 +62,15 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
 	private int _activeStorageCount;
 
-	public float DeltaTime { get; private set; }
-	public float Time { get; private set; }
+	public double DeltaTime { get; private set; }
+	public double Time { get; private set; }
 	public bool HdrOutput => false; // browser output is the SDR canvas; HDR canvas negotiation is a later concern
 
-	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists { get; private set; } = [];
-
 	/// <summary>Set the per-frame inputs before the graph records.</summary>
-	public void BeginFrame(float deltaTime, float time, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists)
+	public void BeginFrame(double deltaTime, double time)
 	{
 		DeltaTime = deltaTime;
 		Time = time;
-		DrawLists = drawLists;
 	}
 
 	/// <summary>

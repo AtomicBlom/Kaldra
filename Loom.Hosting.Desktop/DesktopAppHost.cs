@@ -54,11 +54,11 @@ public sealed class DesktopAppHost : IAppHost
 		// A minimal built-in headless capture (--capture <path>): render a few frames so any delta-driven state
 		// settles, grab one, then close. Not the full launch-option surface — that's a later unification.
 		var capturePath = ArgValue(args, "--capture");
-		var total = 0f;
+		var total = 0.0;
 		var frame = 0;
 		window.Render += delta =>
 		{
-			total += (float)delta;
+			total += delta;
 			driver.Tick(new FrameTime(delta, total));
 			frame++;
 			if (capturePath is { Length: > 0 })

@@ -7,4 +7,4 @@
 /// surfaced to the app so a per-frame hook needs no other clock. Kept minimal: a later fixed-timestep design
 /// adds a new hook rather than changing this shape.
 /// </summary>
-public readonly record struct FrameTime(double DeltaSeconds, float TotalSeconds);
+public readonly record struct FrameTime(double DeltaSeconds, double TotalSeconds);

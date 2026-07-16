@@ -29,7 +29,7 @@ public sealed partial class WebAppHost : IAppHost
 	// rely on this host's own module initializer having run (unreliable under WASM AOT).
 	private static IEngine? _engine;
 	private static string? _captureName;
-	private static float _time;
+	private static double _time;
 	private static double _lastTimestampMs;
 	private static int _frame;
 
@@ -127,13 +127,13 @@ public sealed partial class WebAppHost : IAppHost
 		if (_captureName is not null)
 		{
 			delta = CaptureDelta;
-			_time = _frame * (float)CaptureDelta;
+			_time = _frame * CaptureDelta;
 		}
 		else
 		{
 			delta = _lastTimestampMs > 0 ? (timestampMs - _lastTimestampMs) / 1000.0 : 1.0 / 60.0;
 			_lastTimestampMs = timestampMs;
-			_time += (float)delta;
+			_time += delta;
 		}
 
 		try
