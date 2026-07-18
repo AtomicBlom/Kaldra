@@ -16,18 +16,19 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      # Loom.Tests only references Core/Graph/Assets — no submodule needed for that job.
       # SUIsei is a private submodule; it is fetched separately below with a PAT.
       - uses: actions/checkout@v7
 
-      # Fetch the private SUIsei submodule using a PAT that has contents:read on AtomicBlom/SUIsei.
-      # VMASharp (public) is not needed by Loom.Tests, so we only init the SUIsei submodule.
-      - name: Checkout SUIsei submodule
+      # Loom.Tests references both GPU backends (for OffscreenEngineTests' self-registration), and the Vulkan
+      # backend references the VMASharp submodule — so building the tests needs VMASharp checked out, alongside
+      # SUIsei (needed by the NativeAOT gate + UI unit test steps below). VMASharp is public; SUIsei is private, so
+      # wire the PAT (contents:read on AtomicBlom/SUIsei) before init so both resolve.
+      - name: Checkout submodules (PAT for private SUIsei)
         env:
           GH_PAT: ${{ secrets.PAT }}
         run: |
           git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/"
-          git submodule update --init external/SUIsei
+          git submodule update --init --recursive external/SUIsei external/VMASharp
 
       - uses: actions/setup-dotnet@v5
         with:
