@@ -6,6 +6,7 @@ using Loom.Core.Hosting;
 
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
+using Silk.NET.Windowing.Glfw;
 
 namespace Loom.Hosting.Desktop;
 
@@ -30,6 +31,12 @@ public sealed class DesktopAppHost : IAppHost
 	{
 		ArgumentNullException.ThrowIfNull(app);
 		var driver = (IHostedApplication)app;
+
+		// Silk.NET discovers its windowing platform by reflection, which NativeAOT trims away — so an AOT-published
+		// app throws "no window platform registered" at Window.Create. Register GLFW explicitly: required under AOT,
+		// and a harmless no-op under JIT where the reflective discovery already ran. (Input's GlfwInput platform is
+		// registered where the host first creates an input context.)
+		GlfwWindowing.RegisterPlatform();
 
 		var hostOptions = HostOptions.Parse(args);
 		if (hostOptions.ShowHelp)
