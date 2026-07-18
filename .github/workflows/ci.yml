@@ -9,7 +9,7 @@ name: CI
 
 on:
   push:
-    branches: [master, Milestone13, loom-ui]
+    branches: [master]
   pull_request:
 
 jobs:
