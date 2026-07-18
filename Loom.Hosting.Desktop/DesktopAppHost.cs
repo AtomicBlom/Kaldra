@@ -84,54 +84,18 @@ public sealed class DesktopAppHost : IAppHost
 		};
 		window.FocusChanged += focused => driver.SetFocus(focused);
 
-		if (hostOptions.Capture is { Length: > 0 } capturePath)
+		// The interactive frame loop: the window owns the pacing (capped by MaxFramesPerSecond above); each callback
+		// advances the app one frame until it calls Exit() (RequestExit closes the window) or the window is closed.
+		// Headless verification of a hosted app is done by in-process tests driving the engine offscreen, not by a
+		// capture/smoke mode on this production host.
+		var total = 0.0;
+		window.Render += delta =>
 		{
-			// The frozen-time capture protocol, matching Loom.Sandbox's --capture: drive a fixed 1/60 delta with
-			// time held at a constant 1 second rather than the wall clock, so any delta-driven state (auto-exposure,
-			// temporal filters) converges identically on every run — a game captured this way is pixel-comparable
-			// with the engine's own golden/parity pipeline. Captured at frame 60 — late enough for that
-			// convergence — then two more ticks before exit so the capture's write has finished before teardown.
-			const double captureDelta = 1.0 / 60.0;
-			const double captureTime = 1.0;
-			var frame = 0;
-			window.Render += _ =>
-			{
-				if (minimized)
-					return;
-				frame++;
-				if (frame == 60)
-					engine.RequestCapture(capturePath);
-				driver.Tick(new FrameTime(captureDelta, captureTime));
-				if (frame >= 62)
-					host.RequestExit();
-			};
-		}
-		else if (hostOptions.SmokeFrames > 0)
-		{
-			var total = 0.0;
-			var frame = 0;
-			window.Render += delta =>
-			{
-				if (minimized)
-					return;
-				total += delta;
-				frame++;
-				driver.Tick(new FrameTime(delta, total));
-				if (frame >= hostOptions.SmokeFrames)
-					host.RequestExit();
-			};
-		}
-		else
-		{
-			var total = 0.0;
-			window.Render += delta =>
-			{
-				if (minimized)
-					return;
-				total += delta;
-				driver.Tick(new FrameTime(delta, total));
-			};
-		}
+			if (minimized)
+				return;
+			total += delta;
+			driver.Tick(new FrameTime(delta, total));
+		};
 
 		window.Run();
 

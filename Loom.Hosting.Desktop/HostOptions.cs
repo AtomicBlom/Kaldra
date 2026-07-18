@@ -5,10 +5,11 @@ using Loom.Core.Hosting;
 namespace Loom.Hosting.Desktop;
 
 /// <summary>
-/// <see cref="DesktopAppHost"/>'s command-line launch-option parser — the host-level flags every desktop-hosted
-/// <see cref="LoomApplication"/> gets for free (backend selection, presentation, headless smoke/capture) without
-/// the app author writing any parsing of its own. Modeled on <c>Loom.Sandbox</c>'s own launch-option grammar, so a
-/// game hosted here is verifiable with the same golden/parity pipeline the engine's sandbox uses.
+/// <see cref="DesktopAppHost"/>'s command-line launch-option parser — the runtime flags a shipped, desktop-hosted
+/// <see cref="LoomApplication"/> gets for free (backend selection, presentation, dev shader-watching) without the
+/// app author writing any parsing of its own. Scoped to what a real interactive game actually consumes at launch;
+/// test-only affordances (frame capture, fixed frame-count runs) live in the test tooling, not the production host,
+/// because a real game's frames aren't deterministic and it never wants those flags.
 /// <para>
 /// Parsing is deliberately tiny and dependency-free: <c>--key value</c>, <c>--key=value</c>, and bare
 /// <c>--flag</c> (optionally <c>--flag=false</c>). Any argument this parser does not recognize as one of its own
@@ -41,12 +42,6 @@ public sealed record HostOptions
 	/// deterministic software rendering. Maps onto <see cref="EngineSettings.PreferSoftwareAdapter"/>.</summary>
 	public bool SoftwareAdapter { get; init; }
 
-	/// <summary>Headless: render N frames (real delta) then exit. 0 = run interactively.</summary>
-	public int SmokeFrames { get; init; }
-
-	/// <summary>Capture one frame to this PNG path with frozen time, then exit. Null disables.</summary>
-	public string? Capture { get; init; }
-
 	/// <summary>Print usage and exit. Set by <c>--help</c>/<c>-h</c> or by any parse error.</summary>
 	public bool ShowHelp { get; init; }
 
@@ -77,10 +72,6 @@ public sealed record HostOptions
 		  --software-adapter        Force a CPU/software rendering adapter (DX12 WARP; a Vulkan CPU device) for
 		                            GPU-less CI or deterministic software rendering.
 
-		Headless / capture:
-		  --smoke-frames <n>        Render N frames then exit.
-		  --capture <path>          Capture one frame to a PNG (frozen time) then exit.
-
 		  -h, --help                Show this help.
 
 		Any option not listed above is passed through unchanged to the app.
@@ -102,8 +93,6 @@ public sealed record HostOptions
 		var hdr = false;
 		var watchShaders = false;
 		var softwareAdapter = false;
-		var smokeFrames = 0;
-		string? capture = null;
 		var help = false;
 		var appArgs = new List<string>();
 
@@ -151,11 +140,6 @@ public sealed record HostOptions
 					case "--hdr": hdr = Flag(); break;
 					case "--watch-shaders": watchShaders = Flag(); break;
 					case "--software-adapter": softwareAdapter = Flag(); break;
-					case "--smoke-frames":
-						smokeFrames = int.Parse(Value(), CultureInfo.InvariantCulture);
-						if (smokeFrames <= 0) return Fail("--smoke-frames must be a positive frame count (a headless run needs N > 0 frames to render then exit).");
-						break;
-					case "--capture": capture = Value(); break;
 					case "--help" or "-h" or "-?": help = true; break;
 					default:
 						// Not one of ours — pass it through untouched (its own value token, if any, arrives on the
@@ -178,8 +162,6 @@ public sealed record HostOptions
 			HdrOutput = hdr,
 			WatchShaderDirectory = watchShaders,
 			SoftwareAdapter = softwareAdapter,
-			SmokeFrames = smokeFrames,
-			Capture = capture,
 			ShowHelp = help,
 			AppArgs = [.. appArgs],
 		};

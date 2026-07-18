@@ -26,36 +26,32 @@ rendering adapter instead of a real GPU:
 Both the desktop host (`Loom.Hosting.Desktop`'s `HostOptions`) and `Loom.Sandbox` expose this as a
 `--software-adapter` command-line flag.
 
-## Copyable recipe for a consuming game
+## Recipe for a consuming game
 
-A game built on `Loom.Sdk` can adapt the same recipe — force WARP, capture, and colorcount-assert — with no
-GPU runner:
+Keep two concerns separate: forcing a software adapter (a real launch option) and verifying rendering headlessly
+(a test concern).
 
-```yaml
-# .github/workflows/software-capture.yml
-name: Software rasterizer capture
+**Force a software adapter.** The reusable desktop host exposes `--software-adapter`
+(→ `EngineSettings.PreferSoftwareAdapter`), so any `LoomApplication` can be launched onto WARP / a CPU device on a
+GPU-less runner. That is real runtime config a game can pass.
 
-on: [push, pull_request]
+**Verify rendering headlessly — with an in-process test, not a host flag.** The production host does not have a
+`--capture` or a fixed-frame-count mode, and deliberately so: a shipped game has no deterministic frame to grab
+(it opens on an animated splash or a menu waiting for input), so a frozen-frame capture is meaningless for it.
+Verify rendering with a GPU-optional test that brings the engine up **offscreen** — no window, no special host
+flags — and asserts a real frame came out:
 
-jobs:
-  warp-capture:
-    runs-on: windows-latest   # ships WARP out of the box
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '10.0.x'
-      - run: dotnet build MyGame.csproj -c Release
-      - shell: pwsh
-        run: |
-          dotnet run --project MyGame.csproj -c Release --no-build -- `
-            --backend dx12 --software-adapter --capture out/frame.png --smoke-frames 60
-          # Assert out/frame.png isn't black/empty — e.g. via the same colorcount approach as
-          # Scripts/Verification/colorcount.ps1 in the Loom repo (distinct-RGB count over a decoded PNG).
+```csharp
+// Skips cleanly when Engine.AvailableEngines is empty; forcing PreferSoftwareAdapter runs it on WARP with no GPU.
+var engine = backend.Create(Surface.Offscreen(width, height), width, height, settings);
+// … set a graph, render a few frames pumping ServicePendingUploads, then engine.RequestCapture(path) …
+// assert the PNG decodes to width x height and isn't a near-empty/black frame.
 ```
 
-Swap `--capture ... --smoke-frames N` for whatever headless invocation your game's own launch options expose
-(see `HostOptions`/`LaunchOptions` if you're hosting through `Loom.Hosting.Desktop` or the sandbox pattern).
+See [`Loom.Tests/OffscreenEngineTests.cs`](../Loom.Tests/OffscreenEngineTests.cs) for the end-to-end shape — this
+is how Loom itself verifies rendering on a GPU-less runner, and it's the pattern a game (or a template) should
+copy. The frozen-frame `--capture` used by `Loom.Sandbox` and `tools/golden.ps1` is a framework/demo regression
+tool for deterministic scenes, not a shipped-game feature.
 
 ## Offscreen: windowless / Linux (lavapipe) runners
 
