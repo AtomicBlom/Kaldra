@@ -38,6 +38,7 @@
     <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <ProjectReference Include="..\Loom.Concepts\Loom.Concepts.csproj" />
+    <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
   </ItemGroup>
 
   <!-- Referenced so their module initializers self-register into Engine.AvailableEngines (each guarded by its own

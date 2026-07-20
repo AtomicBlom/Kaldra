@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<!-- The engine and everything downstream of it must stay NativeAOT-clean; opt into the trim/AOT
+		     analyzers so any reflection or unrooted-metadata slip is a build warning, not a publish surprise. -->
+		<IsAotCompatible>true</IsAotCompatible>
+	</PropertyGroup>
+
+	<PropertyGroup Label="NuGet">
+		<PackageId>Loom.Input</PackageId>
+		<Description>Neutral input subsystem for Loom: device-agnostic events, a per-frame snapshot, declarative action maps with rebinding persistence, and an input-layer arbitration stack. Depends only on the BCL so desktop hosts, the web host, and headless tests all share it.</Description>
+		<PackageTags>input;gamepad;keyboard;mouse;touch;gamedev;dotnet</PackageTags>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<!-- Suppress missing-XML-doc warnings until the XML doc pass is complete. -->
+		<NoWarn>$(NoWarn);CS1591</NoWarn>
+	</PropertyGroup>
+
+</Project>
