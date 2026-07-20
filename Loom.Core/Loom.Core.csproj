@@ -15,6 +15,12 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
+  <!-- The input subsystem is a BCL-only leaf carrying no graphics-API type, so this downward reference
+       leaves backend portability untouched while giving the hosting layer a neutral input model. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
+  </ItemGroup>
+
   <!-- Ship the standard-level LLM orientation file as a NuGet content file so it surfaces in
        NuGet Package Explorer and IDE package viewers. Conditioned so `dotnet pack` without a prior
        generate-llms-docs run still succeeds (CI generates it before packing). -->

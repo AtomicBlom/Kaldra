@@ -1,6 +1,7 @@
-﻿using System.Numerics;
+using System.Numerics;
 
 using Loom.Core.Graph;
+using Loom.Input;
 
 namespace Loom.Core.Hosting;
 
@@ -46,10 +47,33 @@ public abstract class LoomApplication : IHostedApplication
 	/// </summary>
 	public Vector2 SurfaceSize { get; private set; }
 
+	/// <summary>
+	/// The resolved input for the current frame — the bottom-of-stack (game-facing) held state after every input
+	/// layer has had its say. Poll it during <see cref="Update"/>, <see cref="FixedUpdate"/>, or <see cref="Draw"/>
+	/// for level and edge queries (<c>Input.Down(Key.W)</c>, <c>Input.Pressed(Key.Space)</c>,
+	/// <c>Input.PointerDelta</c>, <c>Input.Gamepad(0)</c>). Valid from construction — with no layers pushed it is
+	/// simply the raw event stream folded into held state.
+	/// </summary>
+	/// <remarks>
+	/// The stack resolves once per frame, at the top of the tick before the fixed-step catch-up loop, so this same
+	/// snapshot is shared by <em>every</em> <see cref="FixedUpdate"/> step of the frame as well as <see cref="Update"/>
+	/// and <see cref="Draw"/>. A <see cref="InputSnapshot.Pressed(Key)"/> edge is therefore visible to all of a
+	/// frame's fixed steps — guard once-per-press simulation logic accordingly rather than assuming one fixed step
+	/// per edge.
+	/// </remarks>
+	protected InputSnapshot Input => _inputStack.Output;
+
 	private IHostControl _host = null!;
 	private double _fixedStepHz;
 	private double _fixedAccumulator;
 	private double _fixedTotalSeconds;
+
+	/// <summary>The per-frame input capacity shared by the queue, the fold, and the drain scratch.</summary>
+	private const int InputEventCapacity = 1024;
+
+	private readonly InputEventRing _inputQueue = new(InputEventCapacity);
+	private readonly InputLayerStack _inputStack = new(InputEventCapacity);
+	private readonly InputEvent[] _inputScratch = new InputEvent[InputEventCapacity];
 
 	/// <summary>The spiral-of-death guard: at most this many <see cref="FixedUpdate"/> steps run per frame before any further backlog is dropped.</summary>
 	private const int MaxCatchUpSteps = 5;
@@ -107,6 +131,22 @@ public abstract class LoomApplication : IHostedApplication
 	/// </summary>
 	protected void Exit() => _host.RequestExit();
 
+	/// <summary>
+	/// Pushes an input layer on top of the stack, where it is processed first each frame — it sees input before,
+	/// and can block or inject it for, every layer beneath. The app assembles the stack bottom-up (gameplay first,
+	/// then UI glue, then transient modals); whoever pushes a layer keeps the reference and removes it.
+	/// </summary>
+	protected void PushInputLayer(IInputLayer layer) => _inputStack.Push(layer);
+
+	/// <summary>Removes and returns the top input layer, or null if the stack is empty.</summary>
+	protected IInputLayer? PopInputLayer() => _inputStack.Pop();
+
+	/// <summary>Removes a specific input layer from anywhere in the stack (not just the top); returns whether it was present.</summary>
+	protected bool RemoveInputLayer(IInputLayer layer) => _inputStack.Remove(layer);
+
+	/// <summary>Whether <paramref name="layer"/> is currently in the input stack.</summary>
+	protected bool ContainsInputLayer(IInputLayer layer) => _inputStack.Contains(layer);
+
 	AppOptions IHostedApplication.ReadOptions()
 	{
 		var options = new AppOptions();
@@ -130,8 +170,18 @@ public abstract class LoomApplication : IHostedApplication
 
 	void IHostedApplication.SetFocus(bool focused) => OnFocusChanged(focused);
 
+	void IHostedApplication.QueueInput(in InputEvent e) => _inputQueue.Enqueue(in e);
+
+	RumbleQueue IHostedApplication.Rumble => _inputStack.RumbleQueue;
+
 	void IHostedApplication.Tick(FrameTime time)
 	{
+		// Resolve the layer stack once, at the very top of the frame before the fixed-step catch-up loop, so both
+		// FixedUpdate and Update see this frame's input. The resulting Input snapshot is shared by every fixed step
+		// of the frame (see the Input property's remarks on the edge double-fire caveat).
+		var events = _inputScratch.AsSpan(0, _inputQueue.Drain(_inputScratch));
+		_inputStack.Resolve(events);
+
 		var frameTime = time;
 		if (_fixedStepHz > 0)
 		{

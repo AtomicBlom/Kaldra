@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <PackageReference Include="Silk.NET.Windowing" />
+    <PackageReference Include="Silk.NET.Input" />
     <PackageReference Include="Silk.NET.Maths" />
   </ItemGroup>
 
