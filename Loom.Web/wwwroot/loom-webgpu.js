@@ -458,6 +458,110 @@ export function startPointerHandler(dotnetPointer) {
 	canvas.addEventListener("pointerup", e => send(e, 2));
 }
 
+// Forward DOM pointer/keyboard/text + Gamepad-API events to the host as neutral input. Each callback carries at
+// most three values (the ceiling the .NET source-generated JS interop marshals for a function): the three-value
+// events get a dedicated callback (onPointerMove, onGamepadButton, onGamepadAxis), the rest share the
+// discriminated onEvent(kind, a, b) channel, and onKey(code, down) carries the physical KeyboardEvent.code string
+// the host maps to a neutral key. Pointer moves are coalesced and the poll-only Gamepad API is diffed once per
+// animation frame, so a high-rate device can't flood the frame's event capacity. Pointer coordinates are device
+// pixels (CSS position × the capped device-pixel ratio, matching getCanvasSize) so a hit-test lands on the
+// geometry the engine rendered.
+export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis, onEvent, onKey) {
+	// onEvent kind codes — must match WebInputPump's Kind* constants.
+	const POINTER_BUTTON = 1, WHEEL = 2, TEXT = 3, GAMEPAD_CONNECTION = 4, FOCUS = 5;
+
+	// Pointer/wheel target the canvas (coordinates are canvas-relative); keyboard/focus/gamepad target the window
+	// so they work regardless of which element holds DOM focus in a full-screen canvas app.
+	const target = canvas ?? document;
+	const pointerKind = t => t === "pen" ? 1 : t === "touch" ? 2 : 0;
+	const toDevice = e => {
+		const rect = (canvas ?? document.documentElement).getBoundingClientRect();
+		const dpr = Math.min(window.devicePixelRatio || 1, 2);
+		return [(e.clientX - rect.left) * dpr, (e.clientY - rect.top) * dpr];
+	};
+
+	// Pointer move: keep only the latest per frame, flushed by the rAF loop below (or eagerly before a button so
+	// a click lands where the cursor is).
+	let pendingMove = null;
+	const flushMove = () => {
+		if (!pendingMove) return;
+		onPointerMove(pendingMove[0], pendingMove[1], pendingMove[2]);
+		pendingMove = null;
+	};
+	target.addEventListener("pointermove", e => {
+		const [x, y] = toDevice(e);
+		pendingMove = [x, y, pointerKind(e.pointerType)];
+	});
+	const button = (e, down) => {
+		const [x, y] = toDevice(e);
+		pendingMove = [x, y, pointerKind(e.pointerType)];
+		flushMove();
+		onEvent(POINTER_BUTTON, e.button, down ? 1 : 0);
+	};
+	target.addEventListener("pointerdown", e => button(e, true));
+	target.addEventListener("pointerup", e => button(e, false));
+	// Vertical scroll rides deltaY, a shift-scroll reports on deltaX; passive since the host doesn't cancel it.
+	target.addEventListener("wheel", e => onEvent(WHEEL, e.deltaX, e.deltaY), { passive: true });
+
+	// Keyboard state via the physical (layout-independent) code; drop auto-repeat — the host's held state already
+	// covers a key held across frames, and typed characters come through the text channel below.
+	window.addEventListener("keydown", e => { if (!e.repeat) onKey(e.code, true); });
+	window.addEventListener("keyup", e => onKey(e.code, false));
+	// Typed text via keypress: it delivers a layout/shift-resolved character that raw key codes can't. Emit only
+	// genuine single-character values (skip named keys like "Enter"/"ArrowUp" that also fire keypress), one event
+	// per code point so an astral character (e.g. an emoji) arrives as a single UTF-32 code point.
+	window.addEventListener("keypress", e => {
+		const cps = [...(e.key ?? "")];
+		if (cps.length === 1 && cps[0].codePointAt(0) >= 0x20)
+			onEvent(TEXT, cps[0].codePointAt(0), 0);
+	});
+
+	// Focus/visibility: the browser drops keyup for keys held across a blur or tab-hide, so notify the host (it
+	// synthesizes the releases). focused = 1 on regain, 0 on loss.
+	window.addEventListener("blur", () => onEvent(FOCUS, 0, 0));
+	window.addEventListener("focus", () => onEvent(FOCUS, 1, 0));
+	document.addEventListener("visibilitychange", () => onEvent(FOCUS, document.hidden ? 0 : 1, 0));
+
+	// Gamepads: connect/disconnect via the DOM events, button/axis changes by diffing the poll-only API each frame.
+	const padStates = [];
+	window.addEventListener("gamepadconnected", e => { padStates[e.gamepad.index] = { buttons: [], axes: [] }; onEvent(GAMEPAD_CONNECTION, e.gamepad.index, 1); });
+	window.addEventListener("gamepaddisconnected", e => { padStates[e.gamepad.index] = null; onEvent(GAMEPAD_CONNECTION, e.gamepad.index, 0); });
+
+	const AXIS_EPS = 1e-3;
+	const pollGamepads = () => {
+		const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+		for (let i = 0; i < pads.length; i++) {
+			const gp = pads[i];
+			if (!gp) continue;
+			const st = padStates[i] ??= { buttons: [], axes: [] };
+			for (let b = 0; b < gp.buttons.length; b++) {
+				const btn = gp.buttons[b];
+				// Buttons 6/7 are the analog triggers — forward their value as axes 4/5, not as digital buttons.
+				if (b === 6 || b === 7) {
+					const axis = b === 6 ? 4 : 5;
+					if (st.axes[axis] === undefined || Math.abs(st.axes[axis] - btn.value) > AXIS_EPS) {
+						st.axes[axis] = btn.value;
+						onGamepadAxis(i, axis, btn.value);
+					}
+				} else if (st.buttons[b] !== btn.pressed) {
+					st.buttons[b] = btn.pressed;
+					onGamepadButton(i, b, btn.pressed ? 1 : 0);
+				}
+			}
+			for (let a = 0; a < gp.axes.length && a < 4; a++) {
+				if (st.axes[a] === undefined || Math.abs(st.axes[a] - gp.axes[a]) > AXIS_EPS) {
+					st.axes[a] = gp.axes[a];
+					onGamepadAxis(i, a, gp.axes[a]);
+				}
+			}
+		}
+	};
+
+	// One maintenance tick per animation frame: flush the coalesced pointer move, then diff the gamepads.
+	const tick = () => { flushMove(); pollGamepads(); requestAnimationFrame(tick); };
+	requestAnimationFrame(tick);
+}
+
 function align4(n) { return (n + 3) & ~3; }
 
 // Diagnostic hook (read via the CDP verification harness): the pending error queue plus device/canvas state.

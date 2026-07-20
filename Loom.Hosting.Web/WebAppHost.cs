@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
@@ -32,6 +32,10 @@ public sealed partial class WebAppHost : IAppHost
 	private static double _time;
 	private static double _lastTimestampMs;
 	private static int _frame;
+
+	// The DOM/Gamepad-API → neutral input bridge, held for the lifetime of the app (its OnInput/OnKey delegates
+	// are handed to the JS input shim once at startup).
+	private static WebInputPump? _input;
 
 	// Capture mode (?capture=<name>): a frozen 1/60 s clock and a one-shot grab at a fixed frame, so a headless
 	// browser capture is deterministic and pixel-comparable with a desktop reference.
@@ -116,7 +120,12 @@ public sealed partial class WebAppHost : IAppHost
 		app.Load(engine, Host);
 		// The host reports the initial size before the first frame, exactly like every later resize.
 		app.Resize(width, height);
-		// Focus/blur wiring is a follow-up — no JS import exists yet to observe the page's visibility/focus state.
+
+		// Bridge the page's DOM/Gamepad-API input into the app's neutral queue, and its focus/visibility state into
+		// the app's focus hook. On blur/hide the pump synthesizes releases for everything held — the browser drops
+		// the key/button ups for anything held across a tab switch, which would otherwise strand it down.
+		_input = new WebInputPump(app.QueueInput, app.SetFocus);
+		StartInputHandlers(_input.OnPointerMove, _input.OnGamepadButton, _input.OnGamepadAxis, _input.OnEvent, _input.OnKey);
 
 		SetStatus($"Loom running on {engine.DeviceName} ({width}x{height})");
 		StartFrameLoop(Frame);
@@ -262,4 +271,17 @@ public sealed partial class WebAppHost : IAppHost
 	[JSImport("startResizeHandler", Module)]
 	[SupportedOSPlatform("browser")]
 	private static partial void StartResizeHandler([JSMarshalAs<JSType.Function>] Action onResize);
+
+	// Attach the DOM/Gamepad-API input listeners. Each callback carries at most three values (the ceiling the
+	// source-generated JS interop marshals for a function): the three-value events get a dedicated callback
+	// (pointer move, gamepad button, gamepad axis), the rest share the discriminated onEvent channel, and onKey
+	// carries the physical KeyboardEvent.code string plus its down/up state (mapped to a neutral key on this side).
+	[JSImport("startInputHandlers", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial void StartInputHandlers(
+		[JSMarshalAs<JSType.Function<JSType.Number, JSType.Number, JSType.Number>>] Action<double, double, double> onPointerMove,
+		[JSMarshalAs<JSType.Function<JSType.Number, JSType.Number, JSType.Number>>] Action<double, double, double> onGamepadButton,
+		[JSMarshalAs<JSType.Function<JSType.Number, JSType.Number, JSType.Number>>] Action<double, double, double> onGamepadAxis,
+		[JSMarshalAs<JSType.Function<JSType.Number, JSType.Number, JSType.Number>>] Action<double, double, double> onEvent,
+		[JSMarshalAs<JSType.Function<JSType.String, JSType.Boolean>>] Action<string, bool> onKey);
 }
