@@ -31,6 +31,7 @@
        wholly ImGui-free. The twin of Loom.UI.SUIsei (which bridges the XAML UI engine the same way). -->
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
+    <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
     <PackageReference Include="ImGui.NET" />
     <!-- Hermetic slangc for compiling this package's shader (bundled in the package; win-x64 / win-arm64) — build-only. -->
     <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />

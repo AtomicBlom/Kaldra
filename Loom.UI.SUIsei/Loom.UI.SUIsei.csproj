@@ -31,6 +31,7 @@
     <ProjectReference Include="..\external\SUIsei\SUIsei\SUIsei.csproj" />
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
+    <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
     <!-- Hermetic slangc for compiling this package's shader (bundled in the package; win-x64 / win-arm64) — build-only. -->
     <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
     <!-- Hermetic DXC for signing the DXIL output; build-only. -->
