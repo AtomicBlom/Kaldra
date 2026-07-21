@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Graph;

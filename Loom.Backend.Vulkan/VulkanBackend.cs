@@ -101,8 +101,8 @@ public sealed class VulkanBackend : IRenderBackend
 			settings.CopyBaseSettingsTo(vulkanSettings);
 		}
 
-		if (surface is OffscreenSurface)
-			return new VulkanEngine(width, height, vulkanSettings);
+		if (surface is OffscreenSurface offscreen)
+			return new VulkanEngine(offscreen.Width, offscreen.Height, vulkanSettings);
 
 		if (surface is not IVkSurface vkSurface)
 			throw new ArgumentException(

@@ -12,12 +12,11 @@ namespace Loom.Backend.DirectX12;
 /// long-lived API handles: the DXGI factory, the D3D12 device, the direct (graphics) command queue, and the
 /// debug layer. The Vulkan/Silk.NET stack is quarantined in this assembly; nothing here reaches Core/Graph.
 /// <para>
-/// By default the device comes up on the system default adapter (this dev box is single-GPU — an Adreno
-/// on Windows-on-ARM); explicit high-performance/discrete adapter selection honouring
-/// <see cref="DirectX12EngineSettings.PreferDiscreteGpu"/> is a later refinement.
-/// <see cref="Loom.Core.Hosting.EngineSettings.PreferSoftwareAdapter"/> instead resolves the WARP
-/// (software rasterizer) adapter via <c>IDXGIFactory4.EnumWarpAdapter</c>, for GPU-less CI and
-/// deterministic software rendering.
+/// The device comes up on the system default adapter; <see cref="DirectX12EngineSettings.PreferDiscreteGpu"/>
+/// has no effect here (this backend does no explicit high-performance/discrete adapter selection). When
+/// <see cref="Loom.Core.Hosting.EngineSettings.PreferSoftwareAdapter"/> is set, the WARP (software rasterizer)
+/// adapter is resolved instead via <c>IDXGIFactory4.EnumWarpAdapter</c>, for GPU-less CI and deterministic
+/// software rendering.
 /// </para>
 /// </summary>
 internal sealed unsafe class DirectX12Context : IDisposable

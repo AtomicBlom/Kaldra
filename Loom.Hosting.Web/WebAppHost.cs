@@ -116,7 +116,8 @@ public sealed partial class WebAppHost : IAppHost
 		app.Load(engine, Host);
 		// The host reports the initial size before the first frame, exactly like every later resize.
 		app.Resize(width, height);
-		// Focus/blur wiring is a follow-up — no JS import exists yet to observe the page's visibility/focus state.
+		// The web host does not observe page focus, so app.SetFocus is never called here: there is no JS import
+		// wired to surface the page's visibility/focus state.
 
 		SetStatus($"Loom running on {engine.DeviceName} ({width}x{height})");
 		StartFrameLoop(Frame);

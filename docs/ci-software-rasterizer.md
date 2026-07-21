@@ -1,8 +1,8 @@
 # CI with a software rasterizer (no GPU)
 
 Loom's strongest regression net — the golden-image and cross-backend parity captures (`tools/golden.ps1`,
-`GoldenImageTests`, `CrossBackendParityTests`) — needs a real GPU to produce its captures, so it only runs
-locally today; GitHub-hosted runners have none, and CI skips it (see `.github/workflows/ci.yml`).
+`GoldenImageTests`, `CrossBackendParityTests`) — needs a real GPU to produce its captures, so it runs only on a
+GPU-equipped machine; GitHub-hosted runners have none, and CI skips it (see `.github/workflows/ci.yml`).
 `EngineSettings.PreferSoftwareAdapter` plus `windows-latest`'s bundled WARP (Microsoft's software D3D12
 rasterizer) close part of that gap: a GPU-less runner can still render every tracked demo and prove it produced
 real pixels, not a crash or a black frame.
@@ -90,9 +90,9 @@ Measured locally (win-arm64, Adreno X1-85, Release build) by diffing a hardware 
 | `Bloom` | 0.00/255  | 5        | 0.0%                |
 
 Both comfortably clear the cross-backend parity bar documented in the root `CLAUDE.md` (4/255 mean per channel,
-<0.5% of pixels). That is a promising signal for WARP as a future parity baseline — but it is one box, one GPU
-family, one build. It has not been measured on the `windows-latest` runners CI actually uses, across the full
+<0.5% of pixels). That is a promising signal for WARP as a parity baseline — but it is one box, one GPU family,
+one build. It has not been measured on the `windows-latest` runners CI actually uses, across the full
 tracked-demo set, or over time (a driver/OS update could change it). **No software-adapter parity baseline is
-committed by this change** — `.github/workflows/software-capture.yml` stays a colorcount smoke test — and
-promoting WARP captures to a committed golden/parity baseline is left as a follow-up once it's been measured on
-the runner that would actually enforce it.
+committed:** `.github/workflows/software-capture.yml` is a colorcount smoke test only. Promoting WARP captures to
+a committed golden/parity baseline needs the fidelity first measured on the runner that would actually enforce
+it.
