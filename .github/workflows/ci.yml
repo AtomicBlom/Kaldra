@@ -1,7 +1,9 @@
 name: CI
 
-# Build the solution and run the backend-neutral unit tests (describe/execute layers, graph export, frustum math,
-# asset source). These need no GPU, so they run on the standard GitHub-hosted runners.
+# Build the engine (including both GPU backends, so the offscreen/hosted-application tests link and self-register)
+# and run the unit tests. No GPU is needed: the GPU-gated tests (golden-image, cross-backend parity, and the
+# offscreen render tests) auto-skip when no device is available, and the rest are backend-neutral (describe/execute
+# layers, graph export, frustum math, asset source).
 #
 # The golden-image regression (GoldenImageTests) is deliberately NOT run here: it needs a GPU to produce the
 # captures, and GitHub-hosted runners have none. It is opt-in (skipped unless LOOM_GOLDEN_DIR is set) and is run
@@ -14,7 +16,14 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    # Self-hosted Windows runner: Loom.Tests references both GPU backends (below), whose shader-compile step runs
+    # the Slang compiler — and Slang.Sdk packages a native slangc only for win-x64 / win-arm64 (the DirectX12
+    # backend also signs its DXIL with the Windows DXC), so a Linux runner can't build it. A self-hosted runner
+    # keeps this off GitHub-hosted minutes and, on a box with a real device, runs the GPU-gated tests instead of
+    # skipping them.
+    # SECURITY: safe only while this repo is PRIVATE. Before making it public, remove the self-hosted runner (a
+    # fork's PR could otherwise run arbitrary code on it) and switch back to `runs-on: windows-latest`.
+    runs-on: [self-hosted, windows]
     steps:
       # SUIsei is a private submodule; it is fetched separately below with a PAT.
       - uses: actions/checkout@v7
@@ -26,6 +35,7 @@ jobs:
       - name: Checkout submodules (PAT for private SUIsei)
         env:
           GH_PAT: ${{ secrets.PAT }}
+        shell: bash
         run: |
           git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/"
           git submodule update --init --recursive external/SUIsei external/VMASharp
@@ -34,8 +44,9 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      # Build only the neutral layers + tests (no GPU backends, no Slang/DXC toolchain on the runner).
-      - name: Build (neutral layers + tests)
+      # Build the tests and everything they reference — the engine, both GPU backends, and the Slang/DXC shader
+      # toolchain that the backends compile through (hence the Windows runner; see runs-on above).
+      - name: Build (engine + backends + tests)
         run: dotnet build Loom.Tests/Loom.Tests.csproj -c Release
 
       # TUnit runs on Microsoft.Testing.Platform; the repo-root global.json opts `dotnet test` into MTP mode,

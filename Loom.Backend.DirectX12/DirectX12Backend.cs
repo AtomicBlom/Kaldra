@@ -73,8 +73,8 @@ public sealed class DirectX12Backend : IRenderBackend
 			settings.CopyBaseSettingsTo(dx12Settings);
 		}
 
-		if (surface is OffscreenSurface)
-			return new DirectX12Engine(width, height, dx12Settings);
+		if (surface is OffscreenSurface offscreen)
+			return new DirectX12Engine(offscreen.Width, offscreen.Height, dx12Settings);
 
 		if (surface is not nint hwnd)
 			throw new ArgumentException(
