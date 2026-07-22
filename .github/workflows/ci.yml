@@ -16,11 +16,14 @@ on:
 
 jobs:
   build-and-test:
-    # Windows-hosted: Loom.Tests references both GPU backends (below), whose shader-compile step runs the Slang
-    # compiler — and Slang.Sdk packages a native slangc only for win-x64 / win-arm64 (the DirectX12 backend also
-    # signs its DXIL with the Windows DXC). A Linux runner can't execute that toolchain, so the full build (engine
-    # + backends + tests) is a Windows job. GPU-gated tests still auto-skip here — the runner has no GPU.
-    runs-on: windows-latest
+    # Self-hosted Windows runner: Loom.Tests references both GPU backends (below), whose shader-compile step runs
+    # the Slang compiler — and Slang.Sdk packages a native slangc only for win-x64 / win-arm64 (the DirectX12
+    # backend also signs its DXIL with the Windows DXC), so a Linux runner can't build it. A self-hosted runner
+    # keeps this off GitHub-hosted minutes and, on a box with a real device, runs the GPU-gated tests instead of
+    # skipping them.
+    # SECURITY: safe only while this repo is PRIVATE. Before making it public, remove the self-hosted runner (a
+    # fork's PR could otherwise run arbitrary code on it) and switch back to `runs-on: windows-latest`.
+    runs-on: [self-hosted, windows]
     steps:
       # SUIsei is a private submodule; it is fetched separately below with a PAT.
       - uses: actions/checkout@v7
