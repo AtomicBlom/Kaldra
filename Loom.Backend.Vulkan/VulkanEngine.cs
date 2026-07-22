@@ -46,7 +46,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
-	private readonly VulkanSwapchain _swapchain;
+	private readonly IVulkanPresentTarget _presentTarget;
+	private readonly bool _offscreen;
 	private readonly string _shaderDir;
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly VulkanTechniqueCache _techniques;
@@ -106,8 +107,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private uint _timestampValidBits;        // 0 ⇒ the graphics queue can't timestamp (timing unavailable)
 
 	// This frame's host inputs, pulled from FrameInputs at the top of Render (cameras already clip-space-adjusted).
-	private float _frameTime;
-	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _frameDrawLists = [];
+	private double _frameTime;
 
 	private int _currentFrame;
 	private bool _framebufferResized;
@@ -119,9 +119,29 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	// 0 valid bits ⇒ the graphics queue can't timestamp, so the profiler stays permanently unavailable.
 	protected override bool CanEnableGpuTiming => _timestampValidBits != 0;
 
+	// The real swapchain, for the two calls only it (not VulkanOffscreenTarget) supports — vkAcquireNextImageKHR
+	// and vkQueuePresentKHR. Only ever accessed when !_offscreen, where _presentTarget is guaranteed to be one.
+	private VulkanSwapchain WindowSwapchain => (VulkanSwapchain)_presentTarget;
+
 	public VulkanEngine(IVkSurface surface, int width, int height, VulkanEngineSettings settings)
+		: this(new VulkanContext(surface, settings.EnableValidation, settings.PreferDiscreteGpu, settings.PreferSoftwareAdapter), offscreen: false, width, height, settings)
 	{
-		_ctx = new VulkanContext(surface, settings.EnableValidation, settings.PreferDiscreteGpu);
+	}
+
+	/// <summary>
+	/// Bring up a windowless engine (<see cref="Loom.Core.Hosting.Surface.Offscreen"/>): the present target is an
+	/// owned <see cref="VulkanOffscreenTarget"/> instead of a swapchain, so <see cref="IEngine.RequestCapture"/>
+	/// reads back an owned image rather than a presented one — no window, no <c>VkSurfaceKHR</c>.
+	/// </summary>
+	public VulkanEngine(int width, int height, VulkanEngineSettings settings)
+		: this(new VulkanContext(settings.EnableValidation, settings.PreferDiscreteGpu, settings.PreferSoftwareAdapter), offscreen: true, width, height, settings)
+	{
+	}
+
+	private VulkanEngine(VulkanContext ctx, bool offscreen, int width, int height, VulkanEngineSettings settings)
+	{
+		_ctx = ctx;
+		_offscreen = offscreen;
 		_vk = _ctx.Vk;
 		_shaderDir = settings.ShaderDirectory;
 
@@ -132,7 +152,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		if (_timestampValidBits == 0)
 			Console.WriteLine("[loom] GPU timing unavailable: the graphics queue reports 0 timestamp valid bits.");
 		_windowExtent = new Extent2D((uint)width, (uint)height);
-		_swapchain = new VulkanSwapchain(_ctx, _windowExtent, settings.VSync, settings.HdrOutput);
+		_presentTarget = offscreen
+			? new VulkanOffscreenTarget(_ctx, _windowExtent, MaxFramesInFlight)
+			: new VulkanSwapchain(_ctx, _windowExtent, settings.VSync, settings.HdrOutput);
 
 		// One VMA allocator backs both transients and meshes. The command pool must exist before the mesh
 		// store (geometry uploads use a one-time copy command), so create it up front.
@@ -255,7 +277,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		}
 
 		// Build transients from `executed` so the injected debug-sample edges add SampledBit to inspected resources.
-		_transients = new VulkanTransientResources(_ctx, executed, Aliases, _swapchain.ImageFormat, _swapchain.Extent, MaxFramesInFlight, _allocator);
+		_transients = new VulkanTransientResources(_ctx, executed, Aliases, _presentTarget.ImageFormat, _presentTarget.Extent, MaxFramesInFlight, _allocator);
 		_context.SetTransients(_transients);
 
 		// Readback staging: one host-visible buffer per frame slot for each g.Readback target.
@@ -322,14 +344,12 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 	public override void Render(FrameInputs inputs)
 	{
-		ArgumentNullException.ThrowIfNull(inputs);
 		ServicePendingUploads();
 		if (Graph is null || _transients is null)
 			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
 
 		_frameTime = inputs.Time;
-		_frameDrawLists = inputs.DrawLists;
-		DrawFrame((float)inputs.DeltaSeconds);
+		DrawFrame(inputs.DeltaSeconds);
 	}
 
 	private void CreateCommandPool()
@@ -378,23 +398,25 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 	private void CreateRenderFinishedSemaphores()
 	{
-		_renderFinished = new Semaphore[_swapchain.ImageCount];
+		_renderFinished = new Semaphore[_presentTarget.ImageCount];
 		SemaphoreCreateInfo semInfo = new() { SType = StructureType.SemaphoreCreateInfo };
 		for (var i = 0; i < _renderFinished.Length; i++)
 			_vk.CreateSemaphore(_ctx.Device, in semInfo, null, out _renderFinished[i]).Check("vkCreateSemaphore");
 	}
 
-	private void RecreateSwapchain()
+	// Rebuild the present target at the current extent — the windowed swapchain (on resize or ErrorOutOfDateKhr/
+	// SuboptimalKhr) or the offscreen target's owned images (on Resize); both implement IVulkanPresentTarget.
+	private void RecreatePresentTarget()
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
 			return;
 
 		_vk.DeviceWaitIdle(_ctx.Device);
-		var oldImageCount = _swapchain.ImageCount;
-		_swapchain.Recreate(_windowExtent);
-		_transients?.Recreate(_swapchain.Extent);
+		var oldImageCount = _presentTarget.ImageCount;
+		_presentTarget.Recreate(_windowExtent);
+		_transients?.Recreate(_presentTarget.Extent);
 
-		if (_swapchain.ImageCount != oldImageCount)
+		if (_presentTarget.ImageCount != oldImageCount)
 		{
 			DestroyRenderFinishedSemaphores();
 			CreateRenderFinishedSemaphores();
@@ -461,7 +483,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		if (_commandPool.Handle != 0)
 			_vk.DestroyCommandPool(_ctx.Device, _commandPool, null);
 
-		_swapchain.Dispose();
+		_presentTarget.Dispose();
 		_ctx.Dispose(); // the device + instance — last, after everything that used them
 	}
 }

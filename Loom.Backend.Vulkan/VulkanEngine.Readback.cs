@@ -104,10 +104,10 @@ internal sealed unsafe partial class VulkanEngine
 		return (buffer, memory);
 	}
 
-	// PNG capture only handles 8-bit RGBA/BGRA swapchains (the formats WriteCapture decodes); HDR swapchain
-	// formats (FP16 / 10-bit packed) are not capturable to PNG here.
+	// PNG capture only handles an 8-bit RGBA/BGRA present target (the formats WriteCapture decodes); an HDR
+	// swapchain format (FP16 / 10-bit packed) is not capturable to PNG here.
 	private bool CaptureSupported() =>
-		_swapchain.ImageFormat is VkFormat.B8G8R8A8Srgb or VkFormat.B8G8R8A8Unorm or VkFormat.R8G8B8A8Srgb or VkFormat.R8G8B8A8Unorm;
+		_presentTarget.ImageFormat is VkFormat.B8G8R8A8Srgb or VkFormat.B8G8R8A8Unorm or VkFormat.R8G8B8A8Srgb or VkFormat.R8G8B8A8Unorm;
 
 	private void WriteCapture(DeviceMemory memory, ulong size, uint width, uint height, string path)
 	{
@@ -115,8 +115,8 @@ internal sealed unsafe partial class VulkanEngine
 		_vk.MapMemory(_ctx.Device, memory, 0, size, 0, &mapped).Check("vkMapMemory");
 		var src = new ReadOnlySpan<byte>(mapped, (int)size);
 
-		// VulkanSwapchain is typically B8G8R8A8; PNG wants RGBA, so swap R/B for those formats.
-		var swizzle = _swapchain.ImageFormat is VkFormat.B8G8R8A8Srgb or VkFormat.B8G8R8A8Unorm;
+		// The present target is typically B8G8R8A8; PNG wants RGBA, so swap R/B for those formats.
+		var swizzle = _presentTarget.ImageFormat is VkFormat.B8G8R8A8Srgb or VkFormat.B8G8R8A8Unorm;
 		var rgba = new byte[(int)size];
 		for (var i = 0; i < (int)(width * height); i++)
 		{

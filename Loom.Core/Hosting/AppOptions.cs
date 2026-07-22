@@ -17,4 +17,27 @@ public sealed class AppOptions
 
 	/// <summary>Initial height in pixels (desktop window size; web fallback size).</summary>
 	public int Height { get; set; } = 720;
+
+	/// <summary>
+	/// Engine configuration handed to the backend at device bring-up (<see cref="Hosting.EngineSettings.VSync"/>,
+	/// <see cref="Hosting.EngineSettings.HdrOutput"/>, <see cref="Hosting.EngineSettings.MaxFramesPerSecond"/>,
+	/// <see cref="Hosting.EngineSettings.WatchShaderDirectory"/>, <see cref="Hosting.EngineSettings.EnableValidation"/>) —
+	/// set members here in <c>Configure</c> rather than the host constructing settings itself. Defaults
+	/// <see cref="Hosting.EngineSettings.EnableValidation"/> <b>off</b>: a hosted app is assumed to be a
+	/// production build, so a developer opts into the validation/debug layer explicitly rather than shipping it on
+	/// by default (constructing <see cref="Hosting.EngineSettings"/> directly, as the sandbox and tests do, still
+	/// defaults it on). Pick the backend via <see cref="Hosting.EngineSettings.PreferredBackend"/> (null = the
+	/// first one available); the host overwrites it with the backend it actually resolved, so this always ends
+	/// up recording the truth even when left unset.
+	/// </summary>
+	public EngineSettings EngineSettings { get; set; } = new() { EnableValidation = false };
+
+	/// <summary>
+	/// Fixed-timestep rate in Hz for <see cref="LoomApplication.FixedUpdate"/> (0 = disabled, the default).
+	/// Deterministic simulation/physics code that must not vary with the display's frame rate steps at
+	/// <c>1 / FixedStepHz</c> seconds regardless of how fast frames arrive, with up to 5 catch-up steps per frame
+	/// before any further backlog is dropped (the spiral-of-death guard). <see cref="FrameTime.Alpha"/> carries
+	/// the leftover fraction for render interpolation between the last two fixed states.
+	/// </summary>
+	public double FixedStepHz { get; set; }
 }

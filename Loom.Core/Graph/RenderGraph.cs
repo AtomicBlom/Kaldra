@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Loom.Core.Graph;
 
@@ -14,7 +15,7 @@ namespace Loom.Core.Graph;
 /// (<see cref="Dump"/>) for inspection and tests. Authored via <see cref="Define"/>.
 /// </para>
 /// </summary>
-public sealed class RenderGraph
+public sealed partial class RenderGraph
 {
 	/// <summary>Resolution domains, in declaration order. The backbuffer domain (if used) is included.</summary>
 	public ImmutableArray<Domain> Domains { get; }
@@ -248,14 +249,18 @@ public sealed class RenderGraph
 				p.Name, p.Kind.ToString(), p.Queue.ToString(),
 				[.. p.Accesses.Select(a => new AccessDto(a.Kind.ToString(), a.Resource.Id, a.Resource.Name))]))],
 			PresentTarget?.Name);
-		return JsonSerializer.Serialize(dto, JsonExportOptions);
+		return JsonSerializer.Serialize(dto, GraphJsonContext.Default.GraphDto);
 	}
-
-	private static readonly JsonSerializerOptions JsonExportOptions = new() { WriteIndented = true };
 
 	private sealed record GraphDto(string Hash, DomainDto[] Domains, ResourceDto[] Resources, PassDto[] Passes, string? Present);
 	private sealed record DomainDto(string Name, int Width, int Height, bool IsBackbuffer, float RelativeScale, int Samples);
 	private sealed record ResourceDto(int Id, string Name, string Kind, string Format, string Domain, float Scale, int Count, int ByteSize);
 	private sealed record PassDto(string Name, string Kind, string Queue, AccessDto[] Accesses);
 	private sealed record AccessDto(string Kind, int ResourceId, string ResourceName);
+
+	// Source-generated JSON metadata for the export DTOs. Reflection-based serialization is disabled under
+	// NativeAOT, so ToJson serializes through this context instead of the reflection-based JsonSerializer overload.
+	[JsonSourceGenerationOptions(WriteIndented = true)]
+	[JsonSerializable(typeof(GraphDto))]
+	private sealed partial class GraphJsonContext : JsonSerializerContext;
 }

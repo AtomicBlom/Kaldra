@@ -93,10 +93,6 @@ public sealed class VulkanBackend : IRenderBackend
 	{
 		ArgumentNullException.ThrowIfNull(surface);
 		ArgumentNullException.ThrowIfNull(settings);
-		if (surface is not IVkSurface vkSurface)
-			throw new ArgumentException(
-				$"The Vulkan backend needs the window's {nameof(IVkSurface)}; got {surface.GetType().Name}.",
-				nameof(surface));
 
 		var vulkanSettings = settings as VulkanEngineSettings;
 		if (vulkanSettings is null)
@@ -104,6 +100,14 @@ public sealed class VulkanBackend : IRenderBackend
 			vulkanSettings = new VulkanEngineSettings();
 			settings.CopyBaseSettingsTo(vulkanSettings);
 		}
+
+		if (surface is OffscreenSurface offscreen)
+			return new VulkanEngine(offscreen.Width, offscreen.Height, vulkanSettings);
+
+		if (surface is not IVkSurface vkSurface)
+			throw new ArgumentException(
+				$"The Vulkan backend needs the window's {nameof(IVkSurface)} (or an {nameof(OffscreenSurface)} for windowless creation); got {surface.GetType().Name}.",
+				nameof(surface));
 
 		return new VulkanEngine(vkSurface, width, height, vulkanSettings);
 	}

@@ -24,8 +24,11 @@ public class EngineSettings
 	public bool VSync { get; set; } = true;
 
 	/// <summary>
-	/// Frame-rate cap for the host's render loop (0 = unlimited). Only meaningful with <see cref="VSync"/> off;
-	/// a host-loop concern the engine merely records so the configuration lives in one place.
+	/// Frame-rate cap for the host's render loop (0 = unlimited). Only meaningful with <see cref="VSync"/> off.
+	/// The host owns this: it reads the value and applies the cap to its own loop (e.g. <c>DesktopAppHost</c> sets
+	/// it on the window's frame-rate limiter before the first frame); the engine itself never paces against it.
+	/// It lives here rather than as a separate host-only option so backend/presentation/frame-pacing configuration
+	/// stays in one object.
 	/// </summary>
 	public double MaxFramesPerSecond { get; set; }
 
@@ -52,6 +55,13 @@ public class EngineSettings
 	public bool WatchShaderDirectory { get; set; }
 
 	/// <summary>
+	/// Request a CPU/software rendering adapter (DX12 WARP; a Vulkan CPU device type) instead of a real GPU —
+	/// for GPU-less CI runners or deterministic software rendering. Falls back to the best available adapter
+	/// when no software one exists, rather than failing engine creation.
+	/// </summary>
+	public bool PreferSoftwareAdapter { get; set; }
+
+	/// <summary>
 	/// Copy every base setting onto <paramref name="target"/> — used by a backend when the host passed the neutral
 	/// base type rather than the backend's own settings subclass, so the backend builds its subclass and inherits
 	/// all the base knobs. Centralised so a newly-added base setting can't be silently dropped by a backend's
@@ -66,5 +76,6 @@ public class EngineSettings
 		target.HdrOutput = HdrOutput;
 		target.PreferredBackend = PreferredBackend;
 		target.WatchShaderDirectory = WatchShaderDirectory;
+		target.PreferSoftwareAdapter = PreferSoftwareAdapter;
 	}
 }

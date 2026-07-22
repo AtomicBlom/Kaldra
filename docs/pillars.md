@@ -29,7 +29,7 @@ The dependency direction enforces it: `Sandbox → Backend → Graph → Core`. 
 
 ## Pure per-frame closures
 
-`.Draw` and `.Dispatch` callbacks pull their inputs from `ctx` and from neutral `Constants`/`Storage` buffers, rather than capturing per-frame values at graph-definition time. This keeps the graph description frame-independent and cacheable: the same `RenderGraph` value drives every frame, with per-frame data arriving through `IEngine.Render(frameInputs)` and `IEngine.Write(handle, …)`.
+The graph is built once with `RenderGraph.Define` and cached; each `.Draw`/`.Dispatch` body then runs every frame. So a closure may capture **stable objects** — engine handles and app-side stable producers (a painter, a scene) — and read their **live** members at execute time; it must **not** capture a per-frame **value**, because that snapshot freezes at build time and never updates. Pull per-frame facts from `ctx` and per-frame data from neutral `Constants`/`Storage` buffers (`IEngine.Write(handle, …)`), or from a stable producer passed in as pass state.
 
 **Correct** — pull a per-frame matrix from a constants channel the pass reads:
 
@@ -38,7 +38,7 @@ var viewProj = g.Constants<Matrix4x4>("camera.viewproj");
 g.Pass("gbuffer")
     .Reads(viewProj)
     .Writes(albedo)
-    .Draw(ctx => ctx.Draw(DrawCall.Create(mesh, "gbuffer")));
+    .Draw(static ctx => ctx.Draw(DrawCall.Create(mesh, "gbuffer")));
 // each frame, before Render: engine.Write(viewProj, camera.ViewProjection);
 ```
 
@@ -50,7 +50,14 @@ g.Pass("gbuffer").Writes(albedo)
     .Draw(ctx => DrawWith(ctx, camera));   // don't capture per-frame data
 ```
 
-A stable handle bundle created once for the engine's lifetime (a painter, a mesh store) is fine to capture — it isn't per-frame data.
+**Correct** — a stable producer (not a per-frame value) passed as pass state, so the body can be `static`:
+
+```csharp
+g.Pass("gbuffer").Writes(albedo)
+    .Draw(scene, static (ctx, scene) => DrawWith(ctx, scene));   // scene.Camera read live, not snapshotted
+```
+
+A stable handle bundle created once for the engine's lifetime (a painter, a mesh store) is fine to capture directly — it isn't per-frame data. The `Draw<TState>`/`Dispatch<TState>` overloads exist for the cases where that stable state isn't already in scope: pass it explicitly and write the body `static`, so the compiler rejects any accidental capture of a per-frame value.
 
 ## No allocations on the hot path
 

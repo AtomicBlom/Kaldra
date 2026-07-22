@@ -12,9 +12,11 @@ namespace Loom.Backend.DirectX12;
 /// long-lived API handles: the DXGI factory, the D3D12 device, the direct (graphics) command queue, and the
 /// debug layer. The Vulkan/Silk.NET stack is quarantined in this assembly; nothing here reaches Core/Graph.
 /// <para>
-/// This first slice creates the device on the system default adapter (this dev box is single-GPU — an
-/// Adreno on Windows-on-ARM); explicit high-performance/discrete adapter selection honouring
-/// <see cref="DirectX12EngineSettings.PreferDiscreteGpu"/> is a later refinement.
+/// The device comes up on the system default adapter; <see cref="DirectX12EngineSettings.PreferDiscreteGpu"/>
+/// has no effect here (this backend does no explicit high-performance/discrete adapter selection). When
+/// <see cref="Loom.Core.Hosting.EngineSettings.PreferSoftwareAdapter"/> is set, the WARP (software rasterizer)
+/// adapter is resolved instead via <c>IDXGIFactory4.EnumWarpAdapter</c>, for GPU-less CI and deterministic
+/// software rendering.
 /// </para>
 /// </summary>
 internal sealed unsafe class DirectX12Context : IDisposable
@@ -65,9 +67,29 @@ internal sealed unsafe class DirectX12Context : IDisposable
 
 		SilkMarshal.ThrowHResult(DXGI.CreateDXGIFactory2(factoryFlags, out Factory));
 
-		// Default adapter (single-GPU box). The device requires at least feature level 11_0; the Adreno X1-85
-		// reports 12_1. Tightening the floor to 12_0 (Vulkan-1.3-baseline parity) lands with real techniques.
-		SilkMarshal.ThrowHResult(D3D12.CreateDevice(default(ComPtr<IDXGIAdapter>), D3DFeatureLevel.Level110, out Device));
+		// A null adapter lets D3D12 pick the system default. When a software adapter is requested instead,
+		// resolve WARP explicitly; a failure to enumerate it (WARP is normally always present on Windows) falls
+		// back to the default adapter rather than failing engine creation.
+		ComPtr<IDXGIAdapter> adapter = default;
+		var usingSoftwareAdapter = false;
+		if (settings.PreferSoftwareAdapter)
+		{
+			if (Factory.EnumWarpAdapter(out ComPtr<IDXGIAdapter> warpAdapter) >= 0 && warpAdapter.Handle is not null)
+			{
+				adapter = warpAdapter;
+				usingSoftwareAdapter = true;
+			}
+			else
+			{
+				Console.Error.WriteLine("[loom] --software-adapter requested but WARP adapter enumeration failed; falling back to the default adapter.");
+			}
+		}
+
+		// The device requires at least feature level 11_0; the Adreno X1-85 reports 12_1. Tightening the floor
+		// to 12_0 (Vulkan-1.3-baseline parity) lands with real techniques.
+		SilkMarshal.ThrowHResult(D3D12.CreateDevice(adapter, D3DFeatureLevel.Level110, out Device));
+		if (adapter.Handle is not null)
+			adapter.Dispose();
 
 		// The info queue exists only when the debug layer is active; draining it each frame is how this backend
 		// reports "validation-clean" (the DirectX12 equivalent of the Vulkan validation-layer messages).
@@ -84,7 +106,13 @@ internal sealed unsafe class DirectX12Context : IDisposable
 		SilkMarshal.ThrowHResult(Device.CreateCommandQueue(&queueDesc, out GraphicsQueue));
 
 		RtvDescriptorSize = Device.GetDescriptorHandleIncrementSize(DescriptorHeapType.Rtv);
-		DeviceName = ReadDefaultAdapterName();
+		if (usingSoftwareAdapter)
+		{
+			DeviceName = "WARP (software)";
+			Console.WriteLine("[loom] adapter=WARP (software)");
+		}
+		else
+			DeviceName = ReadDefaultAdapterName();
 	}
 
 	/// <summary>Read adapter 0's description (the default adapter on a single-GPU machine) for the device name.</summary>

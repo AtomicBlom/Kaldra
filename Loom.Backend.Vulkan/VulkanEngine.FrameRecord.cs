@@ -10,7 +10,7 @@ namespace Loom.Backend.Vulkan;
 
 internal sealed unsafe partial class VulkanEngine
 {
-	private void DrawFrame(float deltaSeconds)
+	private void DrawFrame(double deltaSeconds)
 	{
 		if (_windowExtent.Width == 0 || _windowExtent.Height == 0)
 			return; // Minimized — nothing to draw.
@@ -26,31 +26,42 @@ internal sealed unsafe partial class VulkanEngine
 		// Same story for the timing pool: the fence guarantees this slot's last timestamps are complete.
 		DownloadTimings(_currentFrame);
 
-		uint imageIndex = 0;
-		var acquire = _ctx.KhrSwapchain.AcquireNextImage(
-			_ctx.Device, _swapchain.Handle, ulong.MaxValue,
-			_imageAvailable[_currentFrame], default, ref imageIndex);
-
-		if (acquire == Result.ErrorOutOfDateKhr)
+		uint imageIndex;
+		if (_offscreen)
 		{
-			RecreateSwapchain();
-			return;
+			// No presentation engine to acquire from — each frame-in-flight slot always renders into the same
+			// owned image (VulkanOffscreenTarget sizes ImageCount to MaxFramesInFlight), so the slot index doubles
+			// as the image index.
+			imageIndex = (uint)_currentFrame;
 		}
-		if (acquire is not (Result.Success or Result.SuboptimalKhr))
-			acquire.Check("vkAcquireNextImageKHR");
+		else
+		{
+			imageIndex = 0;
+			var acquire = _ctx.KhrSwapchain.AcquireNextImage(
+				_ctx.Device, WindowSwapchain.Handle, ulong.MaxValue,
+				_imageAvailable[_currentFrame], default, ref imageIndex);
+
+			if (acquire == Result.ErrorOutOfDateKhr)
+			{
+				RecreatePresentTarget();
+				return;
+			}
+			if (acquire is not (Result.Success or Result.SuboptimalKhr))
+				acquire.Check("vkAcquireNextImageKHR");
+		}
 
 		_vk.ResetFences(_ctx.Device, 1, in _inFlight[_currentFrame]);
 
 		var capturePath = CapturePath;
-		// PNG capture decodes an 8-bit RGBA/BGRA swapchain; an HDR swapchain (FP16 / 10-bit packed) would
+		// PNG capture decodes an 8-bit RGBA/BGRA present target; an HDR swapchain (FP16 / 10-bit packed) would
 		// decode to garbage, so skip it there rather than write a corrupt file (HDR is verified on-display).
 		if (capturePath is not null && !CaptureSupported())
 		{
-			Console.WriteLine($"[loom] capture skipped: swapchain format {_swapchain.ImageFormat} is not an 8-bit RGBA/BGRA format (HDR output).");
+			Console.WriteLine($"[loom] capture skipped: present format {_presentTarget.ImageFormat} is not an 8-bit RGBA/BGRA format (HDR output).");
 			CapturePath = null;
 			capturePath = null;
 		}
-		var captureSize = (ulong)_swapchain.Extent.Width * _swapchain.Extent.Height * 4;
+		var captureSize = (ulong)_presentTarget.Extent.Width * _presentTarget.Extent.Height * 4;
 		Buffer captureBuffer = default;
 		DeviceMemory captureMemory = default;
 		if (capturePath is not null)
@@ -58,7 +69,7 @@ internal sealed unsafe partial class VulkanEngine
 
 		// This frame slot's prior work is done (fence waited), so its descriptor sets are idle: recycle them.
 		_descriptors.BeginFrame(_currentFrame);
-		_transients!.SetBackbuffer(_currentFrame, _swapchain.Images[imageIndex], _swapchain.ImageViews[imageIndex], _swapchain.Extent);
+		_transients!.SetBackbuffer(_currentFrame, _presentTarget.Images[imageIndex], _presentTarget.ImageViews[imageIndex], _presentTarget.Extent);
 
 		var cmd = _commandBuffers[_currentFrame];
 		_vk.ResetCommandBuffer(cmd, 0);
@@ -81,59 +92,73 @@ internal sealed unsafe partial class VulkanEngine
 			SType = StructureType.CommandBufferSubmitInfo,
 			CommandBuffer = cmd,
 		};
+		// Offscreen has no presentation engine to synchronise against — no image was acquired to wait on, and
+		// nothing waits on this frame's completion — so the submit carries neither semaphore; the per-frame fence
+		// alone paces it.
 		SubmitInfo2 submit = new()
 		{
 			SType = StructureType.SubmitInfo2,
-			WaitSemaphoreInfoCount = 1,
-			PWaitSemaphoreInfos = &waitInfo,
+			WaitSemaphoreInfoCount = _offscreen ? 0u : 1u,
+			PWaitSemaphoreInfos = _offscreen ? null : &waitInfo,
 			CommandBufferInfoCount = 1,
 			PCommandBufferInfos = &cmdInfo,
-			SignalSemaphoreInfoCount = 1,
-			PSignalSemaphoreInfos = &signalInfo,
+			SignalSemaphoreInfoCount = _offscreen ? 0u : 1u,
+			PSignalSemaphoreInfos = _offscreen ? null : &signalInfo,
 		};
 		_vk.QueueSubmit2(_ctx.GraphicsQueue, 1, in submit, _inFlight[_currentFrame]).Check("vkQueueSubmit2");
 
 		if (capturePath is not null)
 		{
 			_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
-			WriteCapture(captureMemory, captureSize, _swapchain.Extent.Width, _swapchain.Extent.Height, capturePath);
+			WriteCapture(captureMemory, captureSize, _presentTarget.Extent.Width, _presentTarget.Extent.Height, capturePath);
 			_vk.DestroyBuffer(_ctx.Device, captureBuffer, null);
 			_vk.FreeMemory(_ctx.Device, captureMemory, null);
 			CapturePath = null;
 		}
 
-		var swapchain = _swapchain.Handle;
-		var renderFinished = _renderFinished[imageIndex];
-		var presentIndex = imageIndex;
-		PresentInfoKHR present = new()
+		if (_offscreen)
 		{
-			SType = StructureType.PresentInfoKhr,
-			WaitSemaphoreCount = 1,
-			PWaitSemaphores = &renderFinished,
-			SwapchainCount = 1,
-			PSwapchains = &swapchain,
-			PImageIndices = &presentIndex,
-		};
-		var result = _ctx.KhrSwapchain.QueuePresent(_ctx.PresentQueue, in present);
-		if (result is Result.ErrorOutOfDateKhr or Result.SuboptimalKhr || _framebufferResized)
-		{
-			_framebufferResized = false;
-			RecreateSwapchain();
+			if (_framebufferResized)
+			{
+				_framebufferResized = false;
+				RecreatePresentTarget();
+			}
 		}
-		else if (result != Result.Success)
+		else
 		{
-			result.Check("vkQueuePresentKHR");
+			var swapchain = WindowSwapchain.Handle;
+			var renderFinished = _renderFinished[imageIndex];
+			var presentIndex = imageIndex;
+			PresentInfoKHR present = new()
+			{
+				SType = StructureType.PresentInfoKhr,
+				WaitSemaphoreCount = 1,
+				PWaitSemaphores = &renderFinished,
+				SwapchainCount = 1,
+				PSwapchains = &swapchain,
+				PImageIndices = &presentIndex,
+			};
+			var result = _ctx.KhrSwapchain.QueuePresent(_ctx.PresentQueue, in present);
+			if (result is Result.ErrorOutOfDateKhr or Result.SuboptimalKhr || _framebufferResized)
+			{
+				_framebufferResized = false;
+				RecreatePresentTarget();
+			}
+			else if (result != Result.Success)
+			{
+				result.Check("vkQueuePresentKHR");
+			}
 		}
 
 		_currentFrame = (_currentFrame + 1) % MaxFramesInFlight;
 	}
 
-	private void RecordGraph(CommandBuffer cmd, Buffer captureBuffer, float deltaTime)
+	private void RecordGraph(CommandBuffer cmd, Buffer captureBuffer, double deltaTime)
 	{
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
-		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _frameDrawLists, _swapchain.Extent, _swapchain.HdrActive);
+		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _presentTarget.Extent, _presentTarget.HdrActive);
 
 		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it. Re-uploading
 		// every frame (cheap — these are tiny) means the last IEngine.Write persists across frames, so a static
@@ -347,10 +372,11 @@ internal sealed unsafe partial class VulkanEngine
 			};
 			_vk.CmdCopyImageToBuffer(cmd, image.Image, ImageLayout.TransferSrcOptimal, captureBuffer, 1, in region);
 
+			var rest = PresentRestScope;
 			TransitionImage(cmd, image.Image, range,
-				ImageLayout.TransferSrcOptimal, ImageLayout.PresentSrcKhr,
+				ImageLayout.TransferSrcOptimal, rest.Layout,
 				PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit,
-				PipelineStageFlags2.BottomOfPipeBit, AccessFlags2.None);
+				rest.Stage, rest.Access);
 		}
 		else
 		{

@@ -68,10 +68,6 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	private readonly Sampler _mirrorEdgeLinearSampler;
 	private readonly Sampler _mirrorEdgeNearestSampler;
 
-	// This frame's draw lists, pulled from FrameInputs.DrawLists and surfaced as ctx.DrawLists; a producer (the UI
-	// painter) looks one up by id and submits it through DrawList.
-	private IReadOnlyList<(DrawListId Id, DrawListData Data)> _drawLists = [];
-
 	private Extent2D _fbExtent;
 	// Per-draw cache keyed by (name + attachment formats); keeps the hot path off VulkanTechniqueCache's
 	// per-call SPIR-V file read. Misses fall through to VulkanTechniqueCache (which bakes + content-hashes once).
@@ -88,13 +84,11 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	private bool _depthReadOnly;
 	private int _frameSlot;
 
-	public float DeltaTime { get; private set; }
+	public double DeltaTime { get; private set; }
 
-	public float Time { get; private set; }
+	public double Time { get; private set; }
 
 	public bool HdrOutput { get; private set; }
-
-	public IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists => _drawLists;
 
 	public VulkanRenderContext(
 		VulkanContext ctx,
@@ -140,14 +134,13 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	/// The VulkanTechnique objects are owned by the VulkanTechniqueCache; the engine resets that separately after draining.</summary>
 	public void ClearBaked() => _baked.Clear();
 
-	/// <summary>Bind the context to this frame's command buffer, frame slot, timing, HDR-output state, and draw lists before any pass records.</summary>
-	public void BeginFrame(CommandBuffer cmd, float deltaTime, float time, int frameSlot, IReadOnlyList<(DrawListId Id, DrawListData Data)> drawLists, Extent2D fbExtent, bool hdrOutput)
+	/// <summary>Bind the context to this frame's command buffer, frame slot, timing, and HDR-output state before any pass records.</summary>
+	public void BeginFrame(CommandBuffer cmd, double deltaTime, double time, int frameSlot, Extent2D fbExtent, bool hdrOutput)
 	{
 		_cmd = cmd;
 		DeltaTime = deltaTime;
 		Time = time;
 		_frameSlot = frameSlot;
-		_drawLists = drawLists;
 		_fbExtent = fbExtent;
 		HdrOutput = hdrOutput;
 		_instanceUpload.BeginFrame(frameSlot); // reset this slot's per-frame instance staging

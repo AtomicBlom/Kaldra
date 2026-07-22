@@ -20,7 +20,7 @@ internal sealed partial class WebGpuEngine
 		if (_transients is null || Graph is null)
 			return;
 
-		_elapsed = inputs.Time;
+		_elapsed = (float)inputs.Time;
 		_writer.Reset();
 		_arena.Reset();
 		_uniformRing.BeginFrame();
@@ -28,7 +28,7 @@ internal sealed partial class WebGpuEngine
 		_storageRing.BeginFrame();
 		_listVertexRing.BeginFrame();
 		_listIndexRing.BeginFrame();
-		_context.BeginFrame((float)inputs.DeltaSeconds, inputs.Time, inputs.DrawLists);
+		_context.BeginFrame(inputs.DeltaSeconds, inputs.Time);
 
 		// Flush each app-writable buffer's CPU shadow into the frame's upload arena. These become queue-level
 		// WriteBuffer ops, which the replayer applies before every pass — so the last IEngine.Write persists and

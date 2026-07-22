@@ -96,12 +96,41 @@ public sealed class PassBuilder
 		return this;
 	}
 
-	/// <summary>The per-frame record callback for a compute pass. Same purity discipline as <see cref="Draw"/>.</summary>
+	/// <summary>
+	/// The per-frame record callback for a raster pass, given a <paramref name="state"/> captured once at build
+	/// time. Write <paramref name="record"/> as a <c>static</c> lambda: it can then only reach <paramref name="state"/>
+	/// (a stable object — an engine handle, or an app-side stable producer like a painter or a scene) and whatever
+	/// it pulls from <c>ctx</c>, so a per-frame value can't accidentally be captured and frozen at build time. Read
+	/// <paramref name="state"/>'s live members at execute time rather than snapshotting them into locals beforehand.
+	/// </summary>
+	public PassBuilder Draw<TState>(TState state, Action<IRenderContext, TState> record)
+	{
+		if (_kind != PassKind.Raster)
+			throw new InvalidOperationException($"Pass '{_name}' is a compute pass; use .Dispatch, not .Draw.");
+		_record = ctx => record(ctx, state);
+		return this;
+	}
+
+	/// <summary>The per-frame record callback for a compute pass. Same purity discipline as <see cref="Draw(Action{IRenderContext})"/>.</summary>
 	public PassBuilder Dispatch(Action<IRenderContext> record)
 	{
 		if (_kind != PassKind.Compute)
 			throw new InvalidOperationException($"Pass '{_name}' is a raster pass; use .Draw, not .Dispatch.");
 		_record = record;
+		return this;
+	}
+
+	/// <summary>
+	/// The per-frame record callback for a compute pass, given a <paramref name="state"/> captured once at build
+	/// time. Same state-passing discipline as <see cref="Draw{TState}"/>: write <paramref name="record"/> as a
+	/// <c>static</c> lambda so only <paramref name="state"/> and <c>ctx</c> are reachable, and read
+	/// <paramref name="state"/>'s live members at execute time rather than capturing a per-frame value.
+	/// </summary>
+	public PassBuilder Dispatch<TState>(TState state, Action<IRenderContext, TState> record)
+	{
+		if (_kind != PassKind.Compute)
+			throw new InvalidOperationException($"Pass '{_name}' is a raster pass; use .Draw, not .Dispatch.");
+		_record = ctx => record(ctx, state);
 		return this;
 	}
 

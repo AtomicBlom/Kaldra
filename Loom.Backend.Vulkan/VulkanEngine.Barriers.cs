@@ -6,6 +6,15 @@ namespace Loom.Backend.Vulkan;
 
 internal sealed unsafe partial class VulkanEngine
 {
+	// The layout/stage/access the present target rests in once a frame's work is done. Windowed: the real
+	// PresentSrcKhr (VK_KHR_swapchain is enabled there, so the layout is valid and the presentation engine expects
+	// it). Offscreen: VK_KHR_swapchain was never enabled — there is no window to present to — so PresentSrcKhr
+	// isn't even a valid layout value there (the validation layer rejects it: "requires the extension
+	// VK_KHR_swapchain"). Rest in ColorAttachmentOptimal instead; the next frame's first transition already treats
+	// the image as Undefined (discarding prior contents), so the exact resting layout doesn't otherwise matter.
+	private VulkanStateMapping.Scope PresentRestScope =>
+		_offscreen ? VulkanStateMapping.For(ResourceState.ColorAttachment) : VulkanStateMapping.For(ResourceState.Present);
+
 	private void EmitTransition(CommandBuffer cmd, ResourceTransition transition)
 	{
 		var id = transition.Resource.Id;
@@ -33,7 +42,7 @@ internal sealed unsafe partial class VulkanEngine
 			_persistentState[id] = transition.To;
 
 		var src = VulkanStateMapping.For(fromState);
-		var dst = VulkanStateMapping.For(transition.To);
+		var dst = transition.To == ResourceState.Present ? PresentRestScope : VulkanStateMapping.For(transition.To);
 		var srcStage = src.Stage;
 		var srcAccess = src.Access;
 

@@ -1,9 +1,9 @@
 namespace Loom.Core.Hosting;
 
 /// <summary>
-/// A rendering backend — the factory for an <see cref="IEngine"/> on a particular graphics API (Vulkan today,
-/// a future DirectX12). Backends self-register into <see cref="Engine.AvailableEngines"/>; the host picks one by
-/// <see cref="Name"/> at runtime and calls <see cref="Create"/>. This is the seam that lets a second backend
+/// A rendering backend — the factory for an <see cref="IEngine"/> on a particular graphics API (Vulkan,
+/// DirectX12, WebGPU). Backends self-register into <see cref="Engine.AvailableEngines"/>; the host picks one by
+/// <see cref="Name"/> at runtime and calls <see cref="Create"/>. This is the seam that lets a backend
 /// slot in without touching the describe/execute layers.
 /// </summary>
 public interface IRenderBackend
@@ -19,5 +19,9 @@ public interface IRenderBackend
 	/// handle. <paramref name="settings"/> may be the base <see cref="EngineSettings"/> or this backend's
 	/// subclass (which it down-casts to read backend-specific knobs).
 	/// </summary>
+	/// <remarks><paramref name="surface"/> may instead be an <see cref="OffscreenSurface"/> (<see cref="Surface.Offscreen"/>)
+	/// for windowless creation — a backend that supports it renders into an owned readable image rather than a
+	/// swapchain, sized to the <see cref="OffscreenSurface"/>'s own dimensions (the <paramref name="width"/>/<paramref name="height"/>
+	/// arguments size the windowed path).</remarks>
 	IEngine Create(object surface, int width, int height, EngineSettings settings);
 }

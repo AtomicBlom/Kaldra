@@ -1,5 +1,5 @@
 Loom 0.1.0-preview.1 — render-graph engine for .NET
-Generated: 2026-06-28
+Generated: 2026-07-16
 Source: https://github.com/AtomicBlom/Loom
 
 ## Pillars of Design (abbreviated)
@@ -68,7 +68,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `g.BackbufferClear` / `g.BackbufferNoClear` | Set the backbuffer's first-write clear colour / skip the clear — before the first `g.Backbuffer` access. |
 
 So a target is declared `g.Screen.Color("hdr", Format.Rgba16F)` or `g.Screen.Depth("depth", Format.Depth32F)`.
-
+
 
 ## Minimal example
 

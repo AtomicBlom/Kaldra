@@ -13,11 +13,11 @@ namespace Loom.Core.Hosting;
 public interface IRenderContext
 {
 	/// <summary>Seconds since the previous frame.</summary>
-	float DeltaTime { get; }
+	double DeltaTime { get; }
 
 	/// <summary>Elapsed seconds since startup — per-frame host data for time-driven effects (the GPU particle
 	/// fountain animates from it). Pulled, not captured.</summary>
-	float Time { get; }
+	double Time { get; }
 
 	/// <summary>
 	/// True when the engine negotiated an HDR display output (requested via
@@ -109,14 +109,4 @@ public interface IRenderContext
 	/// sampleable layout through the final pass, so binding it is safe.
 	/// </summary>
 	Texture? ResolveInspectable(int resourceId);
-
-	/// <summary>
-	/// This frame's draw lists, each <see cref="DrawListId"/> paired with the neutral <see cref="DrawListData"/> a
-	/// producer composited for it — the per-frame channel behind overlay/UI-style rendering. The host fills it via
-	/// <see cref="FrameInputs.DrawLists"/> off the render graph; a pass closure pulls a list out by id and submits it
-	/// with <see cref="DrawList{TVertex}"/> (the UI does this through <c>SUIsei</c>'s painter). Engine-provided frame
-	/// context like <see cref="Time"/> — pulled, not captured, so the graph stays frame-independent. Empty
-	/// (the default) when the host supplied no lists.
-	/// </summary>
-	IReadOnlyList<(DrawListId Id, DrawListData Data)> DrawLists { get; }
 }

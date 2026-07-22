@@ -6,7 +6,7 @@ namespace Loom.Backend.Vulkan;
 /// The swapchain plus its images and image views, sized to the window. Recreatable on resize
 /// (e.g. <see cref="Result.ErrorOutOfDateKhr"/>).
 /// </summary>
-public sealed unsafe class VulkanSwapchain : IDisposable
+public sealed unsafe class VulkanSwapchain : IVulkanPresentTarget
 {
 	private readonly VulkanContext _ctx;
 	private readonly bool _vsync;

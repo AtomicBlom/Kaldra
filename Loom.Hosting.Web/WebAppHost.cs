@@ -29,7 +29,7 @@ public sealed partial class WebAppHost : IAppHost
 	// rely on this host's own module initializer having run (unreliable under WASM AOT).
 	private static IEngine? _engine;
 	private static string? _captureName;
-	private static float _time;
+	private static double _time;
 	private static double _lastTimestampMs;
 	private static int _frame;
 
@@ -96,19 +96,28 @@ public sealed partial class WebAppHost : IAppHost
 		var (width, height) = ParseSize(GetCanvasSize(canvasSelector), options);
 		var settings = new WebGpuEngineSettings
 		{
-			EnableValidation = true,
 			CaptureViaPost = captureViaPost,
 			// Resolve the application's own embedded shaders (compiled to WGSL under "<AppAssembly>.Shaders."), which
 			// the backend's default resolver — scoped to the backend's own shaders — can't see.
 			ShaderResolver = ResolveEntryAssemblyShader,
 		};
+		// Copy the app's neutral settings (EnableValidation defaults off — see AppOptions.EngineSettings — VSync,
+		// HdrOutput, MaxFramesPerSecond, WatchShaderDirectory) onto the WebGPU-specific instance, then restore the
+		// backend name: CopyBaseSettingsTo would otherwise overwrite it with whatever (possibly null) the app set.
+		options.EngineSettings.CopyBaseSettingsTo(settings);
+		settings.PreferredBackend = "WebGPU";
+
 		// Construct the one browser backend directly rather than through Engine.AvailableEngines: that registry is
 		// populated by a module initializer, which is not reliably run under WASM AOT + trimming.
 		var backend = new WebGpuBackend();
 		var engine = backend.Create(surface, width, height, settings);
 		_engine = engine;
 
-		app.Load(engine);
+		app.Load(engine, Host);
+		// The host reports the initial size before the first frame, exactly like every later resize.
+		app.Resize(width, height);
+		// The web host does not observe page focus, so app.SetFocus is never called here: there is no JS import
+		// wired to surface the page's visibility/focus state.
 
 		SetStatus($"Loom running on {engine.DeviceName} ({width}x{height})");
 		StartFrameLoop(Frame);
@@ -127,13 +136,13 @@ public sealed partial class WebAppHost : IAppHost
 		if (_captureName is not null)
 		{
 			delta = CaptureDelta;
-			_time = _frame * (float)CaptureDelta;
+			_time = _frame * CaptureDelta;
 		}
 		else
 		{
 			delta = _lastTimestampMs > 0 ? (timestampMs - _lastTimestampMs) / 1000.0 : 1.0 / 60.0;
 			_lastTimestampMs = timestampMs;
-			_time += (float)delta;
+			_time += delta;
 		}
 
 		try
@@ -157,10 +166,28 @@ public sealed partial class WebAppHost : IAppHost
 	{
 		var engine = _engine;
 		// Capture mode pins the render size to the frame the capture was requested at; ignore viewport resizes.
-		if (engine is null || _captureName is not null)
+		if (engine is null || _captureName is not null || LoomApplication.Current is not { } current)
 			return;
 		var (width, height) = ParseSize(GetCanvasSize(canvasSelector), null);
 		engine.Resize(width, height);
+		((IHostedApplication)current).Resize(width, height);
+	}
+
+	// The app's control channel back to this host. The browser has no separate "window closed" event to hook, so
+	// RequestExit itself performs the close teardown (Unload then WaitIdle) before stopping the frame loop.
+	private static readonly IHostControl Host = new BrowserHostControl();
+
+	private sealed class BrowserHostControl : IHostControl
+	{
+		public void RequestExit()
+		{
+			var engine = _engine;
+			if (engine is null || LoomApplication.Current is not { } current)
+				return;
+			_engine = null; // stop ticking — Frame() no-ops once this is null
+			((IHostedApplication)current).Unload();
+			engine.WaitIdle();
+		}
 	}
 
 	// Resolve a shader artifact (e.g. "triangle.wgsl" / "triangle.wgsl.json") from the application's own assembly,

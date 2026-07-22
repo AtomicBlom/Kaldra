@@ -24,7 +24,7 @@ internal sealed class TriangleApp : LoomApplication
 			var screen = g.Backbuffer;
 			g.Pass("triangle")
 				.Writes(screen)
-				.Draw(ctx => ctx.FullScreen("triangle"));
+				.Draw(static ctx => ctx.FullScreen("triangle"));
 			g.Present(screen);
 		}));
 	}

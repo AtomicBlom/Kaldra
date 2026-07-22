@@ -55,10 +55,38 @@ public sealed unsafe class VulkanContext : IDisposable
 
 	private readonly bool _preferDiscreteGpu;
 
-	public VulkanContext(IVkSurface surface, bool enableValidation = true, bool preferDiscreteGpu = true)
+	/// <summary>
+	/// Prefer a CPU (software) physical device — <see cref="Loom.Core.Hosting.EngineSettings.PreferSoftwareAdapter"/>
+	/// — for GPU-less CI or deterministic software rendering. Vulkan software rasterizers (lavapipe, SwiftShader)
+	/// aren't present on every box, so this degrades gracefully to the normal selection when none is found.
+	/// </summary>
+	private readonly bool _preferSoftwareAdapter;
+
+	// True for a windowless device (Surface.Offscreen): no VK_KHR_surface/VK_KHR_swapchain, no present-queue
+	// requirement — graphics queue only. See the offscreen constructor below.
+	private readonly bool _offscreen;
+
+	public VulkanContext(IVkSurface surface, bool enableValidation = true, bool preferDiscreteGpu = true, bool preferSoftwareAdapter = false)
+		: this(surface, offscreen: false, enableValidation, preferDiscreteGpu, preferSoftwareAdapter)
+	{
+	}
+
+	/// <summary>
+	/// Bring up a surfaceless Vulkan device for offscreen rendering (<see cref="Loom.Core.Hosting.Surface.Offscreen"/>):
+	/// no <c>VK_KHR_surface</c>/<c>VK_KHR_swapchain</c>, no present-queue requirement — graphics queue only. The
+	/// engine renders into an owned <see cref="VulkanOffscreenTarget"/> instead of a swapchain.
+	/// </summary>
+	public VulkanContext(bool enableValidation = true, bool preferDiscreteGpu = true, bool preferSoftwareAdapter = false)
+		: this(null, offscreen: true, enableValidation, preferDiscreteGpu, preferSoftwareAdapter)
+	{
+	}
+
+	private VulkanContext(IVkSurface? surface, bool offscreen, bool enableValidation, bool preferDiscreteGpu, bool preferSoftwareAdapter)
 	{
 		Vk = Vk.GetApi();
 		_preferDiscreteGpu = preferDiscreteGpu;
+		_preferSoftwareAdapter = preferSoftwareAdapter;
+		_offscreen = offscreen;
 
 		// Validation layers live in the Vulkan SDK, which may not be installed. Degrade gracefully.
 		_validation = enableValidation && CheckValidationLayerSupport();
@@ -84,7 +112,8 @@ public sealed unsafe class VulkanContext : IDisposable
 				_debugUtils = debugUtils;
 			if (_validation)
 				SetUpDebugMessenger();
-			CreateSurface(surface);
+			if (!_offscreen)
+				CreateSurface(surface!);
 			PickPhysicalDevice();
 			CreateLogicalDevice();
 		}
@@ -129,7 +158,7 @@ public sealed unsafe class VulkanContext : IDisposable
 		return names;
 	}
 
-	private void CreateInstance(IVkSurface surface)
+	private void CreateInstance(IVkSurface? surface)
 	{
 		ApplicationInfo appInfo = new()
 		{
@@ -141,9 +170,18 @@ public sealed unsafe class VulkanContext : IDisposable
 			ApiVersion = Vk.Version13,
 		};
 
-		// Surface extensions the windowing platform needs (e.g. VK_KHR_surface + the OS one).
-		byte** windowExtensions = surface.GetRequiredExtensions(out uint windowExtCount);
-		var extensions = SilkMarshal.PtrToStringArray((nint)windowExtensions, (int)windowExtCount);
+		// Surface extensions the windowing platform needs (e.g. VK_KHR_surface + the OS one) — none for an
+		// offscreen (surfaceless) context.
+		string[] extensions;
+		if (_offscreen)
+		{
+			extensions = [];
+		}
+		else
+		{
+			byte** windowExtensions = surface!.GetRequiredExtensions(out uint windowExtCount);
+			extensions = SilkMarshal.PtrToStringArray((nint)windowExtensions, (int)windowExtCount);
+		}
 		if (_wantDebugUtils)
 			extensions = [.. extensions, ExtDebugUtils.ExtensionName];
 
@@ -185,6 +223,9 @@ public sealed unsafe class VulkanContext : IDisposable
 
 		result.Check("vkCreateInstance");
 		Instance = instance;
+
+		if (_offscreen)
+			return; // no surface — VK_KHR_surface was never enabled above, so it can't be loaded here
 
 		if (!Vk.TryGetInstanceExtension(Instance, out KhrSurface khrSurface))
 			throw new VulkanException("VK_KHR_surface instance extension is not available.");
@@ -271,7 +312,26 @@ public sealed unsafe class VulkanContext : IDisposable
 
 	private void PickPhysicalDevice()
 	{
-		var devices = Vk.GetPhysicalDevices(Instance);
+		var allDevices = Vk.GetPhysicalDevices(Instance).ToArray();
+		var devices = allDevices;
+
+		// A software (CPU) device — lavapipe, SwiftShader — isn't present on every box. Restrict the candidate
+		// set to suitable CPU devices when one exists; otherwise fall through to the normal selection below
+		// rather than throwing, so a request for software rendering degrades cleanly instead of failing engine
+		// creation on a box with no software ICD installed.
+		if (_preferSoftwareAdapter)
+		{
+			var software = allDevices.Where(IsSuitableSoftwareDevice).ToArray();
+			if (software.Length > 0)
+				devices = software;
+			else
+			{
+				Console.Error.WriteLine(
+					"[loom] --software-adapter requested but no Vulkan CPU (software) device (e.g. lavapipe, " +
+					"SwiftShader) was found on this system; falling back to the normal best-available device.");
+			}
+		}
+
 		var found = false;
 		var chosenIsDiscrete = false;
 
@@ -319,6 +379,16 @@ public sealed unsafe class VulkanContext : IDisposable
 		&& SupportsRequiredExtensions(device)
 		&& SupportsRequiredFeatures(device);
 
+	/// <summary>A suitable device whose <c>PhysicalDeviceType</c> is <see cref="PhysicalDeviceType.Cpu"/> — a
+	/// software rasterizer (lavapipe, SwiftShader) rather than a real GPU.</summary>
+	private bool IsSuitableSoftwareDevice(PhysicalDevice device)
+	{
+		if (!IsSuitable(device, out _, out _))
+			return false;
+		Vk.GetPhysicalDeviceProperties(device, out var props);
+		return props.DeviceType == PhysicalDeviceType.Cpu;
+	}
+
 	private bool FindQueueFamilies(PhysicalDevice device, out uint graphicsFamily, out uint presentFamily)
 	{
 		graphicsFamily = uint.MaxValue;
@@ -335,9 +405,15 @@ public sealed unsafe class VulkanContext : IDisposable
 			if (graphicsFamily == uint.MaxValue && families[i].QueueFlags.HasFlag(QueueFlags.GraphicsBit))
 				graphicsFamily = i;
 
-			KhrSurface.GetPhysicalDeviceSurfaceSupport(device, i, Surface, out var presentSupport);
-			if (presentFamily == uint.MaxValue && presentSupport)
-				presentFamily = i;
+			// Offscreen: no surface to test present support against — the graphics family alone is enough.
+			if (_offscreen)
+				presentFamily = graphicsFamily;
+			else
+			{
+				KhrSurface.GetPhysicalDeviceSurfaceSupport(device, i, Surface, out var presentSupport);
+				if (presentFamily == uint.MaxValue && presentSupport)
+					presentFamily = i;
+			}
 
 			if (graphicsFamily != uint.MaxValue && presentFamily != uint.MaxValue)
 				return true;
@@ -348,6 +424,9 @@ public sealed unsafe class VulkanContext : IDisposable
 
 	private bool SupportsRequiredExtensions(PhysicalDevice device)
 	{
+		if (_offscreen)
+			return true; // no swapchain device extension needed without a surface to present to
+
 		uint count = 0;
 		Vk.EnumerateDeviceExtensionProperties(device, (byte*)null, ref count, null);
 		var available = new ExtensionProperties[count];
@@ -432,19 +511,22 @@ public sealed unsafe class VulkanContext : IDisposable
 			PNext = &f12,
 		};
 
-		byte** deviceExtensions = (byte**)SilkMarshal.StringArrayToPtr(RequiredDeviceExtensions);
+		// No VK_KHR_swapchain for an offscreen device — there is no surface to present to.
+		string[] deviceExtensionNames = _offscreen ? [] : RequiredDeviceExtensions;
+		byte** deviceExtensions = deviceExtensionNames.Length > 0 ? (byte**)SilkMarshal.StringArrayToPtr(deviceExtensionNames) : null;
 		DeviceCreateInfo createInfo = new()
 		{
 			SType = StructureType.DeviceCreateInfo,
 			QueueCreateInfoCount = (uint)uniqueFamilies.Length,
 			PQueueCreateInfos = queueInfos,
-			EnabledExtensionCount = (uint)RequiredDeviceExtensions.Length,
+			EnabledExtensionCount = (uint)deviceExtensionNames.Length,
 			PpEnabledExtensionNames = deviceExtensions,
 			PNext = &f13,
 		};
 
 		var result = Vk.CreateDevice(PhysicalDevice, in createInfo, null, out var device);
-		SilkMarshal.Free((nint)deviceExtensions);
+		if (deviceExtensions is not null)
+			SilkMarshal.Free((nint)deviceExtensions);
 		result.Check("vkCreateDevice");
 		Device = device;
 
@@ -452,6 +534,9 @@ public sealed unsafe class VulkanContext : IDisposable
 		Vk.GetDeviceQueue(Device, PresentFamily, 0, out var presentQueue);
 		GraphicsQueue = graphicsQueue;
 		PresentQueue = presentQueue;
+
+		if (_offscreen)
+			return; // no swapchain — VK_KHR_swapchain was never enabled above, so it can't be loaded here
 
 		if (!Vk.TryGetDeviceExtension(Instance, Device, out KhrSwapchain khrSwapchain))
 			throw new VulkanException("VK_KHR_swapchain device extension is not available.");

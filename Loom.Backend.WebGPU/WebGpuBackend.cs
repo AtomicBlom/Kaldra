@@ -25,6 +25,8 @@ public sealed class WebGpuBackend : IRenderBackend
 	{
 		ArgumentNullException.ThrowIfNull(surface);
 		ArgumentNullException.ThrowIfNull(settings);
+		if (surface is OffscreenSurface)
+			throw new NotSupportedException("The WebGPU backend has no offscreen path; a canvas is always supplied by the page.");
 		if (surface is not WebGpuSurface webGpuSurface)
 			throw new ArgumentException(
 				$"The WebGPU backend needs a {nameof(WebGpuSurface)} (built from the JS shim's initDevice caps); got {surface.GetType().Name}.",

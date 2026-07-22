@@ -17,7 +17,7 @@ public sealed unsafe partial class DirectX12Engine
 		{
 			if (_backbufferState[index] == target)
 				return;
-			Transition(_swapchain.BackBuffer(index), _backbufferState[index], target);
+			Transition(_presentTarget.BackBuffer(index), _backbufferState[index], target);
 			_backbufferState[index] = target;
 			return;
 		}

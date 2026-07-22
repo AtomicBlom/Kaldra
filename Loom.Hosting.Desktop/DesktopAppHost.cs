@@ -1,19 +1,22 @@
-﻿using System.Reflection;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 
 using Loom.Core.Hosting;
 
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
+using Silk.NET.Windowing.Glfw;
 
 namespace Loom.Hosting.Desktop;
 
 /// <summary>
 /// The desktop <see cref="IAppHost"/>: creates a Silk.NET window for whichever backend shipped with the app,
 /// brings up the engine, and drives the application's frame loop until the window closes. Backend-neutral — it
-/// names no backend type; it force-loads the <c>Loom.Backend.*</c> assemblies present next to the app (so their
-/// module initializers register into <see cref="Engine.AvailableEngines"/>), then picks the first available and
-/// branches on its <see cref="IRenderBackend.Name"/> to build the right window surface.
+/// names no backend type; it reads whichever backends have already self-registered into
+/// <see cref="Engine.AvailableEngines"/> (the Loom SDK's generated bootstrap forces their module initializers to
+/// run), falling back to a reflective <c>Loom.Backend.*.dll</c> scan under JIT only if none did, then picks the
+/// first available and branches on its <see cref="IRenderBackend.Name"/> to build the right window surface.
 /// </summary>
 public sealed class DesktopAppHost : IAppHost
 {
@@ -28,56 +31,120 @@ public sealed class DesktopAppHost : IAppHost
 	{
 		ArgumentNullException.ThrowIfNull(app);
 		var driver = (IHostedApplication)app;
-		var options = driver.ReadOptions();
 
-		var backend = ResolveBackend();
+		// Silk.NET discovers its windowing platform by reflection, which NativeAOT trims away — so an AOT-published
+		// app throws "no window platform registered" at Window.Create. Register GLFW explicitly: required under AOT,
+		// and a harmless no-op under JIT where the reflective discovery already ran. (Input's GlfwInput platform is
+		// registered where the host first creates an input context.)
+		GlfwWindowing.RegisterPlatform();
+
+		var hostOptions = HostOptions.Parse(args);
+		if (hostOptions.ShowHelp)
+		{
+			Console.WriteLine(HostOptions.Usage);
+			return;
+		}
+
+		var options = driver.ReadOptions();
+		// Apply before ResolveBackend/engine creation so --backend/--vsync/--max-fps/--hdr/--watch-shaders take
+		// effect; --backend overrides the app's own preference, the rest are the command line's to own outright.
+		hostOptions.ApplyTo(options.EngineSettings);
+
+		var backend = ResolveBackend(options.EngineSettings.PreferredBackend);
+		// Record which backend actually got resolved (the app may have left PreferredBackend unset).
+		options.EngineSettings.PreferredBackend = backend.Name;
 
 		// A context-less window for DirectX12 (it binds its swapchain to the raw HWND); a Vulkan-surface window
 		// otherwise. Both option sets are plain Silk types, so this needs no backend reference — only the name.
+		// FramesPerSecond caps the render loop to EngineSettings.MaxFramesPerSecond (0 = unlimited) — the host, not
+		// the engine, applies the cap.
 		var size = new Vector2D<int>(options.Width, options.Height);
 		var isDirectX12 = string.Equals(backend.Name, "DirectX12", StringComparison.OrdinalIgnoreCase);
+		var fps = options.EngineSettings.MaxFramesPerSecond;
 		var window = Window.Create(isDirectX12
-			? WindowOptions.Default with { Size = size, Title = options.Title, API = GraphicsAPI.None }
-			: WindowOptions.DefaultVulkan with { Size = size, Title = options.Title });
+			? WindowOptions.Default with { Size = size, Title = options.Title, API = GraphicsAPI.None, FramesPerSecond = fps }
+			: WindowOptions.DefaultVulkan with { Size = size, Title = options.Title, FramesPerSecond = fps });
 		window.Initialize();
 
 		object surface = isDirectX12
 			? window.Native?.Win32?.Hwnd ?? throw new InvalidOperationException("The DirectX12 backend needs the window's Win32 HWND, which the platform did not expose.")
 			: window.VkSurface ?? throw new InvalidOperationException("The Vulkan backend needs the window's surface, which the windowing platform did not expose.");
 
-		using var engine = backend.Create(surface, window.FramebufferSize.X, window.FramebufferSize.Y,
-			new EngineSettings { PreferredBackend = backend.Name });
-		driver.Load(engine);
+		using var engine = backend.Create(surface, window.FramebufferSize.X, window.FramebufferSize.Y, options.EngineSettings);
 
-		window.FramebufferResize += fb => engine.Resize(fb.X, fb.Y);
+		IHostControl host = new WindowHostControl(window);
+		driver.Load(engine, host);
 
-		// A minimal built-in headless capture (--capture <path>): render a few frames so any delta-driven state
-		// settles, grab one, then close. Not the full launch-option surface — that's a later unification.
-		var capturePath = ArgValue(args, "--capture");
-		var total = 0f;
-		var frame = 0;
+		// The host reports the initial size before the first frame, exactly like every later resize.
+		driver.Resize(window.FramebufferSize.X, window.FramebufferSize.Y);
+
+		// A 0x0 framebuffer (minimized) has nothing to render into — skip both the engine resize and driver.Resize
+		// so SurfaceSize keeps the last non-zero size, and skip Tick entirely while it stays minimized.
+		var minimized = false;
+		window.FramebufferResize += fb =>
+		{
+			minimized = fb.X == 0 || fb.Y == 0;
+			if (minimized)
+				return;
+			engine.Resize(fb.X, fb.Y);
+			driver.Resize(fb.X, fb.Y);
+		};
+		window.FocusChanged += focused => driver.SetFocus(focused);
+
+		// The interactive frame loop: the window owns the pacing (capped by MaxFramesPerSecond above); each callback
+		// advances the app one frame until it calls Exit() (RequestExit closes the window) or the window is closed.
+		// Headless verification of a hosted app is done by in-process tests driving the engine offscreen, not by a
+		// capture/smoke mode on this production host.
+		var total = 0.0;
 		window.Render += delta =>
 		{
-			total += (float)delta;
+			if (minimized)
+				return;
+			total += delta;
 			driver.Tick(new FrameTime(delta, total));
-			frame++;
-			if (capturePath is { Length: > 0 })
-			{
-				if (frame == 3)
-					engine.RequestCapture(capturePath);
-				else if (frame == 4)
-					window.Close();
-			}
 		};
 
 		window.Run();
+
+		driver.Unload();
+		engine.WaitIdle();
 	}
 
-	// Load every Loom.Backend.*.dll beside the app and run its module initializer so the backend self-registers,
-	// then take the first available. The RID + Use* flags decided which backend DLLs shipped, so this loads
-	// exactly those. LoadFrom alone doesn't fire a module initializer (that's lazy, on first type access), so
-	// RunModuleConstructor forces it — mirroring how the SDK-generated app bootstrap registers the host.
-	private static IRenderBackend ResolveBackend()
+	// The Loom SDK generates a [ModuleInitializer] into the app (LoomBackendBootstrap.g.cs) that forces every
+	// selected backend's module constructor via a compile-time typeof, so Engine.AvailableEngines is normally
+	// already populated by the time this runs — no scan needed. Only a non-SDK/hand-authored project (no generated
+	// bootstrap) or a plugin DLL dropped beside the app falls through to the reflective scan below, and only under
+	// JIT: Assembly.LoadFrom throws NotSupportedException on NativeAOT, so the scan is skipped entirely there
+	// (IsDynamicCodeSupported == false) rather than risk that exception crashing startup.
+	private static IRenderBackend ResolveBackend(string? preferredBackend)
+	{
+		var backends = Engine.AvailableEngines;
+		if (backends.Count == 0 && RuntimeFeature.IsDynamicCodeSupported)
+			backends = ScanForBackends();
+
+		if (backends.Count == 0)
+			throw new InvalidOperationException(
+				"No rendering backend is available. Ensure a Loom backend package (Loom.Backend.Vulkan / " +
+				"Loom.Backend.DirectX12) ships with the app — the Loom SDK adds one for the target RID.");
+
+		if (preferredBackend is not null)
+			foreach (var candidate in backends)
+				if (string.Equals(candidate.Name, preferredBackend, StringComparison.OrdinalIgnoreCase))
+					return candidate;
+
+		return backends[0];
+	}
+
+	// JIT-only fallback: load every Loom.Backend.*.dll beside the app and run its module initializer so the
+	// backend self-registers. LoadFrom alone doesn't fire a module initializer (that's lazy, on first type
+	// access), so RunModuleConstructor forces it — mirroring how the SDK-generated app bootstrap registers the
+	// host. Broadened to swallow NotSupportedException too, in case a caller invokes this without the
+	// IsDynamicCodeSupported guard.
+	[UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
+		Justification = "Reached only under RuntimeFeature.IsDynamicCodeSupported (JIT). A NativeAOT or trimmed app " +
+			"registers its backends through the SDK-generated LoomBackendBootstrap module initializer, which roots the " +
+			"backend assemblies statically, so Engine.AvailableEngines is already populated and this reflective scan is unreachable.")]
+	private static IReadOnlyList<IRenderBackend> ScanForBackends()
 	{
 		foreach (var dll in Directory.EnumerateFiles(AppContext.BaseDirectory, "Loom.Backend.*.dll"))
 		{
@@ -86,25 +153,19 @@ public sealed class DesktopAppHost : IAppHost
 				var assembly = Assembly.LoadFrom(dll);
 				RuntimeHelpers.RunModuleConstructor(assembly.ManifestModule.ModuleHandle);
 			}
-			catch (Exception ex) when (ex is BadImageFormatException or FileLoadException or TypeInitializationException)
+			catch (Exception ex) when (ex is BadImageFormatException or FileLoadException or TypeInitializationException or NotSupportedException)
 			{
 				// Not a loadable managed backend (or its initializer opted out) — skip; a real backend still registers.
 			}
 		}
 
-		var backends = Engine.AvailableEngines;
-		return backends.Count > 0
-			? backends[0]
-			: throw new InvalidOperationException(
-				"No rendering backend is available. Ensure a Loom backend package (Loom.Backend.Vulkan / " +
-				"Loom.Backend.DirectX12) ships with the app — the Loom SDK adds one for the target RID.");
+		return Engine.AvailableEngines;
 	}
 
-	private static string? ArgValue(string[] args, string name)
+	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,
+	// which unwinds window.Run() and lets Run's teardown (Unload + WaitIdle) proceed.
+	private sealed class WindowHostControl(IWindow window) : IHostControl
 	{
-		for (var i = 0; i < args.Length - 1; i++)
-			if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
-				return args[i + 1];
-		return null;
+		public void RequestExit() => window.Close();
 	}
 }

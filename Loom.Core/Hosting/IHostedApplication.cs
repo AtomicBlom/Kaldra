@@ -12,9 +12,24 @@ public interface IHostedApplication
 	/// <summary>Build the app's <see cref="AppOptions"/> (runs its <c>Configure</c> override). Called once before device bring-up.</summary>
 	AppOptions ReadOptions();
 
-	/// <summary>Bind the live engine and run the app's <c>LoadContent</c> (define techniques, upload resources, set the graph). Called once, after the device is up.</summary>
-	void Load(IEngine engine);
+	/// <summary>
+	/// Bind the live engine and the app→host control channel, and run the app's <c>LoadContent</c> (define
+	/// techniques, upload resources, set the graph). Called once, after the device is up.
+	/// </summary>
+	void Load(IEngine engine, IHostControl host);
+
+	/// <summary>
+	/// Notify the app of the current framebuffer size in pixels. Called once with the initial size before the
+	/// first <see cref="Tick"/>, and again on every subsequent resize (skipped by the host while minimized).
+	/// </summary>
+	void Resize(int width, int height);
+
+	/// <summary>Notify the app that the window/canvas gained or lost input focus.</summary>
+	void SetFocus(bool focused);
 
 	/// <summary>Advance one frame: the app's <c>Update</c>, then <c>Draw</c>, then the framework's own unconditional <see cref="IEngine.Render"/>.</summary>
 	void Tick(FrameTime time);
+
+	/// <summary>Run the app's <c>UnloadContent</c> hook. Called once, on close, before the host disposes the engine.</summary>
+	void Unload();
 }
