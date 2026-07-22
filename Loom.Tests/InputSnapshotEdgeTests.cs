@@ -97,4 +97,28 @@ public class InputSnapshotEdgeTests
 		e.CodePoint.ShouldBe(0x41u);
 		e.Device.ShouldBe(InputDevice.Keyboard);
 	}
+
+	[Test]
+	public void Disconnecting_a_pad_releases_state_held_at_unplug()
+	{
+		var snap = new InputSnapshot();
+
+		snap.Advance(
+		[
+			InputEvent.GamepadConnected(0),
+			InputEvent.GamepadButtonDown(0, GamepadButton.South),
+			InputEvent.GamepadAxisMoved(0, GamepadAxis.LeftX, 0.9f),
+		]);
+		snap.Gamepad(0).Down(GamepadButton.South).ShouldBeTrue();
+
+		// The pad vanishes while South is still held (no button-up arrives). The snapshot must synthesize a clean
+		// release edge and drop the axis, not strand the button as permanently down.
+		snap.Advance([InputEvent.GamepadDisconnected(0)]);
+		var pad = snap.Gamepad(0);
+		pad.Connected.ShouldBeFalse();
+		pad.JustDisconnected.ShouldBeTrue();
+		pad.Down(GamepadButton.South).ShouldBeFalse();
+		pad.Released(GamepadButton.South).ShouldBeTrue();
+		pad.Axis(GamepadAxis.LeftX).ShouldBe(0f);
+	}
 }

@@ -127,6 +127,11 @@ public sealed class InputLayerStack
 		for (var k = 0; k < count; k++)
 			_order[k] = _entries[count - 1 - k]; // top → bottom
 
+		// Release leftover slots from a previously taller stack so popped/removed layers aren't kept alive by the
+		// grow-only scratch. Costs nothing (no allocation) and is skipped when the stack hasn't shrunk.
+		if (_order.Length > count)
+			Array.Clear(_order, count, _order.Length - count);
+
 		raw.CopyTo(_bufferA);
 		var current = _bufferA;
 		var other = _bufferB;

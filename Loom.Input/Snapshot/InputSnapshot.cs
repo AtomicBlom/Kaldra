@@ -181,11 +181,19 @@ public sealed class InputSnapshot
 				break;
 			case InputEventKind.GamepadConnected:
 				if ((uint)e.PadIndex < PadSlots)
+				{
 					_padConnected[e.PadIndex] = true;
+					ClearPad(e.PadIndex);
+				}
+
 				break;
 			case InputEventKind.GamepadDisconnected:
 				if ((uint)e.PadIndex < PadSlots)
+				{
 					_padConnected[e.PadIndex] = false;
+					ClearPad(e.PadIndex);
+				}
+
 				break;
 			case InputEventKind.Touch:
 				ApplyTouch(in e);
@@ -212,6 +220,18 @@ public sealed class InputSnapshot
 
 		if (_touchCount < _touches.Length)
 			_touches[_touchCount++] = point;
+	}
+
+	// A (dis)connecting pad holds nothing, so clear its buttons and axes. On disconnect this turns a button held at
+	// unplug into a clean release edge this frame (BeginFrame already snapshotted it as previously-down) rather than
+	// stranding it: GamepadState.Down reports the mask without consulting Connected, so an uncleared button would
+	// read held forever. On connect it discards any stale state left by a prior pad at the same index.
+	private void ClearPad(int index)
+	{
+		_padButtons[index] = 0;
+		var axisBase = index * AxesPerPad;
+		for (var a = 0; a < AxesPerPad; a++)
+			_padAxes[axisBase + a] = 0f;
 	}
 
 	internal ulong KeyWordAt(int word) => _keys[word];
