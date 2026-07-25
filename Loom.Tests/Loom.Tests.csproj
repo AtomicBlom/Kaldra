@@ -38,6 +38,7 @@
     <ProjectReference Include="..\Loom.Graph\Loom.Graph.csproj" />
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <ProjectReference Include="..\Loom.Concepts\Loom.Concepts.csproj" />
+    <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
   </ItemGroup>
 
   <!-- The desktop host, for the backend-neutral host-machinery tests (HostOptions launch-option parsing). No GPU

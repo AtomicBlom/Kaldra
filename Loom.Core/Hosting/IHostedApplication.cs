@@ -1,4 +1,6 @@
-﻿namespace Loom.Core.Hosting;
+using Loom.Input;
+
+namespace Loom.Core.Hosting;
 
 /// <summary>
 /// The driving surface an <see cref="IAppHost"/> uses to run a <see cref="LoomApplication"/>: read its startup
@@ -26,6 +28,21 @@ public interface IHostedApplication
 
 	/// <summary>Notify the app that the window/canvas gained or lost input focus.</summary>
 	void SetFocus(bool focused);
+
+	/// <summary>
+	/// The single host→app input channel: a host adapter feeds every raw device event through here (nothing
+	/// ad-hoc), so desktop and web can't diverge. The app buffers the events and resolves them at the top of the
+	/// next <see cref="Tick"/>. Called on the platform pump thread; single-threaded by design, so the buffer needs
+	/// no locking.
+	/// </summary>
+	void QueueInput(in InputEvent e);
+
+	/// <summary>
+	/// The app's outbound rumble queue — the reverse direction of <see cref="QueueInput"/>. Game code enqueues
+	/// effects onto it (via the input snapshot); a host adapter drains it to hardware each frame, a no-op where
+	/// vibration is unsupported.
+	/// </summary>
+	RumbleQueue Rumble { get; }
 
 	/// <summary>Advance one frame: the app's <c>Update</c>, then <c>Draw</c>, then the framework's own unconditional <see cref="IEngine.Render"/>.</summary>
 	void Tick(FrameTime time);

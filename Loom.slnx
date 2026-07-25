@@ -12,6 +12,8 @@
   <Project Path="Loom.Core/Loom.Core.csproj" />
   <Project Path="Loom.Concepts/Loom.Concepts.csproj" />
   <Project Path="Loom.Graph/Loom.Graph.csproj" />
+  <Project Path="Loom.Hosting.Desktop/Loom.Hosting.Desktop.csproj" />
+  <Project Path="Loom.Input/Loom.Input.csproj" />
   <Project Path="Loom.Sandbox/Loom.Sandbox.csproj" />
   <Project Path="Loom.Tests/Loom.Tests.csproj" />
   <Project Path="Loom.UI.ImGui/Loom.UI.ImGui.csproj" />

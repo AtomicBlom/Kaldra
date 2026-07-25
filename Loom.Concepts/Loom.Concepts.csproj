@@ -22,6 +22,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
+    <!-- The neutral input snapshot FlyCamera consumes. Loom.Input carries no graphics-API/windowing type, so it is
+         a clean leaf dependency that keeps Concepts free of any backend reference. -->
+    <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
   </ItemGroup>
 
 </Project>

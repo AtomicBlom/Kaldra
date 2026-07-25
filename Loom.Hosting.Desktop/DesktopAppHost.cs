@@ -1,9 +1,10 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
 using Loom.Core.Hosting;
 
+using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
 using Silk.NET.Windowing.Glfw;
@@ -78,6 +79,11 @@ public sealed class DesktopAppHost : IAppHost
 		// The host reports the initial size before the first frame, exactly like every later resize.
 		driver.Resize(window.FramebufferSize.X, window.FramebufferSize.Y);
 
+		// Pump the window's platform input devices into the app's neutral input queue. The pump takes the input
+		// context (not the window), so a host with its own window can reuse it against its own context.
+		using var inputContext = window.CreateInput();
+		using var inputPump = new DesktopInputPump(inputContext, driver);
+
 		// A 0x0 framebuffer (minimized) has nothing to render into — skip both the engine resize and driver.Resize
 		// so SurfaceSize keeps the last non-zero size, and skip Tick entirely while it stays minimized.
 		var minimized = false;
@@ -89,7 +95,14 @@ public sealed class DesktopAppHost : IAppHost
 			engine.Resize(fb.X, fb.Y);
 			driver.Resize(fb.X, fb.Y);
 		};
-		window.FocusChanged += focused => driver.SetFocus(focused);
+		window.FocusChanged += focused =>
+		{
+			// The OS drops the ups for anything held across a focus loss (alt-tab), so synthesize releases to keep
+			// held keys/buttons from being stranded down.
+			if (!focused)
+				inputPump.ReleaseAllHeld();
+			driver.SetFocus(focused);
+		};
 
 		// The interactive frame loop: the window owns the pacing (capped by MaxFramesPerSecond above); each callback
 		// advances the app one frame until it calls Exit() (RequestExit closes the window) or the window is closed.
@@ -101,6 +114,7 @@ public sealed class DesktopAppHost : IAppHost
 			if (minimized)
 				return;
 			total += delta;
+			inputPump.Update(delta);
 			driver.Tick(new FrameTime(delta, total));
 		};
 
