@@ -15,6 +15,14 @@ public interface IHostedApplication
 	AppOptions ReadOptions();
 
 	/// <summary>
+	/// Hand the app the command-line arguments the host did not consume as its own launch options (see
+	/// <c>HostOptions.AppArgs</c>) — the app's own flags, verbatim and in order. Called once, before
+	/// <see cref="ReadOptions"/>, so <c>Configure</c> can read them. Defaults to a no-op: a host with no argument
+	/// surface (or an app that ignores args) need not implement it.
+	/// </summary>
+	void SetArgs(string[] appArgs) { }
+
+	/// <summary>
 	/// Bind the live engine and the app→host control channel, and run the app's <c>LoadContent</c> (define
 	/// techniques, upload resources, set the graph). Called once, after the device is up.
 	/// </summary>
@@ -44,7 +52,7 @@ public interface IHostedApplication
 	/// </summary>
 	RumbleQueue Rumble { get; }
 
-	/// <summary>Advance one frame: the app's <c>Update</c>, then <c>Draw</c>, then the framework's own unconditional <see cref="IEngine.Render"/>.</summary>
+	/// <summary>Advance one frame: the app's <c>Update</c>, then <c>Draw</c>, then the framework's own <see cref="IEngine.Render"/> (every frame under <see cref="RenderMode.Continuous"/>; gated under <see cref="RenderMode.OnDemand"/>).</summary>
 	void Tick(FrameTime time);
 
 	/// <summary>Run the app's <c>UnloadContent</c> hook. Called once, on close, before the host disposes the engine.</summary>

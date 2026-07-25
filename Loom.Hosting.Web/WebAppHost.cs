@@ -86,6 +86,7 @@ public sealed partial class WebAppHost : IAppHost
 		}
 
 		var app = (IHostedApplication)LoomApplication.Current!;
+		app.SetArgs([]); // the browser host has no command-line surface; apps read options from the page/query instead
 		var options = app.ReadOptions();
 
 		// Bring the device up (async) before creating the engine — every later WebGPU call is synchronous, so the
