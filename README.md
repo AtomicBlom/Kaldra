@@ -139,15 +139,12 @@ Shaders are authored in **Slang** and compiled offline by the Loom shader SDK to
 
 ```bash
 dotnet build Loom.slnx                          # build everything
-dotnet run   --project Loom.Sandbox             # interactive demo gallery
-dotnet run   --project Loom.Tests               # graph-layer + mip unit tests (TUnit)
-
-# headless / deterministic (pick demo + backend, capture one frozen-time frame):
-dotnet run --project Loom.Sandbox -- --demo bloom --backend dx12 --capture out.png
-dotnet run --project Loom.Sandbox -- --demo full --smoke-frames 3
+dotnet run   --project Loom.Sandbox             # interactive demo gallery (opens a window, blocks until closed)
+dotnet run   --project Loom.Sandbox -- --demo bloom --backend dx12   # pick a demo + backend
+dotnet run   --project Loom.Tests               # unit tests (TUnit) — incl. GPU-gated golden/parity over the gallery
 ```
 
-`Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (cross-backend pixel diff + heatmap). A sandbox run with neither `--capture` nor `--smoke-frames` opens an interactive window and blocks until closed.
+The sandbox is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in `Loom.Tests` — `GalleryGoldenTests`/`GalleryParityTests` render the gallery offscreen in-process (GPU-gated; skipped without one). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
 
 ## Packages
 
