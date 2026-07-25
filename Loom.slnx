@@ -11,6 +11,7 @@
   <Project Path="Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj" />
   <Project Path="Loom.Core/Loom.Core.csproj" />
   <Project Path="Loom.Concepts/Loom.Concepts.csproj" />
+  <Project Path="Loom.Gallery/Loom.Gallery.csproj" />
   <Project Path="Loom.Graph/Loom.Graph.csproj" />
   <Project Path="Loom.Hosting.Desktop/Loom.Hosting.Desktop.csproj" />
   <Project Path="Loom.Input/Loom.Input.csproj" />

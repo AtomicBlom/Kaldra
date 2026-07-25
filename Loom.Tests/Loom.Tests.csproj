@@ -26,10 +26,10 @@
     <Content Include="Goldens\**\*.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- M15: the committed rigged-bar glTF (one source of truth in the sandbox's assets), linked beside the test
+  <!-- The committed rigged-bar glTF (one source of truth in the gallery's assets), linked beside the test
        assembly so GltfSkinningLoadTests can load it through GltfLoader. -->
   <ItemGroup>
-    <Content Include="..\Loom.Sandbox\Assets\rigged_bar.glb" Link="rigged_bar.glb" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\Loom.Gallery\Assets\rigged_bar.glb" Link="rigged_bar.glb" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Describe + Execute layers: both backend-neutral, never the Vulkan backend. -->
@@ -39,6 +39,12 @@
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <ProjectReference Include="..\Loom.Concepts\Loom.Concepts.csproj" />
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
+  </ItemGroup>
+
+  <!-- The demo gallery: the in-process golden/parity tests render its scenes offscreen (GPU-gated), and its
+       compiled shaders (+ signed DXIL) flow beside the test assembly under shaders\ through this reference. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Loom.Gallery\Loom.Gallery.csproj" />
   </ItemGroup>
 
   <!-- The desktop host, for the backend-neutral host-machinery tests (HostOptions launch-option parsing). No GPU

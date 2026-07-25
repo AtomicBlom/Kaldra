@@ -9,8 +9,9 @@
 
 ## What's included
 
-- `DesktopAppHost` — an `IAppHost` that self-registers, owns the Silk.NET window + blocking frame loop, and branches on the backend name for the window surface (Vulkan `IVkSurface` vs DirectX12 `HWND`)
-- A minimal built-in `--capture <path>` headless screenshot hook
+- `DesktopAppHost` — an `IAppHost` that self-registers, owns the Silk.NET window + input pump + blocking frame loop, and branches on the backend name for the window surface (Vulkan `IVkSurface` vs DirectX12 `HWND`)
+- `HostOptions` — reusable launch-option parsing every hosted app gets for free (`--backend`, `--vsync`/`--no-vsync`, `--max-fps`, `--hdr`, `--watch-shaders`, `--software-adapter`), passing any unrecognized argument through to the app as `AppArgs`
+- On-demand rendering: under `RenderMode.OnDemand` the window is event-driven (sleeps between events) and `Invalidate()` wakes it; `Continuous` (the default) runs the loop every frame
 
 ## Usage
 

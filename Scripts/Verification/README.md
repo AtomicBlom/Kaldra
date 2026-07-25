@@ -1,14 +1,13 @@
 # Verification scripts
 
-Small, dependency-free PowerShell helpers for **headless rendering verification** — objective,
-quantitative signal over a captured frame without opening it in a viewer (and, for an agent,
-without pulling the image bytes into context). They use `System.Drawing` (`LockBits`), so they
-run anywhere .NET is present.
+Small, dependency-free PowerShell helpers for **rendering verification** — objective, quantitative
+signal over a rendered frame without opening it in a viewer (and, for an agent, without pulling the
+image bytes into context). They use `System.Drawing` (`LockBits`), so they run anywhere .NET is present.
 
-The capture half of the loop is the sandbox itself, configured by command-line options (no `LOOM_*`
-env vars — run `dotnet run --project Loom.Sandbox -- --help` for the full list): `--capture <path>`
-grabs one frame to a PNG with frozen time + a fixed delta then exits, `--backend <vulkan|dx12>`
-selects the backend, and `--demo <name|index>` picks the demo — the inputs for a cross-backend diff.
+Golden-image and cross-backend parity are ordinary GPU-gated unit tests (`GalleryGoldenTests` /
+`GalleryParityTests` in `Loom.Tests`): they render the gallery demos offscreen in-process and
+compare them, with no window or capture flags. These helpers are for **ad-hoc** inspection of any PNG
+you have on hand — a test-produced capture, a one-off `IEngine.RequestCapture` output, a bug repro.
 
 ## colorcount.ps1
 
@@ -53,30 +52,9 @@ pwsh Scripts/Verification/coverage.ps1 -Path capture.png
 # A broken render with everything in cell (0,0) and the rest 0.0 == a transform/camera bug, not a shader one.
 ```
 
-## capture-compare.ps1
-
-The whole loop in one command: capture a demo on **both** backends (headless, frozen time), then
-`colorcount` + `coverage` + `diff` each. Pass the **exact demo name**. Builds `Loom.Sandbox` once
-unless `-NoBuild`. A dev-box convenience (it spawns the windowed sandbox); CI uses the TUnit golden
-harness instead.
-
-```powershell
-pwsh Scripts/Verification/capture-compare.ps1 -Demo "Sprites + Atlas"
-# -> $env:TEMP/loom-verify/Sprites___Atlas-{vk,dx12,diff}.png  + counts/coverage/diff to stdout
-```
-
-## Manual loop (what capture-compare automates)
-
-```powershell
-$S = "$env:TEMP/loom-caps"; mkdir $S -Force | Out-Null
-dotnet run --project Loom.Sandbox -- --demo "Sprites + Atlas" --capture "$S/vk.png"
-dotnet run --project Loom.Sandbox -- --demo "Sprites + Atlas" --capture "$S/dx12.png" --backend dx12
-pwsh Scripts/Verification/diff.ps1 -A "$S/vk.png" -B "$S/dx12.png" -Out "$S/diff.png"
-```
-
-> Demo selection (`--demo`) takes a 0-based index, an exact (case-insensitive) name, or a **unique
-> case-insensitive substring** (e.g. `bloom`). An ambiguous substring lists its matches and a non-match
-> lists every demo — either way the sandbox exits rather than guessing, so a typo fails loudly.
+> Cross-backend parity is enforced automatically by `GalleryParityTests` (Vulkan vs DirectX12,
+> offscreen, in-process). Reach for `diff.ps1` when you want to eyeball *where* two frames disagree
+> (its heatmap) or to check a PNG pair the test suite doesn't cover.
 
 > For an **"is it rendered correctly"** judgment (vs the objective counts above), hand the PNG to a
 > subagent with a detailed description of the expected image and have it report pass/fail — images

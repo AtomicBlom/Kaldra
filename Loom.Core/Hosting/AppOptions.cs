@@ -33,6 +33,14 @@ public sealed class AppOptions
 	public EngineSettings EngineSettings { get; set; } = new() { EnableValidation = false };
 
 	/// <summary>
+	/// How the host paces frame submission: <see cref="Hosting.RenderMode.Continuous"/> (the default) submits every
+	/// tick, while <see cref="Hosting.RenderMode.OnDemand"/> submits only when the app calls
+	/// <see cref="LoomApplication.Invalidate"/>, on the first frame, or after a resize — for editors, tools, and
+	/// UI-driven apps that should idle when nothing changes.
+	/// </summary>
+	public RenderMode RenderMode { get; set; } = RenderMode.Continuous;
+
+	/// <summary>
 	/// Fixed-timestep rate in Hz for <see cref="LoomApplication.FixedUpdate"/> (0 = disabled, the default).
 	/// Deterministic simulation/physics code that must not vary with the display's frame rate steps at
 	/// <c>1 / FixedStepHz</c> seconds regardless of how fast frames arrive, with up to 5 catch-up steps per frame

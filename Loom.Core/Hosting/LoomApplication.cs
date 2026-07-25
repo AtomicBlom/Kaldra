@@ -24,8 +24,9 @@ namespace Loom.Core.Hosting;
 /// // Program.cs (one line, shared by every platform):
 /// LoomApplication.Run(new MyApp(), args);
 /// </code>
-/// The per-frame submission (<see cref="IEngine.Render"/>) is framework-owned and always happens; the hooks
-/// only feed it.
+/// The per-frame submission (<see cref="IEngine.Render"/>) is framework-owned: the hooks only feed it. Under the
+/// default <see cref="RenderMode.Continuous"/> it happens every frame; under <see cref="RenderMode.OnDemand"/> it
+/// is gated on <see cref="Invalidate"/> / first-frame / resize.
 /// </summary>
 public abstract class LoomApplication : IHostedApplication
 {
@@ -63,10 +64,25 @@ public abstract class LoomApplication : IHostedApplication
 	/// </remarks>
 	protected InputSnapshot Input => _inputStack.Output;
 
+	/// <summary>
+	/// The command-line arguments the host did not consume as its own launch options — the app's own flags,
+	/// verbatim and in order (empty on a host with no argument surface). Valid from <see cref="Configure"/> onward;
+	/// parse it there for app-specific options (the reusable host owns backend/presentation flags itself).
+	/// </summary>
+	protected string[] AppArgs { get; private set; } = [];
+
 	private IHostControl _host = null!;
 	private double _fixedStepHz;
 	private double _fixedAccumulator;
 	private double _fixedTotalSeconds;
+
+	// On-demand render gating (see AppOptions.RenderMode). Under OnDemand a frame is submitted only when the app
+	// invalidated, on the first frame, or after a resize; otherwise the submit is skipped and the compositor holds
+	// the last presented image. Under Continuous these stay irrelevant — ShouldRender always returns true.
+	private RenderMode _renderMode;
+	private bool _renderRequested;
+	private bool _resizePending;
+	private bool _firstFrameRendered;
 
 	/// <summary>The per-frame input capacity shared by the queue, the fold, and the drain scratch.</summary>
 	private const int InputEventCapacity = 1024;
@@ -132,6 +148,18 @@ public abstract class LoomApplication : IHostedApplication
 	protected void Exit() => _host.RequestExit();
 
 	/// <summary>
+	/// Request that the next frame be rendered. Only meaningful under <see cref="RenderMode.OnDemand"/>, where a
+	/// frame is otherwise skipped: call this whenever app state changes so the change is drawn (an input handler, an
+	/// async load completing, an animation advancing). Idempotent within a frame, and safe to call from any thread —
+	/// it also wakes the desktop host's sleeping event loop. A no-op under <see cref="RenderMode.Continuous"/>.
+	/// </summary>
+	protected void Invalidate()
+	{
+		_renderRequested = true;
+		_host?.RequestRender();
+	}
+
+	/// <summary>
 	/// Pushes an input layer on top of the stack, where it is processed first each frame — it sees input before,
 	/// and can block or inject it for, every layer beneath. The app assembles the stack bottom-up (gameplay first,
 	/// then UI glue, then transient modals); whoever pushes a layer keeps the reference and removes it.
@@ -147,11 +175,14 @@ public abstract class LoomApplication : IHostedApplication
 	/// <summary>Whether <paramref name="layer"/> is currently in the input stack.</summary>
 	protected bool ContainsInputLayer(IInputLayer layer) => _inputStack.Contains(layer);
 
+	void IHostedApplication.SetArgs(string[] appArgs) => AppArgs = appArgs;
+
 	AppOptions IHostedApplication.ReadOptions()
 	{
 		var options = new AppOptions();
 		Configure(options);
 		_fixedStepHz = options.FixedStepHz;
+		_renderMode = options.RenderMode;
 		return options;
 	}
 
@@ -165,6 +196,7 @@ public abstract class LoomApplication : IHostedApplication
 	void IHostedApplication.Resize(int width, int height)
 	{
 		SurfaceSize = new Vector2(width, height);
+		_resizePending = true; // a resize recreates the swapchain, so the next frame must render even under OnDemand
 		OnResize(width, height);
 	}
 
@@ -202,7 +234,17 @@ public abstract class LoomApplication : IHostedApplication
 
 		Update(frameTime);
 		Draw(frameTime);
-		Engine.Render(new FrameInputs { DeltaSeconds = time.DeltaSeconds, Time = time.TotalSeconds });
+
+		// Submit unconditionally under Continuous; under OnDemand only when the app invalidated, the first frame has
+		// not yet been drawn, or a resize is pending. Update/Draw still run every tick (input routing, animation) —
+		// only the whole-frame GPU submit is gated (present is atomic in the backend, so it is all-or-nothing).
+		if (_renderMode == RenderMode.Continuous || !_firstFrameRendered || _resizePending || _renderRequested)
+		{
+			Engine.Render(new FrameInputs { DeltaSeconds = time.DeltaSeconds, Time = time.TotalSeconds });
+			_renderRequested = false;
+			_resizePending = false;
+			_firstFrameRendered = true;
+		}
 	}
 
 	void IHostedApplication.Unload() => UnloadContent();

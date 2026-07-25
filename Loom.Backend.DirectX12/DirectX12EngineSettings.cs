@@ -33,9 +33,11 @@ public sealed class DirectX12EngineSettings : EngineSettings
 
 	/// <summary>
 	/// Directory of loose shader assets (the Loom SDK's <c>shaders\</c> output): the DirectX12 backend resolves a
-	/// technique's HLSL (<c>&lt;name&gt;.hlsl</c>) + reflection (<c>&lt;name&gt;.json</c>) here at
+	/// technique's signed DXIL (<c>&lt;name&gt;.[vs,ps,cs].dxil</c>) + reflection (<c>&lt;name&gt;.json</c>) here at
 	/// <see cref="IEngine.DefineTechnique"/>, the counterpart of <c>VulkanEngineSettings.ShaderDirectory</c>.
-	/// A shader with no resolved HLSL falls back to the backend's built-in stand-in.
+	/// Defaults to a <c>shaders</c> folder next to the executable (where the Loom SDK deposits the compiled DXIL) —
+	/// the same absolute default as Vulkan, so a host that leaves it unset resolves app shaders on both backends.
+	/// A shader with no resolved DXIL falls back to the backend's built-in stand-in.
 	/// </summary>
-	public string ShaderDirectory { get; set; } = "shaders";
+	public string ShaderDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "shaders");
 }

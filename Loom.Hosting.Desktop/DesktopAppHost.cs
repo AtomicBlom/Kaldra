@@ -46,6 +46,9 @@ public sealed class DesktopAppHost : IAppHost
 			return;
 		}
 
+		// Hand the app its own (non-host) flags before Configure runs, so an app can parse them in Configure.
+		driver.SetArgs(hostOptions.AppArgs);
+
 		var options = driver.ReadOptions();
 		// Apply before ResolveBackend/engine creation so --backend/--vsync/--max-fps/--hdr/--watch-shaders take
 		// effect; --backend overrides the app's own preference, the rest are the command line's to own outright.
@@ -62,9 +65,14 @@ public sealed class DesktopAppHost : IAppHost
 		var size = new Vector2D<int>(options.Width, options.Height);
 		var isDirectX12 = string.Equals(backend.Name, "DirectX12", StringComparison.OrdinalIgnoreCase);
 		var fps = options.EngineSettings.MaxFramesPerSecond;
-		var window = Window.Create(isDirectX12
+		// Under OnDemand the window is event-driven: it sleeps between events instead of running the loop at a fixed
+		// interval, and RequestRender (WindowHostControl below) wakes it via ContinueEvents. FramesPerSecond still
+		// caps the rate. Continuous keeps the default fixed-interval loop.
+		var eventDriven = options.RenderMode == RenderMode.OnDemand;
+		var windowOptions = isDirectX12
 			? WindowOptions.Default with { Size = size, Title = options.Title, API = GraphicsAPI.None, FramesPerSecond = fps }
-			: WindowOptions.DefaultVulkan with { Size = size, Title = options.Title, FramesPerSecond = fps });
+			: WindowOptions.DefaultVulkan with { Size = size, Title = options.Title, FramesPerSecond = fps };
+		var window = Window.Create(windowOptions with { IsEventDriven = eventDriven });
 		window.Initialize();
 
 		object surface = isDirectX12
@@ -181,5 +189,9 @@ public sealed class DesktopAppHost : IAppHost
 	private sealed class WindowHostControl(IWindow window) : IHostControl
 	{
 		public void RequestExit() => window.Close();
+
+		// Wake the event-driven loop so the next frame renders (a no-op effect when not event-driven). Thread-safe
+		// per Silk's ContinueEvents contract, so an app may invalidate from an off-thread callback.
+		public void RequestRender() => window.ContinueEvents();
 	}
 }
