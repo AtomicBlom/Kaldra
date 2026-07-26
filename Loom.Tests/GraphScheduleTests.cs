@@ -181,6 +181,55 @@ public class GraphScheduleTests
 	}
 
 	[Test]
+	public void Sampling_the_backbuffer_is_rejected()
+	{
+		// The swapchain image is acquired fresh each frame, so it has no stable contents to sample — and each backend
+		// resolved it differently when asked to. Rejecting at derive gives one answer everywhere, before recording.
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var lit = world.Color("lit", Format.Rgba8Srgb);
+				g.Pass("produce").Writes(lit);
+				g.Pass("post").Samples(g.Backbuffer).Writes(lit);
+				g.Present(g.Backbuffer);
+			}));
+
+		ex.Message.ShouldContain(".Samples");
+		ex.Message.ShouldContain("backbuffer");
+	}
+
+	[Test]
+	public void Read_writing_the_backbuffer_as_storage_is_rejected()
+	{
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				g.Compute("post").ReadWrites(g.Backbuffer);
+				g.Present(g.Backbuffer);
+			}));
+
+		ex.Message.ShouldContain(".ReadWrites");
+		ex.Message.ShouldContain("backbuffer");
+	}
+
+	[Test]
+	public void Writing_blending_and_presenting_the_backbuffer_stay_legal()
+	{
+		// The guard must reject only the two read shapes — the backbuffer's whole purpose is to be written and
+		// presented, and .Blends onto it is how overlays composite.
+		var s = Schedule(g =>
+		{
+			var screen = g.Backbuffer;
+			g.Pass("scene").Writes(screen);
+			g.Pass("overlay").Blends(screen);
+			g.Present(screen);
+		});
+
+		s.Passes.Length.ShouldBe(2);
+	}
+
+	[Test]
 	public void Compute_then_compute_on_one_storage_buffer_depends_in_program_order()
 	{
 		// The GPU-particle / sim-step shape: a second compute that .ReadWrites the same storage buffer must wait

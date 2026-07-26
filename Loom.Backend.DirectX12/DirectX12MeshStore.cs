@@ -35,6 +35,18 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 
 	public DirectX12MeshStore(DirectX12Context ctx) => _ctx = ctx;
 
+	/// <summary>
+	/// Resolve a <see cref="Mesh.Id"/> to its slot in the store. Ids are 1-based so <c>default(Mesh)</c> (id 0) is
+	/// never a live handle: drawing an unassigned <see cref="Mesh"/> field fails here instead of silently rendering
+	/// whichever mesh was uploaded first.
+	/// </summary>
+	private int Slot(int meshId) =>
+		meshId >= 1 && meshId <= _meshes.Count
+			? meshId - 1
+			: throw new InvalidOperationException(
+				$"DirectX12: mesh id {meshId} was not created by this engine ({(meshId == 0 ? "0 is default(Mesh), an unassigned handle" : $"only ids 1..{_meshes.Count} exist")}). " +
+				"Meshes come from IEngine.CreateMesh / CreateMesh<T> / CreateSkinnedMesh.");
+
 	/// <summary>Upload canonical <see cref="Vertex"/> geometry (the <see cref="VertexLayout.MeshStandard"/> layout) and return a handle.</summary>
 	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
 		Create(MemoryMarshal.AsBytes(vertices), sizeof(Vertex), indices);
@@ -53,7 +65,6 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		var vertexBuffer = CreateUploadBuffer(vertexData, vertexBytes);
 		var indexBuffer = CreateUploadBuffer(MemoryMarshal.AsBytes(indices), indexBytes);
 
-		var id = _meshes.Count;
 		_meshes.Add(new StoredMesh
 		{
 			VertexBuffer = vertexBuffer,
@@ -72,7 +83,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 			},
 			IndexCount = (uint)indices.Length,
 		});
-		return new Mesh(id, indices.Length);
+		return new Mesh(_meshes.Count);
 	}
 
 	/// <summary>
@@ -84,17 +95,17 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	public Mesh CreateSkinned(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices)
 	{
 		var mesh = Create(MemoryMarshal.AsBytes(vertices), System.Runtime.CompilerServices.Unsafe.SizeOf<SkinnedVertex>(), indices);
-		var stored = _meshes[mesh.Id];
+		var stored = _meshes[Slot(mesh.Id)];
 		stored.VertexCount = (uint)vertices.Length;
-		_meshes[mesh.Id] = stored;
+		_meshes[Slot(mesh.Id)] = stored;
 		return mesh;
 	}
 
 	/// <summary>The skinned mesh's bind-pose buffer GPU address, bound as a structured-buffer root SRV for the compute pre-skin pass.</summary>
-	public ulong BindPoseAddress(int meshId) => _meshes[meshId].VertexBuffer.GetGPUVirtualAddress();
+	public ulong BindPoseAddress(int meshId) => _meshes[Slot(meshId)].VertexBuffer.GetGPUVirtualAddress();
 
 	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count.</summary>
-	public uint VertexCount(int meshId) => _meshes[meshId].VertexCount;
+	public uint VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;
 
 	/// <summary>
 	/// Draw a mesh's index buffer with its per-vertex stream sourced from <paramref name="vertexView"/> instead of
@@ -103,7 +114,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	/// </summary>
 	public void DrawSkinned(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, VertexBufferView vertexView)
 	{
-		var mesh = _meshes[meshId];
+		var mesh = _meshes[Slot(meshId)];
 		var ibv = mesh.IndexView;
 		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		cmd.IASetVertexBuffers(0, 1, &vertexView);
@@ -114,7 +125,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	/// <summary>Bind a mesh's vertex + index buffers and record an indexed draw into the command list.</summary>
 	public void Draw(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId)
 	{
-		var mesh = _meshes[meshId];
+		var mesh = _meshes[Slot(meshId)];
 		var vbv = mesh.VertexView;
 		var ibv = mesh.IndexView;
 		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
@@ -130,7 +141,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	/// </summary>
 	public void DrawInstanced(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, VertexBufferView instanceView, uint instanceCount)
 	{
-		var mesh = _meshes[meshId];
+		var mesh = _meshes[Slot(meshId)];
 		var ibv = mesh.IndexView;
 		var views = stackalloc VertexBufferView[2] { mesh.VertexView, instanceView };
 		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);

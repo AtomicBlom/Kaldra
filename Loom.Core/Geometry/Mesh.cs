@@ -11,6 +11,9 @@ namespace Loom.Core.Geometry;
 /// keeps them), so referencing one from a pass's record closure does not break the closure's purity the way
 /// capturing per-frame data would ("you hand me draw lists").
 /// </summary>
-/// <param name="Id">Stable, engine-assigned index the backend resolves to vertex/index buffers.</param>
-/// <param name="IndexCount">Number of indices to draw.</param>
-public readonly record struct Mesh(int Id, int IndexCount);
+/// <param name="Id">
+/// Stable, engine-assigned identity the backend resolves to vertex/index buffers. Ids start at 1, so
+/// <c>default(Mesh)</c> — an unassigned field — is never a mesh the engine created and is rejected at draw time
+/// rather than silently drawing whichever mesh happened to be uploaded first.
+/// </param>
+public readonly record struct Mesh(int Id);

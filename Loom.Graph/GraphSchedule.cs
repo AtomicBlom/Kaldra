@@ -40,8 +40,10 @@ public sealed class GraphSchedule
 
 	/// <summary>
 	/// Derive the schedule. Throws <see cref="GraphValidationException"/> if a non-persistent resource is
-	/// read before any pass writes it (it would sample undefined contents) or if the present target is never
-	/// written. Also emits a console warning for any dead pass (writes nothing consumed/presented/read back).
+	/// read before any pass writes it (it would sample undefined contents), if the present target is never
+	/// written, or if a pass samples or read-writes the backbuffer (a write/present target only). Every such
+	/// problem in the graph is reported together rather than one per attempt. Also emits a console warning for
+	/// any dead pass (writes nothing consumed/presented/read back).
 	/// </summary>
 	public static GraphSchedule Derive(RenderGraph graph)
 	{
@@ -82,6 +84,18 @@ public sealed class GraphSchedule
 			var writes = new Dictionary<int, ResourceHandle>();
 			foreach (var access in passes[i].Accesses)
 			{
+				// The swapchain image is a write-and-present target only. It is acquired fresh each frame, so it has
+				// no stable contents to sample, and each backend resolves it differently when asked to: one binds
+				// whichever image was last acquired, one hands back a sentinel view, one throws while recording.
+				// Reject it here so the answer is the same everywhere, and before a frame is ever recorded.
+				if (access.Resource.Kind == ResourceKind.Backbuffer && access.Kind is AccessKind.Sample or AccessKind.ReadWrite)
+				{
+					var verb = access.Kind == AccessKind.Sample ? ".Samples" : ".ReadWrites";
+					errors.Add(
+						$"Pass '{passes[i].Name}' declares {verb} on the backbuffer, which is a write/present target only. " +
+						"Render into a target declared on g.Screen and write that to the backbuffer instead.");
+				}
+
 				if (access.Kind.Reads())
 					reads[access.Resource.Id] = access.Resource;
 				if (access.Kind.Writes())
