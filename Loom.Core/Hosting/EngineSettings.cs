@@ -39,9 +39,9 @@ public class EngineSettings
 	public bool HdrOutput { get; set; }
 
 	/// <summary>
-	/// The backend to select from <see cref="Engine.AvailableEngines"/> by <see cref="IRenderBackend.Name"/>.
+	/// The backend to select from <see cref="Backends.Available"/> by <see cref="IRenderBackend.Name"/>.
 	/// Null (the default) means "the first available backend." A host's selection idiom:
-	/// <c>Engine.AvailableEngines.FirstOrDefault(e =&gt; e.Name == settings.PreferredBackend) ?? Engine.AvailableEngines.First()</c>.
+	/// <c>Backends.Available.FirstOrDefault(b =&gt; b.Name == settings.PreferredBackend) ?? Backends.Available.First()</c>.
 	/// </summary>
 	public string? PreferredBackend { get; set; }
 

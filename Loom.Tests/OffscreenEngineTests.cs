@@ -9,7 +9,7 @@ namespace Loom.Tests;
 /// <summary>
 /// The offscreen (windowless) render path: <see cref="Surface.Offscreen"/> brings an engine up with no window or
 /// surface, renders into an owned readable image, and <see cref="IEngine.RequestCapture"/> extracts pixels from it
-/// exactly as it does for a windowed frame. GPU-gated — SKIPPED when <see cref="Engine.AvailableEngines"/> is empty
+/// exactly as it does for a windowed frame. GPU-gated — SKIPPED when <see cref="Backends.Available"/> is empty
 /// (no GPU backend usable on this box). Each available backend is exercised independently in its own loop
 /// iteration, so one backend being unavailable never hides a regression in another.
 /// </summary>
@@ -22,17 +22,17 @@ public class OffscreenEngineTests
 	public void Offscreen_engine_renders_and_captures_a_non_empty_frame()
 	{
 		// Touch each backend's EngineSettings subclass so its assembly loads and its module initializer
-		// self-registers into Engine.AvailableEngines (guarded by its own IsSupported() probe) — a backend
+		// self-registers into Backends.Available (guarded by its own IsSupported() probe) — a backend
 		// assembly never referenced anywhere else in this method would otherwise stay unloaded and invisible here.
 		_ = new VulkanEngineSettings();
 		_ = new DirectX12EngineSettings();
 
-		if (Engine.AvailableEngines.Count == 0)
-			throw new TUnit.Core.Exceptions.SkipTestException("No GPU backend is available on this box (Engine.AvailableEngines is empty).");
+		if (Backends.Available.Count == 0)
+			throw new TUnit.Core.Exceptions.SkipTestException("No GPU backend is available on this box (Backends.Available is empty).");
 
 		var failures = new List<string>();
 
-		foreach (var backend in Engine.AvailableEngines)
+		foreach (var backend in Backends.Available)
 		{
 			var capturePath = Path.Combine(Path.GetTempPath(), $"loom-offscreen-{backend.Name}-{Guid.NewGuid():N}.png");
 			try

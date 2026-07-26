@@ -50,7 +50,7 @@ public abstract class LoomApplication : IHostedApplication
 
 	/// <summary>
 	/// The resolved input for the current frame — the bottom-of-stack (game-facing) held state after every input
-	/// layer has had its say. Poll it during <see cref="Update"/>, <see cref="FixedUpdate"/>, or <see cref="Draw"/>
+	/// layer has had its say. Poll it during <see cref="Update"/>, <see cref="FixedUpdate"/>, or <see cref="BeforeRender"/>
 	/// for level and edge queries (<c>Input.Down(Key.W)</c>, <c>Input.Pressed(Key.Space)</c>,
 	/// <c>Input.PointerDelta</c>, <c>Input.Gamepad(0)</c>). Valid from construction — with no layers pushed it is
 	/// simply the raw event stream folded into held state.
@@ -58,7 +58,7 @@ public abstract class LoomApplication : IHostedApplication
 	/// <remarks>
 	/// The stack resolves once per frame, at the top of the tick before the fixed-step catch-up loop, so this same
 	/// snapshot is shared by <em>every</em> <see cref="FixedUpdate"/> step of the frame as well as <see cref="Update"/>
-	/// and <see cref="Draw"/>. A <see cref="InputSnapshot.Pressed(Key)"/> edge is therefore visible to all of a
+	/// and <see cref="BeforeRender"/>. A <see cref="InputSnapshot.Pressed(Key)"/> edge is therefore visible to all of a
 	/// frame's fixed steps — guard once-per-press simulation logic accordingly rather than assuming one fixed step
 	/// per edge.
 	/// </remarks>
@@ -100,18 +100,20 @@ public abstract class LoomApplication : IHostedApplication
 	/// <summary>Define techniques, upload meshes/textures/materials, and <see cref="SetGraph"/>. Runs once, after <see cref="Engine"/> is bound.</summary>
 	protected virtual void LoadContent() { }
 
-	/// <summary>Per-frame CPU work: publish view-projection / per-object data into the graph's app-writable buffers via <c>Engine.Write</c>. Runs before <see cref="Draw"/> and the frame's render.</summary>
+	/// <summary>Per-frame CPU work: publish view-projection / per-object data into the graph's app-writable buffers via <c>Engine.Write</c>. Runs before <see cref="BeforeRender"/> and the frame's render.</summary>
 	protected virtual void Update(FrameTime time) { }
 
 	/// <summary>
-	/// Supplementary per-frame hook that runs immediately <em>before</em> the framework's always-happens
-	/// <see cref="IEngine.Render"/>. This is <b>not</b> where you issue draw calls — Loom is graph-based: pass
-	/// closures are registered once (in the graph you build in <see cref="LoadContent"/>) and the engine submits
-	/// every frame whether or not this is overridden. Use it for the work that must run right before submission
-	/// with the frame's final state resolved: projecting a pointer hit, compositing an in-world UI panel, writing
-	/// debug overlay lines. If you're looking for "the render callback", build a render graph instead.
+	/// Runs each frame immediately before the framework submits the active graph (<see cref="IEngine.Render"/>), with
+	/// the frame's state fully resolved — the place for work that depends on everything else being settled: projecting
+	/// a pointer hit onto the scene, compositing an in-world UI panel, writing debug-overlay lines.
+	/// <para>
+	/// Draw calls are not issued here. Loom is graph-based: a pass's closures are registered once (in the graph built
+	/// in <see cref="LoadContent"/>) and the engine records them every frame whether or not this is overridden. To
+	/// draw something, add a pass to the graph.
+	/// </para>
 	/// </summary>
-	protected virtual void Draw(FrameTime time) { }
+	protected virtual void BeforeRender(FrameTime time) { }
 
 	/// <summary>
 	/// Runs at a constant rate (<c>1 / AppOptions.FixedStepHz</c>) independent of the display's frame rate — zero,
@@ -119,7 +121,7 @@ public abstract class LoomApplication : IHostedApplication
 	/// spiral-of-death guard caps the catch-up at <see cref="MaxCatchUpSteps"/> steps per frame, dropping any
 	/// further backlog rather than falling ever further behind). Never called while
 	/// <see cref="AppOptions.FixedStepHz"/> is 0 (the default). Put deterministic simulation/physics here rather
-	/// than in <see cref="Update"/>; read <see cref="FrameTime.Alpha"/> in <see cref="Update"/>/<see cref="Draw"/>
+	/// than in <see cref="Update"/>; read <see cref="FrameTime.Alpha"/> in <see cref="Update"/>/<see cref="BeforeRender"/>
 	/// to interpolate render state between the last two fixed steps.
 	/// </summary>
 	protected virtual void FixedUpdate(FixedTime time) { }
@@ -233,7 +235,7 @@ public abstract class LoomApplication : IHostedApplication
 		}
 
 		Update(frameTime);
-		Draw(frameTime);
+		BeforeRender(frameTime);
 
 		// Submit unconditionally under Continuous; under OnDemand only when the app invalidated, the first frame has
 		// not yet been drawn, or a resize is pending. Update/Draw still run every tick (input routing, animation) —

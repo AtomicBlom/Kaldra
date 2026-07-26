@@ -15,7 +15,7 @@ namespace Loom.Hosting.Desktop;
 /// The desktop <see cref="IAppHost"/>: creates a Silk.NET window for whichever backend shipped with the app,
 /// brings up the engine, and drives the application's frame loop until the window closes. Backend-neutral — it
 /// names no backend type; it reads whichever backends have already self-registered into
-/// <see cref="Engine.AvailableEngines"/> (the Loom SDK's generated bootstrap forces their module initializers to
+/// <see cref="Backends.Available"/> (the Loom SDK's generated bootstrap forces their module initializers to
 /// run), falling back to a reflective <c>Loom.Backend.*.dll</c> scan under JIT only if none did, then picks the
 /// first available and branches on its <see cref="IRenderBackend.Name"/> to build the right window surface.
 /// </summary>
@@ -133,14 +133,14 @@ public sealed class DesktopAppHost : IAppHost
 	}
 
 	// The Loom SDK generates a [ModuleInitializer] into the app (LoomBackendBootstrap.g.cs) that forces every
-	// selected backend's module constructor via a compile-time typeof, so Engine.AvailableEngines is normally
+	// selected backend's module constructor via a compile-time typeof, so Backends.Available is normally
 	// already populated by the time this runs — no scan needed. Only a non-SDK/hand-authored project (no generated
 	// bootstrap) or a plugin DLL dropped beside the app falls through to the reflective scan below, and only under
 	// JIT: Assembly.LoadFrom throws NotSupportedException on NativeAOT, so the scan is skipped entirely there
 	// (IsDynamicCodeSupported == false) rather than risk that exception crashing startup.
 	private static IRenderBackend ResolveBackend(string? preferredBackend)
 	{
-		var backends = Engine.AvailableEngines;
+		var backends = Backends.Available;
 		if (backends.Count == 0 && RuntimeFeature.IsDynamicCodeSupported)
 			backends = ScanForBackends();
 
@@ -165,7 +165,7 @@ public sealed class DesktopAppHost : IAppHost
 	[UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode",
 		Justification = "Reached only under RuntimeFeature.IsDynamicCodeSupported (JIT). A NativeAOT or trimmed app " +
 			"registers its backends through the SDK-generated LoomBackendBootstrap module initializer, which roots the " +
-			"backend assemblies statically, so Engine.AvailableEngines is already populated and this reflective scan is unreachable.")]
+			"backend assemblies statically, so Backends.Available is already populated and this reflective scan is unreachable.")]
 	private static IReadOnlyList<IRenderBackend> ScanForBackends()
 	{
 		foreach (var dll in Directory.EnumerateFiles(AppContext.BaseDirectory, "Loom.Backend.*.dll"))
@@ -181,7 +181,7 @@ public sealed class DesktopAppHost : IAppHost
 			}
 		}
 
-		return Engine.AvailableEngines;
+		return Backends.Available;
 	}
 
 	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,

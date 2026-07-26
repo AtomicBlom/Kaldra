@@ -1,7 +1,7 @@
-﻿namespace Loom.Core.Hosting;
+namespace Loom.Core.Hosting;
 
 /// <summary>
-/// Per-frame timing handed to <see cref="LoomApplication.Update"/> and <see cref="LoomApplication.Draw"/> —
+/// Per-frame timing handed to <see cref="LoomApplication.Update"/> and <see cref="LoomApplication.BeforeRender"/> —
 /// the same two values the engine already carries on <see cref="FrameInputs"/> (<see cref="DeltaSeconds"/>
 /// = <see cref="FrameInputs.DeltaSeconds"/>, <see cref="TotalSeconds"/> = <see cref="FrameInputs.Time"/>),
 /// surfaced to the app so a per-frame hook needs no other clock. <see cref="Alpha"/> is the render-interpolation

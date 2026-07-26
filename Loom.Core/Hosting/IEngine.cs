@@ -10,7 +10,7 @@ namespace Loom.Core.Hosting;
 /// the long-lived device and the pipeline cache; the <em>active graph</em> is swappable (<see cref="SetGraph"/>),
 /// so a structural change re-derives the schedule/barriers/aliasing while the device and cache are reused.
 /// Obtain one from
-/// <see cref="IRenderBackend.Create"/> via <see cref="Engine.AvailableEngines"/>; the host names no
+/// <see cref="IRenderBackend.Create"/> via <see cref="Backends.Available"/>; the host names no
 /// graphics-API type to drive it. Dispose it to tear the device down (drains the GPU first).
 /// </summary>
 public interface IEngine : IEngineClipSpace, IDisposable

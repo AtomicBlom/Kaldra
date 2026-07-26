@@ -7,7 +7,7 @@ namespace Loom.Backend.Vulkan;
 /// Vulkan-specific engine configuration — the <see cref="EngineSettings"/> subclass a host populates when it
 /// wants to steer Vulkan-only knobs. It is the one sanctioned place a backend type appears in
 /// app code; constructing it also loads the Loom.Vulkan assembly, which self-registers the Vulkan backend into
-/// <see cref="Engine.AvailableEngines"/> (see <see cref="VulkanBackend"/>). A host that needs no Vulkan-only
+/// <see cref="Backends.Available"/> (see <see cref="VulkanBackend"/>). A host that needs no Vulkan-only
 /// knob can use the base <see cref="EngineSettings"/> instead, provided it touches some Loom.Vulkan type first.
 /// </summary>
 public sealed class VulkanEngineSettings : EngineSettings
