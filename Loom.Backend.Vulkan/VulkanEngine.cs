@@ -203,10 +203,23 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// reads geometry, else none (a fullscreen/compute technique). A non-null Instance marks it instanced
 		// (a second per-instance stream at binding 1).
 		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
+		var spirv = ResolveShaderAsset(descriptor.Shader, ".spv");
+		// Resolve the descriptor's source-level entry names against the ones the module actually declares: slangc
+		// renames a lone entry point to "main" in SPIR-V, so a compute shader's declared `computeMain` is not
+		// necessarily the name pipeline creation must be given. A two-entry graphics module matches verbatim and
+		// passes through unchanged.
+		var vertexEntry = descriptor.IsCompute
+			? descriptor.VertexEntry
+			: SpirvEntryPoints.Resolve(spirv, descriptor.VertexEntry, SpirvEntryPoints.Stage.Vertex, descriptor.Shader);
+		var fragmentEntry = SpirvEntryPoints.Resolve(
+			spirv,
+			descriptor.IsCompute ? descriptor.ComputeEntry : descriptor.FragmentEntry,
+			descriptor.IsCompute ? SpirvEntryPoints.Stage.Compute : SpirvEntryPoints.Stage.Fragment,
+			descriptor.Shader);
 		_registry[name] = new VulkanTechniqueTemplate(
-			ResolveShaderAsset(descriptor.Shader, ".spv"),
-			descriptor.VertexEntry,
-			descriptor.FragmentEntry,
+			spirv,
+			vertexEntry,
+			fragmentEntry,
 			reflection.SampleCount,
 			descriptor.HasVertexInput,
 			descriptor.Blend,
