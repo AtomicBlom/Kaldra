@@ -1,3 +1,5 @@
+using System.Numerics;
+using Loom.Core.Geometry;
 using Loom.Core.Graph;
 
 namespace Loom.Tests;
@@ -218,4 +220,77 @@ public class DomainAndResourceTests
 	public void Persistent_rejects_zero_ring_depth() =>
 		Should.Throw<ArgumentOutOfRangeException>(() =>
 			RenderGraph.Define(g => g.Persistent("bad", Format.R16F, size: 0)));
+
+	[Test]
+	public void Typed_buffer_sizes_itself_from_the_element_type()
+	{
+		BufferHandle? buffer = null;
+		RenderGraph.Define(g => buffer = g.Buffer<Matrix4x4>("instances", 1024));
+
+		buffer!.Stride.ShouldBe(64);
+		buffer.ElementCount.ShouldBe(1024);
+		buffer.ByteSize.ShouldBe(1024 * 64);
+	}
+
+	[Test]
+	public void Layout_buffer_sizes_itself_from_the_layout_stride()
+	{
+		BufferHandle? buffer = null;
+		RenderGraph.Define(g => buffer = g.Buffer("skinned", 300, VertexLayout.MeshStandard));
+
+		buffer!.Stride.ShouldBe(VertexLayout.MeshStandard.Stride);
+		buffer.ElementCount.ShouldBe(300);
+		buffer.ByteSize.ShouldBe(300 * 48);
+	}
+
+	[Test]
+	public void Byte_sized_buffer_declares_no_element_contract()
+	{
+		// 0 is the "unknown" sentinel both draw-path guards key off: an opaque byte block promises nothing about
+		// its contents, so neither the stride check nor the instance-count check has anything to compare.
+		BufferHandle? buffer = null;
+		RenderGraph.Define(g => buffer = g.Buffer("opaque", 4096));
+
+		buffer!.ByteSize.ShouldBe(4096);
+		buffer.Stride.ShouldBe(0);
+		buffer.ElementCount.ShouldBe(0);
+	}
+
+	[Test]
+	[Arguments(0)]
+	[Arguments(-1)]
+	public void Typed_buffer_rejects_a_nonpositive_count(int count)
+	{
+		Should.Throw<ArgumentOutOfRangeException>(() => RenderGraph.Define(g => g.Buffer<Matrix4x4>("bad", count)));
+		Should.Throw<ArgumentOutOfRangeException>(() => RenderGraph.Define(g => g.Buffer("bad", count, VertexLayout.MeshStandard)));
+	}
+
+	[Test]
+	public void Typed_buffer_rejects_a_count_whose_byte_size_overflows() =>
+		// count x stride is computed in 64 bits so this fails loud, rather than wrapping to a small (or negative)
+		// byte size and allocating a buffer the declared elements do not fit in.
+		Should.Throw<ArgumentOutOfRangeException>(() =>
+			RenderGraph.Define(g => g.Buffer<Matrix4x4>("huge", (int.MaxValue / 64) + 1)));
+
+	[Test]
+	public void Storage_buffer_carries_its_element_stride_and_count()
+	{
+		ResourceHandle? storage = null;
+		RenderGraph.Define(g => storage = g.Storage<Matrix4x4>("bones", 128));
+
+		storage!.Stride.ShouldBe(64);
+		storage.ElementCount.ShouldBe(128);
+		storage.ByteSize.ShouldBe(128 * 64);
+	}
+
+	[Test]
+	public void Element_metadata_does_not_change_the_graph_hash()
+	{
+		// Stride/ElementCount are declaration metadata: how the author spelled the size, not what the engine derives
+		// from it. Hashing them would bust every cached graph on a purely cosmetic migration to the typed overloads.
+		var typed = RenderGraph.Define(g => g.Buffer<Matrix4x4>("instances", 16));
+		var bytes = RenderGraph.Define(g => g.Buffer("instances", 16 * 64));
+
+		typed.Hash().ShouldBe(bytes.Hash());
+	}
 }

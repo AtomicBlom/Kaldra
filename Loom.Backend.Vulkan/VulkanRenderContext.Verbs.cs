@@ -51,6 +51,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		}
 		else if (call.Instances.GpuBuffer is { } gpuBuf)
 		{
+			gpuBuf.CheckInstanceStride(template.Instance?.Stride ?? 0, call.Technique);
 			var gpuBuffer = _resources.GetBuffer(_frameSlot, gpuBuf.Id);
 			if (call.Mesh is { } mesh)
 			{

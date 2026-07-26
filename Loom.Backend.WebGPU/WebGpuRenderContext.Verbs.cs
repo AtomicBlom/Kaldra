@@ -54,7 +54,7 @@ internal sealed partial class WebGpuRenderContext
 		}
 
 		BindAndSet(baked, views, call.Uniforms, default);
-		RecordGeometry(call);
+		RecordGeometry(call, template.Instance?.Stride ?? 0);
 	}
 
 	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
@@ -109,7 +109,7 @@ internal sealed partial class WebGpuRenderContext
 
 	// Emit the geometry half of a draw: single mesh, skinned override, GPU-resident instances, CPU instances, or a
 	// procedural instanced draw whose vertices the shader fabricates from the vertex index.
-	private void RecordGeometry(in DrawCall call)
+	private void RecordGeometry(in DrawCall call, int instanceStride)
 	{
 		var meshes = _engine.Meshes;
 		var writer = _engine.Writer;
@@ -125,6 +125,7 @@ internal sealed partial class WebGpuRenderContext
 
 		if (call.Instances.GpuBuffer is { } gpuBuf)
 		{
+			gpuBuf.CheckInstanceStride(instanceStride, call.Technique);
 			var gpuBuffer = _engine.Transients.BufferHandle(gpuBuf.Id);
 			if (call.Mesh is { } mesh)
 			{

@@ -113,9 +113,25 @@ public ref struct DrawCall
 	/// <summary>
 	/// Build a GPU-resident instance source from <paramref name="buffer"/> (a <c>.ReadsVertex</c> resource a
 	/// compute pass filled) and <paramref name="count"/> instances. The engine derives the compute→vertex barrier.
+	/// <para>
+	/// When the buffer was declared element-wise (<see cref="GraphBuilder.Buffer{T}"/> /
+	/// <see cref="GraphBuilder.Buffer(string,int,Geometry.VertexLayout)"/>), <paramref name="count"/> is checked
+	/// against the elements it actually holds. Drawing more instances than that reads off the end of the buffer,
+	/// which no backend reports — so it is rejected here, where both numbers are known.
+	/// </para>
 	/// </summary>
 	public static InstanceSource Gpu(BufferHandle buffer, int count)
-		=> InstanceSource.FromGpu(buffer, count);
+	{
+		ArgumentNullException.ThrowIfNull(buffer);
+		ArgumentOutOfRangeException.ThrowIfNegative(count);
+		if (buffer.ElementCount > 0 && count > buffer.ElementCount)
+		{
+			throw new ArgumentOutOfRangeException(nameof(count),
+				$"Draw asks for {count} instances from buffer '{buffer.Name}', which was declared to hold {buffer.ElementCount}. " +
+				"Size the buffer and the draw from the same count.");
+		}
+		return InstanceSource.FromGpu(buffer, count);
+	}
 
 	/// <summary>
 	/// The per-instance data for a <see cref="DrawCall"/>: CPU-sourced (uploaded per frame) or GPU-resident.

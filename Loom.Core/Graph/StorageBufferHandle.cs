@@ -11,6 +11,6 @@ namespace Loom.Core.Graph;
 /// </summary>
 public sealed class StorageBufferHandle : ResourceHandle, IStorageBufferHandle
 {
-	internal StorageBufferHandle(int id, string name, Domain domain, int byteSize, bool growable = false)
-		: base(id, name, Format.Rgba8Unorm, ResourceKind.Storage, domain, scale: 1f, count: 1, byteSize: byteSize, growable: growable) { }
+	internal StorageBufferHandle(int id, string name, Domain domain, int byteSize, bool growable = false, int stride = 0, int elementCount = 0)
+		: base(id, name, Format.Rgba8Unorm, ResourceKind.Storage, domain, scale: 1f, count: 1, byteSize: byteSize, growable: growable, stride: stride, elementCount: elementCount) { }
 }

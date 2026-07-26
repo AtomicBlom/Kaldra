@@ -2,7 +2,7 @@ namespace Loom.Core.Graph;
 
 /// <summary>
 /// An immutable handle to a declared resource — the currency the authoring API trades in. You get one from a
-/// <see cref="Domain"/> verb (or <see cref="GraphBuilder.Persistent"/> / <see cref="GraphBuilder.Buffer"/> /
+/// <see cref="Domain"/> verb (or <see cref="GraphBuilder.Persistent"/> / <see cref="GraphBuilder.Buffer{T}(string,int)"/> /
 /// <see cref="GraphBuilder.Backbuffer"/>) and hand it to pass verbs (<c>.Writes</c>, <c>.Samples</c>, …).
 /// <para>
 /// This is an <b>abstract base</b>; every concrete handle is a <see cref="ColorHandle"/>, <see cref="DepthHandle"/>,
@@ -44,6 +44,22 @@ public abstract class ResourceHandle
 	public int ByteSize { get; }
 
 	/// <summary>
+	/// The size of one element in bytes, for a buffer declared in terms of its element type or
+	/// <see cref="Geometry.VertexLayout"/> (<see cref="GraphBuilder.Buffer{T}"/>,
+	/// <see cref="GraphBuilder.Buffer(string,int,Geometry.VertexLayout)"/>, <see cref="GraphBuilder.Storage{T}"/>).
+	/// <b>0 means unknown</b> — an image resource, or a buffer declared as an opaque byte size — so every consumer
+	/// must treat 0 as "no contract to check against" rather than as a stride of zero.
+	/// </summary>
+	public int Stride { get; }
+
+	/// <summary>
+	/// How many elements the buffer was declared to hold — the counterpart of <see cref="Stride"/>, and 0 under
+	/// exactly the same conditions. For a <see cref="Growable"/> storage buffer this is the <em>initial</em> element
+	/// count, since a larger <c>IEngine.Write</c> reallocates.
+	/// </summary>
+	public int ElementCount { get; }
+
+	/// <summary>
 	/// For a <see cref="ResourceKind.Storage"/> buffer: whether its GPU allocation may grow at runtime. When true,
 	/// <c>IEngine.Write</c> with a span larger than the current capacity reallocates the buffer (geometrically)
 	/// instead of throwing; <see cref="ByteSize"/> is then the <em>initial</em> capacity, not a fixed one. A storage
@@ -55,7 +71,7 @@ public abstract class ResourceHandle
 	/// <summary>True if this is the swapchain present target.</summary>
 	public bool IsBackbuffer => Kind == ResourceKind.Backbuffer;
 
-	private protected ResourceHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count, int byteSize, bool growable = false)
+	private protected ResourceHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count, int byteSize, bool growable = false, int stride = 0, int elementCount = 0)
 	{
 		Id = id;
 		Name = name;
@@ -66,6 +82,8 @@ public abstract class ResourceHandle
 		Count = count;
 		ByteSize = byteSize;
 		Growable = growable;
+		Stride = stride;
+		ElementCount = elementCount;
 	}
 
 	/// <summary>The pixel dimensions of this resource, resolving <see cref="Scale"/> against its domain.</summary>

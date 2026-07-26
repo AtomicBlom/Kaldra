@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using Loom.Core.Geometry;
 
 namespace Loom.Core.Graph;
 
@@ -204,12 +205,54 @@ public sealed class GraphBuilder
 	/// not resolution-bound. A compute pass <c>.ReadWrites</c> it and a draw <c>.ReadsVertex</c> it (GPU
 	/// particles): the engine derives the compute→vertex barrier from those edges. Anchored to the backbuffer
 	/// domain (it has no resolution of its own).
+	/// <para>
+	/// This overload declares a bag of bytes and nothing about what fills it. Prefer
+	/// <see cref="Buffer{T}(string,int)"/> or <see cref="Buffer(string,int,VertexLayout)"/> whenever the buffer holds
+	/// elements: the element stride reaches the handle instead of being multiplied away, so the draw path can check
+	/// the technique's per-instance stream against it rather than corrupting memory silently. Reach for the byte
+	/// overload only for a genuinely unstructured block.
+	/// </para>
 	/// </summary>
 	public BufferHandle Buffer(string name, int byteSize)
 	{
 		if (byteSize <= 0)
 			throw new ArgumentOutOfRangeException(nameof(byteSize), "A buffer needs a positive byte size.");
 		return (BufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Buffer, BackbufferDomainForPersistent(), scale: 1f, byteSize: byteSize);
+	}
+
+	/// <summary>
+	/// Declare a GPU storage buffer holding <paramref name="count"/> elements of <typeparamref name="T"/> —
+	/// <see cref="Buffer(string,int)"/> stated in terms of what the buffer holds, so the size arithmetic and the
+	/// element stride are the engine's business rather than a magic number at the call site.
+	/// <typeparamref name="T"/>'s layout must match the shader's <c>RWStructuredBuffer</c> element on every backend.
+	/// </summary>
+	public BufferHandle Buffer<T>(string name, int count) where T : unmanaged =>
+		ElementBuffer(name, count, Unsafe.SizeOf<T>());
+
+	/// <summary>
+	/// Declare a GPU storage buffer holding <paramref name="count"/> elements laid out as
+	/// <paramref name="layout"/> — the spelling for a buffer a compute pass fills and a draw then consumes as a
+	/// per-instance vertex stream (the GPU-particle path). Naming the <em>same</em> <see cref="VertexLayout"/> the
+	/// technique names as its <c>Instance</c> stream makes the buffer and the shader that walks it share one source
+	/// of truth, and lets the draw path reject a mismatch instead of stepping through the buffer at the wrong stride.
+	/// </summary>
+	public BufferHandle Buffer(string name, int count, VertexLayout layout)
+	{
+		ArgumentNullException.ThrowIfNull(layout);
+		return ElementBuffer(name, count, layout.Stride);
+	}
+
+	// The shared body of the two element-wise Buffer overloads: size the allocation from count x stride and keep both
+	// on the handle. The multiply widens to long first so an implausibly large declaration fails loud instead of
+	// wrapping to a negative (or small positive) byte size that would allocate a buffer nothing fits in.
+	private BufferHandle ElementBuffer(string name, int count, int stride)
+	{
+		if (count <= 0)
+			throw new ArgumentOutOfRangeException(nameof(count), $"Buffer '{name}' needs a positive element count.");
+		var byteSize = (long)count * stride;
+		if (byteSize > int.MaxValue)
+			throw new ArgumentOutOfRangeException(nameof(count), $"Buffer '{name}' would need {byteSize} bytes ({count} elements x {stride} bytes), which overflows its 32-bit byte size.");
+		return (BufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Buffer, BackbufferDomainForPersistent(), scale: 1f, byteSize: (int)byteSize, stride: stride, elementCount: count);
 	}
 
 	/// <summary>
@@ -237,10 +280,11 @@ public sealed class GraphBuilder
 	{
 		if (count <= 0)
 			throw new ArgumentOutOfRangeException(nameof(count), "A storage buffer needs a positive element count.");
-		return (StorageBufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Storage, BackbufferDomainForPersistent(), scale: 1f, byteSize: count * Unsafe.SizeOf<T>(), growable: growable);
+		var stride = Unsafe.SizeOf<T>();
+		return (StorageBufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Storage, BackbufferDomainForPersistent(), scale: 1f, byteSize: count * stride, growable: growable, stride: stride, elementCount: count);
 	}
 
-	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0, bool growable = false, Vector4? clearValue = null, bool noClear = false)
+	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0, bool growable = false, Vector4? clearValue = null, bool noClear = false, int stride = 0, int elementCount = 0)
 	{
 		if (!_resourceNames.Add(name))
 			throw new InvalidOperationException($"Duplicate resource name '{name}'.");
@@ -248,9 +292,9 @@ public sealed class GraphBuilder
 		ResourceHandle handle = kind switch
 		{
 			ResourceKind.Depth => new DepthHandle(id, name, format, domain, scale),
-			ResourceKind.Buffer => new BufferHandle(id, name, format, domain, byteSize),
+			ResourceKind.Buffer => new BufferHandle(id, name, format, domain, byteSize, stride, elementCount),
 			ResourceKind.Constants => new ConstantsHandle(id, name, domain, byteSize),
-			ResourceKind.Storage => new StorageBufferHandle(id, name, domain, byteSize, growable),
+			ResourceKind.Storage => new StorageBufferHandle(id, name, domain, byteSize, growable, stride, elementCount),
 			// Color / Persistent / Backbuffer are all colour-like images; the lifetime/role lives in Kind.
 			_ => new ColorHandle(id, name, format, kind, domain, scale, count, clearValue, noClear)
 		};

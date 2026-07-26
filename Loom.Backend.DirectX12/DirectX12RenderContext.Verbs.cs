@@ -59,6 +59,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 		{
 			if (_transients is null)
 				throw new InvalidOperationException("DirectX12: a GPU-buffer instanced draw requires an active graph (SetGraph).");
+			gpuBuf.CheckInstanceStride(baked.InstanceStride, call.Technique);
 			if (call.Mesh is { } mesh)
 			{
 				// GPU-resident instance stream + indexed mesh draw (foliage, GPU-driven placement).

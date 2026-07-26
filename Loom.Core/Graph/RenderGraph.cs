@@ -123,7 +123,13 @@ public sealed partial class RenderGraph
 		{
 			var scale = resource.Scale == 1f ? "" : $"  scale={resource.Scale:0.###}";
 			var ring = resource.Count == 1 ? "" : $"  ring={resource.Count}";
-			sb.AppendLine($"    [{resource.Id}] {resource.Name}  {resource.Kind} {resource.Format}  @{resource.Domain.Name}{scale}{ring}");
+			// Buffers have no resolution, so their size is the only thing that describes them: as elements x stride
+			// when they were declared that way, otherwise as the opaque byte count that is all the declaration said.
+			var size = resource.ByteSize == 0 ? ""
+				: resource.Stride > 0 ? $"  {resource.ElementCount}x{resource.Stride}B"
+				: $"  {resource.ByteSize}B";
+			var growth = resource.Growable ? "  growable" : "";
+			sb.AppendLine($"    [{resource.Id}] {resource.Name}  {resource.Kind} {resource.Format}  @{resource.Domain.Name}{scale}{ring}{size}{growth}");
 		}
 
 		sb.AppendLine($"  Passes ({Passes.Length}):");
@@ -244,7 +250,7 @@ public sealed partial class RenderGraph
 		var dto = new GraphDto(
 			Hash(),
 			[.. Domains.Select(d => new DomainDto(d.Name, d.Width, d.Height, d.IsBackbuffer, d.RelativeScale, d.Samples))],
-			[.. Resources.Select(r => new ResourceDto(r.Id, r.Name, r.Kind.ToString(), r.Format.ToString(), r.Domain.Name, r.Scale, r.Count, r.ByteSize))],
+			[.. Resources.Select(r => new ResourceDto(r.Id, r.Name, r.Kind.ToString(), r.Format.ToString(), r.Domain.Name, r.Scale, r.Count, r.ByteSize, r.Stride, r.ElementCount))],
 			[.. Passes.Select(p => new PassDto(
 				p.Name, p.Kind.ToString(), p.Queue.ToString(),
 				[.. p.Accesses.Select(a => new AccessDto(a.Kind.ToString(), a.Resource.Id, a.Resource.Name))]))],
@@ -254,7 +260,7 @@ public sealed partial class RenderGraph
 
 	private sealed record GraphDto(string Hash, DomainDto[] Domains, ResourceDto[] Resources, PassDto[] Passes, string? Present);
 	private sealed record DomainDto(string Name, int Width, int Height, bool IsBackbuffer, float RelativeScale, int Samples);
-	private sealed record ResourceDto(int Id, string Name, string Kind, string Format, string Domain, float Scale, int Count, int ByteSize);
+	private sealed record ResourceDto(int Id, string Name, string Kind, string Format, string Domain, float Scale, int Count, int ByteSize, int Stride, int ElementCount);
 	private sealed record PassDto(string Name, string Kind, string Queue, AccessDto[] Accesses);
 	private sealed record AccessDto(string Kind, int ResourceId, string ResourceName);
 
