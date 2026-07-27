@@ -11,7 +11,7 @@ You declare *what* each render pass reads and writes; Loom derives ordering, bar
 **Core render graph**
 - Declare reads/writes per pass; the engine derives pass ordering, every barrier and image-layout transition, transient-memory aliasing (non-overlapping lifetimes share memory), and frame pacing.
 - Immutable, hashable graph + technique descriptions, baked and cached by hash.
-- Reusable sub-graphs compose as plain extension methods; ping-pong is two handles swapped in a normal loop.
+- Reusable sub-graphs compose as plain extension methods, and `using (g.Scope("left"))` instantiates one twice in a graph without the fragment taking a prefix parameter; ping-pong is two handles swapped in a normal loop.
 - GPU→CPU readback as a first-class edge (`g.Readback`), resolving 1–2 frames later.
 
 **Two backends at pixel parity**

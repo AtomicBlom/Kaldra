@@ -13,6 +13,7 @@ A graph is built once with `RenderGraph.Define(g => { … })` and set on the eng
 | `g.Compute("name")` | Begin a compute pass → `PassBuilder`. Chain access verbs, then `.Dispatch(ctx => …)`. |
 | `g.Present(colorHandle)` | The terminal: declare which colour resource is shown this frame (returns void). |
 | `g.Readback(handle)` | Declare a GPU→CPU readback of a resource; returns the same handle. Read it later with `engine.Read`. |
+| `using (g.Scope("name"))` | Prefix every domain/resource/pass declared in the block with `name.`, so a reusable fragment can be instantiated more than once. Nests. Techniques and the backbuffer are not scoped. |
 | `g.Buffer<T>("name", count)` | A GPU storage buffer of `count × sizeof(T)` (not resolution-bound) → `BufferHandle`. |
 | `g.Buffer("name", count, layout)` | The same, sized by a `VertexLayout`'s stride — the spelling for a buffer a compute fills and a draw consumes as its per-instance stream. Naming the layout the technique names lets the draw path reject a stride mismatch. |
 | `g.Buffer("name", byteSize)` | The same as an opaque block of `byteSize` bytes. Declares no element contract, so neither draw-path guard applies — prefer one of the two above. |
