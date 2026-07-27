@@ -50,7 +50,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `g.Domain("name", scale, samples=1)` | A backbuffer-relative `Domain` — `scale × native`, re-resolved on resize (e.g. `0.5f` for half-res). |
 | `domain.Color("name", format, clearValue?=null, noClear?=false)` | A colour target in this domain → `ColorHandle`. `noClear: true` skips the clear (only when the first pass covers every pixel). |
 | `domain.Color("name", format, scale, …)` | A colour target at a fraction of the domain's resolution (mip chains, bloom pyramid). |
-| `domain.Depth("name", format)` | A depth target in this domain → `DepthHandle`. |
+| `domain.Depth("name", format, clearDepth = 1f, noClear = false)` | A depth target in this domain → `DepthHandle`. `clearDepth: 0f` is the reversed-Z far plane; `noClear` skips the clear (only correct when the first depth-writing pass covers every pixel). |
 | `domain.Persistent("name", format)` | A cross-frame target sized to this domain (use a tiny domain for a scalar history). |
 | `g.BackbufferClear` / `g.BackbufferNoClear` | Set the backbuffer's first-write clear colour / skip the clear — before the first `g.Backbuffer` access. |
 
@@ -217,6 +217,8 @@ engine.DefineTechnique("foliage", new TechniqueDescriptor("foliage",
 | `Instance` (`null`) | The per-instance `VertexLayout` (e.g. `Transform`) for instanced draws. |
 | `HasListPush` (`false`) | A draw-list technique's all-stage push block (whose last slot each command's `Tag` rewrites). |
 | `Cull` (`CullMode.None`) | Which faces the rasterizer discards — front faces are counter-clockwise. |
+| `DepthTest` (`DepthCompare.LessOrEqual`) | The depth comparison a fragment must pass, when the pass has a depth target. |
+| `Bias` (`null`) | A constant + slope-scaled depth offset (`DepthBias`) — the shadow-acne knob. |
 
 Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan) + signed DXIL (DirectX 12) with reflection JSON.
 
@@ -226,7 +228,23 @@ Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan) + sign
 |---|---|
 | `BlendMode` (`Loom.Core.Graph`) | `None`, `AlphaOver`, `Additive`, `PremultipliedAlpha`, `Multiply`. |
 | `CullMode` (`Loom.Core.Graph`) | `None`, `Back`, `Front` (front faces are counter-clockwise). |
+| `DepthCompare` (`Loom.Core.Graph`) | `Never`, `Less`, `Equal`, `LessOrEqual`, `Greater`, `NotEqual`, `GreaterOrEqual`, `Always`. |
 | `SamplerAddress` (`Loom.Core.Materials`) | `Clamp`, `Repeat`, `MirrorRepeat`, `ClampToBorder`, `MirrorClampToEdge`. |
+
+### Reversed-Z
+
+Reversed-Z puts the far plane at depth 0, which cancels the perspective divide's precision loss at distance against a float depth buffer's density near zero — the standard fix for depth fighting in a large world. It is **three declarations that must agree**; getting one wrong doesn't fail, it inverts or erases occlusion:
+
+```csharp
+var depth = g.Screen.Depth("depth", Format.Depth32F, clearDepth: 0f);          // 1. far plane at 0
+camera.Perspective(fovY, aspect, 0.1f, 5000f, reversed: true);                 // 2. reversed projection
+engine.DefineTechnique("mesh", new TechniqueDescriptor("mesh",
+    HasVertexInput: true, DepthTest: DepthCompare.GreaterOrEqual));            // 3. reversed test
+```
+
+Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projection, not the viewport.
+
+**Depth bias is only partly portable.** `DepthBias.SlopeScale` means the same thing on every backend. `DepthBias.Constant` does not: Vulkan multiplies it by an implementation-defined `r`, D3D12 applies `Constant × 2^(exponent−23)` for a float depth buffer. Prefer the slope-scaled term, or tune the constant per backend.
 
 ## Drawing, instancing, skinning (`Loom.Core.Hosting`)
 

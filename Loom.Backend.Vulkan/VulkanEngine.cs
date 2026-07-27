@@ -42,7 +42,6 @@ namespace Loom.Backend.Vulkan;
 internal sealed unsafe partial class VulkanEngine : EngineBase
 {
 	private const int MaxFramesInFlight = 2;
-	private static readonly ClearValue ClearDepth = new(depthStencil: new ClearDepthStencilValue(1.0f, 0));
 
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
@@ -233,8 +232,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.Instance,
 			reflection.UniformBufferCount,
 			descriptor.HasListPush,
-			descriptor.Cull);
-
+			descriptor.Cull,
+			descriptor.DepthTest,
+			descriptor.Bias);
 	}
 
 	// Evict the baked pipelines after a hot-reload so the next bake rebuilds from the re-registered templates.

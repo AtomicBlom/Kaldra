@@ -235,7 +235,10 @@ export function createRenderPipeline(handle, descriptorJson) {
 		fragment: { module: tables[T_SHADER_MODULES][d.module], entryPoint: d.fragmentEntry, targets },
 		primitive: { topology: d.topology, cullMode: d.cullMode, frontFace: d.frontFace },
 	};
-	if (d.depth) desc.depthStencil = { format: FORMATS[d.depth.format], depthWriteEnabled: d.depth.write, depthCompare: d.depth.compare };
+	if (d.depth) desc.depthStencil = {
+		format: FORMATS[d.depth.format], depthWriteEnabled: d.depth.write, depthCompare: d.depth.compare,
+		depthBias: d.depth.bias, depthBiasSlopeScale: d.depth.biasSlopeScale, depthBiasClamp: d.depth.biasClamp,
+	};
 	tables[T_RENDER_PIPELINES][handle] = device.createRenderPipeline(desc);
 }
 

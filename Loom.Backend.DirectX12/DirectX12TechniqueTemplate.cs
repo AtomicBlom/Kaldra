@@ -19,4 +19,5 @@ internal readonly record struct DirectX12TechniqueTemplate(
 	SamplerAddress Address = SamplerAddress.Clamp,
 	VertexLayout? Layout = null, VertexLayout? Instance = null,
 	int UniformBufferCount = 0, int InputBufferCount = 0, bool HasListPush = false,
-	CullMode Cull = CullMode.None);
+	CullMode Cull = CullMode.None,
+	DepthCompare DepthTest = DepthCompare.LessOrEqual, DepthBias? Bias = null);

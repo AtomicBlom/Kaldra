@@ -364,8 +364,13 @@ public sealed class GraphBuilder
 		return (StorageBufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Storage, BackbufferDomainForPersistent(), scale: 1f, byteSize: count * stride, growable: growable, stride: stride, elementCount: count);
 	}
 
-	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0, bool growable = false, Vector4? clearValue = null, bool noClear = false, int stride = 0, int elementCount = 0)
+	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0, bool growable = false, Vector4? clearValue = null, bool noClear = false, int stride = 0, int elementCount = 0, float clearDepth = 1f)
 	{
+		// Both APIs define the depth clear over the [0,1] depth range; anything else is undefined rather than a
+		// deeper far plane. Catch the reversed-Z typo (clearDepth: -1) at declaration instead of at bake.
+		if (kind == ResourceKind.Depth && clearDepth is < 0f or > 1f)
+			throw new ArgumentOutOfRangeException(nameof(clearDepth), $"Depth target '{name}' clears to {clearDepth}; the depth range is [0, 1] (1 = conventional far plane, 0 = reversed-Z far plane).");
+
 		// The backbuffer is the one resource a scope must not rename: it is created lazily on first access, so which
 		// scope happens to touch it first is an accident of authoring order, not a naming decision.
 		if (kind != ResourceKind.Backbuffer)
@@ -375,7 +380,7 @@ public sealed class GraphBuilder
 		var id = _resources.Count;
 		ResourceHandle handle = kind switch
 		{
-			ResourceKind.Depth => new DepthHandle(id, name, format, domain, scale),
+			ResourceKind.Depth => new DepthHandle(id, name, format, domain, scale, clearDepth, noClear),
 			ResourceKind.Buffer => new BufferHandle(id, name, format, domain, byteSize, stride, elementCount),
 			ResourceKind.Constants => new ConstantsHandle(id, name, domain, byteSize),
 			ResourceKind.Storage => new StorageBufferHandle(id, name, domain, byteSize, growable, stride, elementCount),

@@ -226,6 +226,21 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		_ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown vertex format."),
 	};
 
+	// Exhaustive so a new DepthCompare member fails loud here instead of silently falling back to a test that
+	// happens to compile.
+	private static CompareOp ToCompareOp(DepthCompare compare) => compare switch
+	{
+		DepthCompare.Never => CompareOp.Never,
+		DepthCompare.Less => CompareOp.Less,
+		DepthCompare.Equal => CompareOp.Equal,
+		DepthCompare.LessOrEqual => CompareOp.LessOrEqual,
+		DepthCompare.Greater => CompareOp.Greater,
+		DepthCompare.NotEqual => CompareOp.NotEqual,
+		DepthCompare.GreaterOrEqual => CompareOp.GreaterOrEqual,
+		DepthCompare.Always => CompareOp.Always,
+		_ => throw new NotSupportedException($"Vulkan: DepthCompare '{compare}' is not mapped to a compare op."),
+	};
+
 	private Pipeline CreatePipeline(ShaderModule module, in VulkanTechniqueDescription description)
 	{
 		using var arena = new VulkanNativeArena();
@@ -278,6 +293,14 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			// same convention, so a technique's CullMode discards the same triangles on either backend.
 			FrontFace = FrontFace.CounterClockwise,
 			LineWidth = 1.0f,
+			// Vulkan scales the constant factor by an implementation-defined r (the smallest resolvable depth
+			// difference for the format), where D3D12 applies Constant x 2^(exponent-23). The same Constant therefore
+			// offsets by different amounts on the two backends; SlopeScale is the term that means the same thing on
+			// both. Documented on DepthBias rather than papered over here — there is no honest conversion.
+			DepthBiasEnable = description.Bias.HasValue,
+			DepthBiasConstantFactor = description.Bias?.Constant ?? 0f,
+			DepthBiasSlopeFactor = description.Bias?.SlopeScale ?? 0f,
+			DepthBiasClamp = description.Bias?.Clamp ?? 0f,
 		});
 		var multisample = arena.Write(new PipelineMultisampleStateCreateInfo
 		{
@@ -325,8 +348,8 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			PDynamicStates = dynamicStates,
 		});
 
-		// Depth: enabled when the pass writes a depth attachment (the backend supplies its format). Standard
-		// reverse-less-than test with write; no stencil. Null when the technique has no depth target.
+		// Depth: enabled when the pass writes a depth attachment (the backend supplies its format). The technique
+		// states the comparison; no stencil. Null when the technique has no depth target.
 		var hasDepth = description.DepthFormat != Format.Undefined;
 		var depthStencil = hasDepth
 			? arena.Write(new PipelineDepthStencilStateCreateInfo
@@ -334,7 +357,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 				SType = StructureType.PipelineDepthStencilStateCreateInfo,
 				DepthTestEnable = true,
 				DepthWriteEnable = description.DepthWrite,
-				DepthCompareOp = CompareOp.LessOrEqual,
+				DepthCompareOp = ToCompareOp(description.DepthTest),
 			})
 			: null;
 

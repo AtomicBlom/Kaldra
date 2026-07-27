@@ -39,10 +39,31 @@ public sealed class Camera(IEngineClipSpace? clipSpace = null)
 	/// </summary>
 	public Frustum ExtractFrustum() => (View * Projection).ToFrustum();
 
-	/// <summary>Set a perspective <see cref="Projection"/> from a vertical field of view (radians), aspect, and near/far planes.</summary>
-	public Camera Perspective(float fovY, float aspect, float near, float far)
+	/// <summary>
+	/// Set a perspective <see cref="Projection"/> from a vertical field of view (radians), aspect, and near/far planes.
+	/// <para>
+	/// <paramref name="reversed"/> maps the near plane to depth 1 and the far plane to depth 0 — <b>reversed-Z</b>,
+	/// which cancels the perspective divide's precision loss at distance against a float depth buffer's density near
+	/// zero, and is the standard fix for depth fighting in a large world. It is one of three pieces that must agree:
+	/// declare the depth target with <c>Domain.Depth(name, format, clearDepth: 0f)</c> and give every technique
+	/// drawing into it <c>DepthTest: DepthCompare.GreaterOrEqual</c>. Getting one wrong inverts or erases occlusion
+	/// rather than failing.
+	/// </para>
+	/// </summary>
+	public Camera Perspective(float fovY, float aspect, float near, float far, bool reversed = false)
 	{
-		Projection = Matrix4x4.CreatePerspectiveFieldOfView(fovY, aspect, near, far);
+		var projection = Matrix4x4.CreatePerspectiveFieldOfView(fovY, aspect, near, far);
+		// Compose z' = 1 - z rather than swapping near/far: CreatePerspectiveFieldOfView rejects far <= near, so the
+		// usual "pass them backwards" trick throws here. Post-multiplying flips the already-computed depth row.
+		if (reversed)
+		{
+			projection *= new Matrix4x4(
+				1, 0, 0, 0,
+				0, 1, 0, 0,
+				0, 0, -1, 0,
+				0, 0, 1, 1);
+		}
+		Projection = projection;
 		return this;
 	}
 

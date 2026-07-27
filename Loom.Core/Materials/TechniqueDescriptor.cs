@@ -33,6 +33,8 @@ namespace Loom.Core.Materials;
 /// <param name="Instance">The per-instance vertex stream a technique consumes, or null for a non-instanced technique. The backend places it at the layout's own <see cref="VertexLayout.Binding"/> — binding 1 alongside a per-vertex mesh (e.g. <see cref="VertexLayout.Transform"/>, the usual instanced draw), or binding 0 outright when there is no per-vertex mesh (a GPU-particle stream the compute fills). The instance data's stride must match its <see cref="VertexLayout.Stride"/>.</param>
 /// <param name="HasListPush">True for a draw-list technique (<c>ctx.DrawList</c>): a small all-stage push block (vertex + fragment) whose final slot the backend rewrites with each command's <c>Tag</c>. Distinct from <paramref name="HasFragmentPush"/> (fragment-only scalar block) and the vertex-only MVP push.</param>
 /// <param name="Cull">Which triangle faces the rasterizer discards — <see cref="CullMode.None"/> (the default, draw both faces), <see cref="CullMode.Back"/> for solid closed geometry, or <see cref="CullMode.Front"/>. Front faces are counter-clockwise; register a separate technique for a shader you want drawn both single- and double-sided.</param>
+/// <param name="DepthTest">The depth comparison a fragment must pass to survive, when the pass has a depth target. <see cref="DepthCompare.LessOrEqual"/> (the default) is the conventional near-is-0 buffer; <see cref="DepthCompare.GreaterOrEqual"/> is its reversed-Z counterpart and must be paired with a depth target cleared to 0 and a reversed projection.</param>
+/// <param name="Bias">A constant + slope-scaled depth offset for this technique, or null (the default) for none. The shadow-acne knob; see <see cref="DepthBias"/> for why the constant term is not portable between backends but the slope-scaled term is.</param>
 public readonly record struct TechniqueDescriptor(
 	string Shader,
 	string VertexEntry = "vertexMain",
@@ -46,7 +48,9 @@ public readonly record struct TechniqueDescriptor(
 	VertexLayout? Layout = null,
 	VertexLayout? Instance = null,
 	bool HasListPush = false,
-	CullMode Cull = CullMode.None)
+	CullMode Cull = CullMode.None,
+	DepthCompare DepthTest = DepthCompare.LessOrEqual,
+	DepthBias? Bias = null)
 {
 	/// <summary>The conventional compute entry-point name, and the one the shader build compiles by.</summary>
 	public const string DefaultComputeEntry = "computeMain";

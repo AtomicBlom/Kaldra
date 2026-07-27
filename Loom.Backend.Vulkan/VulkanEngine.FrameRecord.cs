@@ -283,7 +283,9 @@ internal sealed unsafe partial class VulkanEngine
 					ImageLayout = VulkanStateMapping.For(attachment.State).Layout,
 					LoadOp = ToLoadOp(attachment.Load),
 					StoreOp = ToStoreOp(attachment.Store),
-					ClearValue = ClearDepth,
+					// The derived clear — 1 for a conventional depth target, 0 for a reversed-Z one. Ignored unless
+					// LoadOp is Clear, in which case derivation always supplied a value.
+					ClearValue = new ClearValue(depthStencil: new ClearDepthStencilValue(attachment.DepthClear ?? 1f, 0)),
 				};
 				hasDepth = true;
 			}

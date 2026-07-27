@@ -409,8 +409,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
-			descriptor.Cull));
-
+			descriptor.Cull, descriptor.DepthTest, descriptor.Bias));
 	}
 
 

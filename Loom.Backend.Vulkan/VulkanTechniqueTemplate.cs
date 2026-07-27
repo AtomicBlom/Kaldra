@@ -28,6 +28,8 @@ namespace Loom.Backend.Vulkan;
 /// <param name="UniformBufferCount">Number of descriptor-bound constant buffers the shader reads (the per-frame uniform seam), bound after the storage slots; 0 or 1 in practice. Fed from the per-frame uniform ring; carries data too large for the 16-float push (CSM matrices, lighting params, wind).</param>
 /// <param name="HasListPush">True if the technique reads a per-command tag rewrite after the shared push block (the draw-list path).</param>
 /// <param name="Cull">Triangle face-culling mode — back-face culling for opaque mesh passes, none for fullscreen/billboard techniques.</param>
+/// <param name="DepthTest">The depth comparison baked into the pipeline when the pass has a depth target.</param>
+/// <param name="Bias">Constant + slope-scaled depth offset baked into the rasterizer state, or null for none.</param>
 public readonly record struct VulkanTechniqueTemplate(
 	byte[] Spirv,
 	string VertexEntry,
@@ -45,4 +47,6 @@ public readonly record struct VulkanTechniqueTemplate(
 	VertexLayout? Instance = null,
 	int UniformBufferCount = 0,
 	bool HasListPush = false,
-	CullMode Cull = CullMode.None);
+	CullMode Cull = CullMode.None,
+	DepthCompare DepthTest = DepthCompare.LessOrEqual,
+	DepthBias? Bias = null);
