@@ -58,6 +58,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// technique has no per-instance stream.</summary>
 	public int InstanceStride { get; }
 
+	/// <summary>Which uniform slot carries the per-material parameter block, or null when the shader declares none.</summary>
+	public int? MaterialUniformSlot { get; }
+
 	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		IsCompute = template.IsCompute;
@@ -66,6 +69,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		InputBufferCount = template.InputBufferCount;
 		UniformBufferCount = template.UniformBufferCount;
 		InstanceStride = template.Instance?.Stride ?? 0;
+		MaterialUniformSlot = template.MaterialUniformSlot;
 
 		if (template.IsCompute)
 		{

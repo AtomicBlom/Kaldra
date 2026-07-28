@@ -122,4 +122,22 @@ public class ShaderReflectionMaterialTests
 		reflection.UniformBufferCount.ShouldBe(2); // view + draw — names are being read, so the parse is live
 		reflection.HasMaterialParameters.ShouldBeFalse();
 	}
+
+	[Test]
+	public void The_real_material_pbr_sidecar_reports_the_reserved_block()
+	{
+		// The end of the chain against a shipped artifact: material_pbr.slang declares a sampler then view, draw and
+		// loomMaterial, so the block is descriptor 3 but uniform *slot* 2, and its three float4 rows lay out as 48
+		// bytes. If slangc changed how it names or sizes the block, the parse would go quietly wrong; this notices.
+		var path = Path.Combine(AppContext.BaseDirectory, "shaders", "material_pbr.json");
+		if (!File.Exists(path))
+			throw new TUnit.Core.Exceptions.SkipTestException($"reflection sidecar not found at {path}.");
+
+		var reflection = ShaderReflection.FromBytes(File.ReadAllBytes(path));
+
+		reflection.SampleCount.ShouldBe(1);
+		reflection.UniformBufferCount.ShouldBe(3);
+		reflection.MaterialUniformSlot.ShouldBe(2);
+		reflection.MaterialParameterBytes.ShouldBe(48);
+	}
 }

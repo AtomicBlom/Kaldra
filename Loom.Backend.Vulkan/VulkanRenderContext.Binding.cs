@@ -1,4 +1,5 @@
 using Loom.Core.Graph;
+using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Silk.NET.Vulkan;
 
@@ -151,5 +152,39 @@ internal sealed unsafe partial class VulkanRenderContext
 	{
 		var (buffer, offset) = _uniformUpload.Upload(_frameSlot, bytes);
 		return new UniformBinding(buffer, offset, (ulong)bytes.Length);
+	}
+
+	/// <summary>
+	/// Fill a draw's uniform slots and return how many were filled. Slot order is the shader's: the slot reflection
+	/// identified as the per-material block takes the material's parameter bytes, and the remaining slots take the
+	/// pass's <c>.Reads</c> constants in order, then the per-draw block.
+	/// <para>
+	/// The material block is staged into the same per-frame uniform ring as the per-draw block, so a material needs no
+	/// GPU buffer of its own and carries no frames-in-flight hazard — the bytes are copied into this frame's slice
+	/// during recording, which is also what makes <c>IEngine.Write(material, …)</c> take effect on the next draw.
+	/// </para>
+	/// </summary>
+	private int FillUniformSlots(Span<UniformBinding> ubos, in DrawCall call, in VulkanTechniqueTemplate template)
+	{
+		var materialSlot = call.Material is not null ? template.MaterialUniformSlot : null;
+		var drawBlock = call.Uniforms.Length > 0;
+		// Counting the slots up front (rather than appending) is what guarantees the material's slot is reached even
+		// when it sits past the constants — appending would stop short and leave the shader reading an unbound slot.
+		var total = Math.Min(_activeConstantsCount + (drawBlock ? 1 : 0) + (materialSlot.HasValue ? 1 : 0), ubos.Length);
+
+		var constant = 0;
+		for (var slot = 0; slot < total; slot++)
+		{
+			if (slot == materialSlot)
+				ubos[slot] = UploadUniforms(_materials.ParametersOf(call.Material!.Value.Id));
+			else if (constant < _activeConstantsCount)
+				ubos[slot] = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[constant++]), 0, Vk.WholeSize);
+			else if (drawBlock)
+			{
+				ubos[slot] = UploadUniforms(call.Uniforms);
+				drawBlock = false;
+			}
+		}
+		return total;
 	}
 }

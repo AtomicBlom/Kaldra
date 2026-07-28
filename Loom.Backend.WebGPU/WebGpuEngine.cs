@@ -94,6 +94,9 @@ internal sealed partial class WebGpuEngine : EngineBase
 	/// <summary>Check a material against the technique about to draw it, memoized per pair (the shared contract check).</summary>
 	internal void ValidateMaterial(Material material, string technique) => Materials.ValidateAgainst(material, technique);
 
+	/// <summary>A material's per-material parameter bytes, to stage into the uniform ring for this draw. Empty when it carries none.</summary>
+	internal ReadOnlySpan<byte> MaterialParameters(int materialId) => Materials.ParametersOf(materialId);
+
 	/// <summary>The sampled view handle of an uploaded texture.</summary>
 	internal int TextureView(int textureId) => _textures.View(textureId);
 

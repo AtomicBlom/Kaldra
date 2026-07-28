@@ -56,7 +56,8 @@ internal sealed partial class WebGpuRenderContext
 				views[i] = transients.ViewHandle(call.Sampled[i].Id);
 		}
 
-		BindAndSet(baked, views, call.Uniforms, default);
+		BindAndSet(baked, views, call.Uniforms, default,
+			call.Material is { } mat ? _engine.MaterialParameters(mat.Id) : default);
 		RecordGeometry(call, template.Instance?.Stride ?? 0);
 	}
 
