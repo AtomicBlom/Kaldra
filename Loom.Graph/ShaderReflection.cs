@@ -16,14 +16,38 @@ namespace Loom.Graph;
 /// <param name="UniformBufferCount">Descriptor-bound constant buffers (distinct from a push/root constant).</param>
 /// <param name="InputBufferCount">Read-only structured / byte-address buffers, the subset of <paramref name="StorageBufferCount"/> bound for reading (e.g. a compute input).</param>
 /// <param name="StorageBufferStride">A read-write structured buffer's element stride in bytes (0 for a raw byte-address buffer or no sidecar).</param>
+/// <param name="MaterialUniformSlot">
+/// Which of the shader's uniform slots is the per-material parameter block — the ordinal, among this shader's
+/// constant buffers in binding order, of the one declared with the reserved name
+/// <see cref="MaterialParameterName"/>. <c>null</c> when the shader declares no material block, which is every
+/// shader that takes its parameters from the pass or the draw. Nullable rather than a <c>-1</c> sentinel so that a
+/// <c>default</c> reflection means "no material block" instead of "slot 0 is the material block".
+/// </param>
+/// <param name="MaterialParameterBytes">
+/// The size of that block as the shader lays it out, including trailing padding to the cbuffer's alignment — the
+/// number of bytes the backend stages per draw. 0 when there is no material block.
+/// </param>
 public readonly record struct ShaderReflection(
 	int SampleCount,
 	int StorageImageCount,
 	int StorageBufferCount,
 	int UniformBufferCount,
 	int InputBufferCount,
-	int StorageBufferStride)
+	int StorageBufferStride,
+	int? MaterialUniformSlot = null,
+	int MaterialParameterBytes = 0)
 {
+	/// <summary>
+	/// The reserved shader-side name of the per-material parameter block. A shader opts into the material parameter
+	/// channel by declaring a constant buffer under this name; reflection then tells the backend which slot it is and
+	/// how big it is, so neither the author nor the engine hand-counts. Convention is to declare it last (after the
+	/// pass and per-draw blocks), but nothing depends on that — the slot is whatever reflection reports.
+	/// </summary>
+	public const string MaterialParameterName = "loomMaterial";
+
+	/// <summary>Whether the shader declares a per-material parameter block.</summary>
+	public bool HasMaterialParameters => MaterialUniformSlot.HasValue;
+
 	/// <summary>The all-zero shape — what a shader with no reflection sidecar (e.g. a built-in stand-in) reflects.</summary>
 	public static ShaderReflection Empty => default;
 
@@ -40,6 +64,13 @@ public readonly record struct ShaderReflection(
 	{
 		using var doc = JsonDocument.Parse(json);
 		int samplers = 0, storageImages = 0, storageBuffers = 0, uniformBuffers = 0, inputBuffers = 0, storageBufferStride = 0;
+		// The material block's uniform slot is its ordinal among the shader's constant buffers *in binding order*,
+		// because that is the order the backends bind them in (Vulkan's set-0 puts uniform buffers last as a block,
+		// ascending). Collected as (bindingIndex, byteSize) and resolved after the walk rather than trusting the JSON
+		// array to already be sorted.
+		var materialBinding = -1;
+		var materialBytes = 0;
+		var cbufferBindings = new List<int>();
 
 		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
 		{
@@ -58,6 +89,13 @@ public readonly record struct ShaderReflection(
 				if (kind == "constantBuffer")
 				{
 					uniformBuffers++;
+					var bindingIndex = binding.TryGetProperty("index", out var bi) ? bi.GetInt32() : int.MaxValue;
+					cbufferBindings.Add(bindingIndex);
+					if (p.TryGetProperty("name", out var name) && name.GetString() == MaterialParameterName)
+					{
+						materialBinding = bindingIndex;
+						materialBytes = ConstantBufferByteSize(type);
+					}
 					continue;
 				}
 				if (kind != "resource")
@@ -90,7 +128,28 @@ public readonly record struct ShaderReflection(
 			}
 		}
 
-		return new ShaderReflection(samplers, storageImages, storageBuffers, uniformBuffers, inputBuffers, storageBufferStride);
+		int? materialSlot = null;
+		if (materialBinding >= 0)
+		{
+			cbufferBindings.Sort();
+			materialSlot = cbufferBindings.IndexOf(materialBinding);
+		}
+
+		return new ShaderReflection(
+			samplers, storageImages, storageBuffers, uniformBuffers, inputBuffers, storageBufferStride,
+			materialSlot, materialSlot.HasValue ? materialBytes : 0);
+	}
+
+	// A constant buffer's laid-out size in bytes, as the shader sees it — Slang reports it on the element's var
+	// layout, already padded to the cbuffer alignment (a 68-byte struct reports 80). Fall back to summing the
+	// element type's fields when the layout node is absent, which is what an older sidecar looks like.
+	private static int ConstantBufferByteSize(JsonElement constantBufferType)
+	{
+		if (constantBufferType.TryGetProperty("elementVarLayout", out var elementVarLayout)
+			&& elementVarLayout.TryGetProperty("binding", out var binding)
+			&& binding.TryGetProperty("size", out var size))
+			return size.GetInt32();
+		return constantBufferType.TryGetProperty("elementType", out var elementType) ? TypeByteSize(elementType) : 0;
 	}
 
 	// The byte size of a Slang reflection type (scalar / vector / matrix / struct) — used to derive a structured
