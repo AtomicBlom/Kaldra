@@ -24,6 +24,13 @@ public abstract class EngineBase : IEngine
 	private PassTiming[] _timings = [];
 	private bool _gpuTimingEnabled;
 
+	/// <summary>
+	/// The materials this engine has minted — their texture ids, parameter bytes, and technique pairings. Owned here
+	/// rather than per backend so the material/technique contract is checked identically everywhere; a backend passes
+	/// this to its render context to resolve a draw's material.
+	/// </summary>
+	protected MaterialStore Materials { get; } = new();
+
 	/// <summary>The backend's name (e.g. <c>"Vulkan"</c>), surfaced as <see cref="IEngine.BackendName"/>.</summary>
 	public abstract string BackendName { get; }
 
@@ -81,12 +88,52 @@ public abstract class EngineBase : IEngine
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		ArgumentException.ThrowIfNullOrEmpty(name);
-		BakeTechnique(name, descriptor);
+		// Recording what the shader expects of a material is what lets a mismatch be caught at *definition* — and
+		// because a hot reload replays this, at reload too, against every material already built for the name.
+		Materials.RegisterTechnique(name, BakeTechnique(name, descriptor));
 		_reload.Record(name, descriptor);
 	}
 
-	/// <summary>Bake a technique's backend pipeline/PSO inputs from its descriptor — the backend half of <see cref="DefineTechnique"/>.</summary>
-	protected abstract void BakeTechnique(string name, TechniqueDescriptor descriptor);
+	/// <summary>
+	/// Bake a technique's backend pipeline/PSO inputs from its descriptor — the backend half of
+	/// <see cref="DefineTechnique"/>. Returns what the technique's shader expects a <see cref="Material"/> to supply,
+	/// which the backend already has in hand: it comes from the same reflection sidecar the descriptor counts come
+	/// from. Return <c>default</c> for a technique with no reflection (a built-in stand-in), which reads as
+	/// "no textures, no parameters" and so accepts any material.
+	/// </summary>
+	protected abstract MaterialLayout BakeTechnique(string name, TechniqueDescriptor descriptor);
+
+	/// <inheritdoc/>
+	public MaterialLayout MaterialLayoutOf(string technique)
+	{
+		ArgumentException.ThrowIfNullOrEmpty(technique);
+		return Materials.LayoutOf(technique)
+			?? throw new InvalidOperationException($"Technique '{technique}' is not defined — call DefineTechnique before asking what it expects of a material.");
+	}
+
+	/// <inheritdoc/>
+	public Material CreateMaterial(string technique, params ReadOnlySpan<Texture> textures)
+	{
+		ArgumentException.ThrowIfNullOrEmpty(technique);
+		return Materials.Create(technique, textures, default);
+	}
+
+	/// <inheritdoc/>
+	public Material CreateMaterial<T>(string technique, in T parameters, params ReadOnlySpan<Texture> textures) where T : unmanaged
+	{
+		ArgumentException.ThrowIfNullOrEmpty(technique);
+		Span<byte> bytes = stackalloc byte[Unsafe.SizeOf<T>()];
+		MemoryMarshal.Write(bytes, in parameters);
+		return Materials.Create(technique, textures, bytes);
+	}
+
+	/// <inheritdoc/>
+	public void Write<T>(Material material, in T parameters) where T : unmanaged
+	{
+		Span<byte> bytes = stackalloc byte[Unsafe.SizeOf<T>()];
+		MemoryMarshal.Write(bytes, in parameters);
+		Materials.WriteParameters(material.Id, bytes);
+	}
 
 	/// <summary>Queue logical shader <paramref name="shader"/> for hot-reload if a technique uses it. Call from the file-watcher callback.</summary>
 	protected void QueueShaderReload(string shader) => _reload.QueueIfTracked(shader);
@@ -296,7 +343,9 @@ public abstract class EngineBase : IEngine
 	public abstract Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged;
 	public abstract Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices);
 	public abstract Texture CreateTexture(TextureData data);
-	public abstract Material CreateMaterial(params ReadOnlySpan<Texture> textures);
+
+	/// <inheritdoc/>
+	public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => Materials.Create(textures);
 	public abstract void Dispose();
 
 	// ── Async GPU resource creation: a caller (any thread — a background decode, or a concurrently-preloading demo)
@@ -332,7 +381,7 @@ public abstract class EngineBase : IEngine
 	/// </summary>
 	public Task<Texture> CreateTextureAsync(TextureData data) => EnqueueGpuWork(() => CreateTexture(data));
 
-	/// <summary>Async counterpart to <see cref="CreateMaterial"/> — see the class-level remarks above.</summary>
+	/// <summary>Async counterpart to <see cref="CreateMaterial(ReadOnlySpan{Texture})"/> — see the class-level remarks above.</summary>
 	public Task<Material> CreateMaterialAsync(params Texture[] textures) => EnqueueGpuWork(() => CreateMaterial(textures));
 
 	/// <summary>

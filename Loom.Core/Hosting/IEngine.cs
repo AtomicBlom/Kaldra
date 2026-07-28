@@ -98,8 +98,50 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// </summary>
 	Material CreateMaterial(params ReadOnlySpan<Texture> textures);
 
-	/// <summary>Async counterpart to <see cref="CreateMaterial"/> — see <see cref="CreateTextureAsync"/>'s remarks.</summary>
+	/// <summary>Async counterpart to <see cref="CreateMaterial(ReadOnlySpan{Texture})"/> — see <see cref="CreateTextureAsync"/>'s remarks.</summary>
 	Task<Material> CreateMaterialAsync(params Texture[] textures);
+
+	/// <summary>
+	/// Bundle textures into a <see cref="Material"/> <em>for a named technique</em>, so the pairing is recorded and
+	/// checked rather than discovered at draw time. Otherwise identical to
+	/// <see cref="CreateMaterial(ReadOnlySpan{Texture})"/>.
+	/// <para>
+	/// Recording the pairing is what makes a shader edit fail loudly: because <see cref="DefineTechnique"/> is
+	/// replayed on hot reload, adding or reordering a sampler in the shader is caught at the reload, against every
+	/// material already built for that technique — instead of silently sampling the wrong texture.
+	/// </para>
+	/// </summary>
+	/// <param name="technique">The technique this material is built for; it must already be defined.</param>
+	/// <param name="textures">The textures, in the order the technique's shader binds them.</param>
+	Material CreateMaterial(string technique, params ReadOnlySpan<Texture> textures);
+
+	/// <summary>
+	/// Bundle textures plus a per-material parameter block into a <see cref="Material"/> for a named technique. The
+	/// technique's shader opts into the parameter channel by declaring a constant buffer named <c>loomMaterial</c>;
+	/// <typeparamref name="T"/> is the app's own struct matching that block, and <c>sizeof(T)</c> must equal the size
+	/// reflection reports for it. The engine keeps a CPU copy and stages it into the per-frame uniform ring on every
+	/// draw that uses this material, so there is no new GPU object and no frames-in-flight hazard.
+	/// <para>
+	/// The engine has no material model: <typeparamref name="T"/> is whatever the shader declares. Lay it out so the
+	/// shader's constant-buffer packing agrees on every backend — 16-byte-aligned members are the safe rule.
+	/// </para>
+	/// </summary>
+	Material CreateMaterial<T>(string technique, in T parameters, params ReadOnlySpan<Texture> textures) where T : unmanaged;
+
+	/// <summary>
+	/// Overwrite a material's parameter block — the material counterpart of
+	/// <see cref="Write{T}(ConstantsHandle, in T)"/>, for a tint or roughness that changes at runtime. Takes effect on
+	/// the next draw that uses the material; the graph is untouched, so nothing rebuilds.
+	/// <typeparamref name="T"/> must be the same size as the block the material was created with.
+	/// </summary>
+	void Write<T>(Material material, in T parameters) where T : unmanaged;
+
+	/// <summary>
+	/// What a technique expects a material to supply — its reflected texture count and parameter-block size. Useful
+	/// for building a material generically (an asset importer sizing its upload) and for diagnostics. Throws if the
+	/// technique is not defined.
+	/// </summary>
+	MaterialLayout MaterialLayoutOf(string technique);
 
 	/// <summary>
 	/// Make <paramref name="graph"/> the active graph: derive its schedule, barriers, and transient-memory plan

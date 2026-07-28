@@ -29,7 +29,6 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private readonly DirectX12DescriptorRing _ring;
 	private readonly DirectX12MeshStore _meshes;
 	private readonly DirectX12TextureStore _textures;
-	private readonly MaterialStore _materials;
 	private readonly DirectX12RenderContext _context;
 	private DirectX12Transients? _transients;
 
@@ -130,8 +129,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_ring = new DirectX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the resource viewer's debug SRVs
 		_meshes = new DirectX12MeshStore(_ctx);
 		_textures = new DirectX12TextureStore(_ctx);
-		_materials = new MaterialStore();
-		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, _materials, (int)BufferCount);
+		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, Materials, (int)BufferCount);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
@@ -323,7 +321,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	/// resolves embedded SPIR-V. A shader with no resolvable/compilable HLSL falls back to the backend's built-in
 	/// stand-in.
 	/// </summary>
-	protected override void BakeTechnique(string name, TechniqueDescriptor descriptor)
+	protected override MaterialLayout BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		var dir = _settings.ShaderDirectory;
 		var shader = descriptor.Shader;
@@ -409,7 +407,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			descriptor.HasVertexInput, descriptor.HasFragmentPush, descriptor.LinearFilter,
 			descriptor.IsCompute, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
-			descriptor.Cull, descriptor.DepthTest, descriptor.Bias));
+			descriptor.Cull, descriptor.DepthTest, descriptor.Bias,
+			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes));
+		return new MaterialLayout(inputCount, reflection.MaterialParameterBytes);
 	}
 
 
@@ -504,8 +504,6 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
-
-	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	[DllImport("kernel32", SetLastError = true)]
 	private static extern nint CreateEventW(nint lpEventAttributes, int bManualReset, int bInitialState, nint lpName);

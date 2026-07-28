@@ -11,9 +11,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 	// Draw(mesh, material), textured instancing, and textured particles. The caller checks TableParam/InputCount.
 	private void BindMaterialTable(DirectX12Technique baked, Material material, string technique)
 	{
+		_materials.ValidateAgainst(material, technique);
 		var textures = _materials.TexturesOf(material.Id);
-		if (textures.Length < baked.InputCount)
-			throw new InvalidOperationException($"DirectX12: material supplies {textures.Length} textures but technique '{technique}' samples {baked.InputCount}.");
 		var (cpu, gpu) = _ring.Allocate((uint)baked.InputCount);
 		for (var i = 0; i < baked.InputCount; i++)
 			WriteTextureSrv(textures[i], _ring.Offset(cpu, (uint)i));

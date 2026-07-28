@@ -42,9 +42,12 @@ internal sealed partial class WebGpuRenderContext
 		Span<int> views = stackalloc int[sampleCount];
 		if (call.Material is { } material)
 		{
+			// The shared contract check, so a material with too few textures is reported here exactly as it is on the
+			// desktop backends. Without it this loop clamped to the last texture and silently repeated it.
+			_engine.ValidateMaterial(material, call.Technique);
 			var textures = _engine.MaterialTextures(material.Id);
 			for (var i = 0; i < sampleCount; i++)
-				views[i] = _engine.TextureView(textures[Math.Min(i, textures.Length - 1)]);
+				views[i] = _engine.TextureView(textures[i]);
 		}
 		else
 		{

@@ -52,7 +52,6 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private readonly VulkanTechniqueCache _techniques;
 	private readonly VulkanMeshStore _meshes;
 	private readonly VulkanTextureStore _textures;
-	private readonly MaterialStore _materials;
 	private readonly VulkanDescriptorAllocator _descriptors;
 	private readonly VulkanRenderContext _context;
 	private readonly Dictionary<string, VulkanTechniqueTemplate> _registry = []; // logical name → backend baked-input form
@@ -164,9 +163,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_techniques = new VulkanTechniqueCache(_ctx);
 		_meshes = new VulkanMeshStore(_ctx, _allocator, _commandPool);
 		_textures = new VulkanTextureStore(_ctx, _allocator, _commandPool);
-		_materials = new MaterialStore();
 		_descriptors = new VulkanDescriptorAllocator(_ctx, MaxFramesInFlight);
-		_context = new VulkanRenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, _materials, _allocator, MaxFramesInFlight);
+		_context = new VulkanRenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, Materials, _allocator, MaxFramesInFlight);
 
 		CreateCommandBuffers();
 		CreateSyncObjects();
@@ -190,7 +188,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		QueueShaderReload(shader);
 	}
 
-	protected override void BakeTechnique(string name, TechniqueDescriptor descriptor)
+	protected override MaterialLayout BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		// Resolve the logical shader name to backend bytecode + reflection, and fold the neutral descriptor into
 		// the backend's baked-input form. Shaders are named logically — no .spv path in app code.
@@ -234,7 +232,10 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.HasListPush,
 			descriptor.Cull,
 			descriptor.DepthTest,
-			descriptor.Bias);
+			descriptor.Bias,
+			reflection.MaterialUniformSlot,
+			reflection.MaterialParameterBytes);
+		return new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes);
 	}
 
 	// Evict the baked pipelines after a hot-reload so the next bake rebuilds from the re-registered templates.
@@ -257,8 +258,6 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
-
-	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	// Tear down the previous graph's transients/readback/timing pools before the base binds a new graph; the device
 	// and caches survive. The base has already drained the GPU when a prior graph existed.

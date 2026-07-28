@@ -77,9 +77,8 @@ internal sealed unsafe partial class VulkanRenderContext
 	// e.g. a view-projection then the model, or foliage's wind, read in the vertex stage).
 	private void BindMaterialTextures(VulkanTechnique baked, VulkanTechniqueTemplate template, Material material, string technique, ReadOnlySpan<UniformBinding> ubos = default)
 	{
+		_materials.ValidateAgainst(material, technique);
 		var textures = _materials.TexturesOf(material.Id);
-		if (textures.Length < template.SampleCount)
-			throw new VulkanException($"Material supplies {textures.Length} textures but technique '{technique}' samples {template.SampleCount}.");
 
 		var sampler = template.Address switch
 		{

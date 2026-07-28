@@ -30,6 +30,8 @@ namespace Loom.Backend.Vulkan;
 /// <param name="Cull">Triangle face-culling mode — back-face culling for opaque mesh passes, none for fullscreen/billboard techniques.</param>
 /// <param name="DepthTest">The depth comparison baked into the pipeline when the pass has a depth target.</param>
 /// <param name="Bias">Constant + slope-scaled depth offset baked into the rasterizer state, or null for none.</param>
+/// <param name="MaterialUniformSlot">Which uniform slot carries the per-material parameter block, or null when the shader declares none.</param>
+/// <param name="MaterialParameterBytes">Bytes of per-material parameters to stage into the uniform ring per draw; 0 when the shader declares no block.</param>
 public readonly record struct VulkanTechniqueTemplate(
 	byte[] Spirv,
 	string VertexEntry,
@@ -49,4 +51,6 @@ public readonly record struct VulkanTechniqueTemplate(
 	bool HasListPush = false,
 	CullMode Cull = CullMode.None,
 	DepthCompare DepthTest = DepthCompare.LessOrEqual,
-	DepthBias? Bias = null);
+	DepthBias? Bias = null,
+	int? MaterialUniformSlot = null,
+	int MaterialParameterBytes = 0);
