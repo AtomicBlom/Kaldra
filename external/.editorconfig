@@ -17,3 +17,9 @@ root = true
 # than from a command line every caller has to remember to pass.
 [*.{cs,vb}]
 generated_code = true
+
+# `generated_code` is read by the compiler as well as the formatter, and Roslyn asks generated files to declare
+# their nullable context explicitly (CS8669) — so marking VMASharp generated silences the analysis we don't want
+# but turns on 54 warnings we also don't want, in sources that predate the convention and are not ours to annotate.
+# Verified both ways: 0 CS8669 without this file, 54 with it and without this line.
+dotnet_diagnostic.CS8669.severity = none
