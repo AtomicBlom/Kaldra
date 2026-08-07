@@ -126,17 +126,22 @@ This renders a mesh into an offscreen HDR buffer, then tone-maps that buffer to 
 
 ### 1. Define shaders
 
-Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan) and signed DXIL (DirectX 12), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
+Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
 
-`Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer and a per-draw model matrix from the uniform block:
+Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that `LOOM_BINDING(n)` counts **every** descriptor while `register(bN)` counts **only constant buffers and starts at `b1`** (`b0` is reserved on DirectX 12), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
+
+`Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer the pass `.Reads`, and a per-draw model matrix from the per-draw uniform block:
 
 ```slang
-// The per-frame view-projection, filled from the app via engine.Write(viewProj, …).
-[[vk::binding(0, 0)]] ConstantBuffer<float4x4> viewProj;
+#include "loom_platform.module.slang"
 
-// The per-draw block staged by DrawCall.SetUniforms(modelMatrix).
-struct PerDraw { float4x4 model; }
-[[vk::push_constant]] PerDraw draw;
+struct ViewProj { float4x4 viewProj; }   // filled from the app via engine.Write(viewProj, …)
+struct PerDraw  { float4x4 model; }      // staged by DrawCall.SetUniforms(ref block)
+
+// No samplers precede them, so these own descriptors 0 and 1 — and registers b1/b2, since b0 is reserved.
+// Uniform slots fill in a defined order: the pass's .Reads constants first, then the per-draw block.
+LOOM_BINDING(0) ConstantBuffer<ViewProj> view : register(b1);
+LOOM_BINDING(1) ConstantBuffer<PerDraw>  draw : register(b2);
 
 struct VSOut { float4 pos : SV_Position; float3 normal : NORMAL; }
 
@@ -145,7 +150,7 @@ VSOut vertexMain(float3 pos : POSITION, float3 normal : NORMAL)
 {
     VSOut o;
     float4 world = mul(draw.model, float4(pos, 1.0));
-    o.pos = mul(viewProj, world);
+    o.pos = mul(view.viewProj, world);
     o.normal = mul((float3x3)draw.model, normal);
     return o;
 }
@@ -161,20 +166,28 @@ float4 fragmentMain(VSOut i) : SV_Target
 `Shaders/tonemap.slang` — a fullscreen pass that samples the HDR target and maps it to display range. A fullscreen technique fabricates its own triangle, so it has no vertex input:
 
 ```slang
-[[vk::binding(0, 0)]] Sampler2D hdr;   // the pass's first .Samples input
+#include "loom_platform.module.slang"
+
+LOOM_BINDING(0) Sampler2D hdr;   // the pass's first .Samples input
+
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; }
 
 [shader("vertex")]
-float4 vertexMain(uint id : SV_VertexID) : SV_Position
+VSOut vertexMain(uint id : SV_VertexID)
 {
-    // Fullscreen triangle from the vertex id — no mesh.
+    // Fullscreen triangle from the vertex id — no mesh. LOOM_FULLSCREEN_POS applies the NDC-Y convention this
+    // target needs; writing `uv * 2 - 1` by hand renders upside down on WebGPU.
     float2 uv = float2((id << 1) & 2, id & 2);
-    return float4(uv * 2.0 - 1.0, 0.0, 1.0);
+    VSOut o;
+    o.pos = LOOM_FULLSCREEN_POS(uv);
+    o.uv = uv;
+    return o;
 }
 
 [shader("fragment")]
-float4 fragmentMain(float4 pos : SV_Position) : SV_Target
+float4 fragmentMain(VSOut i) : SV_Target
 {
-    float3 c = hdr.Load(int3(pos.xy, 0)).rgb;
+    float3 c = hdr.Sample(i.uv).rgb;
     c = c / (c + 1.0);                       // Reinhard tone-map
     return float4(c, 1.0);
 }
@@ -224,7 +237,11 @@ var graph = RenderGraph.Define(g =>
             {
                 var call = DrawCall.Create(obj.Mesh, "scene");
                 call.Material = obj.Material;          // fills the technique's reflected sampler slots
-                call.SetUniforms(obj.ModelMatrix);     // the per-draw block matching the shader
+                // The per-draw block matching the shader. `ref` because the bytes alias this storage until the
+                // draw is submitted — passing a temporary would leave the engine reading a dead local, so the
+                // compiler rejects it rather than letting it corrupt at runtime.
+                var model = obj.ModelMatrix;
+                call.SetUniforms(ref model);
                 ctx.Draw(call);
             }
         });

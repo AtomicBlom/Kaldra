@@ -144,7 +144,7 @@ string BuildFull()
     var sb = new StringBuilder();
     sb.AppendLine(header);
     sb.AppendLine();
-    foreach (var name in new[] { "architecture", "api-vocabulary", "pillars", "getting-started", "effect-cookbook" })
+    foreach (var name in new[] { "architecture", "api-vocabulary", "pillars", "getting-started", "shader-authoring", "effect-cookbook" })
     {
         sb.AppendLine(Doc(name));
         sb.AppendLine("---");

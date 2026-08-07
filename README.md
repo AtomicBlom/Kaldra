@@ -185,4 +185,5 @@ Three layers, kept strictly separate — `Sandbox → {backends} → Graph → C
 
 - [GitHub](https://github.com/AtomicBlom/Loom)
 - [Design bible & roadmap](Planning.md) · [UI track](external/SUIsei/Planning.md)
+- Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [effect cookbook](docs/effect-cookbook.md) · [architecture](docs/architecture.md)
 - [CI with a software rasterizer (WARP, no GPU)](docs/ci-software-rasterizer.md)

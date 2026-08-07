@@ -18,7 +18,7 @@ namespace Loom.Backend.Vulkan;
 /// <param name="HasVertexInput">True if the vertex stage reads a <see cref="Vertex"/> buffer (a mesh technique) rather than fabricating a fullscreen triangle.</param>
 /// <param name="Blend">The blend equation — pairs with a pass that <c>.Blends</c> its target (alpha-over for transparency, additive for bloom).</param>
 /// <param name="LinearFilter">Sample inputs with a linear (rather than nearest) sampler — smooth filtering for bloom's downsample/upsample; nearest elsewhere keeps the pixel grid crisp.</param>
-/// <param name="HasFragmentPush">True if the shader's fragment (or, for a compute technique, compute) stage reads a small push-constant block (up to four floats) — the per-pass scalar channel (JFA step, hovered id, exposure rate).</param>
+/// <param name="HasFragmentPush">True if the shader's fragment (or, for a compute technique, compute) stage reads a small push-constant block (up to sixteen floats — <see cref="VulkanTechnique.FragmentPushSize"/>) — the per-pass scalar channel (JFA step, hovered id, exposure rate, a light-space matrix).</param>
 /// <param name="IsCompute">True for a compute technique: one compute entry point (in <see cref="FragmentEntry"/>), dispatched rather than drawn.</param>
 /// <param name="StorageCount">Number of storage images the (compute) shader read-writes, bound after the sampled inputs (bindings SampleCount..SampleCount+StorageCount-1).</param>
 /// <param name="StorageBufferCount">Number of storage buffers (not images) the shader read-writes, bound after the storage images.</param>

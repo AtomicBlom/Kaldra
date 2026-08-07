@@ -220,7 +220,7 @@ engine.DefineTechnique("foliage", new TechniqueDescriptor("foliage",
 | `DepthTest` (`DepthCompare.LessOrEqual`) | The depth comparison a fragment must pass, when the pass has a depth target. |
 | `Bias` (`null`) | A constant + slope-scaled depth offset (`DepthBias`) — the shadow-acne knob. |
 
-Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan) + signed DXIL (DirectX 12) with reflection JSON.
+Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) with reflection JSON. The Slang-side half of the contract — the platform macros, the two independent numbering schemes, and where a push block actually lands — is [`shader-authoring.md`](shader-authoring.md).
 
 ### Pipeline-intent enums
 

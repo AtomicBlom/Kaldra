@@ -30,6 +30,15 @@
 #define LOOM_FULLSCREEN_POS(uv) float4((uv) * 2.0 - 1.0, 0.0, 1.0)
 #endif
 
+// Clip-space position for a vertex already authored in clip space — a shader that fabricates its geometry from
+// SV_VertexID with no camera to carry the backend's clip-space correction. Same NDC-Y split as
+// LOOM_FULLSCREEN_POS, and for the same reason; this one just takes NDC xy directly (-1..1) instead of a 0..1 uv.
+#ifdef LOOM_WGSL
+#define LOOM_CLIP_POS(xy) float4((xy).x, -(xy).y, 0.0, 1.0)
+#else
+#define LOOM_CLIP_POS(xy) float4((xy), 0.0, 1.0)
+#endif
+
 // Screen uv (0..1, top-left origin) of a clip-space position, for a shader that reprojects a world point back to
 // screen to sample a G-buffer there (SSAO, screen-space reflections, …). Same NDC-Y convention split as
 // LOOM_FULLSCREEN_POS: Vulkan/DX12 carry the clip-space correction in their view-projection so uv.y = ndc.y·0.5+0.5,

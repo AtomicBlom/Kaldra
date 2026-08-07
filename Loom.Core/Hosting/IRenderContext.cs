@@ -40,7 +40,7 @@ public interface IRenderContext
 
 	/// <summary>
 	/// As the input-only <c>FullScreen</c> overload, but also supplies a small inline block of
-	/// scalar parameters to the fragment stage (a push/root-constant block, up to four floats). This is the
+	/// scalar parameters to the fragment stage (a push/root-constant block, up to sixteen floats). This is the
 	/// per-pass uniform channel the post passes need — the JFA flood's jump step, the seed's hovered id, an
 	/// outline's width/glow — without a full resource binding. The technique must be registered as taking a
 	/// fragment-stage constant block (the backend reserves the range in its pipeline layout).
@@ -52,7 +52,7 @@ public interface IRenderContext
 	/// (the pass's <c>.Samples</c>); <paramref name="storage"/> resources are its S..S+T-1 read-write inputs
 	/// (the pass's <c>.ReadWrites</c>) — the graph derives the read-write storage transitions and the
 	/// compute↔consumer barriers, and the backend maps the ordinals to its binding model. <paramref name="push"/>
-	/// is the same up-to-four-float scalar channel as the fullscreen overload, delivered to the compute stage.
+	/// is the same up-to-sixteen-float scalar channel as the fullscreen overload, delivered to the compute stage.
 	/// Used by the auto-exposure reduction.
 	/// </summary>
 	void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage);
