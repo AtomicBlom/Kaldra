@@ -49,6 +49,18 @@
     <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Backend.WebGPU" Version="$(LoomPackageVersion)" />
   </ItemGroup>
 
+  <!-- UI bridges, same shape as the backends. Both reach the GPU only through the neutral draw-list verb, so
+       neither drags a UI library into a backend. SUIsei brings the XAML runtime (and its source generator)
+       transitively; ImGui brings ImGui.NET. -->
+  <ItemGroup Condition="'$(UseSUIsei)' == 'true'">
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.UI.SUIsei\Loom.UI.SUIsei.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.UI.SUIsei" Version="$(LoomPackageVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseImGui)' == 'true'">
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.UI.ImGui\Loom.UI.ImGui.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.UI.ImGui" Version="$(LoomPackageVersion)" />
+  </ItemGroup>
+
   <!--
     Application host by RID. The desktop host runs on any non-browser target (it selects whichever desktop
     backend shipped at runtime); the web host runs for browser-wasm. Referencing the host is what makes

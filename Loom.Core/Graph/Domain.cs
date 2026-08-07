@@ -1,4 +1,3 @@
-using System.Drawing;
 using System.Numerics;
 
 namespace Loom.Core.Graph;
@@ -9,7 +8,7 @@ namespace Loom.Core.Graph;
 /// domain, then cross to the backbuffer with an explicit nearest-neighbour upscale.
 /// <para>
 /// A <c>Domain</c> is an immutable façade over the owning <see cref="GraphBuilder"/>: its
-/// <see cref="System.Drawing.Color"/>/<see cref="Depth"/> verbs declare targets <em>into that builder</em>. Obtain one
+/// <see cref="Color(string,Format,Vector4?,bool)"/>/<see cref="Depth"/> verbs declare targets <em>into that builder</em>. Obtain one
 /// from <see cref="Domain"/> or <see cref="GraphBuilder.Backbuffer"/>.
 /// </para>
 /// </summary>

@@ -23,7 +23,7 @@ Projects (dependency direction `Sandbox → {backends} → Graph → Core`):
 - **`Loom.Tests`** — TUnit + Shouldly; describe/execute-layer + mip tests + in-process GPU-gated golden/parity tests over `Loom.Gallery`.
 - **`Loom.Sandbox`** — the only `Exe`; a thin `LoomApplication` (`SandboxApp`) hosting `Loom.Gallery` under `Loom.Hosting.Desktop` (see below).
 
-All target `net10.0`; the solution is `Loom.slnx`. Key operational facts: the host hands the backend the window's surface opaquely (Vulkan `IVkSurface`, DX12 `HWND`); 2 frames in flight; shaders are Slang compiled offline to SPIR-V + signed DXIL with reflection-derived descriptor layouts; backends self-register into `Engine.AvailableEngines` guarded by an `IsSupported()` probe.
+All target `net10.0`; the solution is `Loom.slnx`. Key operational facts: the host hands the backend the window's surface opaquely (Vulkan `IVkSurface`, DX12 `HWND`); 2 frames in flight; shaders are Slang compiled offline to SPIR-V + signed DXIL + WGSL with reflection-derived descriptor layouts; backends self-register into `Backends.Available` guarded by an `IsSupported()` probe.
 
 Dev-environment notes:
 - **Don't assume the host architecture or GPU** — this repo is developed across more than one machine (both Windows-on-ARM and x64 boxes have been used). Detect it at the start of a session rather than hard-coding: `dotnet --info` (or `$env:PROCESSOR_ARCHITECTURE`) for the CPU arch, and `Get-CimInstance Win32_VideoController | Select-Object Name` for the GPU. Keep engine code arch/GPU-agnostic (or behind a capability check).

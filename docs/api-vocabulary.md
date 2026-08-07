@@ -94,7 +94,8 @@ var graph = RenderGraph.Define(g =>
             {
                 var call = DrawCall.Create(obj.Mesh, "lit");
                 call.Material = obj.Material;
-                call.SetUniforms(obj.ModelMatrix);     // a per-draw block, matching the shader's cbuffer
+                var model = obj.ModelMatrix;
+                call.SetUniforms(ref model);           // a per-draw block, matching the shader's cbuffer
                 ctx.Draw(call);
             }
         });
@@ -110,7 +111,7 @@ Ping-pong (bloom, JFA) is just two handles and a `(read, write)` tuple swapped i
 
 | Type | Role |
 |---|---|
-| `Engine` | Static backend registry. `Engine.AvailableEngines` is an `IReadOnlyList<IRenderBackend>` (registration order); each referenced backend assembly self-registers as it loads. |
+| `Backends` | Static backend registry. `Backends.Available` is an `IReadOnlyList<IRenderBackend>` (registration order); each referenced backend assembly self-registers as it loads. |
 | `IRenderBackend` | A discoverable backend: `string Name` and `IEngine Create(object surface, int width, int height, EngineSettings settings)`. The surface is opaque (Vulkan `IVkSurface` / DX12 `HWND`). |
 | `IEngine` | The live engine — owns the device and pipeline cache, survives graph swaps. See its members below. |
 | `IRenderContext` | The per-frame execution context passed to `.Draw` / `.Dispatch`. Closures *pull* from it rather than capturing. |
@@ -121,12 +122,12 @@ Ping-pong (bloom, JFA) is just two handles and a `(read, write)` tuple swapped i
 ### Selecting a backend and creating the engine
 
 ```csharp
-var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
-              ?? Engine.AvailableEngines.First();
+var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)
+              ?? Backends.Available.First();
 using var engine = backend.Create(window.Surface, width, height, settings);
 ```
 
-`Engine.AvailableEngines` is a list, not a dictionary — select by `Name`, never an indexer. Constructing a backend's `EngineSettings` subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads and registers that backend.
+`Backends.Available` is a list, not a dictionary — select by `Name`, never an indexer. Constructing a backend's `EngineSettings` subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads and registers that backend.
 
 ### `EngineSettings`
 
@@ -259,7 +260,7 @@ Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projec
 | `VertexCount` (`int`) | Vertices per instance for procedural draws (when `Mesh` is null). |
 | `Instances` (`InstanceSource`) | Per-instance data — empty (default) = single draw. |
 | `Material` (`Material?`) | Material whose textures fill the technique's sampler slots; `null` for untextured techniques. |
-| `Uniforms` / `.SetUniforms<T>(in T)` / `.SetUniforms<T>(ReadOnlySpan<T>)` | The per-draw uniform block (raw bytes matching the shader's cbuffer); set it from a typed value or span. |
+| `Uniforms` / `.SetUniforms<T>(ref T)` / `.SetUniforms<T>(ReadOnlySpan<T>)` | The per-draw uniform block (raw bytes matching the shader's cbuffer); set it from a typed value or span. |
 | `Sampled` (`ReadOnlySpan<ResourceHandle>`) | Graph resources bound as sampled inputs (each declared via `.Samples`). |
 | `DrawCall.From<T>(ReadOnlySpan<T>)` | Build an `InstanceSource` from a CPU instance span (uploaded per frame). |
 | `DrawCall.Gpu(BufferHandle, count)` | Build an `InstanceSource` from a GPU-resident buffer a compute pass filled. |

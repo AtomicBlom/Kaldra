@@ -47,7 +47,7 @@ Verify rendering with a GPU-optional test that brings the engine up **offscreen*
 flags — and asserts a real frame came out:
 
 ```csharp
-// Skips cleanly when Engine.AvailableEngines is empty; forcing PreferSoftwareAdapter runs it on WARP with no GPU.
+// Skips cleanly when Backends.Available is empty; forcing PreferSoftwareAdapter runs it on WARP with no GPU.
 var engine = backend.Create(Surface.Offscreen(width, height), width, height, settings);
 // … set a graph, render a few frames pumping ServicePendingUploads, then engine.RequestCapture(path) …
 // assert the PNG decodes to width x height and isn't a near-empty/black frame.
@@ -67,7 +67,7 @@ renders into an owned readable target with no `HWND` / `VkSurfaceKHR` involved, 
 extracts pixels from it exactly as it does for a windowed frame —
 `backend.Create(Surface.Offscreen(width, height), width, height, settings)` in place of a real window surface.
 See `Loom.Tests/OffscreenEngineTests.cs` for the shape this takes end to end (it exercises every available
-backend against a real hardware or software device, whichever `Engine.AvailableEngines` finds).
+backend against a real hardware or software device, whichever `Backends.Available` finds).
 
 ## Gotchas found bringing this up
 

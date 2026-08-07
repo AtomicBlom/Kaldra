@@ -6,8 +6,8 @@ namespace Loom.Backend.DirectX12;
 
 /// <summary>
 /// A per-frame-in-flight <c>UPLOAD</c>-heap vertex buffer for CPU-driven instancing — the DirectX12
-/// counterpart of the Vulkan backend's <c>VulkanInstanceUploadBuffer</c>. <c>ctx.DrawInstanced(mesh, technique,
-/// span)</c> stages its per-instance data here each frame; <see cref="Upload"/> returns the GPU virtual address to
+/// counterpart of the Vulkan backend's <c>VulkanInstanceUploadBuffer</c>. <c>ctx.Draw</c> with a <c>DrawCall.Instances</c>
+/// source stages its per-instance data here each frame; <see cref="Upload"/> returns the GPU virtual address to
 /// point the instance <see cref="VertexBufferView"/> at.
 /// <para>
 /// Multiple instanced draws in one frame append at successive 16-aligned offsets. A growth mid-frame

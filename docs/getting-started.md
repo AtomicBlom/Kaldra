@@ -68,13 +68,13 @@ The submodule model gives you full engine source and the ability to modify the e
 
 ## Creating an engine
 
-A backend is the factory for an `IEngine`. Each referenced backend assembly self-registers an `IRenderBackend` into `Engine.AvailableEngines` as it loads, so the host discovers what is available at runtime and selects one by name. **Constructing a backend's settings subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads that backend's assembly** and fires its registration — it is the one sanctioned place a backend type appears in app code.
+A backend is the factory for an `IEngine`. Each referenced backend assembly self-registers an `IRenderBackend` into `Backends.Available` as it loads, so the host discovers what is available at runtime and selects one by name. **Constructing a backend's settings subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads that backend's assembly** and fires its registration — it is the one sanctioned place a backend type appears in app code.
 
 The host hands the backend the window's native surface *opaquely* — Loom names no windowing type. For Vulkan that is the window's `IVkSurface`; for DirectX 12 it is the window's `HWND`. Using Silk.NET for windowing:
 
 ```csharp
 using Loom.Core.Hosting;
-using Loom.Vulkan;
+using Loom.Backend.Vulkan;
 
 // A Vulkan-capable window (Silk.NET).
 var options = WindowOptions.DefaultVulkan with { Size = new Vector2D<int>(1280, 720), Title = "My Loom app" };
@@ -84,7 +84,7 @@ window.Initialize();
 if (window.VkSurface is null)
     throw new InvalidOperationException("The windowing platform did not expose a Vulkan surface.");
 
-// Constructing VulkanEngineSettings loads Loom.Vulkan, which registers the backend.
+// Constructing VulkanEngineSettings loads Loom.Backend.Vulkan, which registers the backend.
 var settings = new VulkanEngineSettings
 {
     EnableValidation = true,        // Vulkan validation layers (dev)
@@ -94,15 +94,15 @@ var settings = new VulkanEngineSettings
 };
 
 // Select the backend by name and create the engine bound to the surface.
-var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
-              ?? Engine.AvailableEngines.First();
+var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)
+              ?? Backends.Available.First();
 using var engine = backend.Create(window.VkSurface, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 ```
 
-For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `Loom.DirectX12`), and pass the window's `HWND` as the surface:
+For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `Loom.Backend.DirectX12`), and pass the window's `HWND` as the surface:
 
 ```csharp
-using Loom.DirectX12;
+using Loom.Backend.DirectX12;
 
 var settings = new DirectX12EngineSettings
 {
@@ -113,8 +113,8 @@ var settings = new DirectX12EngineSettings
 var hwnd = window.Native?.Win32?.Hwnd
            ?? throw new InvalidOperationException("The DirectX12 backend needs the window's Win32 HWND.");
 
-var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
-              ?? Engine.AvailableEngines.First();
+var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)
+              ?? Backends.Available.First();
 using var engine = backend.Create(hwnd, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 ```
 

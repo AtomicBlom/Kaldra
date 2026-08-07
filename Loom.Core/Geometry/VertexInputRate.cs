@@ -6,6 +6,6 @@ public enum VertexInputRate
 	/// <summary>One element per vertex — the mesh's geometry stream (binding 0).</summary>
 	PerVertex,
 
-	/// <summary>One element per instance — the per-instance stream a <c>DrawInstanced</c> reads (binding 1).</summary>
+	/// <summary>One element per instance — the per-instance stream a an instanced <c>ctx.Draw</c> reads (binding 1).</summary>
 	PerInstance,
 }

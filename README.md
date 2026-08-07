@@ -60,7 +60,8 @@ var graph = RenderGraph.Define(g =>
             {
                 var call = DrawCall.Create(obj.Mesh, "lit");
                 call.Material = obj.Material;
-                call.SetUniforms(obj.ModelMatrix);     // a per-draw block, matching the shader's cbuffer
+                var model = obj.ModelMatrix;
+                call.SetUniforms(ref model);           // a per-draw block, matching the shader's cbuffer
                 ctx.Draw(call);
             }
         });
@@ -84,13 +85,13 @@ These are the whole scheduling vocabulary — you declare intent and the engine 
 | `.ReadsVertex(b)` | read a buffer as a vertex / instance stream |
 | `.Reads(c)` | read a constants buffer (an app-filled uniform) |
 | `.Reads(b)` | read a read-only storage buffer / SSBO (an overload of `.Reads`) |
-| `.Queue(q)` | assign the pass to a queue |
+| `.Queue(q)` | assign the pass to a queue — `Queue.AsyncCompute` throws at derive time until multi-queue scheduling lands, rather than pretending an overlap that never happens |
 
 Resolution **`Domain`s** decide where each resource lives: `g.Screen` (native size), `g.Backbuffer`, or a fixed `g.Domain("world", 320, 180)`. A fixed low-res world domain plus a nearest-neighbour upscale is the pixel-art look.
 
 ### Feed per-frame data (the engine names no game concepts)
 
-`FrameInputs` carries only `DeltaSeconds`, `Time`, and `DrawLists` — there is no engine `Camera` or `Scene`. View, light, and time-of-day data flow in through neutral `Constants`/`Storage` buffers your passes `.Reads`:
+`FrameInputs` carries only `DeltaSeconds` and `Time` — there is no engine `Camera` or `Scene`. View, light, and time-of-day data flow in through neutral `Constants`/`Storage` buffers your passes `.Reads`:
 
 ```csharp
 // each frame, before engine.Render(...): publish the matrix the "opaque" pass reads
@@ -155,11 +156,15 @@ The sandbox is a `LoomApplication` on the desktop host: every run is interactive
 | `Loom.Assets` | Neutral image (StbImageSharp) + glTF (SharpGLTF) loaders |
 | `Loom.Backend.Vulkan` | Vulkan 1.3 backend |
 | `Loom.Backend.DirectX12` | DirectX 12 backend |
+| `Loom.Backend.WebGPU` | WebGPU backend (browser) |
+| `Loom.Concepts` | App-side helpers — `Camera`, `Frustum`, `Scene`. Not part of the engine |
+| `Loom.Input` | Neutral input: actions, bindings, layered event routing |
+| `Loom.Hosting.Desktop` | Desktop host — window, surface, frame loop, CLI flags |
+| `Loom.Hosting.Web` | Browser host, paired with the WebGPU backend |
 | `Loom.UI.SUIsei` | SUIsei XAML-UI integration (via the neutral draw-list verb) |
 | `Loom.UI.ImGui` | Dear ImGui integration |
 | `Loom.Sdk` | MSBuild SDK — reference this from a game project |
 
-> The backend assembly/project names in the repository are being renamed to `Loom.Backend.Vulkan` / `Loom.Backend.DirectX12` to match these package IDs (see [`Planning.md`](Planning.md) §6).
 
 Consuming Loom selects backends through the SDK:
 

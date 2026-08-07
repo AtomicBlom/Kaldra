@@ -6,7 +6,7 @@ namespace Loom.Backend.Vulkan;
 
 /// <summary>
 /// A per-frame-in-flight host-visible vertex buffer for CPU-driven instancing — the place
-/// <c>ctx.DrawInstanced(mesh, technique, span)</c> stages its per-instance data each frame: one mappable buffer
+/// <c>ctx.Draw</c> with a <c>DrawCall.Instances</c> source stages its per-instance data each frame: one mappable buffer
 /// per slot, grown with headroom, written map→copy→unmap, no fence wait (the executor waited the slot's fence
 /// before re-recording it).
 /// <para>
