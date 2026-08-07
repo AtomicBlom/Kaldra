@@ -81,7 +81,7 @@ public interface IEngine : IEngineClipSpace, IDisposable
 
 	/// <summary>
 	/// Run every GPU creation call queued by a <c>*Async</c> method (<see cref="CreateMeshAsync"/>,
-	/// <see cref="CreateSkinnedMeshAsync"/>, <see cref="CreateTextureAsync"/>, <see cref="CreateMaterialAsync"/>)
+	/// <see cref="CreateSkinnedMeshAsync"/>, <see cref="CreateTextureAsync"/>, <see cref="CreateMaterialAsync(Texture[])"/>)
 	/// since the last call, completing each one's <see cref="Task"/>. Every backend calls this once per frame from
 	/// <see cref="Render"/>; call it explicitly (in a small pump loop) while awaiting an async load before any frame
 	/// loop is running yet — e.g. at startup, or the first demo a host builds. Draining every backend's GPU-creating
@@ -100,6 +100,16 @@ public interface IEngine : IEngineClipSpace, IDisposable
 
 	/// <summary>Async counterpart to <see cref="CreateMaterial(ReadOnlySpan{Texture})"/> — see <see cref="CreateTextureAsync"/>'s remarks.</summary>
 	Task<Material> CreateMaterialAsync(params Texture[] textures);
+
+	/// <summary>Async counterpart to <see cref="CreateMaterial(string, ReadOnlySpan{Texture})"/> — see <see cref="CreateTextureAsync"/>'s remarks.</summary>
+	Task<Material> CreateMaterialAsync(string technique, params Texture[] textures);
+
+	/// <summary>
+	/// Async counterpart to <see cref="CreateMaterial{T}(string, in T, ReadOnlySpan{Texture})"/> — see
+	/// <see cref="CreateTextureAsync"/>'s remarks. Takes <paramref name="parameters"/> by value, not by <c>in</c>:
+	/// the call is deferred onto the servicing thread, so the block is captured rather than referenced.
+	/// </summary>
+	Task<Material> CreateMaterialAsync<T>(string technique, T parameters, params Texture[] textures) where T : unmanaged;
 
 	/// <summary>
 	/// Bundle textures into a <see cref="Material"/> <em>for a named technique</em>, so the pairing is recorded and

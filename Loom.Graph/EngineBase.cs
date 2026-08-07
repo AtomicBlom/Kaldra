@@ -384,6 +384,18 @@ public abstract class EngineBase : IEngine
 	/// <summary>Async counterpart to <see cref="CreateMaterial(ReadOnlySpan{Texture})"/> — see the class-level remarks above.</summary>
 	public Task<Material> CreateMaterialAsync(params Texture[] textures) => EnqueueGpuWork(() => CreateMaterial(textures));
 
+	/// <summary>Async counterpart to <see cref="CreateMaterial(string, ReadOnlySpan{Texture})"/> — see the class-level remarks above.</summary>
+	public Task<Material> CreateMaterialAsync(string technique, params Texture[] textures) =>
+		EnqueueGpuWork(() => CreateMaterial(technique, textures));
+
+	/// <summary>
+	/// Async counterpart to <see cref="CreateMaterial{T}(string, in T, ReadOnlySpan{Texture})"/> — see the
+	/// class-level remarks above. <paramref name="parameters"/> is taken by value rather than by <c>in</c> because
+	/// the call is deferred onto the servicing thread, so the block has to be captured rather than referenced.
+	/// </summary>
+	public Task<Material> CreateMaterialAsync<T>(string technique, T parameters, params Texture[] textures) where T : unmanaged =>
+		EnqueueGpuWork(() => CreateMaterial(technique, in parameters, textures));
+
 	/// <summary>
 	/// Run every GPU creation call queued by a <c>*Async</c> method since the last call, completing each one's
 	/// <see cref="Task"/>. Called once per frame by every backend's <see cref="Render"/> (so calls requested during

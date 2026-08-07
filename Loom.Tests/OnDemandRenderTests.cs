@@ -135,6 +135,8 @@ public class OnDemandRenderTests
 		public Task<Texture> CreateTextureAsync(TextureData data) => throw new NotSupportedException();
 		public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => throw new NotSupportedException();
 		public Task<Material> CreateMaterialAsync(params Texture[] textures) => throw new NotSupportedException();
+		public Task<Material> CreateMaterialAsync(string technique, params Texture[] textures) => throw new NotSupportedException();
+		public Task<Material> CreateMaterialAsync<T>(string technique, T parameters, params Texture[] textures) where T : unmanaged => throw new NotSupportedException();
 		public Material CreateMaterial(string technique, params ReadOnlySpan<Texture> textures) => throw new NotSupportedException();
 		public Material CreateMaterial<T>(string technique, in T parameters, params ReadOnlySpan<Texture> textures) where T : unmanaged => throw new NotSupportedException();
 		public void Write<T>(Material material, in T parameters) where T : unmanaged => throw new NotSupportedException();
