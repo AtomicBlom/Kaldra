@@ -20,8 +20,8 @@
     <Using Include="Shouldly" />
   </ItemGroup>
 
-  <!-- M13 golden-image baselines: committed reference PNGs, copied beside the test assembly so GoldenImageTests
-       can read them at runtime (the matching fresh captures come from tools/golden.ps1 via LOOM_GOLDEN_DIR). -->
+  <!-- Golden-image baselines: committed reference PNGs, copied beside the test assembly so GalleryGoldenTests
+       can read them at runtime. LOOM_GOLDEN_UPDATE (or tools/golden.ps1 -Update) regenerates them in the source tree. -->
   <ItemGroup>
     <Content Include="Goldens\**\*.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
@@ -53,7 +53,7 @@
     <ProjectReference Include="..\Loom.Hosting.Desktop\Loom.Hosting.Desktop.csproj" />
   </ItemGroup>
 
-  <!-- Referenced so their module initializers self-register into Engine.AvailableEngines (each guarded by its own
+  <!-- Referenced so their module initializers self-register into Backends.Available (each guarded by its own
        IsSupported() probe — a box/OS lacking one degrades to it simply not appearing, never a build/runtime
        failure) for OffscreenEngineTests, which is GPU-gated and skips whichever backend isn't present. -->
   <ItemGroup>

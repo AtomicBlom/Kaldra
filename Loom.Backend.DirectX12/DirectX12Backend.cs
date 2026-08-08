@@ -17,7 +17,7 @@ public sealed class DirectX12Backend : IRenderBackend
 {
 #pragma warning disable CA2255
 	/// <summary>
-	/// Register the DirectX12 backend as the Loom.DirectX12 assembly loads — but only if
+	/// Register the DirectX12 backend as the Loom.Backend.DirectX12 assembly loads — but only if
 	/// <see cref="IsSupported"/> confirms D3D12 is actually available. On a box (or OS) without it the backend then
 	/// never appears in <see cref="Backends.Available"/>, so selection falls through to a working one instead
 	/// of crashing later in <see cref="Create"/>.

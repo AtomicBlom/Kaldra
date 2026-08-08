@@ -15,7 +15,7 @@ public sealed class VulkanBackend : IRenderBackend
 {
 #pragma warning disable CA2255
 	/// <summary>
-	/// Register the Vulkan backend as the Loom.Vulkan assembly loads — but only
+	/// Register the Vulkan backend as the Loom.Backend.Vulkan assembly loads — but only
 	/// if <see cref="IsSupported"/> confirms a Vulkan 1.3 device is actually present. An unusable backend then never
 	/// appears in <see cref="Backends.Available"/>, so the host's selection falls through to a working one
 	/// instead of crashing later in <see cref="Create"/>.

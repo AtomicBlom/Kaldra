@@ -351,7 +351,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			return File.ReadAllBytes(path);
 
 		throw new VulkanException(
-			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Vulkan?");
+			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Backend.Vulkan?");
 	}
 
 	public override void Render(FrameInputs inputs)

@@ -2,7 +2,7 @@
 
   <!-- Desktop application host: owns the Silk.NET window + engine bring-up + blocking frame loop for a
        LoomApplication. Backend-neutral by design — it references NO backend assembly, only Silk.NET.Windowing
-       and Loom.Core. It selects whatever backend shipped next to the app (Engine.AvailableEngines) and branches
+       and Loom.Core. It selects whatever backend shipped next to the app (Backends.Available) and branches
        on the backend's Name to build the matching window (a Vulkan-surface window, or a context-less window for
        DirectX12's HWND). The RID + the Loom SDK's Use* flags decide which backend is actually present. -->
 

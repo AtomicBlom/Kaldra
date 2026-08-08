@@ -1,7 +1,7 @@
 # CI with a software rasterizer (no GPU)
 
 Loom's strongest regression net — the golden-image and cross-backend parity captures (`tools/golden.ps1`,
-`GoldenImageTests`, `CrossBackendParityTests`) — needs a real GPU to produce its captures, so it runs only on a
+`GalleryGoldenTests`, `GalleryParityTests`) — needs a real GPU to produce its captures, so it runs only on a
 GPU-equipped machine; GitHub-hosted runners have none, and CI skips it (see `.github/workflows/ci.yml`).
 `EngineSettings.PreferSoftwareAdapter` plus `windows-latest`'s bundled WARP (Microsoft's software D3D12
 rasterizer) close part of that gap: a GPU-less runner can still render every tracked demo and prove it produced
