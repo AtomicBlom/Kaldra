@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Loom.Core.Diagnostics;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
@@ -81,7 +82,7 @@ internal sealed unsafe class DirectX12Context : IDisposable
 			}
 			else
 			{
-				Console.Error.WriteLine("[loom] --software-adapter requested but WARP adapter enumeration failed; falling back to the default adapter.");
+				LoomLog.Warning("--software-adapter requested but WARP adapter enumeration failed; falling back to the default adapter.");
 			}
 		}
 
@@ -109,7 +110,7 @@ internal sealed unsafe class DirectX12Context : IDisposable
 		if (usingSoftwareAdapter)
 		{
 			DeviceName = "WARP (software)";
-			Console.WriteLine("[loom] adapter=WARP (software)");
+			LoomLog.Info("adapter=WARP (software)");
 		}
 		else
 			DeviceName = ReadDefaultAdapterName();
@@ -157,9 +158,17 @@ internal sealed unsafe class DirectX12Context : IDisposable
 				if (InfoQueue.GetMessageA(i, message, ref length) < 0)
 					continue;
 				var text = message->PDescription is null ? "" : new string((sbyte*)message->PDescription);
-				Console.WriteLine($"[d3d12:{message->Severity}] {text}");
+				// The debug layer's own severity stays in the text — it is D3D12's classification, not Loom's.
+				var line = $"[d3d12:{message->Severity}] {text}";
 				if (message->Severity is MessageSeverity.Error or MessageSeverity.Corruption)
+				{
+					LoomLog.Error(line);
 					errors++;
+				}
+				else
+				{
+					LoomLog.Warning(line);
+				}
 			}
 		}
 		InfoQueue.ClearStoredMessages();

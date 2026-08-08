@@ -1,3 +1,4 @@
+using Loom.Core.Diagnostics;
 using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
@@ -9,18 +10,6 @@ namespace Loom.Backend.DirectX12;
 
 public sealed unsafe partial class DirectX12Engine
 {
-	/// <summary>
-	/// Record (into the open command list) the copy of the just-rendered backbuffer into the readback buffer,
-	/// leaving the backbuffer in PRESENT state. Returns the row pitch of the readback layout.
-	/// </summary>
-	private uint RecordCapture(ComPtr<ID3D12Resource> backbuffer)
-	{
-		Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.CopySource);
-		var rowPitch = CopyBackbufferToReadback(backbuffer);
-		Transition(backbuffer, ResourceStates.CopySource, ResourceStates.Present);
-		return rowPitch;
-	}
-
 	/// <summary>Record the copy of <paramref name="backbuffer"/> (already in COPY_SOURCE) into the readback buffer; returns the row pitch.</summary>
 	private uint CopyBackbufferToReadback(ComPtr<ID3D12Resource> backbuffer)
 	{
@@ -99,7 +88,7 @@ public sealed unsafe partial class DirectX12Engine
 		_readback.Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 
 		PngWriter.WriteRgba(path, width, height, rgba);
-		Console.WriteLine($"[loom] DirectX12 captured {width}x{height} -> {path}");
+		LoomLog.Info($"DirectX12 captured {width}x{height} -> {path}");
 	}
 
 	// Record the copy of each readback target into the slot's READBACK buffer (after the passes that wrote + read

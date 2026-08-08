@@ -102,7 +102,7 @@ Everything here rides existing verbs (`.Samples`/`.Draw`/`.Blends`/compute + `.R
 ## 6. Planned refactors & housekeeping
 
 - **Stand up a dedicated backend tests project.** Backend integration tests (the kind recently removed when some backend-smoke demos were deleted from the sandbox) and the device-free CPU-testable slices of the backends (pipeline/descriptor hash-key equality, neutral-decision→barrier/PSO translation tables, placed-resource alias-offset math) belong in their own test project — run under NativeAOT — not as sandbox demos. This is the home for closing the "backends have zero unit tests" gap.
-- **Small genuinely-open code items** (low-risk, tracked in [`CODE_REVIEW.md`](CODE_REVIEW.md)): `VertexLayout` offsets ignore attribute alignment; Grid Auto-then-Star measure ordering; the bootstrap `DirectX12Triangle` is allocated for the engine's whole lifetime; the backends have zero CPU unit tests; no compute→compute / ping-pong barrier-derivation test; one SourceGen diagnostic uses a zero-length span.
+- **Small genuinely-open code items** (low-risk, tracked in [`CODE_REVIEW.md`](CODE_REVIEW.md)): `VertexLayout` offsets ignore attribute alignment; Grid Auto-then-Star measure ordering; the backends have zero CPU unit tests; no compute→compute / ping-pong barrier-derivation test; one SourceGen diagnostic uses a zero-length span.
 - **Comment hygiene** (tracked in [`COMMENT_REVIEW.md`](COMMENT_REVIEW.md)): the in-source milestone/section/`PlanningUI.md §…` tags must be stripped to satisfy the self-contained-comment rule — a large but mechanical sweep, concentrated in `external/SUIsei` and the Vulkan backend.
 
 ---

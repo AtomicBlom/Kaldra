@@ -13,6 +13,7 @@ internal sealed unsafe partial class VulkanRenderContext
 	{
 		var baked = Bake(call.Technique);
 		var template = _registry[call.Technique];
+		_validate.Draw(call);
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 
 		// Gather the technique's uniform buffers in slot order. The slot reflection named as the material block (when
@@ -40,11 +41,11 @@ internal sealed unsafe partial class VulkanRenderContext
 			if (call.SkinnedVertices is { } sv)
 			{
 				var vertexBuffer = _resources.GetBuffer(_frameSlot, sv.Id);
-				_meshes.DrawSkinned(_cmd, call.Mesh!.Value.Id, vertexBuffer);
+				_meshes.DrawSkinned(_cmd, _validate.RequireMesh(call).Id, vertexBuffer);
 			}
 			else
 			{
-				_meshes.Draw(_cmd, call.Mesh!.Value.Id);
+				_meshes.Draw(_cmd, _validate.RequireMesh(call).Id);
 			}
 		}
 		else if (call.Instances.GpuBuffer is { } gpuBuf)
@@ -71,20 +72,23 @@ internal sealed unsafe partial class VulkanRenderContext
 			if (call.Instances.CpuData.IsEmpty)
 				return;
 			var (buffer, offset) = _instanceUpload.Upload(_frameSlot, call.Instances.CpuData);
-			_meshes.DrawInstanced(_cmd, call.Mesh!.Value.Id, buffer, offset, (uint)call.Instances.Count);
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, buffer, offset, (uint)call.Instances.Count);
 		}
 	}
 
 	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
 	{
 		var baked = Bake(technique);
+		_validate.Dispatch(technique, sampled, storage);
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Compute, baked.Pipeline);
 
 		if (push.Length > 0)
 		{
+			// A compute push always rides the scalar block — there is no free-uniform-slot route here.
+			_validate.PushFits(technique, push.Length * sizeof(float), routesToUniform: false, 0, VulkanTechnique.FragmentPushSize);
 			var block = stackalloc float[16];
-			for (var i = 0; i < push.Length && i < 16; i++)
-				block[i] = push[i];
+			new Span<float>(block, 16).Clear();
+			push.CopyTo(new Span<float>(block, push.Length));
 			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)VulkanTechnique.FragmentPushSize, block);
 		}
 

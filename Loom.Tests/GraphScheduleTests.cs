@@ -1,4 +1,5 @@
 using Loom.Core.Graph;
+using Loom.Core.Hosting;
 using Loom.Graph;
 
 namespace Loom.Tests;
@@ -14,6 +15,22 @@ public class GraphScheduleTests
 	{
 		var pass = s.Passes.Single(p => p.Pass.Name == name);
 		return [.. pass.DependsOn.Select(d => s.Graph.Passes[d].Name).Order()];
+	}
+
+	[Test]
+	public void A_derive_time_rejection_is_catchable_as_an_authoring_mistake()
+	{
+		// Derive-time and record-time mistakes share one base, so an app can catch "I authored this wrong" once
+		// instead of listing every exception type the engine and its backends can raise.
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var ghost = world.Color("ghost", Format.Rgba8Srgb);
+				g.Pass("p").Samples(ghost).Writes(world.Color("o", Format.Rgba8Srgb));
+			}));
+
+		ex.ShouldBeAssignableTo<LoomAuthoringException>();
 	}
 
 	[Test]
@@ -41,6 +58,7 @@ public class GraphScheduleTests
 			var screen = g.Backbuffer;
 			g.Pass("upscale").Writes(screen);
 			g.Pass("hud").Writes(screen);
+			g.Present(screen);
 		});
 
 		DepsOf(s, "upscale").ShouldBeEmpty();
@@ -112,6 +130,7 @@ public class GraphScheduleTests
 			g.Pass("produce").Writes(lit);
 			g.Pass("accumulate").Blends(lit);     // RAW on produce; also a writer
 			g.Pass("consume").Samples(lit).Writes(screen); // RAW on the blend (latest writer)
+			g.Present(screen);
 		});
 
 		DepsOf(s, "accumulate").ShouldBe(new[] { "produce" });
@@ -163,6 +182,89 @@ public class GraphScheduleTests
 			}));
 
 		ex.Message.ShouldContain("never written");
+	}
+
+	[Test]
+	public void Writing_the_backbuffer_without_presenting_it_throws()
+	{
+		// The blank-window footgun: the frame is rendered and then dropped, with no diagnostic anywhere. Nothing
+		// legitimate does this, so it fails at derive rather than shipping a window that never updates.
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var lit = world.Color("lit", Format.Rgba8Srgb);
+				g.Pass("produce").Writes(lit);
+				g.Pass("blit").Samples(lit).Writes(g.Backbuffer); // …and then never presents it
+			}));
+
+		ex.Message.ShouldContain("blit");
+		ex.Message.ShouldContain("g.Present");
+	}
+
+	[Test]
+	public void Presenting_something_other_than_the_written_backbuffer_throws()
+	{
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var other = world.Color("other", Format.Rgba8Srgb);
+				g.Pass("blit").Writes(g.Backbuffer);
+				g.Pass("side").Writes(other);
+				g.Present(other); // the backbuffer's contents never reach the window
+			}));
+
+		ex.Message.ShouldContain("presents 'other'");
+	}
+
+	[Test]
+	public void An_offscreen_graph_that_never_touches_the_backbuffer_is_fine()
+	{
+		// The check keys off a Backbuffer-kind resource existing at all, and a graph that never asks for one — every
+		// offscreen render, including the golden tests — must stay unaffected.
+		Should.NotThrow(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var o = world.Color("o", Format.Rgba8Srgb);
+				g.Pass("p").Writes(o);
+				g.Readback(o);
+			}));
+	}
+
+	[Test]
+	public void Reading_more_constants_buffers_than_a_pass_can_bind_throws()
+	{
+		// Past the cap the extras used to be dropped on every backend, mis-binding each slot after it. The count is
+		// the same everywhere, so the rejection belongs at derive rather than in three record paths.
+		var over = GraphLimits.MaxUniformBuffersPerPass + 1;
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var pass = g.Pass("post").Writes(world.Color("o", Format.Rgba8Srgb));
+				for (var i = 0; i < over; i++)
+					pass.Reads(g.Constants<System.Numerics.Vector4>($"params{i}"));
+			}));
+
+		ex.Message.ShouldContain("post");
+		ex.Message.ShouldContain(over.ToString());
+		ex.Message.ShouldContain(GraphLimits.MaxUniformBuffersPerPass.ToString());
+	}
+
+	[Test]
+	public void Reading_exactly_the_cap_is_allowed()
+	{
+		// The boundary: the cap is what the backends' slot arrays are sized to, so exactly that many must derive.
+		Should.NotThrow(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var pass = g.Pass("post").Writes(world.Color("o", Format.Rgba8Srgb));
+				for (var i = 0; i < GraphLimits.MaxUniformBuffersPerPass; i++)
+					pass.Reads(g.Constants<System.Numerics.Vector4>($"params{i}"));
+			}));
 	}
 
 	[Test]
@@ -272,6 +374,7 @@ public class GraphScheduleTests
 			var history = g.Persistent("exposure", Format.R16F);
 			var o = g.Backbuffer;
 			g.Pass("adapt").Samples(history).Writes(o);
+			g.Present(o);
 		});
 
 		DepsOf(s, "adapt").ShouldBeEmpty();

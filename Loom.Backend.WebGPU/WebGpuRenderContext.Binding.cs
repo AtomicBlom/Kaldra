@@ -20,7 +20,7 @@ internal sealed partial class WebGpuRenderContext
 	/// the lowered push-constant block. Uniform bindings are dynamic-offset: the constants and per-draw/push data
 	/// live in stable buffers, so the group is cached by its bound handles and only the offsets change per draw.
 	/// </summary>
-	private void BindAndSet(WebGpuTechnique baked, ReadOnlySpan<int> sampledViews, ReadOnlySpan<byte> perDrawUniform, ReadOnlySpan<float> push, ReadOnlySpan<byte> materialUniform = default)
+	private void BindAndSet(WebGpuTechnique baked, string technique, ReadOnlySpan<int> sampledViews, ReadOnlySpan<byte> perDrawUniform, ReadOnlySpan<float> push, ReadOnlySpan<byte> materialUniform = default)
 	{
 		var bindings = baked.Template.Bindings;
 		if (!bindings.HasBindings)
@@ -38,11 +38,18 @@ internal sealed partial class WebGpuRenderContext
 		var pushOffset = 0;
 		if (bindings.PushBinding >= 0)
 		{
+			// The lowered push block is a fixed-size uniform here, so an over-wide push used to be clipped by the
+			// Math.Min below — silently, and only on this backend, since the desktop ones stage the whole span.
+			_validate.PushFits(technique, push.Length * sizeof(float), routesToUniform: false, 0, bindings.PushByteSize);
 			Span<byte> pushBytes = stackalloc byte[bindings.PushByteSize];
 			pushBytes.Clear();
-			var src = MemoryMarshal.AsBytes(push);
-			src[..Math.Min(src.Length, pushBytes.Length)].CopyTo(pushBytes);
+			MemoryMarshal.AsBytes(push).CopyTo(pushBytes);
 			pushOffset = ring.Reserve(pushBytes, bindings.PushByteSize);
+		}
+		else if (push.Length > 0 && bindings.UniformBufferBindings.Length == 0)
+		{
+			// No push block and no constant buffer at all: the bytes have nowhere to land and used to vanish.
+			_validate.PushFits(technique, push.Length * sizeof(float), routesToUniform: false, 0, 0);
 		}
 
 		Span<int> entries = stackalloc int[bindings.Entries.Count * 5];

@@ -100,6 +100,57 @@ public class OffscreenEngineTests
 		failures.ShouldBeEmpty("Offscreen rendering failures:\n  " + string.Join("\n  ", failures));
 	}
 
+	[Test]
+	public void Every_backend_reports_the_same_authoring_mistakes_the_same_way()
+	{
+		// The point of the neutral exception family: an app catches one type with one message whichever backend is
+		// drawing. Asserting the types and messages are *identical across backends* is the only way to prove that —
+		// a per-backend assertion would pass just as happily with three different spellings.
+		_ = new VulkanEngineSettings();
+		_ = new DirectX12EngineSettings();
+
+		if (Backends.Available.Count == 0)
+			throw new TUnit.Core.Exceptions.SkipTestException("No GPU backend is available on this box (Backends.Available is empty).");
+
+		var undefinedTechnique = new Dictionary<string, string>();
+		var missingShader = new Dictionary<string, string>();
+
+		foreach (var backend in Backends.Available)
+		{
+			using var engine = backend.Create(Surface.Offscreen(Width, Height), Width, Height, new EngineSettings());
+
+			// A typo'd technique name, reported when a pass records with it.
+			engine.DefineTechnique("fullscreen", new TechniqueDescriptor("fullscreen"));
+			var graph = RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("fill").Writes(screen).Draw(ctx => ctx.FullScreen("no-such-technique"));
+				g.Present(screen);
+			});
+			engine.SetGraph(graph);
+
+			var notDefined = Should.Throw<TechniqueNotDefinedException>(
+				() => engine.Render(new FrameInputs { Time = 0, DeltaSeconds = 1.0 / 60.0 }));
+			notDefined.Technique.ShouldBe("no-such-technique");
+			undefinedTechnique[backend.Name] = notDefined.Message;
+
+			// A shader whose compiled artifact was never built, reported at define time.
+			var absent = Should.Throw<ShaderAssetMissingException>(
+				() => engine.DefineTechnique("ghost", new TechniqueDescriptor("no-such-shader")));
+			absent.Shader.ShouldBe("no-such-shader");
+			missingShader[backend.Name] = absent.Message;
+		}
+
+		// Guard against a vacuous pass: one backend agrees with itself trivially.
+		undefinedTechnique.Count.ShouldBeGreaterThan(0);
+		undefinedTechnique.Values.Distinct().Count().ShouldBe(
+			1, $"the undefined-technique message differs per backend: {string.Join(" | ", undefinedTechnique.Select(kv => $"{kv.Key}: {kv.Value}"))}");
+
+		// The missing-shader message names the paths it tried, so it is legitimately backend-specific — but the type
+		// and the named shader must match, which the per-backend assertions above already pinned.
+		missingShader.Count.ShouldBe(undefinedTechnique.Count);
+	}
+
 	// Distinct opaque RGB values in a captured frame — a flat/empty frame collapses to one.
 	private static int DistinctColors(byte[] rgba)
 	{

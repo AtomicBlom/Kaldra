@@ -14,6 +14,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 	public void Draw(in DrawCall call)
 	{
 		var baked = _techniques.GetOrBake(call.Technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_validate.Draw(call);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
@@ -43,11 +44,11 @@ internal sealed unsafe partial class DirectX12RenderContext
 			{
 				if (_transients is null)
 					throw new InvalidOperationException("DirectX12: skinned draw requires an active graph (SetGraph).");
-				_meshes.DrawSkinned(_cmd, call.Mesh!.Value.Id, SkinnedView(sv));
+				_meshes.DrawSkinned(_cmd, _validate.RequireMesh(call).Id, SkinnedView(sv));
 			}
 			else
 			{
-				_meshes.Draw(_cmd, call.Mesh!.Value.Id);
+				_meshes.Draw(_cmd, _validate.RequireMesh(call).Id);
 			}
 		}
 		else if (call.Instances.GpuBuffer is { } gpuBuf)
@@ -95,7 +96,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 				SizeInBytes = (uint)bytes.Length,
 				StrideInBytes = (uint)call.Instances.Stride,
 			};
-			_meshes.DrawInstanced(_cmd, call.Mesh!.Value.Id, instanceView, (uint)call.Instances.Count);
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, instanceView, (uint)call.Instances.Count);
 		}
 	}
 
@@ -105,14 +106,19 @@ internal sealed unsafe partial class DirectX12RenderContext
 			throw new InvalidOperationException("DirectX12: compute requires an active graph (SetGraph).");
 
 		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
+		_validate.Dispatch(technique, sampled, storage);
 		_cmd.SetComputeRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		if (push.Length > 0 && baked.RootConstantParam >= 0)
+		if (push.Length > 0)
 		{
+			// A compute push always rides the root-constant block. Checked before the `>= 0` test, so a technique that
+			// declares no block reports it rather than dropping the push, as this used to.
+			_validate.PushFits(technique, push.Length * sizeof(float), routesToUniform: false, 0,
+				baked.RootConstantParam >= 0 ? DirectX12Technique.ScalarPushSize : 0);
 			var block = stackalloc float[16];
-			for (var i = 0; i < push.Length && i < 16; i++)
-				block[i] = push[i];
+			new Span<float>(block, 16).Clear();
+			push.CopyTo(new Span<float>(block, push.Length));
 			_cmd.SetComputeRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
 		}
 

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text;
+using Loom.Core.Diagnostics;
 using Loom.Core.Graph;
 
 namespace Loom.Graph;
@@ -82,8 +83,18 @@ public sealed class GraphSchedule
 			// write (e.g. .Blends), and we must resolve dependencies once, against state BEFORE this pass.
 			var reads = new Dictionary<int, ResourceHandle>();
 			var writes = new Dictionary<int, ResourceHandle>();
+			// Uniform and storage reads bind to numbered technique slots, and there are only so many. Counted here
+			// because every backend collects these edges the same way and every one of them used to drop the overflow
+			// silently, mis-binding each slot after the cap rather than reporting anything.
+			var uniformReads = 0;
+			var storageReads = 0;
 			foreach (var access in passes[i].Accesses)
 			{
+				if (access.Kind == AccessKind.ReadUniform)
+					uniformReads++;
+				else if (access.Kind == AccessKind.ReadStorage)
+					storageReads++;
+
 				// The swapchain image is a write-and-present target only. It is acquired fresh each frame, so it has
 				// no stable contents to sample, and each backend resolves it differently when asked to: one binds
 				// whichever image was last acquired, one hands back a sentinel view, one throws while recording.
@@ -101,6 +112,15 @@ public sealed class GraphSchedule
 				if (access.Kind.Writes())
 					writes[access.Resource.Id] = access.Resource;
 			}
+
+			if (uniformReads > GraphLimits.MaxUniformBuffersPerPass)
+				errors.Add(
+					$"Pass '{passes[i].Name}' reads {uniformReads} constants buffers but a pass may read at most " +
+					$"{GraphLimits.MaxUniformBuffersPerPass}. Pack the extras into one larger block, or split the pass.");
+			if (storageReads > GraphLimits.MaxStorageBuffersPerPass)
+				errors.Add(
+					$"Pass '{passes[i].Name}' reads {storageReads} storage buffers but a pass may read at most " +
+					$"{GraphLimits.MaxStorageBuffersPerPass}. Pack the extras into one larger buffer, or split the pass.");
 
 			foreach (var (id, resource) in reads)
 			{
@@ -152,6 +172,24 @@ public sealed class GraphSchedule
 		if (graph.PresentTarget is { } present
 			&& (!state.TryGetValue(present.Id, out var presentState) || presentState.LastWriter < 0))
 			errors.Add($"Present target '{present.Name}' is never written by any pass.");
+
+		// And the converse: a backbuffer that a pass writes but nothing presents renders a whole frame and then drops
+		// it, leaving a permanently blank window with no diagnostic anywhere. There is no legitimate reason to do it —
+		// the backbuffer handle only exists because the app asked for it — so this is an error, not a warning. An
+		// offscreen graph never mints one, so it is unaffected.
+		foreach (var resource in graph.Resources)
+		{
+			if (!resource.IsBackbuffer
+				|| !state.TryGetValue(resource.Id, out var backbufferState)
+				|| backbufferState.LastWriter < 0
+				|| graph.PresentTarget?.Id == resource.Id)
+				continue;
+
+			var writer = passes[backbufferState.LastWriter].Name;
+			errors.Add(graph.PresentTarget is { } other
+				? $"Pass '{writer}' writes the backbuffer '{resource.Name}', but the graph presents '{other.Name}' instead — the backbuffer's contents would never reach the window."
+				: $"Pass '{writer}' writes the backbuffer '{resource.Name}', but the graph presents nothing — call g.Present(...) on it, or the window stays blank.");
+		}
 
 		if (errors.Count > 0)
 			throw new GraphValidationException(string.Join(Environment.NewLine, errors));
@@ -242,7 +280,7 @@ public sealed class GraphSchedule
 			}
 
 			if (writesAnything && !feedsOutput)
-				Console.WriteLine($"[loom] warning: pass '{graph.Passes[i].Name}' produces nothing read downstream, presented, or read back — it may be dead.");
+				LoomLog.Warning($"pass '{graph.Passes[i].Name}' produces nothing read downstream, presented, or read back — it may be dead.");
 		}
 	}
 

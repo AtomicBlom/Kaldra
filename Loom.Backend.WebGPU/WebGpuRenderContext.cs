@@ -8,6 +8,7 @@ using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Graph;
 
 namespace Loom.Backend.WebGPU;
 
@@ -26,9 +27,10 @@ namespace Loom.Backend.WebGPU;
 /// </para>
 /// </summary>
 [SupportedOSPlatform("browser")]
-internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRenderContext, IDisposable
+internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordValidator validation) : IRenderContext, IDisposable
 {
 	private readonly WebGpuEngine _engine = engine;
+	private readonly RecordValidator _validate = validation;
 
 	// Per-(name, attachment formats) baked pipelines — keyed by value so the per-draw lookup allocates nothing.
 	// Misses bake a render pipeline from the technique's template; cleared/disposed on hot-reload.
@@ -55,8 +57,8 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 
 	// The app-writable parameter/storage buffers the current pass .Reads (in .Reads order), bound to the technique's
 	// uniform / storage-buffer slots at draw time.
-	public const int MaxUniformBuffers = 8;
-	public const int MaxStorageBuffers = 8;
+	public const int MaxUniformBuffers = GraphLimits.MaxUniformBuffersPerPass;
+	public const int MaxStorageBuffers = GraphLimits.MaxStorageBuffersPerPass;
 	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
 	private int _activeConstantsCount;
 	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
@@ -78,8 +80,9 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 	/// read-only — a read-only pass bakes with depth writes off so a transparent draw tests against, but does not
 	/// disturb, the opaque depth. Called by the engine before the pass's Record runs.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly, ReadOnlySpan<int> colorViews, int areaWidth, int areaHeight, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
+	public void BeginPass(GraphPass pass, ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly, ReadOnlySpan<int> colorViews, int areaWidth, int areaHeight, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
 	{
+		_validate.BeginPass(pass);
 		if (colorFormatIds.Length > MaxColorFormats)
 			throw new WebGpuException($"A pass has {colorFormatIds.Length} color attachments; the pipeline-key buffer holds {MaxColorFormats}.");
 		_colorCount = colorFormatIds.Length;
@@ -89,10 +92,13 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine) : IRender
 		_scopeHeight = areaHeight;
 		_depthFormatId = depthFormatId;
 		_depthReadOnly = depthReadOnly;
-		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
-		constantsIds[.._activeConstantsCount].CopyTo(_activeConstantsIds);
-		_activeStorageCount = Math.Min(storageIds.Length, MaxStorageBuffers);
-		storageIds[.._activeStorageCount].CopyTo(_activeStorageIds);
+		// Derivation rejects a pass that exceeds either cap, so these fit by construction. Copying the whole span
+		// rather than clamping it means an engine bug would throw here instead of silently mis-binding every slot
+		// past the cap, which is what the clamp used to do.
+		_activeConstantsCount = constantsIds.Length;
+		constantsIds.CopyTo(_activeConstantsIds);
+		_activeStorageCount = storageIds.Length;
+		storageIds.CopyTo(_activeStorageIds);
 	}
 
 	/// <summary>Resolve a technique to a render pipeline baked against the current pass's attachment formats.</summary>

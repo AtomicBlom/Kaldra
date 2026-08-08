@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Loom.Core.Diagnostics;
 using Silk.NET.Core;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Core.Native;
@@ -91,8 +92,8 @@ public sealed unsafe class VulkanContext : IDisposable
 		// Validation layers live in the Vulkan SDK, which may not be installed. Degrade gracefully.
 		_validation = enableValidation && CheckValidationLayerSupport();
 		if (enableValidation && !_validation)
-			Console.Error.WriteLine(
-				"[loom] Validation requested but VK_LAYER_KHRONOS_validation is unavailable " +
+			LoomLog.Warning(
+				"Validation requested but VK_LAYER_KHRONOS_validation is unavailable " +
 				"(install the Vulkan SDK to enable it). Continuing without validation.");
 
 		// VK_EXT_debug_utils backs the validation messenger and, when the engine is built with UseNamedGPUObjects,
@@ -302,8 +303,14 @@ public sealed unsafe class VulkanContext : IDisposable
 		void* pUserData)
 	{
 		var message = SilkMarshal.PtrToString((nint)pCallbackData->PMessage) ?? "";
-		var level = severity.HasFlag(DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt) ? "ERROR" : "WARN";
-		Console.Error.WriteLine($"[vk:{level}] {message}");
+		// The driver's own severity stays in the text: it is the validation layer's classification, not Loom's, and
+		// collapsing the two would lose which one said what.
+		var error = severity.HasFlag(DebugUtilsMessageSeverityFlagsEXT.ErrorBitExt);
+		var text = $"[vk:{(error ? "ERROR" : "WARN")}] {message}";
+		if (error)
+			LoomLog.Error(text);
+		else
+			LoomLog.Warning(text);
 		return Vk.False;
 	}
 
@@ -326,8 +333,8 @@ public sealed unsafe class VulkanContext : IDisposable
 				devices = software;
 			else
 			{
-				Console.Error.WriteLine(
-					"[loom] --software-adapter requested but no Vulkan CPU (software) device (e.g. lavapipe, " +
+				LoomLog.Warning(
+					"--software-adapter requested but no Vulkan CPU (software) device (e.g. lavapipe, " +
 					"SwiftShader) was found on this system; falling back to the normal best-available device.");
 			}
 		}

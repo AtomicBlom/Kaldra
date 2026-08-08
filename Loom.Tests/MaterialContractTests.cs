@@ -1,3 +1,4 @@
+using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Loom.Graph;
 
@@ -6,8 +7,8 @@ namespace Loom.Tests;
 /// <summary>
 /// The material/technique contract: what a technique expects of a material (from its shader's reflection), when the
 /// disagreement is reported, and that it is reported the same way whichever backend is drawing. This is the shared
-/// half — <see cref="MaterialStore"/> is what all three backends now call, replacing a <c>VulkanException</c>, an
-/// <c>InvalidOperationException</c>, and a silent clamp to the last texture.
+/// half — <see cref="MaterialStore"/> is what all three backends call, and it raises the neutral
+/// <see cref="TechniqueMismatchException"/> so an app handles the mismatch without knowing which backend drew.
 /// </summary>
 public class MaterialContractTests
 {
@@ -42,7 +43,7 @@ public class MaterialContractTests
 		var store = new MaterialStore();
 		store.RegisterTechnique("gbuffer", new MaterialLayout(3, 0));
 
-		var ex = Should.Throw<InvalidOperationException>(() => store.Create("gbuffer", [Tex(1)], default));
+		var ex = Should.Throw<TechniqueMismatchException>(() => store.Create("gbuffer", [Tex(1)], default));
 		ex.Message.ShouldContain("gbuffer");
 		ex.Message.ShouldContain("1 texture");
 		ex.Message.ShouldContain("3");
@@ -55,7 +56,7 @@ public class MaterialContractTests
 		var store = new MaterialStore();
 		store.Create("gbuffer", [Tex(1)], default);
 
-		Should.Throw<InvalidOperationException>(() => store.RegisterTechnique("gbuffer", new MaterialLayout(3, 0)))
+		Should.Throw<TechniqueMismatchException>(() => store.RegisterTechnique("gbuffer", new MaterialLayout(3, 0)))
 			.Message.ShouldContain("gbuffer");
 	}
 
@@ -68,7 +69,7 @@ public class MaterialContractTests
 		store.RegisterTechnique("gbuffer", new MaterialLayout(2, 0));
 		store.Create("gbuffer", [Tex(1), Tex(2)], default);
 
-		var ex = Should.Throw<InvalidOperationException>(() => store.RegisterTechnique("gbuffer", new MaterialLayout(3, 0)));
+		var ex = Should.Throw<TechniqueMismatchException>(() => store.RegisterTechnique("gbuffer", new MaterialLayout(3, 0)));
 		ex.Message.ShouldContain("2 texture");
 		ex.Message.ShouldContain("3");
 	}
@@ -92,14 +93,14 @@ public class MaterialContractTests
 		store.RegisterTechnique("gbuffer", new MaterialLayout(2, 0));
 		var material = store.Create([Tex(1)]);
 
-		Should.Throw<InvalidOperationException>(() => store.ValidateAgainst(material, "gbuffer"));
+		Should.Throw<TechniqueMismatchException>(() => store.ValidateAgainst(material, "gbuffer"));
 	}
 
 	[Test]
 	public void A_technique_with_no_reflection_accepts_any_material()
 	{
-		// A built-in stand-in (the DX12 HLSL fallbacks) has no sidecar, so its layout is default — no textures, no
-		// parameters. That must read as "nothing to check", not as "must supply zero textures".
+		// A technique registered with a default layout claims no textures and no parameters. That must read as
+		// "nothing to check", not as "must supply zero textures".
 		var store = new MaterialStore();
 		var material = store.Create([Tex(1), Tex(2)]);
 
@@ -116,7 +117,7 @@ public class MaterialContractTests
 		var store = new MaterialStore();
 		store.RegisterTechnique("lit", new MaterialLayout(1, ParameterByteSize: 0));
 
-		Should.Throw<InvalidOperationException>(() => store.Create("lit", [Tex(1)], new byte[48]))
+		Should.Throw<TechniqueMismatchException>(() => store.Create("lit", [Tex(1)], new byte[48]))
 			.Message.ShouldContain("48-byte");
 	}
 
@@ -126,7 +127,7 @@ public class MaterialContractTests
 		var store = new MaterialStore();
 		store.RegisterTechnique("pbr", new MaterialLayout(4, 48));
 
-		var ex = Should.Throw<InvalidOperationException>(() => store.Create("pbr", [Tex(1), Tex(2), Tex(3), Tex(4)], default));
+		var ex = Should.Throw<TechniqueMismatchException>(() => store.Create("pbr", [Tex(1), Tex(2), Tex(3), Tex(4)], default));
 		ex.Message.ShouldContain("loomMaterial");
 		ex.Message.ShouldContain("CreateMaterial<T>");
 	}
@@ -139,8 +140,8 @@ public class MaterialContractTests
 		var store = new MaterialStore();
 		store.RegisterTechnique("pbr", new MaterialLayout(0, 48));
 
-		Should.Throw<InvalidOperationException>(() => store.Create("pbr", [], new byte[32]));
-		Should.Throw<InvalidOperationException>(() => store.Create("pbr", [], new byte[64]));
+		Should.Throw<TechniqueMismatchException>(() => store.Create("pbr", [], new byte[32]));
+		Should.Throw<TechniqueMismatchException>(() => store.Create("pbr", [], new byte[64]));
 		Should.NotThrow(() => store.Create("pbr", [], new byte[48]));
 	}
 

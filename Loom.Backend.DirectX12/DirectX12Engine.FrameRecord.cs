@@ -203,7 +203,7 @@ public sealed unsafe partial class DirectX12Engine
 		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
 		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
 		var storageCount = CollectStorageIds(pass.Pass, storageIds);
-		_context.BeginPass(new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
+		_context.BeginPass(pass.Pass, new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
 
 		// Hand the context this pass's render-target handles + extent so a draw-list group-opacity layer can rebind
 		// the pass scope after detouring through an offscreen target.
@@ -221,7 +221,7 @@ public sealed unsafe partial class DirectX12Engine
 		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
 		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
 		var storageCount = CollectStorageIds(pass.Pass, storageIds);
-		_context.BeginPass(ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, uniformIds[..uniformCount], storageIds[..storageCount]);
+		_context.BeginPass(pass.Pass, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, uniformIds[..uniformCount], storageIds[..storageCount]);
 		pass.Pass.Record?.Invoke(_context);
 	}
 
@@ -231,7 +231,7 @@ public sealed unsafe partial class DirectX12Engine
 	{
 		var n = 0;
 		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadUniform && n < ids.Length)
+			if (access.Kind == AccessKind.ReadUniform)
 				ids[n++] = access.Resource.Id;
 		return n;
 	}
@@ -242,7 +242,7 @@ public sealed unsafe partial class DirectX12Engine
 	{
 		var n = 0;
 		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadStorage && n < ids.Length)
+			if (access.Kind == AccessKind.ReadStorage)
 				ids[n++] = access.Resource.Id;
 		return n;
 	}

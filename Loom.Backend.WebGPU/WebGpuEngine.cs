@@ -1,8 +1,9 @@
 using System.Runtime.Versioning;
-
 using Loom.Core.Animation;
+using Loom.Core.Diagnostics;
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
+using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Loom.Graph;
 
@@ -48,6 +49,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 	private float _elapsed;
 
 	public WebGpuEngine(WebGpuSurface surface, int width, int height, WebGpuEngineSettings settings)
+		: base(settings)
 	{
 		_surface = surface;
 		_settings = settings;
@@ -64,7 +66,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_listVertexRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferVertex, minAlignment: 4, "ui-vertex-ring");
 		_listIndexRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferIndex, minAlignment: 4, "ui-index-ring");
 		_layerTargets = new WebGpuLayerTargets(_handles);
-		_context = new WebGpuRenderContext(this);
+		_context = new WebGpuRenderContext(this, Validation);
 		WebGpuInterop.ConfigureCanvas(_width, _height);
 	}
 
@@ -102,7 +104,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 
 	/// <summary>Look up a registered technique's format-agnostic template.</summary>
 	internal WebGpuTechniqueTemplate Template(string name) =>
-		_templates.TryGetValue(name, out var template) ? template : throw new WebGpuException($"No technique registered under the name '{name}'.");
+		_templates.TryGetValue(name, out var template) ? template : throw new TechniqueNotDefinedException(name);
 
 	public override string BackendName => "WebGPU";
 	public override string DeviceName => _surface.AdapterName;
@@ -118,7 +120,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 	// parse the binding model, and create the shader module + group-0 layouts on the JS side. The render pipeline
 	// itself is baked lazily per attachment-format set (WebGpuRenderContext.Bake). Wrapped in a validation error
 	// scope so a malformed layout surfaces as a named error rather than a silently broken pipeline.
-	protected override MaterialLayout BakeTechnique(string name, TechniqueDescriptor descriptor)
+	protected override TechniqueShape BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		if (_templates.Remove(name, out var previous))
 			previous.Dispose();
@@ -131,10 +133,16 @@ internal sealed partial class WebGpuEngine : EngineBase
 		WebGpuInterop.PopErrorScope($"bake technique '{name}'");
 		var errors = WebGpuInterop.TakeErrors();
 		if (!string.IsNullOrEmpty(errors))
-			Console.WriteLine($"[loom][webgpu] {errors}");
+			LoomLog.Error($"[webgpu] {errors}");
 
 		_templates[name] = template;
-		return new MaterialLayout(template.SampleCount, template.MaterialParameterBytes);
+		return new TechniqueShape(
+			new MaterialLayout(template.SampleCount, template.MaterialParameterBytes),
+			[.. template.Bindings.UniformBufferBytes],
+			// WGSL has no push constants, so a LOOM_PUSH_CONSTANT block lowers to an ordinary uniform buffer; the
+			// binding model reports its size, and 0 when the technique declares none.
+			template.Bindings.PushByteSize,
+			descriptor.HasListPush ? template.Bindings.PushByteSize : 0);
 	}
 
 	protected override void ResetPipelineCaches()

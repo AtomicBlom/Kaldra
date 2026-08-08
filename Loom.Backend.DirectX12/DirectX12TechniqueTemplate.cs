@@ -6,9 +6,9 @@ namespace Loom.Backend.DirectX12;
 
 /// <summary>
 /// A registered DirectX12 technique: its <em>prebuilt per-stage bytecode</em> + the shape needed to bake a pipeline
-/// (the DirectX12 counterpart of <c>TechniqueTemplate</c>). The bytecode is either signed DXIL the Loom build emitted
-/// offline (the real Slang shaders) or DXBC the backend FXC-compiled from a built-in stand-in — both are blobs
-/// the PSO consumes directly, so baking never compiles. The vertex and fragment stages are separate blobs; for
+/// (the DirectX12 counterpart of <c>TechniqueTemplate</c>). The bytecode is signed DXIL the Loom build emitted
+/// offline from the Slang shaders — a blob the PSO consumes directly, so baking never compiles and the backend
+/// ships no shader compiler. The vertex and fragment stages are separate blobs; for
 /// a compute technique only <see cref="FragmentBytecode"/> (the compute blob) is used.
 /// </summary>
 internal readonly record struct DirectX12TechniqueTemplate(
