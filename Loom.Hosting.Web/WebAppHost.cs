@@ -112,7 +112,7 @@ public sealed partial class WebAppHost : IAppHost
 		options.EngineSettings.CopyBaseSettingsTo(settings);
 		settings.PreferredBackend = "WebGPU";
 
-		// Construct the one browser backend directly rather than through Engine.AvailableEngines: that registry is
+		// Construct the one browser backend directly rather than through Backends.Available: that registry is
 		// populated by a module initializer, which is not reliably run under WASM AOT + trimming.
 		var backend = new WebGpuBackend();
 		var engine = backend.Create(surface, width, height, settings);

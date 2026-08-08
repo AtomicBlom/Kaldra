@@ -10,9 +10,6 @@ namespace Loom.Backend.WebGPU;
 [SupportedOSPlatform("browser")]
 internal sealed partial class WebGpuEngine
 {
-	// Loom clears depth to the far plane; WebGPU's default depthClearValue matches, but pass it explicitly.
-	private const float ClearDepth = 1.0f;
-
 	public override void Render(FrameInputs inputs)
 	{
 		DrainShaderReloads();
@@ -121,7 +118,9 @@ internal sealed partial class WebGpuEngine
 				_writer.ColorAttachment(_transients!.ViewHandle(a.Resource.Id), ToLoadOp(a.Load), ToStoreOp(a.Store), a.ClearValue ?? Vector4.Zero);
 		foreach (var a in attachments)
 			if (a.State != ResourceState.ColorAttachment)
-				_writer.DepthAttachment(_transients!.ViewHandle(a.Resource.Id), ToLoadOp(a.Load), ToStoreOp(a.Store), ClearDepth, a.State == ResourceState.DepthReadOnly);
+				// The derived clear — 1 for a conventional depth target, 0 for a reversed-Z one. Ignored unless the
+				// load op is Clear, in which case derivation always supplied a value.
+				_writer.DepthAttachment(_transients!.ViewHandle(a.Resource.Id), ToLoadOp(a.Load), ToStoreOp(a.Store), a.DepthClear ?? 1f, a.State == ResourceState.DepthReadOnly);
 
 		_writer.SetViewport(0, 0, area.Width, area.Height);
 		_writer.SetScissor(0, 0, area.Width, area.Height);

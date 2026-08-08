@@ -4,11 +4,12 @@ using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using SUIsei;
-// Explicit aliases resolve the DrawListId / DrawListData / DrawCommand name conflicts
-// between SUIsei.Drawing and Loom.Core.Hosting.
-using DrawListId = SUIsei.Drawing.DrawListId;
-using DrawListData = SUIsei.Drawing.DrawListData;
+// Explicit aliases resolve the DrawCommand / DrawListData / DrawListId name conflicts between SUIsei.Drawing and
+// Loom.Core.Hosting. Kept in alphabetical order: `dotnet format` sorts using directives, and a sort that has work to
+// do lifts the first alias above this comment and detaches it.
 using DrawCommand = SUIsei.Drawing.DrawCommand;
+using DrawListData = SUIsei.Drawing.DrawListData;
+using DrawListId = SUIsei.Drawing.DrawListId;
 using LoomDrawCommand = Loom.Core.Hosting.DrawCommand;
 
 namespace Loom.UI.SUIsei;

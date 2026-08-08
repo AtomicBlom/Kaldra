@@ -5,7 +5,7 @@
 
     Pulls in the shared shader-compile machinery (Content mode for an app) and selects which rendering
     backend(s) the app references. Merely referencing a backend assembly loads it, and its [ModuleInitializer]
-    self-registers it into Engine.AvailableEngines — so backend choice is just a ProjectReference toggle.
+    self-registers it into Backends.Available — so backend choice is just a ProjectReference toggle.
 
     Only apps import this file, so a backend reference can never reach Loom.Core/Loom.Graph (the cardinal
     backend-isolation invariant). The guarantee is "absence of import" — no opt-in guard property needed.
@@ -47,6 +47,18 @@
   <ItemGroup Condition="'$(UseWebGPU)' == 'true'">
     <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Backend.WebGPU\Loom.Backend.WebGPU.csproj" />
     <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Backend.WebGPU" Version="$(LoomPackageVersion)" />
+  </ItemGroup>
+
+  <!-- UI bridges, same shape as the backends. Both reach the GPU only through the neutral draw-list verb, so
+       neither drags a UI library into a backend. SUIsei brings the XAML runtime (and its source generator)
+       transitively; ImGui brings ImGui.NET. -->
+  <ItemGroup Condition="'$(UseSUIsei)' == 'true'">
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.UI.SUIsei\Loom.UI.SUIsei.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.UI.SUIsei" Version="$(LoomPackageVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseImGui)' == 'true'">
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.UI.ImGui\Loom.UI.ImGui.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.UI.ImGui" Version="$(LoomPackageVersion)" />
   </ItemGroup>
 
   <!--
@@ -101,7 +113,7 @@
   <!--
     Backend registration bootstrap. Referencing a backend assembly makes its module initializer run under JIT
     (first type touch triggers it lazily), but a NativeAOT-published app may never touch a backend type directly —
-    it only ever sees Engine.AvailableEngines through the host — so nothing forces the constructor to run and the
+    it only ever sees Backends.Available through the host — so nothing forces the constructor to run and the
     backend never registers. Generate a tiny [ModuleInitializer] into the app that forces each SELECTED backend's
     module constructor via a compile-time typeof (no Assembly.LoadFrom, so this stays AOT-safe: no reflection-emit,
     no probing the output directory). Each backend's own module initializer still runs its IsSupported() probe

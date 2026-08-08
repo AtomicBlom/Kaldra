@@ -53,6 +53,12 @@ public sealed class VulkanTechniqueCache(VulkanContext ctx) : IDisposable
 		hash.AppendData(BitConverter.GetBytes(description.StorageBufferCount));
 		hash.AppendData(BitConverter.GetBytes(description.HasListPush));
 		hash.AppendData(BitConverter.GetBytes((int)description.Cull));
+		hash.AppendData(BitConverter.GetBytes((int)description.DepthTest));
+		var bias = description.Bias ?? default;
+		hash.AppendData(BitConverter.GetBytes(description.Bias.HasValue));
+		hash.AppendData(BitConverter.GetBytes(bias.Constant));
+		hash.AppendData(BitConverter.GetBytes(bias.SlopeScale));
+		hash.AppendData(BitConverter.GetBytes(bias.Clamp));
 		AppendLayout(hash, description.Layout);
 		AppendLayout(hash, description.Instance);
 		return Convert.ToHexString(hash.GetHashAndReset());

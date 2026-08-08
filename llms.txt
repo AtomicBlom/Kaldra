@@ -1,5 +1,5 @@
 Loom 0.1.0-preview.1 — render-graph engine for .NET
-Generated: 2026-07-16
+Generated: 2026-08-07
 Source: https://github.com/AtomicBlom/Loom
 
 # Loom Architecture
@@ -45,23 +45,34 @@ No graphics-API type leaks into `Loom.Core` or `Loom.Graph`. Introducing one is 
 ## Dependency direction
 
 ```
-Loom.Sandbox ──► Loom.Backend.Vulkan ──► Loom.Graph ──► Loom.Core
-             └──► Loom.Backend.DirectX12 ──►┘
+                       ┌──► Loom.Backend.Vulkan    ─┐
+your app ──► host ─────┼──► Loom.Backend.DirectX12 ─┼──► Loom.Graph ──► Loom.Core
+             │         └──► Loom.Backend.WebGPU    ─┘
+             │
+             └── Loom.Hosting.Desktop (window, surface, frame loop, CLI flags)
+                 Loom.Hosting.Web     (browser, paired with the WebGPU backend)
 ```
 
-`Loom.Assets` sits beside `Loom.Core` — both are backend-neutral and have no graphics-API references.
+Beside the engine tiers, all backend-neutral and free of graphics-API references:
+
+| Project | Role |
+|---|---|
+| `Loom.Assets` | image + glTF loaders, and the material upload bridge |
+| `Loom.Concepts` | app-side helpers — `Camera`, `Frustum`, `Scene`. Deliberately **not** engine API |
+| `Loom.Input` | actions, bindings, layered event routing |
+| `Loom.UI.SUIsei` / `Loom.UI.ImGui` | UI bridges; both reach the GPU only through the neutral draw-list verb, so no backend references a UI library |
 
 ## Shader pipeline
 
-Shaders are written in **Slang** and compiled offline to SPIR-V (Vulkan) and signed DXIL (DX12) by the `Loom.Sdk` MSBuild targets at build time. Reflection JSON is emitted alongside each compiled shader; the backend reads it at `DefineTechnique` time to derive descriptor-binding layouts without you specifying them.
+Shaders are written in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) by the `Loom.Sdk` MSBuild targets at build time. Reflection JSON is emitted alongside each compiled shader; the backend reads it at `DefineTechnique` time to derive descriptor-binding layouts without you specifying them. The Slang-side contract — the platform macros and the binding rules — is [`shader-authoring.md`](shader-authoring.md).
 
 Engine shaders (blit, tonemap, auto-exposure) are **embedded** in the backend assemblies. Your app's shaders compile to **loose files** (`.spv`/`.dxil`/`.json`) copied to `shaders/` in the output directory.
 
 ## Backend selection
 
-Backends self-register via `[ModuleInitializer]` into `Engine.AvailableEngines` (an `IReadOnlyList<IRenderBackend>`). Including a backend assembly in your project is enough to make it available; which one runs is a runtime decision — the host picks a registered backend by name (`Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)`) and calls `backend.Create(surface, width, height, settings)`, handing over the window's native surface (Vulkan `IVkSurface` / DirectX 12 `HWND`).
+Backends self-register via `[ModuleInitializer]` into `Backends.Available` (an `IReadOnlyList<IRenderBackend>`). Including a backend assembly in your project is enough to make it available; which one runs is a runtime decision — the host picks a registered backend by name (`Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)`) and calls `backend.Create(surface, width, height, settings)`, handing over the window's native surface (Vulkan `IVkSurface` / DirectX 12 `HWND`).
 
-When using `Loom.Sdk` (NuGet or submodule), the `UseVulkan` / `UseDirectX12` MSBuild properties control which backend assemblies are referenced and therefore which `[ModuleInitializer]` calls fire.
+When using `Loom.Sdk` (NuGet or submodule), the `UseVulkan` / `UseDirectX12` / `UseWebGPU` MSBuild properties control which backend assemblies are referenced and therefore which `[ModuleInitializer]` calls fire; `UseSUIsei` / `UseImGui` do the same for the UI bridges.
 
 ---
 
@@ -80,7 +91,10 @@ A graph is built once with `RenderGraph.Define(g => { … })` and set on the eng
 | `g.Compute("name")` | Begin a compute pass → `PassBuilder`. Chain access verbs, then `.Dispatch(ctx => …)`. |
 | `g.Present(colorHandle)` | The terminal: declare which colour resource is shown this frame (returns void). |
 | `g.Readback(handle)` | Declare a GPU→CPU readback of a resource; returns the same handle. Read it later with `engine.Read`. |
-| `g.Buffer("name", byteSize)` | A GPU storage buffer of `byteSize` bytes (not resolution-bound) → `BufferHandle`. |
+| `using (g.Scope("name"))` | Prefix every domain/resource/pass declared in the block with `name.`, so a reusable fragment can be instantiated more than once. Nests. Techniques and the backbuffer are not scoped. |
+| `g.Buffer<T>("name", count)` | A GPU storage buffer of `count × sizeof(T)` (not resolution-bound) → `BufferHandle`. |
+| `g.Buffer("name", count, layout)` | The same, sized by a `VertexLayout`'s stride — the spelling for a buffer a compute fills and a draw consumes as its per-instance stream. Naming the layout the technique names lets the draw path reject a stride mismatch. |
+| `g.Buffer("name", byteSize)` | The same as an opaque block of `byteSize` bytes. Declares no element contract, so neither draw-path guard applies — prefer one of the two above. |
 | `g.Constants<T>("name")` | An app-written uniform/constant block of `sizeof(T)` bytes → `ConstantsHandle`. Fill with `engine.Write`. |
 | `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. |
 | `g.Persistent("name", format, size=1)` | A cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. |
@@ -114,7 +128,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `g.Domain("name", scale, samples=1)` | A backbuffer-relative `Domain` — `scale × native`, re-resolved on resize (e.g. `0.5f` for half-res). |
 | `domain.Color("name", format, clearValue?=null, noClear?=false)` | A colour target in this domain → `ColorHandle`. `noClear: true` skips the clear (only when the first pass covers every pixel). |
 | `domain.Color("name", format, scale, …)` | A colour target at a fraction of the domain's resolution (mip chains, bloom pyramid). |
-| `domain.Depth("name", format)` | A depth target in this domain → `DepthHandle`. |
+| `domain.Depth("name", format, clearDepth = 1f, noClear = false)` | A depth target in this domain → `DepthHandle`. `clearDepth: 0f` is the reversed-Z far plane; `noClear` skips the clear (only correct when the first depth-writing pass covers every pixel). |
 | `domain.Persistent("name", format)` | A cross-frame target sized to this domain (use a tiny domain for a scalar history). |
 | `g.BackbufferClear` / `g.BackbufferNoClear` | Set the backbuffer's first-write clear colour / skip the clear — before the first `g.Backbuffer` access. |
 
@@ -158,7 +172,8 @@ var graph = RenderGraph.Define(g =>
             {
                 var call = DrawCall.Create(obj.Mesh, "lit");
                 call.Material = obj.Material;
-                call.SetUniforms(obj.ModelMatrix);     // a per-draw block, matching the shader's cbuffer
+                var model = obj.ModelMatrix;
+                call.SetUniforms(ref model);           // a per-draw block, matching the shader's cbuffer
                 ctx.Draw(call);
             }
         });
@@ -174,7 +189,7 @@ Ping-pong (bloom, JFA) is just two handles and a `(read, write)` tuple swapped i
 
 | Type | Role |
 |---|---|
-| `Engine` | Static backend registry. `Engine.AvailableEngines` is an `IReadOnlyList<IRenderBackend>` (registration order); each referenced backend assembly self-registers as it loads. |
+| `Backends` | Static backend registry. `Backends.Available` is an `IReadOnlyList<IRenderBackend>` (registration order); each referenced backend assembly self-registers as it loads. |
 | `IRenderBackend` | A discoverable backend: `string Name` and `IEngine Create(object surface, int width, int height, EngineSettings settings)`. The surface is opaque (Vulkan `IVkSurface` / DX12 `HWND`). |
 | `IEngine` | The live engine — owns the device and pipeline cache, survives graph swaps. See its members below. |
 | `IRenderContext` | The per-frame execution context passed to `.Draw` / `.Dispatch`. Closures *pull* from it rather than capturing. |
@@ -185,12 +200,12 @@ Ping-pong (bloom, JFA) is just two handles and a `(read, write)` tuple swapped i
 ### Selecting a backend and creating the engine
 
 ```csharp
-var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
-              ?? Engine.AvailableEngines.First();
+var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)
+              ?? Backends.Available.First();
 using var engine = backend.Create(window.Surface, width, height, settings);
 ```
 
-`Engine.AvailableEngines` is a list, not a dictionary — select by `Name`, never an indexer. Constructing a backend's `EngineSettings` subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads and registers that backend.
+`Backends.Available` is a list, not a dictionary — select by `Name`, never an indexer. Constructing a backend's `EngineSettings` subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads and registers that backend.
 
 ### `EngineSettings`
 
@@ -281,8 +296,10 @@ engine.DefineTechnique("foliage", new TechniqueDescriptor("foliage",
 | `Instance` (`null`) | The per-instance `VertexLayout` (e.g. `Transform`) for instanced draws. |
 | `HasListPush` (`false`) | A draw-list technique's all-stage push block (whose last slot each command's `Tag` rewrites). |
 | `Cull` (`CullMode.None`) | Which faces the rasterizer discards — front faces are counter-clockwise. |
+| `DepthTest` (`DepthCompare.LessOrEqual`) | The depth comparison a fragment must pass, when the pass has a depth target. |
+| `Bias` (`null`) | A constant + slope-scaled depth offset (`DepthBias`) — the shadow-acne knob. |
 
-Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan) + signed DXIL (DirectX 12) with reflection JSON.
+Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) with reflection JSON. The Slang-side half of the contract — the platform macros, the two independent numbering schemes, and where a push block actually lands — is [`shader-authoring.md`](shader-authoring.md).
 
 ### Pipeline-intent enums
 
@@ -290,7 +307,23 @@ Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan) + sign
 |---|---|
 | `BlendMode` (`Loom.Core.Graph`) | `None`, `AlphaOver`, `Additive`, `PremultipliedAlpha`, `Multiply`. |
 | `CullMode` (`Loom.Core.Graph`) | `None`, `Back`, `Front` (front faces are counter-clockwise). |
+| `DepthCompare` (`Loom.Core.Graph`) | `Never`, `Less`, `Equal`, `LessOrEqual`, `Greater`, `NotEqual`, `GreaterOrEqual`, `Always`. |
 | `SamplerAddress` (`Loom.Core.Materials`) | `Clamp`, `Repeat`, `MirrorRepeat`, `ClampToBorder`, `MirrorClampToEdge`. |
+
+### Reversed-Z
+
+Reversed-Z puts the far plane at depth 0, which cancels the perspective divide's precision loss at distance against a float depth buffer's density near zero — the standard fix for depth fighting in a large world. It is **three declarations that must agree**; getting one wrong doesn't fail, it inverts or erases occlusion:
+
+```csharp
+var depth = g.Screen.Depth("depth", Format.Depth32F, clearDepth: 0f);          // 1. far plane at 0
+camera.Perspective(fovY, aspect, 0.1f, 5000f, reversed: true);                 // 2. reversed projection
+engine.DefineTechnique("mesh", new TechniqueDescriptor("mesh",
+    HasVertexInput: true, DepthTest: DepthCompare.GreaterOrEqual));            // 3. reversed test
+```
+
+Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projection, not the viewport.
+
+**Depth bias is only partly portable.** `DepthBias.SlopeScale` means the same thing on every backend. `DepthBias.Constant` does not: Vulkan multiplies it by an implementation-defined `r`, D3D12 applies `Constant × 2^(exponent−23)` for a float depth buffer. Prefer the slope-scaled term, or tune the constant per backend.
 
 ## Drawing, instancing, skinning (`Loom.Core.Hosting`)
 
@@ -305,7 +338,7 @@ Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan) + sign
 | `VertexCount` (`int`) | Vertices per instance for procedural draws (when `Mesh` is null). |
 | `Instances` (`InstanceSource`) | Per-instance data — empty (default) = single draw. |
 | `Material` (`Material?`) | Material whose textures fill the technique's sampler slots; `null` for untextured techniques. |
-| `Uniforms` / `.SetUniforms<T>(in T)` / `.SetUniforms<T>(ReadOnlySpan<T>)` | The per-draw uniform block (raw bytes matching the shader's cbuffer); set it from a typed value or span. |
+| `Uniforms` / `.SetUniforms<T>(ref T)` / `.SetUniforms<T>(ReadOnlySpan<T>)` | The per-draw uniform block (raw bytes matching the shader's cbuffer); set it from a typed value or span. |
 | `Sampled` (`ReadOnlySpan<ResourceHandle>`) | Graph resources bound as sampled inputs (each declared via `.Samples`). |
 | `DrawCall.From<T>(ReadOnlySpan<T>)` | Build an `InstanceSource` from a CPU instance span (uploaded per frame). |
 | `DrawCall.Gpu(BufferHandle, count)` | Build an `InstanceSource` from a GPU-resident buffer a compute pass filled. |
@@ -520,13 +553,13 @@ The submodule model gives you full engine source and the ability to modify the e
 
 ## Creating an engine
 
-A backend is the factory for an `IEngine`. Each referenced backend assembly self-registers an `IRenderBackend` into `Engine.AvailableEngines` as it loads, so the host discovers what is available at runtime and selects one by name. **Constructing a backend's settings subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads that backend's assembly** and fires its registration — it is the one sanctioned place a backend type appears in app code.
+A backend is the factory for an `IEngine`. Each referenced backend assembly self-registers an `IRenderBackend` into `Backends.Available` as it loads, so the host discovers what is available at runtime and selects one by name. **Constructing a backend's settings subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads that backend's assembly** and fires its registration — it is the one sanctioned place a backend type appears in app code.
 
 The host hands the backend the window's native surface *opaquely* — Loom names no windowing type. For Vulkan that is the window's `IVkSurface`; for DirectX 12 it is the window's `HWND`. Using Silk.NET for windowing:
 
 ```csharp
 using Loom.Core.Hosting;
-using Loom.Vulkan;
+using Loom.Backend.Vulkan;
 
 // A Vulkan-capable window (Silk.NET).
 var options = WindowOptions.DefaultVulkan with { Size = new Vector2D<int>(1280, 720), Title = "My Loom app" };
@@ -536,7 +569,7 @@ window.Initialize();
 if (window.VkSurface is null)
     throw new InvalidOperationException("The windowing platform did not expose a Vulkan surface.");
 
-// Constructing VulkanEngineSettings loads Loom.Vulkan, which registers the backend.
+// Constructing VulkanEngineSettings loads Loom.Backend.Vulkan, which registers the backend.
 var settings = new VulkanEngineSettings
 {
     EnableValidation = true,        // Vulkan validation layers (dev)
@@ -546,15 +579,15 @@ var settings = new VulkanEngineSettings
 };
 
 // Select the backend by name and create the engine bound to the surface.
-var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
-              ?? Engine.AvailableEngines.First();
+var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)
+              ?? Backends.Available.First();
 using var engine = backend.Create(window.VkSurface, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 ```
 
-For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `Loom.DirectX12`), and pass the window's `HWND` as the surface:
+For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `Loom.Backend.DirectX12`), and pass the window's `HWND` as the surface:
 
 ```csharp
-using Loom.DirectX12;
+using Loom.Backend.DirectX12;
 
 var settings = new DirectX12EngineSettings
 {
@@ -565,8 +598,8 @@ var settings = new DirectX12EngineSettings
 var hwnd = window.Native?.Win32?.Hwnd
            ?? throw new InvalidOperationException("The DirectX12 backend needs the window's Win32 HWND.");
 
-var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
-              ?? Engine.AvailableEngines.First();
+var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)
+              ?? Backends.Available.First();
 using var engine = backend.Create(hwnd, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 ```
 
@@ -578,17 +611,22 @@ This renders a mesh into an offscreen HDR buffer, then tone-maps that buffer to 
 
 ### 1. Define shaders
 
-Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan) and signed DXIL (DirectX 12), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
+Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
 
-`Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer and a per-draw model matrix from the uniform block:
+Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that `LOOM_BINDING(n)` counts **every** descriptor while `register(bN)` counts **only constant buffers and starts at `b1`** (`b0` is reserved on DirectX 12), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
+
+`Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer the pass `.Reads`, and a per-draw model matrix from the per-draw uniform block:
 
 ```slang
-// The per-frame view-projection, filled from the app via engine.Write(viewProj, …).
-[[vk::binding(0, 0)]] ConstantBuffer<float4x4> viewProj;
+#include "loom_platform.module.slang"
 
-// The per-draw block staged by DrawCall.SetUniforms(modelMatrix).
-struct PerDraw { float4x4 model; }
-[[vk::push_constant]] PerDraw draw;
+struct ViewProj { float4x4 viewProj; }   // filled from the app via engine.Write(viewProj, …)
+struct PerDraw  { float4x4 model; }      // staged by DrawCall.SetUniforms(ref block)
+
+// No samplers precede them, so these own descriptors 0 and 1 — and registers b1/b2, since b0 is reserved.
+// Uniform slots fill in a defined order: the pass's .Reads constants first, then the per-draw block.
+LOOM_BINDING(0) ConstantBuffer<ViewProj> view : register(b1);
+LOOM_BINDING(1) ConstantBuffer<PerDraw>  draw : register(b2);
 
 struct VSOut { float4 pos : SV_Position; float3 normal : NORMAL; }
 
@@ -597,7 +635,7 @@ VSOut vertexMain(float3 pos : POSITION, float3 normal : NORMAL)
 {
     VSOut o;
     float4 world = mul(draw.model, float4(pos, 1.0));
-    o.pos = mul(viewProj, world);
+    o.pos = mul(view.viewProj, world);
     o.normal = mul((float3x3)draw.model, normal);
     return o;
 }
@@ -613,20 +651,28 @@ float4 fragmentMain(VSOut i) : SV_Target
 `Shaders/tonemap.slang` — a fullscreen pass that samples the HDR target and maps it to display range. A fullscreen technique fabricates its own triangle, so it has no vertex input:
 
 ```slang
-[[vk::binding(0, 0)]] Sampler2D hdr;   // the pass's first .Samples input
+#include "loom_platform.module.slang"
+
+LOOM_BINDING(0) Sampler2D hdr;   // the pass's first .Samples input
+
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; }
 
 [shader("vertex")]
-float4 vertexMain(uint id : SV_VertexID) : SV_Position
+VSOut vertexMain(uint id : SV_VertexID)
 {
-    // Fullscreen triangle from the vertex id — no mesh.
+    // Fullscreen triangle from the vertex id — no mesh. LOOM_FULLSCREEN_POS applies the NDC-Y convention this
+    // target needs; writing `uv * 2 - 1` by hand renders upside down on WebGPU.
     float2 uv = float2((id << 1) & 2, id & 2);
-    return float4(uv * 2.0 - 1.0, 0.0, 1.0);
+    VSOut o;
+    o.pos = LOOM_FULLSCREEN_POS(uv);
+    o.uv = uv;
+    return o;
 }
 
 [shader("fragment")]
-float4 fragmentMain(float4 pos : SV_Position) : SV_Target
+float4 fragmentMain(VSOut i) : SV_Target
 {
-    float3 c = hdr.Load(int3(pos.xy, 0)).rgb;
+    float3 c = hdr.Sample(i.uv).rgb;
     c = c / (c + 1.0);                       // Reinhard tone-map
     return float4(c, 1.0);
 }
@@ -676,7 +722,11 @@ var graph = RenderGraph.Define(g =>
             {
                 var call = DrawCall.Create(obj.Mesh, "scene");
                 call.Material = obj.Material;          // fills the technique's reflected sampler slots
-                call.SetUniforms(obj.ModelMatrix);     // the per-draw block matching the shader
+                // The per-draw block matching the shader. `ref` because the bytes alias this storage until the
+                // draw is submitted — passing a temporary would leave the engine reading a dead local, so the
+                // compiler rejects it rather than letting it corrupt at runtime.
+                var model = obj.ModelMatrix;
+                call.SetUniforms(ref model);
                 ctx.Draw(call);
             }
         });

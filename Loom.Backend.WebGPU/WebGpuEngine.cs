@@ -26,7 +26,6 @@ internal sealed partial class WebGpuEngine : EngineBase
 	private readonly WebGpuSamplerCache _samplers;
 	private readonly WebGpuMeshStore _meshes;
 	private readonly WebGpuTextureStore _textures;
-	private readonly MaterialStore _materials = new();
 	private readonly WebGpuBufferRing _uniformRing;
 	private readonly WebGpuBufferRing _instanceRing;
 	private readonly WebGpuBufferRing _storageRing;
@@ -90,7 +89,13 @@ internal sealed partial class WebGpuEngine : EngineBase
 	internal WebGpuTransientResources Transients => _transients ?? throw new WebGpuException("No active graph — SetGraph must run before a pass records.");
 
 	/// <summary>The texture ids (into the texture store) a material bundles, in bind order.</summary>
-	internal ReadOnlySpan<int> MaterialTextures(int materialId) => _materials.TexturesOf(materialId);
+	internal ReadOnlySpan<int> MaterialTextures(int materialId) => Materials.TexturesOf(materialId);
+
+	/// <summary>Check a material against the technique about to draw it, memoized per pair (the shared contract check).</summary>
+	internal void ValidateMaterial(Material material, string technique) => Materials.ValidateAgainst(material, technique);
+
+	/// <summary>A material's per-material parameter bytes, to stage into the uniform ring for this draw. Empty when it carries none.</summary>
+	internal ReadOnlySpan<byte> MaterialParameters(int materialId) => Materials.ParametersOf(materialId);
 
 	/// <summary>The sampled view handle of an uploaded texture.</summary>
 	internal int TextureView(int textureId) => _textures.View(textureId);
@@ -113,7 +118,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 	// parse the binding model, and create the shader module + group-0 layouts on the JS side. The render pipeline
 	// itself is baked lazily per attachment-format set (WebGpuRenderContext.Bake). Wrapped in a validation error
 	// scope so a malformed layout surfaces as a named error rather than a silently broken pipeline.
-	protected override void BakeTechnique(string name, TechniqueDescriptor descriptor)
+	protected override MaterialLayout BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		if (_templates.Remove(name, out var previous))
 			previous.Dispose();
@@ -129,6 +134,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 			Console.WriteLine($"[loom][webgpu] {errors}");
 
 		_templates[name] = template;
+		return new MaterialLayout(template.SampleCount, template.MaterialParameterBytes);
 	}
 
 	protected override void ResetPipelineCaches()
@@ -213,8 +219,6 @@ internal sealed partial class WebGpuEngine : EngineBase
 	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
-
-	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	public override void Dispose()
 	{

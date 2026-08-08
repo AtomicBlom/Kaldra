@@ -20,14 +20,9 @@ VsOut vertexMain(uint vertexId : SV_VertexID)
 
 	VsOut output;
 	output.color = colors[vertexId];
-	// Fabricated directly in clip space (no camera to carry the backend's clip-space correction), so the NDC-Y
-	// split has to be applied here — same convention as LOOM_FULLSCREEN_POS: Vulkan/DX12 map straight through;
-	// WebGPU's Y-up NDC needs the flip.
-#ifdef LOOM_WGSL
-	output.position = float4(pos.x, -pos.y, 0.0, 1.0);
-#else
-	output.position = float4(pos, 0.0, 1.0);
-#endif
+	// Fabricated directly in clip space, so there is no camera carrying the backend's clip-space correction —
+	// LOOM_CLIP_POS applies the NDC-Y convention this target needs.
+	output.position = LOOM_CLIP_POS(pos);
 	return output;
 }
 

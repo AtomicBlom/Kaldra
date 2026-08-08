@@ -1,0 +1,25 @@
+# Vendored third-party code. Loom's conventions stop at this directory.
+#
+# `root = true` ends the upward .editorconfig search here, so the repo-root file's rules — tabs, BOM-less UTF-8,
+# sorted usings, a final newline — do not reach anything under external/. A vendored subtree brings its own style,
+# and one with an opinion of its own states it in its own .editorconfig (SUIsei does), which likewise ends the
+# search there and leaves this file governing only the subtrees that don't.
+root = true
+
+# `dotnet format` skips files marked as generated, which is the .editorconfig-level way to say "not ours to
+# restyle". This matters because external/VMASharp is not listed in Loom.slnx but IS a ProjectReference from
+# Loom.Backend.Vulkan, so a solution-wide `dotnet format Loom.slnx` loads and rewrites it anyway: stripping its
+# UTF-8 BOMs, re-sorting its usings, and adding final newlines. That left the submodule permanently dirty with
+# churn nobody asked for and no way to tell real local patches from formatter noise.
+#
+# The label is a slight stretch — VMASharp is vendored, not generated — but "exclude this path" is what the
+# property means to the formatter, and it is the only exclusion `dotnet format` reads from configuration rather
+# than from a command line every caller has to remember to pass.
+[*.{cs,vb}]
+generated_code = true
+
+# `generated_code` is read by the compiler as well as the formatter, and Roslyn asks generated files to declare
+# their nullable context explicitly (CS8669) — so marking VMASharp generated silences the analysis we don't want
+# but turns on 54 warnings we also don't want, in sources that predate the convention and are not ours to annotate.
+# Verified both ways: 0 CS8669 without this file, 54 with it and without this line.
+dotnet_diagnostic.CS8669.severity = none

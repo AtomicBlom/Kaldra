@@ -68,13 +68,13 @@ The submodule model gives you full engine source and the ability to modify the e
 
 ## Creating an engine
 
-A backend is the factory for an `IEngine`. Each referenced backend assembly self-registers an `IRenderBackend` into `Engine.AvailableEngines` as it loads, so the host discovers what is available at runtime and selects one by name. **Constructing a backend's settings subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads that backend's assembly** and fires its registration — it is the one sanctioned place a backend type appears in app code.
+A backend is the factory for an `IEngine`. Each referenced backend assembly self-registers an `IRenderBackend` into `Backends.Available` as it loads, so the host discovers what is available at runtime and selects one by name. **Constructing a backend's settings subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads that backend's assembly** and fires its registration — it is the one sanctioned place a backend type appears in app code.
 
 The host hands the backend the window's native surface *opaquely* — Loom names no windowing type. For Vulkan that is the window's `IVkSurface`; for DirectX 12 it is the window's `HWND`. Using Silk.NET for windowing:
 
 ```csharp
 using Loom.Core.Hosting;
-using Loom.Vulkan;
+using Loom.Backend.Vulkan;
 
 // A Vulkan-capable window (Silk.NET).
 var options = WindowOptions.DefaultVulkan with { Size = new Vector2D<int>(1280, 720), Title = "My Loom app" };
@@ -84,7 +84,7 @@ window.Initialize();
 if (window.VkSurface is null)
     throw new InvalidOperationException("The windowing platform did not expose a Vulkan surface.");
 
-// Constructing VulkanEngineSettings loads Loom.Vulkan, which registers the backend.
+// Constructing VulkanEngineSettings loads Loom.Backend.Vulkan, which registers the backend.
 var settings = new VulkanEngineSettings
 {
     EnableValidation = true,        // Vulkan validation layers (dev)
@@ -94,15 +94,15 @@ var settings = new VulkanEngineSettings
 };
 
 // Select the backend by name and create the engine bound to the surface.
-var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
-              ?? Engine.AvailableEngines.First();
+var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)
+              ?? Backends.Available.First();
 using var engine = backend.Create(window.VkSurface, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 ```
 
-For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `Loom.DirectX12`), and pass the window's `HWND` as the surface:
+For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `Loom.Backend.DirectX12`), and pass the window's `HWND` as the surface:
 
 ```csharp
-using Loom.DirectX12;
+using Loom.Backend.DirectX12;
 
 var settings = new DirectX12EngineSettings
 {
@@ -113,8 +113,8 @@ var settings = new DirectX12EngineSettings
 var hwnd = window.Native?.Win32?.Hwnd
            ?? throw new InvalidOperationException("The DirectX12 backend needs the window's Win32 HWND.");
 
-var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
-              ?? Engine.AvailableEngines.First();
+var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)
+              ?? Backends.Available.First();
 using var engine = backend.Create(hwnd, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 ```
 
@@ -126,17 +126,22 @@ This renders a mesh into an offscreen HDR buffer, then tone-maps that buffer to 
 
 ### 1. Define shaders
 
-Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan) and signed DXIL (DirectX 12), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
+Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
 
-`Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer and a per-draw model matrix from the uniform block:
+Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that `LOOM_BINDING(n)` counts **every** descriptor while `register(bN)` counts **only constant buffers and starts at `b1`** (`b0` is reserved on DirectX 12), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
+
+`Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer the pass `.Reads`, and a per-draw model matrix from the per-draw uniform block:
 
 ```slang
-// The per-frame view-projection, filled from the app via engine.Write(viewProj, …).
-[[vk::binding(0, 0)]] ConstantBuffer<float4x4> viewProj;
+#include "loom_platform.module.slang"
 
-// The per-draw block staged by DrawCall.SetUniforms(modelMatrix).
-struct PerDraw { float4x4 model; }
-[[vk::push_constant]] PerDraw draw;
+struct ViewProj { float4x4 viewProj; }   // filled from the app via engine.Write(viewProj, …)
+struct PerDraw  { float4x4 model; }      // staged by DrawCall.SetUniforms(ref block)
+
+// No samplers precede them, so these own descriptors 0 and 1 — and registers b1/b2, since b0 is reserved.
+// Uniform slots fill in a defined order: the pass's .Reads constants first, then the per-draw block.
+LOOM_BINDING(0) ConstantBuffer<ViewProj> view : register(b1);
+LOOM_BINDING(1) ConstantBuffer<PerDraw>  draw : register(b2);
 
 struct VSOut { float4 pos : SV_Position; float3 normal : NORMAL; }
 
@@ -145,7 +150,7 @@ VSOut vertexMain(float3 pos : POSITION, float3 normal : NORMAL)
 {
     VSOut o;
     float4 world = mul(draw.model, float4(pos, 1.0));
-    o.pos = mul(viewProj, world);
+    o.pos = mul(view.viewProj, world);
     o.normal = mul((float3x3)draw.model, normal);
     return o;
 }
@@ -161,20 +166,28 @@ float4 fragmentMain(VSOut i) : SV_Target
 `Shaders/tonemap.slang` — a fullscreen pass that samples the HDR target and maps it to display range. A fullscreen technique fabricates its own triangle, so it has no vertex input:
 
 ```slang
-[[vk::binding(0, 0)]] Sampler2D hdr;   // the pass's first .Samples input
+#include "loom_platform.module.slang"
+
+LOOM_BINDING(0) Sampler2D hdr;   // the pass's first .Samples input
+
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; }
 
 [shader("vertex")]
-float4 vertexMain(uint id : SV_VertexID) : SV_Position
+VSOut vertexMain(uint id : SV_VertexID)
 {
-    // Fullscreen triangle from the vertex id — no mesh.
+    // Fullscreen triangle from the vertex id — no mesh. LOOM_FULLSCREEN_POS applies the NDC-Y convention this
+    // target needs; writing `uv * 2 - 1` by hand renders upside down on WebGPU.
     float2 uv = float2((id << 1) & 2, id & 2);
-    return float4(uv * 2.0 - 1.0, 0.0, 1.0);
+    VSOut o;
+    o.pos = LOOM_FULLSCREEN_POS(uv);
+    o.uv = uv;
+    return o;
 }
 
 [shader("fragment")]
-float4 fragmentMain(float4 pos : SV_Position) : SV_Target
+float4 fragmentMain(VSOut i) : SV_Target
 {
-    float3 c = hdr.Load(int3(pos.xy, 0)).rgb;
+    float3 c = hdr.Sample(i.uv).rgb;
     c = c / (c + 1.0);                       // Reinhard tone-map
     return float4(c, 1.0);
 }
@@ -224,7 +237,11 @@ var graph = RenderGraph.Define(g =>
             {
                 var call = DrawCall.Create(obj.Mesh, "scene");
                 call.Material = obj.Material;          // fills the technique's reflected sampler slots
-                call.SetUniforms(obj.ModelMatrix);     // the per-draw block matching the shader
+                // The per-draw block matching the shader. `ref` because the bytes alias this storage until the
+                // draw is submitted — passing a temporary would leave the engine reading a dead local, so the
+                // compiler rejects it rather than letting it corrupt at runtime.
+                var model = obj.ModelMatrix;
+                call.SetUniforms(ref model);
                 ctx.Draw(call);
             }
         });

@@ -39,4 +39,6 @@ public readonly record struct VulkanTechniqueDescription(
 	VertexLayout? Instance = null,
 	int UniformBufferCount = 0,
 	bool HasListPush = false,
-	CullMode Cull = CullMode.None);
+	CullMode Cull = CullMode.None,
+	DepthCompare DepthTest = DepthCompare.LessOrEqual,
+	DepthBias? Bias = null);

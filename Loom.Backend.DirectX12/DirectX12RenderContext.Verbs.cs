@@ -17,16 +17,11 @@ internal sealed unsafe partial class DirectX12RenderContext
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
-		// The technique's CBVs (b1..) in slot order: the pass's .Reads constants (e.g. a view-projection) first,
+		// The technique's CBVs (b1..) in slot order: the slot reflection named as the per-material block (when the draw
+		// carries a material) takes the material's parameter bytes; the rest take the pass's .Reads constants in order,
 		// then the per-draw Uniforms block (model, object data). Bound for material and sampled draws alike.
 		if (baked.CbvRootParam >= 0)
-		{
-			var bound = 0;
-			for (var j = 0; j < _activeConstantsCount; j++)
-				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound++), _transients!.Resource(_slot, _activeConstantsIds[j]).GetGPUVirtualAddress());
-			if (call.Uniforms.Length > 0 && baked.UniformBufferCount > bound)
-				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound), _uniformUpload.Upload(_slot, call.Uniforms));
-		}
+			BindUniformSlots(baked, call);
 
 		// Material textures or sampled graph resources fill the SRV table — mutually exclusive texture source.
 		if (call.Material is { } material)
@@ -59,6 +54,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 		{
 			if (_transients is null)
 				throw new InvalidOperationException("DirectX12: a GPU-buffer instanced draw requires an active graph (SetGraph).");
+			gpuBuf.CheckInstanceStride(baked.InstanceStride, call.Technique);
 			if (call.Mesh is { } mesh)
 			{
 				// GPU-resident instance stream + indexed mesh draw (foliage, GPU-driven placement).

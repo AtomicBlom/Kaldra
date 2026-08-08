@@ -63,7 +63,7 @@ public class FrustumCullTests
 	[Test]
 	public void Scene_cull_compacts_only_the_visible_instances()
 	{
-		var group = new InstancedGroup(new Mesh(0, 36), "instanced");
+		var group = new InstancedGroup(new Mesh(1), "instanced");
 		var atFocus = Matrix4x4.CreateTranslation(0, 0, 0);
 		var offscreen = Matrix4x4.CreateTranslation(100, 0, 0);
 		group.Add(atFocus, UnitBox);
@@ -82,7 +82,7 @@ public class FrustumCullTests
 	[Test]
 	public void Copy_all_takes_every_instance_without_culling()
 	{
-		var group = new InstancedGroup(new Mesh(0, 36), "instanced");
+		var group = new InstancedGroup(new Mesh(1), "instanced");
 		group.Add(Matrix4x4.CreateTranslation(100, 0, 0), UnitBox);
 		group.Add(Matrix4x4.CreateTranslation(200, 0, 0), UnitBox);
 

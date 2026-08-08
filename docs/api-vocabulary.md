@@ -13,7 +13,10 @@ A graph is built once with `RenderGraph.Define(g => { … })` and set on the eng
 | `g.Compute("name")` | Begin a compute pass → `PassBuilder`. Chain access verbs, then `.Dispatch(ctx => …)`. |
 | `g.Present(colorHandle)` | The terminal: declare which colour resource is shown this frame (returns void). |
 | `g.Readback(handle)` | Declare a GPU→CPU readback of a resource; returns the same handle. Read it later with `engine.Read`. |
-| `g.Buffer("name", byteSize)` | A GPU storage buffer of `byteSize` bytes (not resolution-bound) → `BufferHandle`. |
+| `using (g.Scope("name"))` | Prefix every domain/resource/pass declared in the block with `name.`, so a reusable fragment can be instantiated more than once. Nests. Techniques and the backbuffer are not scoped. |
+| `g.Buffer<T>("name", count)` | A GPU storage buffer of `count × sizeof(T)` (not resolution-bound) → `BufferHandle`. |
+| `g.Buffer("name", count, layout)` | The same, sized by a `VertexLayout`'s stride — the spelling for a buffer a compute fills and a draw consumes as its per-instance stream. Naming the layout the technique names lets the draw path reject a stride mismatch. |
+| `g.Buffer("name", byteSize)` | The same as an opaque block of `byteSize` bytes. Declares no element contract, so neither draw-path guard applies — prefer one of the two above. |
 | `g.Constants<T>("name")` | An app-written uniform/constant block of `sizeof(T)` bytes → `ConstantsHandle`. Fill with `engine.Write`. |
 | `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. |
 | `g.Persistent("name", format, size=1)` | A cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. |
@@ -47,7 +50,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `g.Domain("name", scale, samples=1)` | A backbuffer-relative `Domain` — `scale × native`, re-resolved on resize (e.g. `0.5f` for half-res). |
 | `domain.Color("name", format, clearValue?=null, noClear?=false)` | A colour target in this domain → `ColorHandle`. `noClear: true` skips the clear (only when the first pass covers every pixel). |
 | `domain.Color("name", format, scale, …)` | A colour target at a fraction of the domain's resolution (mip chains, bloom pyramid). |
-| `domain.Depth("name", format)` | A depth target in this domain → `DepthHandle`. |
+| `domain.Depth("name", format, clearDepth = 1f, noClear = false)` | A depth target in this domain → `DepthHandle`. `clearDepth: 0f` is the reversed-Z far plane; `noClear` skips the clear (only correct when the first depth-writing pass covers every pixel). |
 | `domain.Persistent("name", format)` | A cross-frame target sized to this domain (use a tiny domain for a scalar history). |
 | `g.BackbufferClear` / `g.BackbufferNoClear` | Set the backbuffer's first-write clear colour / skip the clear — before the first `g.Backbuffer` access. |
 
@@ -91,7 +94,8 @@ var graph = RenderGraph.Define(g =>
             {
                 var call = DrawCall.Create(obj.Mesh, "lit");
                 call.Material = obj.Material;
-                call.SetUniforms(obj.ModelMatrix);     // a per-draw block, matching the shader's cbuffer
+                var model = obj.ModelMatrix;
+                call.SetUniforms(ref model);           // a per-draw block, matching the shader's cbuffer
                 ctx.Draw(call);
             }
         });
@@ -107,7 +111,7 @@ Ping-pong (bloom, JFA) is just two handles and a `(read, write)` tuple swapped i
 
 | Type | Role |
 |---|---|
-| `Engine` | Static backend registry. `Engine.AvailableEngines` is an `IReadOnlyList<IRenderBackend>` (registration order); each referenced backend assembly self-registers as it loads. |
+| `Backends` | Static backend registry. `Backends.Available` is an `IReadOnlyList<IRenderBackend>` (registration order); each referenced backend assembly self-registers as it loads. |
 | `IRenderBackend` | A discoverable backend: `string Name` and `IEngine Create(object surface, int width, int height, EngineSettings settings)`. The surface is opaque (Vulkan `IVkSurface` / DX12 `HWND`). |
 | `IEngine` | The live engine — owns the device and pipeline cache, survives graph swaps. See its members below. |
 | `IRenderContext` | The per-frame execution context passed to `.Draw` / `.Dispatch`. Closures *pull* from it rather than capturing. |
@@ -118,12 +122,12 @@ Ping-pong (bloom, JFA) is just two handles and a `(read, write)` tuple swapped i
 ### Selecting a backend and creating the engine
 
 ```csharp
-var backend = Engine.AvailableEngines.FirstOrDefault(e => e.Name == settings.PreferredBackend)
-              ?? Engine.AvailableEngines.First();
+var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)
+              ?? Backends.Available.First();
 using var engine = backend.Create(window.Surface, width, height, settings);
 ```
 
-`Engine.AvailableEngines` is a list, not a dictionary — select by `Name`, never an indexer. Constructing a backend's `EngineSettings` subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads and registers that backend.
+`Backends.Available` is a list, not a dictionary — select by `Name`, never an indexer. Constructing a backend's `EngineSettings` subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads and registers that backend.
 
 ### `EngineSettings`
 
@@ -214,8 +218,10 @@ engine.DefineTechnique("foliage", new TechniqueDescriptor("foliage",
 | `Instance` (`null`) | The per-instance `VertexLayout` (e.g. `Transform`) for instanced draws. |
 | `HasListPush` (`false`) | A draw-list technique's all-stage push block (whose last slot each command's `Tag` rewrites). |
 | `Cull` (`CullMode.None`) | Which faces the rasterizer discards — front faces are counter-clockwise. |
+| `DepthTest` (`DepthCompare.LessOrEqual`) | The depth comparison a fragment must pass, when the pass has a depth target. |
+| `Bias` (`null`) | A constant + slope-scaled depth offset (`DepthBias`) — the shadow-acne knob. |
 
-Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan) + signed DXIL (DirectX 12) with reflection JSON.
+Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) with reflection JSON. The Slang-side half of the contract — the platform macros, the two independent numbering schemes, and where a push block actually lands — is [`shader-authoring.md`](shader-authoring.md).
 
 ### Pipeline-intent enums
 
@@ -223,7 +229,23 @@ Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan) + sign
 |---|---|
 | `BlendMode` (`Loom.Core.Graph`) | `None`, `AlphaOver`, `Additive`, `PremultipliedAlpha`, `Multiply`. |
 | `CullMode` (`Loom.Core.Graph`) | `None`, `Back`, `Front` (front faces are counter-clockwise). |
+| `DepthCompare` (`Loom.Core.Graph`) | `Never`, `Less`, `Equal`, `LessOrEqual`, `Greater`, `NotEqual`, `GreaterOrEqual`, `Always`. |
 | `SamplerAddress` (`Loom.Core.Materials`) | `Clamp`, `Repeat`, `MirrorRepeat`, `ClampToBorder`, `MirrorClampToEdge`. |
+
+### Reversed-Z
+
+Reversed-Z puts the far plane at depth 0, which cancels the perspective divide's precision loss at distance against a float depth buffer's density near zero — the standard fix for depth fighting in a large world. It is **three declarations that must agree**; getting one wrong doesn't fail, it inverts or erases occlusion:
+
+```csharp
+var depth = g.Screen.Depth("depth", Format.Depth32F, clearDepth: 0f);          // 1. far plane at 0
+camera.Perspective(fovY, aspect, 0.1f, 5000f, reversed: true);                 // 2. reversed projection
+engine.DefineTechnique("mesh", new TechniqueDescriptor("mesh",
+    HasVertexInput: true, DepthTest: DepthCompare.GreaterOrEqual));            // 3. reversed test
+```
+
+Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projection, not the viewport.
+
+**Depth bias is only partly portable.** `DepthBias.SlopeScale` means the same thing on every backend. `DepthBias.Constant` does not: Vulkan multiplies it by an implementation-defined `r`, D3D12 applies `Constant × 2^(exponent−23)` for a float depth buffer. Prefer the slope-scaled term, or tune the constant per backend.
 
 ## Drawing, instancing, skinning (`Loom.Core.Hosting`)
 
@@ -238,7 +260,7 @@ Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan) + sign
 | `VertexCount` (`int`) | Vertices per instance for procedural draws (when `Mesh` is null). |
 | `Instances` (`InstanceSource`) | Per-instance data — empty (default) = single draw. |
 | `Material` (`Material?`) | Material whose textures fill the technique's sampler slots; `null` for untextured techniques. |
-| `Uniforms` / `.SetUniforms<T>(in T)` / `.SetUniforms<T>(ReadOnlySpan<T>)` | The per-draw uniform block (raw bytes matching the shader's cbuffer); set it from a typed value or span. |
+| `Uniforms` / `.SetUniforms<T>(ref T)` / `.SetUniforms<T>(ReadOnlySpan<T>)` | The per-draw uniform block (raw bytes matching the shader's cbuffer); set it from a typed value or span. |
 | `Sampled` (`ReadOnlySpan<ResourceHandle>`) | Graph resources bound as sampled inputs (each declared via `.Samples`). |
 | `DrawCall.From<T>(ReadOnlySpan<T>)` | Build an `InstanceSource` from a CPU instance span (uploaded per frame). |
 | `DrawCall.Gpu(BufferHandle, count)` | Build an `InstanceSource` from a GPU-resident buffer a compute pass filled. |

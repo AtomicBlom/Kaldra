@@ -185,7 +185,7 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 				// A depth target is created TYPELESS (so it can also be sampled); its DSV/clear use the typed depth
 				// format (D32_FLOAT) and its SRV the typed colour-compatible format (R32_FLOAT). Colour: all the same.
 				var (_, viewFormat, srvFormat) = DirectX12FormatMapping.ToDxgiViews(resource.Format);
-				var clear = BuildClear(viewFormat, isDepth, (resource as ColorHandle)?.ClearValue);
+				var clear = BuildClear(viewFormat, (resource as ColorHandle)?.ClearValue, (resource as DepthHandle)?.ClearDepth);
 				ComPtr<ID3D12Resource> texture = default;
 				SilkMarshal.ThrowHResult(ctx.Device.CreatePlacedResource(heap, 0, &desc, ResourceStates.Common, &clear, out texture));
 				ctx.SetObjectName((ID3D12Object*)texture.Handle, $"{resource.Name}#{slot}");
@@ -365,14 +365,15 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		};
 	}
 
-	// Optimized clear value hint for the D3D12 resource, matched to the executor's ClearRenderTargetView call
-	// so the debug layer doesn't warn. For colour targets without a declared clear value, the runtime never
-	// clears, so any hint value is fine (we use all-zero).
-	private static ClearValue BuildClear(DxgiFormat format, bool isDepth, Vector4? colorClear = null)
+	// Optimized clear value hint for the D3D12 resource, matched to the executor's ClearRenderTargetView /
+	// ClearDepthStencilView call so the debug layer doesn't warn. Both the hint and the clear read the declared value
+	// off the handle, so a reversed-Z target (clearDepth: 0) stays consistent. For colour targets without a declared
+	// clear value, the runtime never clears, so any hint value is fine (we use all-zero).
+	private static ClearValue BuildClear(DxgiFormat format, Vector4? colorClear, float? depthClear)
 	{
 		var clear = new ClearValue { Format = format };
-		if (isDepth)
-			clear.Anonymous.DepthStencil = new DepthStencilValue { Depth = 1f, Stencil = 0 };
+		if (depthClear is { } depth)
+			clear.Anonymous.DepthStencil = new DepthStencilValue { Depth = depth, Stencil = 0 };
 		else if (colorClear is { } cv)
 		{
 			clear.Anonymous.Color[0] = cv.X;

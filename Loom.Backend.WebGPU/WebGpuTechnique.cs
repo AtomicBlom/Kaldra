@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.Versioning;
 using System.Text;
 
@@ -73,11 +74,20 @@ internal sealed class WebGpuTechnique : IDisposable
 
 		sb.Append("\"depth\":");
 		if (depthFormatId >= 0)
+		{
+			var bias = template.Bias ?? default;
 			sb.Append("{\"format\":").Append(depthFormatId)
 				.Append(",\"write\":").Append(depthWrite ? "true" : "false")
-				.Append(",\"compare\":\"less-equal\"}");
+				.Append(",\"compare\":\"").Append(CompareString(template.DepthTest))
+				.Append("\",\"bias\":").Append(bias.Constant)
+				.Append(",\"biasSlopeScale\":").Append(bias.SlopeScale.ToString(CultureInfo.InvariantCulture))
+				.Append(",\"biasClamp\":").Append(bias.Clamp.ToString(CultureInfo.InvariantCulture))
+				.Append('}');
+		}
 		else
+		{
 			sb.Append("null");
+		}
 
 		sb.Append('}');
 		return sb.ToString();
@@ -144,6 +154,21 @@ internal sealed class WebGpuTechnique : IDisposable
 		sb.Append("{\"color\":{\"srcFactor\":\"").Append(src).Append("\",\"dstFactor\":\"").Append(dst).Append("\",\"operation\":\"add\"},")
 			.Append("\"alpha\":{\"srcFactor\":\"").Append(src).Append("\",\"dstFactor\":\"").Append(dst).Append("\",\"operation\":\"add\"}}");
 	}
+
+	// Exhaustive so a new DepthCompare member fails loud here instead of emitting a string WebGPU rejects at
+	// pipeline creation, far from the technique that caused it.
+	private static string CompareString(DepthCompare compare) => compare switch
+	{
+		DepthCompare.Never => "never",
+		DepthCompare.Less => "less",
+		DepthCompare.Equal => "equal",
+		DepthCompare.LessOrEqual => "less-equal",
+		DepthCompare.Greater => "greater",
+		DepthCompare.NotEqual => "not-equal",
+		DepthCompare.GreaterOrEqual => "greater-equal",
+		DepthCompare.Always => "always",
+		_ => throw new NotSupportedException($"WebGPU: DepthCompare '{compare}' is not mapped to a compare string."),
+	};
 
 	private static string CullString(CullMode cull) => cull switch
 	{

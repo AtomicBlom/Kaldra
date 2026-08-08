@@ -75,6 +75,9 @@
     <UseVulkan     Condition="'$(UseVulkan)'     == ''">false</UseVulkan>
     <UseDirectX12  Condition="'$(UseDirectX12)'  == ''">false</UseDirectX12>
     <UseWebGPU     Condition="'$(UseWebGPU)'     == ''">false</UseWebGPU>
+    <!-- UI bridges are opt-in: a game that draws no UI pays for neither. -->
+    <UseSUIsei     Condition="'$(UseSUIsei)'     == ''">false</UseSUIsei>
+    <UseImGui      Condition="'$(UseImGui)'      == ''">false</UseImGui>
     <LoomShaderOutputMode Condition="'$(LoomShaderOutputMode)' == '' and '$(_LoomTargetsBrowser)' == 'true'">Embed</LoomShaderOutputMode>
     <LoomShaderOutputMode Condition="'$(LoomShaderOutputMode)' == ''">Content</LoomShaderOutputMode>
   </PropertyGroup>

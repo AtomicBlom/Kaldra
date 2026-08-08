@@ -4,7 +4,7 @@ namespace Loom.Core.Hosting;
 /// A platform host that runs a <see cref="LoomApplication"/> — the desktop host owns a window + a blocking
 /// frame loop; the browser host owns a canvas + a requestAnimationFrame loop. Each host assembly self-registers
 /// an instance into <see cref="AppHost"/> via a module initializer as it loads, exactly as an
-/// <see cref="IRenderBackend"/> registers into <see cref="Engine"/>. Which host is <em>present</em> is decided
+/// <see cref="IRenderBackend"/> registers into <see cref="Backends"/>. Which host is <em>present</em> is decided
 /// by the build (the RID pulls in <c>Loom.Hosting.Desktop</c> or <c>Loom.Hosting.Web</c>); <see cref="LoomApplication.Run"/>
 /// dispatches to it.
 /// </summary>

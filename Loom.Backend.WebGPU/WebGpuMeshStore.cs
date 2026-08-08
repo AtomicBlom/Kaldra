@@ -25,6 +25,18 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 
 	private readonly List<StoredMesh> _meshes = [];
 
+	/// <summary>
+	/// Resolve a <see cref="Mesh.Id"/> to its slot in the store. Ids are 1-based so <c>default(Mesh)</c> (id 0) is
+	/// never a live handle: drawing an unassigned <see cref="Mesh"/> field fails here instead of silently rendering
+	/// whichever mesh was uploaded first.
+	/// </summary>
+	private int Slot(int meshId) =>
+		meshId >= 1 && meshId <= _meshes.Count
+			? meshId - 1
+			: throw new WebGpuException(
+				$"Mesh id {meshId} was not created by this engine ({(meshId == 0 ? "0 is default(Mesh), an unassigned handle" : $"only ids 1..{_meshes.Count} exist")}). " +
+				"Meshes come from IEngine.CreateMesh / CreateMesh<T> / CreateSkinnedMesh.");
+
 	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
 		Create(MemoryMarshal.AsBytes(vertices), Marshal.SizeOf<Vertex>(), indices);
 
@@ -33,25 +45,25 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 		var vertexCount = vertexStride > 0 ? vertexData.Length / vertexStride : 0;
 		var (vertexBuffer, indexBuffer) = Upload(vertexData, indices);
 		_meshes.Add(new StoredMesh { VertexBuffer = vertexBuffer, IndexBuffer = indexBuffer, IndexCount = indices.Length, VertexCount = vertexCount });
-		return new Mesh(_meshes.Count - 1, indices.Length);
+		return new Mesh(_meshes.Count);
 	}
 
 	public Mesh CreateSkinned(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices)
 	{
 		var (vertexBuffer, indexBuffer) = Upload(MemoryMarshal.AsBytes(vertices), indices);
 		_meshes.Add(new StoredMesh { VertexBuffer = vertexBuffer, IndexBuffer = indexBuffer, IndexCount = indices.Length, VertexCount = vertices.Length });
-		return new Mesh(_meshes.Count - 1, indices.Length);
+		return new Mesh(_meshes.Count);
 	}
 
 	/// <summary>The bind-pose vertex buffer (a skinned mesh's pre-skin input storage buffer).</summary>
-	public int BindPoseBuffer(int meshId) => _meshes[meshId].VertexBuffer;
+	public int BindPoseBuffer(int meshId) => _meshes[Slot(meshId)].VertexBuffer;
 
-	public int VertexCount(int meshId) => _meshes[meshId].VertexCount;
+	public int VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;
 
 	/// <summary>Record a plain indexed draw of a mesh into the frame's command stream.</summary>
 	public void Draw(WebGpuCommandWriter writer, int meshId)
 	{
-		var mesh = _meshes[meshId];
+		var mesh = _meshes[Slot(meshId)];
 		writer.SetVertexBuffer(0, mesh.VertexBuffer, 0);
 		writer.SetIndexBuffer(mesh.IndexBuffer, indexFormat: 1, 0); // uint32
 		writer.DrawIndexed(mesh.IndexCount, 1, 0, 0, 0);
@@ -60,7 +72,7 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 	/// <summary>Record an indexed draw whose per-vertex stream is <paramref name="vertexBuffer"/> (the pre-skinned buffer).</summary>
 	public void DrawSkinned(WebGpuCommandWriter writer, int meshId, int vertexBuffer)
 	{
-		var mesh = _meshes[meshId];
+		var mesh = _meshes[Slot(meshId)];
 		writer.SetVertexBuffer(0, vertexBuffer, 0);
 		writer.SetIndexBuffer(mesh.IndexBuffer, indexFormat: 1, 0);
 		writer.DrawIndexed(mesh.IndexCount, 1, 0, 0, 0);
@@ -69,7 +81,7 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 	/// <summary>Record an instanced indexed draw: the mesh at binding 0, the per-instance stream at binding 1.</summary>
 	public void DrawInstanced(WebGpuCommandWriter writer, int meshId, int instanceBuffer, int instanceOffset, int instanceCount)
 	{
-		var mesh = _meshes[meshId];
+		var mesh = _meshes[Slot(meshId)];
 		writer.SetVertexBuffer(0, mesh.VertexBuffer, 0);
 		writer.SetVertexBuffer(1, instanceBuffer, instanceOffset);
 		writer.SetIndexBuffer(mesh.IndexBuffer, indexFormat: 1, 0);

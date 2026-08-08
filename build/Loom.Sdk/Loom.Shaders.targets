@@ -23,6 +23,24 @@
   <!-- Top-level (evaluated when LoomShaderSourceDir is known). Entry shaders compile standalone;
        *.module.slang are shared imports (tracked for incremental, never compiled on their own). The glob is
        over SOURCE .slang (which exist at evaluation); the .spv/.json are referenced only as transforms. -->
+  <!-- Per-shader entry-point names, defaulting to the conventional ones every shader in this repo uses. A project
+       overrides one per shader with item metadata:
+
+         <ItemGroup>
+           <LoomSlangEntry Update="Shaders\reduce.slang" ComputeEntry="reduceMain" />
+         </ItemGroup>
+
+       That ItemGroup MUST come AFTER this file is imported — the glob below is what creates the items an Update
+       attaches to, and an Update naming an item that does not exist yet is silently ignored. These defaults are an
+       ItemDefinitionGroup rather than conditional metadata so an explicit value on the item always wins. -->
+  <ItemDefinitionGroup Condition="'$(LoomShaderOutputMode)' != 'None'">
+    <LoomSlangEntry>
+      <VertexEntry>vertexMain</VertexEntry>
+      <FragmentEntry>fragmentMain</FragmentEntry>
+      <ComputeEntry>computeMain</ComputeEntry>
+    </LoomSlangEntry>
+  </ItemDefinitionGroup>
+
   <ItemGroup Condition="'$(LoomShaderOutputMode)' != 'None'">
     <LoomSlangEntry  Include="$(LoomShaderSourceDir)\**\*.slang" Exclude="$(LoomShaderSourceDir)\**\*.module.slang;$(LoomShaderExclude)" />
     <LoomSlangModule Include="$(LoomShaderSourceDir)\**\*.module.slang" />
@@ -82,16 +100,36 @@
     <Warning Condition="'$(LoomEmitDxil)' == 'true' And '$(LoomDxcPath)' == ''"
              Text="LoomEmitDxil is on but no DXC found (neither Microsoft.Direct3D.DXC NuGet package nor Windows SDK '$(LoomDxcArch)' bin). Add a Microsoft.Direct3D.DXC PackageReference with GeneratePathProperty=true to this project, or set $(LoomDxcPath)." />
     <Message Condition="'$(LoomEmitDxil)' == 'true'" Importance="high" Text="Slang -&gt; signed DXIL (per stage): %(LoomSlangEntry.Filename).slang" />
+    <!-- Which stages to emit comes from the [shader("...")] attributes the source declares, and the entry-point name
+         for each comes from item metadata defaulting to the conventional name. Matching the attribute rather than
+         searching for the entry name keeps a mention in a comment (or a substring of another identifier) from
+         requesting a stage the module has no entry for. The file text is passed as a nested property-function result,
+         never embedded in the expression, so quotes/parens/semicolons in the shader cannot break argument parsing.
+
+         The scan is per-file and does not follow #include, so a stage declared in an imported module is invisible
+         here. That is caught by the entry-presence check below rather than silently dropping the stage. -->
     <ItemGroup Condition="'$(LoomEmitDxil)' == 'true'">
+      <!-- VertexEntry/FragmentEntry/ComputeEntry ride along from LoomSlangEntry (the ItemDefinitionGroup default,
+           or a per-shader override) — a transform copies the source item's metadata. -->
       <_LoomDxilEntry Include="@(LoomSlangEntry)">
-        <HasVertex>$([System.IO.File]::ReadAllText('%(FullPath)').Contains('vertexMain'))</HasVertex>
-        <HasFragment>$([System.IO.File]::ReadAllText('%(FullPath)').Contains('fragmentMain'))</HasFragment>
-        <HasCompute>$([System.IO.File]::ReadAllText('%(FullPath)').Contains('computeMain'))</HasCompute>
+        <HasVertex>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\[\s*shader\s*\(\s*"vertex"\s*\)\s*\]'))</HasVertex>
+        <HasFragment>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\[\s*shader\s*\(\s*"fragment"\s*\)\s*\]'))</HasFragment>
+        <HasCompute>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\[\s*shader\s*\(\s*"compute"\s*\)\s*\]'))</HasCompute>
+      </_LoomDxilEntry>
+      <!-- A declared stage whose named entry function is absent would compile to nothing, leaving DirectX 12 to fail
+           at technique registration with a missing-artifact error far from the cause. Detect it here instead. -->
+      <_LoomDxilEntry>
+        <VertexOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(VertexEntry)\s*\('))</VertexOk>
+        <FragmentOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(FragmentEntry)\s*\('))</FragmentOk>
+        <ComputeOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(ComputeEntry)\s*\('))</ComputeOk>
       </_LoomDxilEntry>
     </ItemGroup>
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry vertexMain -stage vertex -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).vs.dxil&quot;" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry fragmentMain -stage fragment -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).ps.dxil&quot;" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry computeMain -stage compute -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).cs.dxil&quot;" />
+    <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True' And '%(_LoomDxilEntry.VertexOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;vertex&quot;)] entry point, but no function named '%(_LoomDxilEntry.VertexEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; VertexEntry=&quot;yourEntry&quot; /&gt;." />
+    <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True' And '%(_LoomDxilEntry.FragmentOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;fragment&quot;)] entry point, but no function named '%(_LoomDxilEntry.FragmentEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; FragmentEntry=&quot;yourEntry&quot; /&gt;." />
+    <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True' And '%(_LoomDxilEntry.ComputeOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;compute&quot;)] entry point, but no function named '%(_LoomDxilEntry.ComputeEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; ComputeEntry=&quot;yourEntry&quot; /&gt;." />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.VertexEntry) -stage vertex -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).vs.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.FragmentEntry) -stage fragment -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).ps.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.ComputeEntry) -stage compute -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).cs.dxil&quot;" />
 
     <!-- WebGPU: also emit WGSL (whole module — Slang's WGSL target handles multi-entry) plus the
          WGSL-target reflection sidecar. -DLOOM_WGSL flips the loom_platform.module.slang macros: explicit

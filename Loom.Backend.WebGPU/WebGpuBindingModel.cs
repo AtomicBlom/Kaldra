@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+using Loom.Graph;
+
 namespace Loom.Backend.WebGPU;
 
 /// <summary>The category of a single WGSL resource binding, deciding the bind-group-layout entry it produces.</summary>
@@ -60,6 +62,16 @@ internal sealed partial class WebGpuBindingModel
 
 	/// <summary>Byte size of the push block (0 when there is none).</summary>
 	public required int PushByteSize { get; init; }
+
+	/// <summary>
+	/// Which entry of <see cref="UniformBufferBindings"/> is the reserved per-material parameter block, or null when
+	/// the shader declares none. An index into that array rather than a WGSL binding index, so it means the same thing
+	/// as the desktop backends' uniform slot.
+	/// </summary>
+	public required int? MaterialUniformSlot { get; init; }
+
+	/// <summary>The size of that block as WGSL lays it out; 0 when the shader declares none.</summary>
+	public required int MaterialParameterBytes { get; init; }
 
 	public bool HasBindings => Entries.Count > 0;
 
@@ -157,8 +169,9 @@ internal sealed partial class WebGpuBindingModel
 
 		// 2. The reflection sidecar: Loom slot order (source order) plus each slot's WGSL binding index.
 		List<int> sampledTex = [], sampledSamp = [], storageImages = [], storageBuffers = [], uniforms = [];
+		var material = (Slot: (int?)null, Bytes: 0);
 		if (reflectionJson is not null)
-			ReadReflection(reflectionJson, sampledTex, sampledSamp, storageImages, storageBuffers, uniforms);
+			material = ReadReflection(reflectionJson, sampledTex, sampledSamp, storageImages, storageBuffers, uniforms);
 
 		// 3. The push block: a WGSL uniform binding that reflection did not attribute to a descriptor-bound uniform.
 		var pushBinding = -1;
@@ -184,14 +197,20 @@ internal sealed partial class WebGpuBindingModel
 			UniformBufferBindings = [.. uniforms],
 			PushBinding = pushBinding,
 			PushByteSize = pushBinding >= 0 ? PushBlockSize : 0,
+			MaterialUniformSlot = material.Slot,
+			MaterialParameterBytes = material.Bytes,
 		};
 	}
 
-	private static void ReadReflection(byte[] json, List<int> sampledTex, List<int> sampledSamp, List<int> storageImages, List<int> storageBuffers, List<int> uniforms)
+	// Fills the per-category binding lists and returns which uniform slot (if any) is the reserved per-material
+	// parameter block, plus its laid-out size.
+	private static (int? Slot, int Bytes) ReadReflection(byte[] json, List<int> sampledTex, List<int> sampledSamp, List<int> storageImages, List<int> storageBuffers, List<int> uniforms)
 	{
+		int? materialSlot = null;
+		var materialBytes = 0;
 		using var doc = JsonDocument.Parse(json);
 		if (!doc.RootElement.TryGetProperty("parameters", out var parameters) || parameters.ValueKind != JsonValueKind.Array)
-			return;
+			return (null, 0);
 
 		foreach (var p in parameters.EnumerateArray())
 		{
@@ -208,6 +227,15 @@ internal sealed partial class WebGpuBindingModel
 
 			if (kind == "constantBuffer")
 			{
+				if (p.TryGetProperty("name", out var cbName) && cbName.GetString() == ShaderReflection.MaterialParameterName)
+				{
+					materialSlot = uniforms.Count; // the slot is this block's ordinal among the uniform buffers
+					materialBytes = type.TryGetProperty("elementVarLayout", out var evl)
+						&& evl.TryGetProperty("binding", out var evlBinding)
+						&& evlBinding.TryGetProperty("size", out var evlSize)
+						? evlSize.GetInt32()
+						: 0;
+				}
 				uniforms.Add(index);
 				continue;
 			}
@@ -232,6 +260,8 @@ internal sealed partial class WebGpuBindingModel
 				sampledSamp.Add(index + 1);
 			}
 		}
+
+		return (materialSlot, materialBytes);
 	}
 
 	private readonly record struct WgslDecl(string Class, string Type)

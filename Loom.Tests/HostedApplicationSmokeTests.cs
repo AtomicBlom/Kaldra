@@ -24,16 +24,16 @@ public class HostedApplicationSmokeTests
 	public void Hosted_application_launches_and_renders_offscreen_through_its_lifecycle()
 	{
 		// Touch each backend's EngineSettings subclass so its assembly loads and its module initializer registers
-		// into Engine.AvailableEngines (guarded by its own IsSupported() probe).
+		// into Backends.Available (guarded by its own IsSupported() probe).
 		_ = new VulkanEngineSettings();
 		_ = new DirectX12EngineSettings();
 
-		if (Engine.AvailableEngines.Count == 0)
-			throw new TUnit.Core.Exceptions.SkipTestException("No GPU backend is available on this box (Engine.AvailableEngines is empty).");
+		if (Backends.Available.Count == 0)
+			throw new TUnit.Core.Exceptions.SkipTestException("No GPU backend is available on this box (Backends.Available is empty).");
 
 		var failures = new List<string>();
 
-		foreach (var backend in Engine.AvailableEngines)
+		foreach (var backend in Backends.Available)
 		{
 			var capturePath = Path.Combine(Path.GetTempPath(), $"loom-hosted-{backend.Name}-{Guid.NewGuid():N}.png");
 			try

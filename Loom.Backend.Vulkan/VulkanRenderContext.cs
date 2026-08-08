@@ -280,7 +280,8 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
 			StorageBufferCount: template.StorageBufferCount,
 			Layout: template.Layout, Instance: template.Instance, UniformBufferCount: template.UniformBufferCount,
-			HasListPush: template.HasListPush, Cull: template.Cull), technique);
+			HasListPush: template.HasListPush, Cull: template.Cull,
+			DepthTest: template.DepthTest, Bias: template.Bias), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
 		// HasFragmentPush are folded into the VulkanTechniqueDescription hash, and LinearFilter only affects the
 		// descriptor's sampler, not the pipeline.

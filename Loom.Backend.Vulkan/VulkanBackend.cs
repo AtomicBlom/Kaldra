@@ -8,23 +8,23 @@ namespace Loom.Backend.Vulkan;
 /// <summary>
 /// The Vulkan <see cref="IRenderBackend"/> — the factory that stands up a Vulkan device and returns a
 /// <see cref="VulkanEngine"/> as a neutral <see cref="IEngine"/>. It self-registers into
-/// <see cref="Engine.AvailableEngines"/> from a module initializer, so simply referencing (loading) this
+/// <see cref="Backends.Available"/> from a module initializer, so simply referencing (loading) this
 /// assembly makes "Vulkan" a selectable backend — no explicit wiring in app code.
 /// </summary>
 public sealed class VulkanBackend : IRenderBackend
 {
 #pragma warning disable CA2255
 	/// <summary>
-	/// Register the Vulkan backend as the Loom.Vulkan assembly loads — but only
+	/// Register the Vulkan backend as the Loom.Backend.Vulkan assembly loads — but only
 	/// if <see cref="IsSupported"/> confirms a Vulkan 1.3 device is actually present. An unusable backend then never
-	/// appears in <see cref="Engine.AvailableEngines"/>, so the host's selection falls through to a working one
+	/// appears in <see cref="Backends.Available"/>, so the host's selection falls through to a working one
 	/// instead of crashing later in <see cref="Create"/>.
 	/// </summary>
 	[ModuleInitializer]
 	internal static void Register()
 	{
 		if (IsSupported())
-			Engine.Register(new VulkanBackend());
+			Backends.Register(new VulkanBackend());
 	}
 #pragma warning restore CA2255
 

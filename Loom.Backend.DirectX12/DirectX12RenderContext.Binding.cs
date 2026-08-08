@@ -11,9 +11,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 	// Draw(mesh, material), textured instancing, and textured particles. The caller checks TableParam/InputCount.
 	private void BindMaterialTable(DirectX12Technique baked, Material material, string technique)
 	{
+		_materials.ValidateAgainst(material, technique);
 		var textures = _materials.TexturesOf(material.Id);
-		if (textures.Length < baked.InputCount)
-			throw new InvalidOperationException($"DirectX12: material supplies {textures.Length} textures but technique '{technique}' samples {baked.InputCount}.");
 		var (cpu, gpu) = _ring.Allocate((uint)baked.InputCount);
 		for (var i = 0; i < baked.InputCount; i++)
 			WriteTextureSrv(textures[i], _ring.Offset(cpu, (uint)i));
@@ -122,5 +121,43 @@ internal sealed unsafe partial class DirectX12RenderContext
 			}
 		};
 		_ctx.Device.CreateShaderResourceView(_transients.Resource(_slot, id), &srv, dest);
+	}
+
+	/// <summary>
+	/// Bind a draw's root CBVs (b1..) in the shader's slot order: the slot reflection identified as the per-material
+	/// block takes the material's parameter bytes, and the remaining slots take the pass's <c>.Reads</c> constants in
+	/// order, then the per-draw block.
+	/// <para>
+	/// The material block is staged into the same per-frame upload ring as the per-draw block, so a material needs no
+	/// GPU buffer of its own and carries no frames-in-flight hazard — which is also why
+	/// <c>IEngine.Write(material, …)</c> takes effect on the next draw with no graph rebuild.
+	/// </para>
+	/// </summary>
+	private void BindUniformSlots(DirectX12Technique baked, in DrawCall call)
+	{
+		var materialSlot = call.Material is not null ? baked.MaterialUniformSlot : null;
+		var drawBlock = call.Uniforms.Length > 0;
+		// Counting the slots up front (rather than appending) is what guarantees the material's slot is reached even
+		// when it sits past the constants — appending would stop short and leave that CBV unbound.
+		var total = Math.Min(_activeConstantsCount + (drawBlock ? 1 : 0) + (materialSlot.HasValue ? 1 : 0), baked.UniformBufferCount);
+
+		var constant = 0;
+		for (var slot = 0; slot < total; slot++)
+		{
+			var param = (uint)(baked.CbvRootParam + slot);
+			if (slot == materialSlot)
+			{
+				_cmd.SetGraphicsRootConstantBufferView(param, _uniformUpload.Upload(_slot, _materials.ParametersOf(call.Material!.Value.Id)));
+			}
+			else if (constant < _activeConstantsCount)
+			{
+				_cmd.SetGraphicsRootConstantBufferView(param, _transients!.Resource(_slot, _activeConstantsIds[constant++]).GetGPUVirtualAddress());
+			}
+			else if (drawBlock)
+			{
+				_cmd.SetGraphicsRootConstantBufferView(param, _uniformUpload.Upload(_slot, call.Uniforms));
+				drawBlock = false;
+			}
+		}
 	}
 }

@@ -5,10 +5,10 @@ namespace Loom.Backend.DirectX12;
 /// <summary>
 /// DirectX 12-specific engine configuration — the <see cref="EngineSettings"/> subclass a host populates when
 /// it wants DirectX12-only knobs (the counterpart to <c>VulkanEngineSettings</c>). It is the one sanctioned place
-/// the DirectX12 backend type appears in app code; constructing it also loads the Loom.DirectX12 assembly, which
-/// self-registers the DirectX12 backend into <see cref="Engine.AvailableEngines"/> (see
+/// the DirectX12 backend type appears in app code; constructing it also loads the Loom.Backend.DirectX12 assembly, which
+/// self-registers the DirectX12 backend into <see cref="Backends.Available"/> (see
 /// <see cref="DirectX12Backend"/>). A host that needs no DirectX12-only knob can use the base <see cref="EngineSettings"/>
-/// instead, provided it touches some Loom.DirectX12 type first.
+/// instead, provided it touches some Loom.Backend.DirectX12 type first.
 /// </summary>
 public sealed class DirectX12EngineSettings : EngineSettings
 {

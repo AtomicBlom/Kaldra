@@ -5,8 +5,8 @@ name: CI
 # offscreen render tests) auto-skip when no device is available, and the rest are backend-neutral (describe/execute
 # layers, graph export, frustum math, asset source).
 #
-# The golden-image regression (GoldenImageTests) is deliberately NOT run here: it needs a GPU to produce the
-# captures, and GitHub-hosted runners have none. It is opt-in (skipped unless LOOM_GOLDEN_DIR is set) and is run
+# The golden-image regression (GalleryGoldenTests) is deliberately NOT run here: it needs a GPU to produce the
+# captures, and GitHub-hosted runners have none. It is opt-in (skipped without a GPU) and is run
 # locally via tools/golden.ps1 — wire a self-hosted GPU runner to add it to CI later.
 
 on:

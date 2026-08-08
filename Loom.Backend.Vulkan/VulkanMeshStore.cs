@@ -40,6 +40,18 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		_commandPool = commandPool;
 	}
 
+	/// <summary>
+	/// Resolve a <see cref="Mesh.Id"/> to its slot in the store. Ids are 1-based so <c>default(Mesh)</c> (id 0) is
+	/// never a live handle: drawing an unassigned <see cref="Mesh"/> field fails here instead of silently rendering
+	/// whichever mesh was uploaded first.
+	/// </summary>
+	private int Slot(int meshId) =>
+		meshId >= 1 && meshId <= _meshes.Count
+			? meshId - 1
+			: throw new VulkanException(
+				$"Mesh id {meshId} was not created by this engine ({(meshId == 0 ? "0 is default(Mesh), an unassigned handle" : $"only ids 1..{_meshes.Count} exist")}). " +
+				"Meshes come from IEngine.CreateMesh / CreateMesh<T> / CreateSkinnedMesh.");
+
 	/// <summary>Upload canonical <see cref="Vertex"/> geometry (the <see cref="VertexLayout.MeshStandard"/> layout) and return a handle.</summary>
 	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
 		Create(MemoryMarshal.AsBytes(vertices), sizeof(Vertex), indices);
@@ -55,7 +67,6 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		var vertexBuffer = Upload(vertexData, BufferUsageFlags.VertexBufferBit, out var vertexAllocation);
 		var indexBuffer = Upload(MemoryMarshal.AsBytes(indices), BufferUsageFlags.IndexBufferBit, out var indexAllocation);
 
-		var id = _meshes.Count;
 		_meshes.Add(new StoredMesh
 		{
 			VertexBuffer = vertexBuffer,
@@ -64,7 +75,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 			IndexAllocation = indexAllocation,
 			IndexCount = (uint)indices.Length,
 		});
-		return new Mesh(id, indices.Length);
+		return new Mesh(_meshes.Count);
 	}
 
 	/// <summary>
@@ -79,7 +90,6 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		var vertexBuffer = Upload(vertexData, BufferUsageFlags.VertexBufferBit | BufferUsageFlags.StorageBufferBit, out var vertexAllocation);
 		var indexBuffer = Upload(MemoryMarshal.AsBytes(indices), BufferUsageFlags.IndexBufferBit, out var indexAllocation);
 
-		var id = _meshes.Count;
 		_meshes.Add(new StoredMesh
 		{
 			VertexBuffer = vertexBuffer,
@@ -89,14 +99,14 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 			IndexCount = (uint)indices.Length,
 			VertexCount = (uint)vertices.Length,
 		});
-		return new Mesh(id, indices.Length);
+		return new Mesh(_meshes.Count);
 	}
 
 	/// <summary>The skinned mesh's bind-pose vertex buffer, for the compute pre-skin pass to read as a structured buffer.</summary>
-	public Buffer BindPoseBuffer(int meshId) => _meshes[meshId].VertexBuffer;
+	public Buffer BindPoseBuffer(int meshId) => _meshes[Slot(meshId)].VertexBuffer;
 
 	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count.</summary>
-	public uint VertexCount(int meshId) => _meshes[meshId].VertexCount;
+	public uint VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;
 
 	/// <summary>
 	/// Draw a mesh's index buffer with its per-vertex stream sourced from <paramref name="vertexBuffer"/> instead
@@ -105,7 +115,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// </summary>
 	public void DrawSkinned(CommandBuffer cmd, int meshId, Buffer vertexBuffer)
 	{
-		var mesh = _meshes[meshId];
+		var mesh = _meshes[Slot(meshId)];
 		var offset = 0ul;
 		_vk.CmdBindVertexBuffers(cmd, 0, 1, in vertexBuffer, in offset);
 		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
@@ -115,7 +125,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// <summary>Bind a mesh's buffers and record an indexed draw into the command buffer.</summary>
 	public void Draw(CommandBuffer cmd, int meshId)
 	{
-		var mesh = _meshes[meshId];
+		var mesh = _meshes[Slot(meshId)];
 		var offset = 0ul;
 		_vk.CmdBindVertexBuffers(cmd, 0, 1, in mesh.VertexBuffer, in offset);
 		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
@@ -130,7 +140,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// </summary>
 	public void DrawInstanced(CommandBuffer cmd, int meshId, Buffer instanceBuffer, ulong instanceOffset, uint instanceCount)
 	{
-		var mesh = _meshes[meshId];
+		var mesh = _meshes[Slot(meshId)];
 		var buffers = stackalloc Buffer[2] { mesh.VertexBuffer, instanceBuffer };
 		var offsets = stackalloc ulong[2] { 0ul, instanceOffset };
 		_vk.CmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);

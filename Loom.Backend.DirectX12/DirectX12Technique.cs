@@ -58,6 +58,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// technique has no per-instance stream.</summary>
 	public int InstanceStride { get; }
 
+	/// <summary>Which uniform slot carries the per-material parameter block, or null when the shader declares none.</summary>
+	public int? MaterialUniformSlot { get; }
+
 	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		IsCompute = template.IsCompute;
@@ -66,6 +69,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		InputBufferCount = template.InputBufferCount;
 		UniformBufferCount = template.UniformBufferCount;
 		InstanceStride = template.Instance?.Stride ?? 0;
+		MaterialUniformSlot = template.MaterialUniformSlot;
 
 		if (template.IsCompute)
 		{
@@ -341,12 +345,24 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				// Counter-clockwise winding is the front face (the glTF convention: triangles wound CCW when viewed
 				// from outside face the camera), matching the Vulkan backend, so Cull.Back discards the same
 				// away-facing triangles on either backend. D3D12 defaults to clockwise-front, hence the explicit flag.
-				RasterizerState = new RasterizerDesc { FillMode = FillMode.Solid, CullMode = ToD3DCull(template.Cull), FrontCounterClockwise = true, DepthClipEnable = true },
+				// D3D12 applies the constant term as Constant x 2^(exponent-23) for a float depth buffer, where Vulkan
+				// scales it by an implementation-defined r. The same DepthBias.Constant therefore offsets by different
+				// amounts on the two backends — documented on DepthBias; SlopeScale is the portable term.
+				RasterizerState = new RasterizerDesc
+				{
+					FillMode = FillMode.Solid,
+					CullMode = ToD3DCull(template.Cull),
+					FrontCounterClockwise = true,
+					DepthClipEnable = true,
+					DepthBias = template.Bias?.Constant ?? 0,
+					SlopeScaledDepthBias = template.Bias?.SlopeScale ?? 0f,
+					DepthBiasClamp = template.Bias?.Clamp ?? 0f,
+				},
 				DepthStencilState = new DepthStencilDesc
 				{
 					DepthEnable = hasDepth,
 					DepthWriteMask = depthReadOnly ? DepthWriteMask.Zero : DepthWriteMask.All,
-					DepthFunc = ComparisonFunc.LessEqual,
+					DepthFunc = ToD3DCompare(template.DepthTest),
 					StencilEnable = false,
 				},
 				DSVFormat = hasDepth ? depthFormat : Format.FormatUnknown,
@@ -435,6 +451,20 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		Loom.Core.Graph.CullMode.Back => D3DCullMode.Back,
 		Loom.Core.Graph.CullMode.Front => D3DCullMode.Front,
 		_ => throw new NotSupportedException($"DirectX12: CullMode '{cull}' is not mapped to a D3D12 cull mode."),
+	};
+
+	// Exhaustive so a new DepthCompare member fails loud here instead of silently keeping the previous test.
+	private static ComparisonFunc ToD3DCompare(DepthCompare compare) => compare switch
+	{
+		DepthCompare.Never => ComparisonFunc.Never,
+		DepthCompare.Less => ComparisonFunc.Less,
+		DepthCompare.Equal => ComparisonFunc.Equal,
+		DepthCompare.LessOrEqual => ComparisonFunc.LessEqual,
+		DepthCompare.Greater => ComparisonFunc.Greater,
+		DepthCompare.NotEqual => ComparisonFunc.NotEqual,
+		DepthCompare.GreaterOrEqual => ComparisonFunc.GreaterEqual,
+		DepthCompare.Always => ComparisonFunc.Always,
+		_ => throw new NotSupportedException($"DirectX12: DepthCompare '{compare}' is not mapped to a comparison func."),
 	};
 
 	// Exhaustive so a new SamplerAddress member fails loud here instead of silently mapping to Clamp.

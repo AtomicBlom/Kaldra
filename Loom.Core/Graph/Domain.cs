@@ -1,4 +1,3 @@
-using System.Drawing;
 using System.Numerics;
 
 namespace Loom.Core.Graph;
@@ -9,7 +8,7 @@ namespace Loom.Core.Graph;
 /// domain, then cross to the backbuffer with an explicit nearest-neighbour upscale.
 /// <para>
 /// A <c>Domain</c> is an immutable façade over the owning <see cref="GraphBuilder"/>: its
-/// <see cref="System.Drawing.Color"/>/<see cref="Depth"/> verbs declare targets <em>into that builder</em>. Obtain one
+/// <see cref="Color(string,Format,Vector4?,bool)"/>/<see cref="Depth"/> verbs declare targets <em>into that builder</em>. Obtain one
 /// from <see cref="Domain"/> or <see cref="GraphBuilder.Backbuffer"/>.
 /// </para>
 /// </summary>
@@ -73,9 +72,18 @@ public sealed class Domain
 	public ColorHandle Color(string name, Format format, float scale, Vector4? clearValue = null, bool noClear = false) =>
 		(ColorHandle)_graph.AddResource(name, format, ResourceKind.Color, this, scale, clearValue: clearValue, noClear: noClear);
 
-	/// <summary>Declare a depth target in this domain.</summary>
-	public DepthHandle Depth(string name, Format format) =>
-		(DepthHandle)_graph.AddResource(name, format, ResourceKind.Depth, this, scale: 1f);
+	/// <summary>
+	/// Declare a depth target in this domain. By default the engine clears it to 1 (the far plane) on first write.
+	/// <para>
+	/// Pass <paramref name="clearDepth"/> <c>0f</c> for <b>reversed-Z</b> — the far plane at 0 — which spends a float
+	/// depth buffer's precision where a perspective divide needs it. It only works as a set: the projection must be
+	/// reversed too (<c>Camera.Perspective(…, reversed: true)</c>) and every technique drawing into this target must
+	/// test <see cref="DepthCompare.GreaterOrEqual"/>. Set <paramref name="noClear"/> to skip the clear entirely
+	/// (<c>LoadOp.DontCare</c>), which is only correct when the first pass to write depth covers every pixel.
+	/// </para>
+	/// </summary>
+	public DepthHandle Depth(string name, Format format, float clearDepth = 1f, bool noClear = false) =>
+		(DepthHandle)_graph.AddResource(name, format, ResourceKind.Depth, this, scale: 1f, clearDepth: clearDepth, noClear: noClear);
 
 	/// <summary>
 	/// Declare a <see cref="ResourceKind.Persistent"/> target sized to this domain — contents survive across

@@ -33,6 +33,18 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 	public required VertexLayout? Instance { get; init; }
 	public required CullMode Cull { get; init; }
 
+	/// <summary>The depth comparison baked into the pipeline when the pass has a depth target.</summary>
+	public required DepthCompare DepthTest { get; init; }
+
+	/// <summary>Constant + slope-scaled depth offset baked into the pipeline's depth-stencil state, or null for none.</summary>
+	public required DepthBias? Bias { get; init; }
+
+	/// <summary>Which uniform slot carries the per-material parameter block, or null when the shader declares none.</summary>
+	public required int? MaterialUniformSlot { get; init; }
+
+	/// <summary>Bytes of per-material parameters to stage into the uniform ring per draw; 0 when the shader declares no block.</summary>
+	public required int MaterialParameterBytes { get; init; }
+
 	/// <summary>
 	/// The WGSL <c>@location</c> Slang assigned to each vertex-input attribute, in the shader's field-declaration
 	/// order (which matches the technique's stream attribute order: per-vertex stream then per-instance). Slang's
@@ -104,6 +116,10 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 			Layout = layout,
 			Instance = descriptor.Instance,
 			Cull = descriptor.Cull,
+			DepthTest = descriptor.DepthTest,
+			Bias = descriptor.Bias,
+			MaterialUniformSlot = bindings.MaterialUniformSlot,
+			MaterialParameterBytes = bindings.MaterialParameterBytes,
 			ShaderModule = module,
 			BindGroupLayout = bindGroupLayout,
 			PipelineLayout = pipelineLayout,

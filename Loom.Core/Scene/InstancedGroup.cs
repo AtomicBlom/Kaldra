@@ -4,7 +4,7 @@ using Loom.Core.Geometry;
 namespace Loom.Core.Scene;
 
 /// <summary>
-/// A group of instances of one mesh drawn with one technique — the unit a <c>ctx.DrawInstanced</c> consumes.
+/// A group of instances of one mesh drawn with one technique — the unit a <c>ctx.Draw</c> with a <c>DrawCall.Instances</c> source consumes.
 /// Holds each instance's world transform + cached world bounds, and offers a frustum cull that compacts the
 /// visible transforms into a caller-provided span (no per-frame allocation).
 /// </summary>

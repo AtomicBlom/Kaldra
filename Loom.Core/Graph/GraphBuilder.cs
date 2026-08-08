@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using Loom.Core.Geometry;
 
 namespace Loom.Core.Graph;
 
@@ -26,6 +27,9 @@ public sealed class GraphBuilder
 
 	private readonly List<ResourceHandle> _readbackTargets = [];
 
+	private readonly List<string> _scopes = [];
+	private string? _scopePrefix;
+
 	private Domain? _backbufferDomain;
 	private ColorHandle? _backbuffer;
 	private Vector4? _backbufferClearValue;
@@ -43,6 +47,7 @@ public sealed class GraphBuilder
 		if (width <= 0 || height <= 0)
 			throw new ArgumentOutOfRangeException(nameof(width), $"Domain '{name}' must have positive dimensions.");
 		ValidateSamples(name, samples);
+		name = Qualify(name);
 		if (!_domainNames.Add(name))
 			throw new InvalidOperationException($"Duplicate domain name '{name}'.");
 
@@ -64,6 +69,7 @@ public sealed class GraphBuilder
 		if (scale <= 0f)
 			throw new ArgumentOutOfRangeException(nameof(scale), $"Domain '{name}' relative scale must be positive.");
 		ValidateSamples(name, samples);
+		name = Qualify(name);
 		if (!_domainNames.Add(name))
 			throw new InvalidOperationException($"Duplicate domain name '{name}'.");
 
@@ -169,6 +175,81 @@ public sealed class GraphBuilder
 		return (ColorHandle)AddResource(name, format, ResourceKind.Persistent, BackbufferDomainForPersistent(), scale: 1f, count: size);
 	}
 
+	/// <summary>
+	/// Open a name scope: every domain, resource and pass declared until the returned handle is disposed gets
+	/// <paramref name="name"/> prefixed to its own name, dot-separated. This is what lets a reusable graph fragment
+	/// be instantiated more than once in one graph — two views, a portal, split-screen, a blur shared by the minimap
+	/// and the main view — since names are otherwise unique per graph and the second instantiation collides.
+	/// <code>
+	/// using (g.Scope("left"))  left  = g.Bloom(litLeft);
+	/// using (g.Scope("right")) right = g.Bloom(litRight);
+	/// </code>
+	/// The fragment itself needs no parameter and no change: it keeps declaring <c>bloom_mip0</c> and the scope
+	/// makes that <c>left.bloom_mip0</c>. Scopes nest, and the qualified name is what the duplicate-name check and
+	/// the graph hash see.
+	/// <para>
+	/// Scoping a pass name is free tooling: <c>DebugLabelScopes</c> derives the RenderDoc/PIX event tree from the
+	/// same dots, so a scoped fragment's passes group under it automatically.
+	/// </para>
+	/// <para>
+	/// <b>Techniques are not scoped.</b> A technique is registered on the engine (<c>IEngine.DefineTechnique</c>),
+	/// not declared on the graph, so <c>ctx.FullScreen("bloom.prefilter", …)</c> inside a scope still names the
+	/// technique exactly as registered. Only the three things a <see cref="GraphBuilder"/> mints are qualified.
+	/// The backbuffer is excluded as well — there is one swapchain image whatever scope first touches it.
+	/// </para>
+	/// </summary>
+	/// <returns>A scope handle to <c>using</c>. It is a <c>ref struct</c>, so it cannot escape the block that opened it.</returns>
+	public NameScope Scope(string name)
+	{
+		if (string.IsNullOrWhiteSpace(name))
+			throw new ArgumentException("A name scope needs a non-empty name.", nameof(name));
+		// A scope may be dotted (Scope("view.left") == two nested scopes), but an empty segment would put a bare '.'
+		// into every qualified name under it and open an unnamed group in the debug-label tree.
+		if (name.StartsWith('.') || name.EndsWith('.') || name.Contains(".."))
+			throw new ArgumentException($"Name scope '{name}' has an empty dot-separated segment.", nameof(name));
+
+		_scopes.Add(name);
+		_scopePrefix = string.Join('.', _scopes);
+		return new NameScope(this, _scopes.Count);
+	}
+
+	// Close the innermost scope. `depth` is what the scope's own nesting level was when it opened, so closing out of
+	// order (only reachable by calling Dispose by hand rather than via `using`) is caught instead of silently
+	// unwinding somebody else's scope.
+	private void PopScope(int depth)
+	{
+		if (_scopes.Count != depth)
+		{
+			throw new InvalidOperationException(
+				$"Name scopes must be closed innermost-first; '{_scopes[depth - 1]}' was opened at depth {depth} but the graph is at depth {_scopes.Count}. Use a `using` statement.");
+		}
+		_scopes.RemoveAt(_scopes.Count - 1);
+		_scopePrefix = _scopes.Count == 0 ? null : string.Join('.', _scopes);
+	}
+
+	// Prefix a graph-local name with the open scopes. Everything a GraphBuilder mints goes through here except the
+	// backbuffer, which is one physical image regardless of who first asked for it.
+	private string Qualify(string name) => _scopePrefix is null ? name : $"{_scopePrefix}.{name}";
+
+	/// <summary>
+	/// The handle returned by <see cref="Scope"/>: disposing it closes the scope. A <c>ref struct</c> so it cannot be
+	/// stored in a field or captured, which keeps a scope's extent to the block that opened it.
+	/// </summary>
+	public readonly ref struct NameScope
+	{
+		private readonly GraphBuilder? _graph;
+		private readonly int _depth;
+
+		internal NameScope(GraphBuilder graph, int depth)
+		{
+			_graph = graph;
+			_depth = depth;
+		}
+
+		/// <summary>Close the scope. A <c>default</c> scope was never opened, so disposing it does nothing.</summary>
+		public void Dispose() => _graph?.PopScope(_depth);
+	}
+
 	/// <summary>Begin a raster pass. Chain intents, then <c>.Draw(ctx => …)</c>.</summary>
 	public PassBuilder Pass(string name) => AddPass(name, PassKind.Raster);
 
@@ -204,12 +285,54 @@ public sealed class GraphBuilder
 	/// not resolution-bound. A compute pass <c>.ReadWrites</c> it and a draw <c>.ReadsVertex</c> it (GPU
 	/// particles): the engine derives the compute→vertex barrier from those edges. Anchored to the backbuffer
 	/// domain (it has no resolution of its own).
+	/// <para>
+	/// This overload declares a bag of bytes and nothing about what fills it. Prefer
+	/// <see cref="Buffer{T}(string,int)"/> or <see cref="Buffer(string,int,VertexLayout)"/> whenever the buffer holds
+	/// elements: the element stride reaches the handle instead of being multiplied away, so the draw path can check
+	/// the technique's per-instance stream against it rather than corrupting memory silently. Reach for the byte
+	/// overload only for a genuinely unstructured block.
+	/// </para>
 	/// </summary>
 	public BufferHandle Buffer(string name, int byteSize)
 	{
 		if (byteSize <= 0)
 			throw new ArgumentOutOfRangeException(nameof(byteSize), "A buffer needs a positive byte size.");
 		return (BufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Buffer, BackbufferDomainForPersistent(), scale: 1f, byteSize: byteSize);
+	}
+
+	/// <summary>
+	/// Declare a GPU storage buffer holding <paramref name="count"/> elements of <typeparamref name="T"/> —
+	/// <see cref="Buffer(string,int)"/> stated in terms of what the buffer holds, so the size arithmetic and the
+	/// element stride are the engine's business rather than a magic number at the call site.
+	/// <typeparamref name="T"/>'s layout must match the shader's <c>RWStructuredBuffer</c> element on every backend.
+	/// </summary>
+	public BufferHandle Buffer<T>(string name, int count) where T : unmanaged =>
+		ElementBuffer(name, count, Unsafe.SizeOf<T>());
+
+	/// <summary>
+	/// Declare a GPU storage buffer holding <paramref name="count"/> elements laid out as
+	/// <paramref name="layout"/> — the spelling for a buffer a compute pass fills and a draw then consumes as a
+	/// per-instance vertex stream (the GPU-particle path). Naming the <em>same</em> <see cref="VertexLayout"/> the
+	/// technique names as its <c>Instance</c> stream makes the buffer and the shader that walks it share one source
+	/// of truth, and lets the draw path reject a mismatch instead of stepping through the buffer at the wrong stride.
+	/// </summary>
+	public BufferHandle Buffer(string name, int count, VertexLayout layout)
+	{
+		ArgumentNullException.ThrowIfNull(layout);
+		return ElementBuffer(name, count, layout.Stride);
+	}
+
+	// The shared body of the two element-wise Buffer overloads: size the allocation from count x stride and keep both
+	// on the handle. The multiply widens to long first so an implausibly large declaration fails loud instead of
+	// wrapping to a negative (or small positive) byte size that would allocate a buffer nothing fits in.
+	private BufferHandle ElementBuffer(string name, int count, int stride)
+	{
+		if (count <= 0)
+			throw new ArgumentOutOfRangeException(nameof(count), $"Buffer '{name}' needs a positive element count.");
+		var byteSize = (long)count * stride;
+		if (byteSize > int.MaxValue)
+			throw new ArgumentOutOfRangeException(nameof(count), $"Buffer '{name}' would need {byteSize} bytes ({count} elements x {stride} bytes), which overflows its 32-bit byte size.");
+		return (BufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Buffer, BackbufferDomainForPersistent(), scale: 1f, byteSize: (int)byteSize, stride: stride, elementCount: count);
 	}
 
 	/// <summary>
@@ -237,20 +360,30 @@ public sealed class GraphBuilder
 	{
 		if (count <= 0)
 			throw new ArgumentOutOfRangeException(nameof(count), "A storage buffer needs a positive element count.");
-		return (StorageBufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Storage, BackbufferDomainForPersistent(), scale: 1f, byteSize: count * Unsafe.SizeOf<T>(), growable: growable);
+		var stride = Unsafe.SizeOf<T>();
+		return (StorageBufferHandle)AddResource(name, Format.Rgba8Unorm, ResourceKind.Storage, BackbufferDomainForPersistent(), scale: 1f, byteSize: count * stride, growable: growable, stride: stride, elementCount: count);
 	}
 
-	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0, bool growable = false, Vector4? clearValue = null, bool noClear = false)
+	internal ResourceHandle AddResource(string name, Format format, ResourceKind kind, Domain domain, float scale, int count = 1, int byteSize = 0, bool growable = false, Vector4? clearValue = null, bool noClear = false, int stride = 0, int elementCount = 0, float clearDepth = 1f)
 	{
+		// Both APIs define the depth clear over the [0,1] depth range; anything else is undefined rather than a
+		// deeper far plane. Catch the reversed-Z typo (clearDepth: -1) at declaration instead of at bake.
+		if (kind == ResourceKind.Depth && clearDepth is < 0f or > 1f)
+			throw new ArgumentOutOfRangeException(nameof(clearDepth), $"Depth target '{name}' clears to {clearDepth}; the depth range is [0, 1] (1 = conventional far plane, 0 = reversed-Z far plane).");
+
+		// The backbuffer is the one resource a scope must not rename: it is created lazily on first access, so which
+		// scope happens to touch it first is an accident of authoring order, not a naming decision.
+		if (kind != ResourceKind.Backbuffer)
+			name = Qualify(name);
 		if (!_resourceNames.Add(name))
 			throw new InvalidOperationException($"Duplicate resource name '{name}'.");
 		var id = _resources.Count;
 		ResourceHandle handle = kind switch
 		{
-			ResourceKind.Depth => new DepthHandle(id, name, format, domain, scale),
-			ResourceKind.Buffer => new BufferHandle(id, name, format, domain, byteSize),
+			ResourceKind.Depth => new DepthHandle(id, name, format, domain, scale, clearDepth, noClear),
+			ResourceKind.Buffer => new BufferHandle(id, name, format, domain, byteSize, stride, elementCount),
 			ResourceKind.Constants => new ConstantsHandle(id, name, domain, byteSize),
-			ResourceKind.Storage => new StorageBufferHandle(id, name, domain, byteSize, growable),
+			ResourceKind.Storage => new StorageBufferHandle(id, name, domain, byteSize, growable, stride, elementCount),
 			// Color / Persistent / Backbuffer are all colour-like images; the lifetime/role lives in Kind.
 			_ => new ColorHandle(id, name, format, kind, domain, scale, count, clearValue, noClear)
 		};
@@ -266,6 +399,7 @@ public sealed class GraphBuilder
 
 	private PassBuilder AddPass(string name, PassKind kind)
 	{
+		name = Qualify(name);
 		if (!_passNames.Add(name))
 			throw new InvalidOperationException($"Duplicate pass name '{name}'.");
 		var pass = new PassBuilder(name, kind);
@@ -275,6 +409,15 @@ public sealed class GraphBuilder
 
 	internal RenderGraph Build()
 	{
+		// An unclosed scope means the authoring closure returned mid-scope — every declaration after the missing
+		// Dispose silently kept the prefix. Say so here rather than leaving the author to wonder why half the graph
+		// is named oddly.
+		if (_scopes.Count > 0)
+		{
+			throw new InvalidOperationException(
+				$"Name scope '{_scopePrefix}' was never closed. Wrap g.Scope(...) in a `using` statement so it closes even when the block exits early.");
+		}
+
 		var passes = ImmutableArray.CreateBuilder<GraphPass>(_passes.Count);
 		foreach (var pass in _passes)
 			passes.Add(pass.Build());

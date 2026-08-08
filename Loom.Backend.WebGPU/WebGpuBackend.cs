@@ -15,7 +15,7 @@ public sealed class WebGpuBackend : IRenderBackend
 {
 #pragma warning disable CA2255
 	[ModuleInitializer]
-	internal static void Register() => Engine.Register(new WebGpuBackend());
+	internal static void Register() => Backends.Register(new WebGpuBackend());
 #pragma warning restore CA2255
 
 	public string Name => "WebGPU";

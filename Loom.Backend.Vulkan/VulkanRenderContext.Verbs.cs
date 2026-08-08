@@ -15,14 +15,12 @@ internal sealed unsafe partial class VulkanRenderContext
 		var template = _registry[call.Technique];
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 
-		// Gather the technique's uniform buffers in slot order: the pass's .Reads constants (e.g. a view-projection)
-		// first, then the per-draw Uniforms block (model, object data). Both material and sampled draws bind them.
+		// Gather the technique's uniform buffers in slot order. The slot reflection named as the material block (when
+		// the draw carries a material) takes that slot; every other slot takes the next of the pass's .Reads constants
+		// (e.g. a view-projection), then the per-draw Uniforms block (model, object data). Both material and sampled
+		// draws bind them.
 		Span<UniformBinding> ubos = stackalloc UniformBinding[MaxUniformBuffers];
-		var uboCount = 0;
-		for (var j = 0; j < _activeConstantsCount && uboCount < MaxUniformBuffers; j++)
-			ubos[uboCount++] = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[j]), 0, Vk.WholeSize);
-		if (call.Uniforms.Length > 0 && uboCount < MaxUniformBuffers)
-			ubos[uboCount++] = UploadUniforms(call.Uniforms);
+		var uboCount = FillUniformSlots(ubos, call, template);
 
 		// Material textures (+ those UBOs) or sampled graph resources (+ those UBOs) — mutually exclusive texture
 		// source. An empty combination leaves the draw unbound (the depth-only path with no constants).
@@ -51,6 +49,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		}
 		else if (call.Instances.GpuBuffer is { } gpuBuf)
 		{
+			gpuBuf.CheckInstanceStride(template.Instance?.Stride ?? 0, call.Technique);
 			var gpuBuffer = _resources.GetBuffer(_frameSlot, gpuBuf.Id);
 			if (call.Mesh is { } mesh)
 			{

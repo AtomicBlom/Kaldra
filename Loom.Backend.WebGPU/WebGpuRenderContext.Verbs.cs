@@ -42,9 +42,12 @@ internal sealed partial class WebGpuRenderContext
 		Span<int> views = stackalloc int[sampleCount];
 		if (call.Material is { } material)
 		{
+			// The shared contract check, so a material with too few textures is reported here exactly as it is on the
+			// desktop backends. Without it this loop clamped to the last texture and silently repeated it.
+			_engine.ValidateMaterial(material, call.Technique);
 			var textures = _engine.MaterialTextures(material.Id);
 			for (var i = 0; i < sampleCount; i++)
-				views[i] = _engine.TextureView(textures[Math.Min(i, textures.Length - 1)]);
+				views[i] = _engine.TextureView(textures[i]);
 		}
 		else
 		{
@@ -53,8 +56,9 @@ internal sealed partial class WebGpuRenderContext
 				views[i] = transients.ViewHandle(call.Sampled[i].Id);
 		}
 
-		BindAndSet(baked, views, call.Uniforms, default);
-		RecordGeometry(call);
+		BindAndSet(baked, views, call.Uniforms, default,
+			call.Material is { } mat ? _engine.MaterialParameters(mat.Id) : default);
+		RecordGeometry(call, template.Instance?.Stride ?? 0);
 	}
 
 	public void Dispatch(string technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)
@@ -109,7 +113,7 @@ internal sealed partial class WebGpuRenderContext
 
 	// Emit the geometry half of a draw: single mesh, skinned override, GPU-resident instances, CPU instances, or a
 	// procedural instanced draw whose vertices the shader fabricates from the vertex index.
-	private void RecordGeometry(in DrawCall call)
+	private void RecordGeometry(in DrawCall call, int instanceStride)
 	{
 		var meshes = _engine.Meshes;
 		var writer = _engine.Writer;
@@ -125,6 +129,7 @@ internal sealed partial class WebGpuRenderContext
 
 		if (call.Instances.GpuBuffer is { } gpuBuf)
 		{
+			gpuBuf.CheckInstanceStride(instanceStride, call.Technique);
 			var gpuBuffer = _engine.Transients.BufferHandle(gpuBuf.Id);
 			if (call.Mesh is { } mesh)
 			{

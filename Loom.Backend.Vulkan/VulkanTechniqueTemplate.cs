@@ -18,7 +18,7 @@ namespace Loom.Backend.Vulkan;
 /// <param name="HasVertexInput">True if the vertex stage reads a <see cref="Vertex"/> buffer (a mesh technique) rather than fabricating a fullscreen triangle.</param>
 /// <param name="Blend">The blend equation — pairs with a pass that <c>.Blends</c> its target (alpha-over for transparency, additive for bloom).</param>
 /// <param name="LinearFilter">Sample inputs with a linear (rather than nearest) sampler — smooth filtering for bloom's downsample/upsample; nearest elsewhere keeps the pixel grid crisp.</param>
-/// <param name="HasFragmentPush">True if the shader's fragment (or, for a compute technique, compute) stage reads a small push-constant block (up to four floats) — the per-pass scalar channel (JFA step, hovered id, exposure rate).</param>
+/// <param name="HasFragmentPush">True if the shader's fragment (or, for a compute technique, compute) stage reads a small push-constant block (up to sixteen floats — <see cref="VulkanTechnique.FragmentPushSize"/>) — the per-pass scalar channel (JFA step, hovered id, exposure rate, a light-space matrix).</param>
 /// <param name="IsCompute">True for a compute technique: one compute entry point (in <see cref="FragmentEntry"/>), dispatched rather than drawn.</param>
 /// <param name="StorageCount">Number of storage images the (compute) shader read-writes, bound after the sampled inputs (bindings SampleCount..SampleCount+StorageCount-1).</param>
 /// <param name="StorageBufferCount">Number of storage buffers (not images) the shader read-writes, bound after the storage images.</param>
@@ -28,6 +28,10 @@ namespace Loom.Backend.Vulkan;
 /// <param name="UniformBufferCount">Number of descriptor-bound constant buffers the shader reads (the per-frame uniform seam), bound after the storage slots; 0 or 1 in practice. Fed from the per-frame uniform ring; carries data too large for the 16-float push (CSM matrices, lighting params, wind).</param>
 /// <param name="HasListPush">True if the technique reads a per-command tag rewrite after the shared push block (the draw-list path).</param>
 /// <param name="Cull">Triangle face-culling mode — back-face culling for opaque mesh passes, none for fullscreen/billboard techniques.</param>
+/// <param name="DepthTest">The depth comparison baked into the pipeline when the pass has a depth target.</param>
+/// <param name="Bias">Constant + slope-scaled depth offset baked into the rasterizer state, or null for none.</param>
+/// <param name="MaterialUniformSlot">Which uniform slot carries the per-material parameter block, or null when the shader declares none.</param>
+/// <param name="MaterialParameterBytes">Bytes of per-material parameters to stage into the uniform ring per draw; 0 when the shader declares no block.</param>
 public readonly record struct VulkanTechniqueTemplate(
 	byte[] Spirv,
 	string VertexEntry,
@@ -45,4 +49,8 @@ public readonly record struct VulkanTechniqueTemplate(
 	VertexLayout? Instance = null,
 	int UniformBufferCount = 0,
 	bool HasListPush = false,
-	CullMode Cull = CullMode.None);
+	CullMode Cull = CullMode.None,
+	DepthCompare DepthTest = DepthCompare.LessOrEqual,
+	DepthBias? Bias = null,
+	int? MaterialUniformSlot = null,
+	int MaterialParameterBytes = 0);

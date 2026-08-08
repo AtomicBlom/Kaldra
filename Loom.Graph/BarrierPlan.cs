@@ -78,6 +78,7 @@ public sealed class BarrierPlan
 					var first = !seen.Contains(id);
 					LoadAction load;
 					Vector4? clearValue = null;
+					float? depthClear = null;
 					if (use.IsReadOnlyAttachment)
 						load = LoadAction.Load;         // depth-read: existing depth is the input
 					else if (use.IsBlend)
@@ -92,8 +93,16 @@ public sealed class BarrierPlan
 							clearValue = ch.ClearValue ?? Vector4.Zero;
 						}
 					}
-					else if (first && use.Resource is DepthHandle)
-						load = LoadAction.Clear;        // depth always clears to 1.0 on first write
+					else if (first && use.Resource is DepthHandle dh)
+					{
+						if (dh.NoClear)
+							load = LoadAction.DontCare; // opt-out: the first depth-writing pass covers every pixel
+						else
+						{
+							load = LoadAction.Clear;    // default: the declared far plane — 1, or 0 under reversed-Z
+							depthClear = dh.ClearDepth;
+						}
+					}
 					else if (first)
 						load = LoadAction.DontCare;     // non-colour, non-depth first write (buffers etc.)
 					else
@@ -101,7 +110,7 @@ public sealed class BarrierPlan
 					var store = use.IsReadOnlyAttachment
 						? StoreAction.DontCare
 						: (UsedAfter(usageOrders, id, scheduled.Order) || id == presentId ? StoreAction.Store : StoreAction.DontCare);
-					attachments.Add(new AttachmentAction(use.Resource, use.State, load, store, clearValue));
+					attachments.Add(new AttachmentAction(use.Resource, use.State, load, store, clearValue, depthClear));
 				}
 
 				currentState[id] = use.State;

@@ -20,7 +20,7 @@ internal sealed partial class WebGpuRenderContext
 	/// the lowered push-constant block. Uniform bindings are dynamic-offset: the constants and per-draw/push data
 	/// live in stable buffers, so the group is cached by its bound handles and only the offsets change per draw.
 	/// </summary>
-	private void BindAndSet(WebGpuTechnique baked, ReadOnlySpan<int> sampledViews, ReadOnlySpan<byte> perDrawUniform, ReadOnlySpan<float> push)
+	private void BindAndSet(WebGpuTechnique baked, ReadOnlySpan<int> sampledViews, ReadOnlySpan<byte> perDrawUniform, ReadOnlySpan<float> push, ReadOnlySpan<byte> materialUniform = default)
 	{
 		var bindings = baked.Template.Bindings;
 		if (!bindings.HasBindings)
@@ -29,8 +29,12 @@ internal sealed partial class WebGpuRenderContext
 		var transients = _engine.Transients;
 		var ring = _engine.UniformRing;
 
-		// Stage the ring-fed blocks (their contents change every draw, even on a bind-group cache hit).
+		// Stage the ring-fed blocks (their contents change every draw, even on a bind-group cache hit). The material's
+		// parameter block rides the same ring as the per-draw block, so a material needs no buffer of its own and
+		// IEngine.Write(material, …) takes effect on the next draw without a graph rebuild.
 		var perDrawOffset = perDrawUniform.Length > 0 ? ring.Reserve(perDrawUniform, perDrawUniform.Length) : 0;
+		var materialSlot = materialUniform.Length > 0 ? bindings.MaterialUniformSlot : null;
+		var materialOffset = materialUniform.Length > 0 ? ring.Reserve(materialUniform, materialUniform.Length) : 0;
 		var pushOffset = 0;
 		if (bindings.PushBinding >= 0)
 		{
@@ -57,21 +61,32 @@ internal sealed partial class WebGpuRenderContext
 		for (var j = 0; j < _activeStorageCount && j < bindings.StorageBufferBindings.Length; j++)
 			AddEntry(entries, ref e, bindings.StorageBufferBindings[j], EntryBuffer, transients.BufferHandle(_activeStorageIds[j]), 0, 0);
 
+		// Uniform slots in the shader's order: the slot reflection named as the per-material block takes the material's
+		// parameters; the rest take the pass's .Reads constants in order, then the per-draw block.
+		var constant = 0;
+		var drawBlockPending = perDrawUniform.Length > 0;
 		for (var j = 0; j < bindings.UniformBufferBindings.Length; j++)
 		{
 			var binding = bindings.UniformBufferBindings[j];
-			if (j < _activeConstantsCount)
+			if (j == materialSlot)
+			{
+				AddEntry(entries, ref e, binding, EntryBuffer, ring.Buffer, 0, materialUniform.Length);
+				dynBinding[dynCount] = binding;
+				dynOffset[dynCount++] = materialOffset;
+			}
+			else if (constant < _activeConstantsCount)
 			{
 				// A graph Constants buffer — bound whole (size 0), dynamic offset 0.
-				AddEntry(entries, ref e, binding, EntryBuffer, transients.BufferHandle(_activeConstantsIds[j]), 0, 0);
+				AddEntry(entries, ref e, binding, EntryBuffer, transients.BufferHandle(_activeConstantsIds[constant++]), 0, 0);
 				dynBinding[dynCount] = binding;
 				dynOffset[dynCount++] = 0;
 			}
-			else if (j == _activeConstantsCount && perDrawUniform.Length > 0)
+			else if (drawBlockPending)
 			{
 				AddEntry(entries, ref e, binding, EntryBuffer, ring.Buffer, 0, perDrawUniform.Length);
 				dynBinding[dynCount] = binding;
 				dynOffset[dynCount++] = perDrawOffset;
+				drawBlockPending = false;
 			}
 			else
 			{

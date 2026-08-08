@@ -42,7 +42,6 @@ namespace Loom.Backend.Vulkan;
 internal sealed unsafe partial class VulkanEngine : EngineBase
 {
 	private const int MaxFramesInFlight = 2;
-	private static readonly ClearValue ClearDepth = new(depthStencil: new ClearDepthStencilValue(1.0f, 0));
 
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
@@ -53,7 +52,6 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private readonly VulkanTechniqueCache _techniques;
 	private readonly VulkanMeshStore _meshes;
 	private readonly VulkanTextureStore _textures;
-	private readonly MaterialStore _materials;
 	private readonly VulkanDescriptorAllocator _descriptors;
 	private readonly VulkanRenderContext _context;
 	private readonly Dictionary<string, VulkanTechniqueTemplate> _registry = []; // logical name → backend baked-input form
@@ -165,9 +163,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_techniques = new VulkanTechniqueCache(_ctx);
 		_meshes = new VulkanMeshStore(_ctx, _allocator, _commandPool);
 		_textures = new VulkanTextureStore(_ctx, _allocator, _commandPool);
-		_materials = new MaterialStore();
 		_descriptors = new VulkanDescriptorAllocator(_ctx, MaxFramesInFlight);
-		_context = new VulkanRenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, _materials, _allocator, MaxFramesInFlight);
+		_context = new VulkanRenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, Materials, _allocator, MaxFramesInFlight);
 
 		CreateCommandBuffers();
 		CreateSyncObjects();
@@ -191,7 +188,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		QueueShaderReload(shader);
 	}
 
-	protected override void BakeTechnique(string name, TechniqueDescriptor descriptor)
+	protected override MaterialLayout BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		// Resolve the logical shader name to backend bytecode + reflection, and fold the neutral descriptor into
 		// the backend's baked-input form. Shaders are named logically — no .spv path in app code.
@@ -203,10 +200,23 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// reads geometry, else none (a fullscreen/compute technique). A non-null Instance marks it instanced
 		// (a second per-instance stream at binding 1).
 		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
+		var spirv = ResolveShaderAsset(descriptor.Shader, ".spv");
+		// Resolve the descriptor's source-level entry names against the ones the module actually declares: slangc
+		// renames a lone entry point to "main" in SPIR-V, so a compute shader's declared `computeMain` is not
+		// necessarily the name pipeline creation must be given. A two-entry graphics module matches verbatim and
+		// passes through unchanged.
+		var vertexEntry = descriptor.IsCompute
+			? descriptor.VertexEntry
+			: SpirvEntryPoints.Resolve(spirv, descriptor.VertexEntry, SpirvEntryPoints.Stage.Vertex, descriptor.Shader);
+		var fragmentEntry = SpirvEntryPoints.Resolve(
+			spirv,
+			descriptor.IsCompute ? descriptor.ComputeEntry : descriptor.FragmentEntry,
+			descriptor.IsCompute ? SpirvEntryPoints.Stage.Compute : SpirvEntryPoints.Stage.Fragment,
+			descriptor.Shader);
 		_registry[name] = new VulkanTechniqueTemplate(
-			ResolveShaderAsset(descriptor.Shader, ".spv"),
-			descriptor.VertexEntry,
-			descriptor.FragmentEntry,
+			spirv,
+			vertexEntry,
+			fragmentEntry,
 			reflection.SampleCount,
 			descriptor.HasVertexInput,
 			descriptor.Blend,
@@ -220,8 +230,12 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.Instance,
 			reflection.UniformBufferCount,
 			descriptor.HasListPush,
-			descriptor.Cull);
-
+			descriptor.Cull,
+			descriptor.DepthTest,
+			descriptor.Bias,
+			reflection.MaterialUniformSlot,
+			reflection.MaterialParameterBytes);
+		return new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes);
 	}
 
 	// Evict the baked pipelines after a hot-reload so the next bake rebuilds from the re-registered templates.
@@ -244,8 +258,6 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
-
-	public override Material CreateMaterial(params ReadOnlySpan<Texture> textures) => _materials.Create(textures);
 
 	// Tear down the previous graph's transients/readback/timing pools before the base binds a new graph; the device
 	// and caches survive. The base has already drained the GPU when a prior graph existed.
@@ -339,7 +351,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			return File.ReadAllBytes(path);
 
 		throw new VulkanException(
-			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Vulkan?");
+			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Backend.Vulkan?");
 	}
 
 	public override void Render(FrameInputs inputs)

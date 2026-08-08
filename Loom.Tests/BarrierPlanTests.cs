@@ -159,7 +159,7 @@ public class BarrierPlanTests
 		// in the describe/execute layers — the buffer is just a resource with read/write edges).
 		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
 		{
-			var instances = g.Buffer("instances", 1024 * 64); // a 4x4 matrix per instance
+			var instances = g.Buffer<Matrix4x4>("instances", 1024);
 			var screen = g.Backbuffer;
 			g.Compute("place").ReadWrites(instances);
 			g.Pass("foliage").Writes(screen).ReadsVertex(instances);

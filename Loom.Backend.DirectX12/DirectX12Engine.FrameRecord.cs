@@ -131,7 +131,7 @@ public sealed unsafe partial class DirectX12Engine
 
 		CpuDescriptorHandle dsv = default;
 		var hasDepth = false;
-		var depthClear = false;
+		float? depthClear = null;
 		var depthReadOnly = false;
 		var depthFormat = DxgiFormat.FormatUnknown;
 		Span<float> clearFloats = stackalloc float[4];
@@ -172,7 +172,7 @@ public sealed unsafe partial class DirectX12Engine
 				dsv = _transients!.View(index, id);
 				depthFormat = _transients.Format(index, id);
 				depthReadOnly = attachment.State == ResourceState.DepthReadOnly;
-				depthClear = attachment.Load == LoadAction.Clear;
+				depthClear = attachment.Load == LoadAction.Clear ? attachment.DepthClear : null;
 				if (width == 0)
 					(width, height) = _transients.Extent(id);
 				hasDepth = true;
@@ -184,9 +184,11 @@ public sealed unsafe partial class DirectX12Engine
 
 		_commandList.OMSetRenderTargets((uint)colorCount, colorCount > 0 ? rtv : null, false, hasDepth ? &dsv : null);
 
-		// Colour clears were emitted above (per attachment); clear depth to 1.0 here if the pass produces it.
-		if (hasDepth && depthClear)
-			_commandList.ClearDepthStencilView(dsv, ClearFlags.Depth, 1f, 0, 0u, (Box2D<int>*)null);
+		// Colour clears were emitted above (per attachment); clear depth here if the pass produces it. The value must
+		// match the resource's optimized-clear hint (DirectX12Transients.BuildClear) or the debug layer warns on
+		// every clear — both come from the DepthHandle's declared ClearDepth.
+		if (hasDepth && depthClear is { } depthClearValue)
+			_commandList.ClearDepthStencilView(dsv, ClearFlags.Depth, depthClearValue, 0, 0u, (Box2D<int>*)null);
 
 		// Negative-height viewport (origin at the bottom): turns D3D12's (1-ndc.y) NDC→screen map into Vulkan's
 		// (ndc.y+1). Paired with the Vulkan-style flipped projection (DirectX12RenderContext.ClipSpace) this renders
