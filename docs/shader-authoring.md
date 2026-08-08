@@ -122,11 +122,13 @@ A compute technique states its entry once via `TechniqueDescriptor.Compute("shad
 
 `ctx.FullScreen(technique, push, …)` and `ctx.Dispatch(technique, groups, push, …)` take a `ReadOnlySpan<float>`. Where it lands depends on what the technique declared:
 
-| The shader declares | The span goes to | Cap |
+| The shader declares | The span goes to | Bound |
 |---|---|---|
-| `LOOM_PUSH_CONSTANT` block (`HasFragmentPush: true`) | push constants / root constants at `b0` | **16 floats** |
-| a descriptor-bound `ConstantBuffer<T>` instead | the per-draw uniform slot, via the per-frame ring | uncapped in practice (CSM pushes 68 floats) |
+| `LOOM_PUSH_CONSTANT` block (`HasFragmentPush: true`) | push constants / root constants at `b0` | **16 floats** — the block's fixed size |
+| a descriptor-bound `ConstantBuffer<T>` instead | the next free uniform slot, via the per-frame ring | **that buffer's declared size** (CSM's is 68 floats wide, and it pushes 68) |
 
 A technique has one or the other, so the same bytes are offered to both channels and the technique's binding model takes whichever it declares.
 
-> **Known gaps ([#16](https://github.com/AtomicBlom/Loom/issues/16)):** pushing more than 16 floats is **silently truncated** on both backends, and on Vulkan pushing floats when the reflected uniform slots are already full is **silently dropped** where DirectX 12 throws. Both should be errors. Until then, if a push seems to have no effect, check the count and the slot budget first.
+The uniform route is not uncapped: it is a real buffer, but a buffer of the size the shader declared, and reflection reports that size. Pushing more than the target holds is an error, on either route — as is pushing when the technique declares no block *and* the pass's `.Reads` have already filled every constant buffer it reflects, which leaves the bytes nowhere to go. All three cases used to be silent (truncated, or dropped entirely); they now throw `TechniqueMismatchException` naming the pass, the technique, and both counts.
+
+One thing the check cannot do: a constant buffer's reflected size includes padding to its 16-byte rows, so a push that *fits* is not thereby laid out the way the shader reads it. Getting the size right does not excuse §7's advice about packing loose scalars into a `float4`.

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Numerics;
+using Loom.Core.Diagnostics;
 using Loom.Core.Graph;
 using Loom.Graph;
 using Silk.NET.Vulkan;
@@ -57,7 +58,7 @@ internal sealed unsafe partial class VulkanEngine
 		// decode to garbage, so skip it there rather than write a corrupt file (HDR is verified on-display).
 		if (capturePath is not null && !CaptureSupported())
 		{
-			Console.WriteLine($"[loom] capture skipped: present format {_presentTarget.ImageFormat} is not an 8-bit RGBA/BGRA format (HDR output).");
+			LoomLog.Warning($"capture skipped: present format {_presentTarget.ImageFormat} is not an 8-bit RGBA/BGRA format (HDR output).");
 			CapturePath = null;
 			capturePath = null;
 		}
@@ -238,7 +239,7 @@ internal sealed unsafe partial class VulkanEngine
 		// resource transitions (storage GENERAL, the consumer's SHADER_READ) were already emitted before this.
 		if (pass.Pass.Kind == PassKind.Compute)
 		{
-			_context.BeginPass([], default, false, uniformIds[..uniformCount], storageIds[..storageCount]); // no colour/depth targets; keeps the bake key stable
+			_context.BeginPass(pass.Pass, [], default, false, uniformIds[..uniformCount], storageIds[..storageCount]); // no colour/depth targets; keeps the bake key stable
 			pass.Pass.Record?.Invoke(_context);
 			return;
 		}
@@ -315,7 +316,7 @@ internal sealed unsafe partial class VulkanEngine
 		Rect2D scissor = new(new Offset2D(0, 0), area);
 		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
 
-		_context.BeginPass(new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
+		_context.BeginPass(pass.Pass, new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
 
 		// Hand the context this pass's colour attachment views + area so a draw-list group-opacity layer can suspend
 		// and resume the dynamic-rendering scope around its offscreen target.
@@ -335,7 +336,7 @@ internal sealed unsafe partial class VulkanEngine
 	{
 		var n = 0;
 		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadUniform && n < ids.Length)
+			if (access.Kind == AccessKind.ReadUniform)
 				ids[n++] = access.Resource.Id;
 		return n;
 	}
@@ -346,7 +347,7 @@ internal sealed unsafe partial class VulkanEngine
 	{
 		var n = 0;
 		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadStorage && n < ids.Length)
+			if (access.Kind == AccessKind.ReadStorage)
 				ids[n++] = access.Resource.Id;
 		return n;
 	}

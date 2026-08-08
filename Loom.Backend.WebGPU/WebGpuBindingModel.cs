@@ -57,6 +57,9 @@ internal sealed partial class WebGpuBindingModel
 	/// <summary>WGSL binding of each descriptor-bound uniform buffer (the per-frame uniform seam), in slot order.</summary>
 	public required int[] UniformBufferBindings { get; init; }
 
+	/// <summary>Each uniform buffer's declared size in bytes, parallel to <see cref="UniformBufferBindings"/>. 0 for a slot whose size the sidecar does not report.</summary>
+	public required int[] UniformBufferBytes { get; init; }
+
 	/// <summary>WGSL binding of the lowered push-constant uniform block, or -1 when the technique has no push block.</summary>
 	public required int PushBinding { get; init; }
 
@@ -168,10 +171,10 @@ internal sealed partial class WebGpuBindingModel
 		}
 
 		// 2. The reflection sidecar: Loom slot order (source order) plus each slot's WGSL binding index.
-		List<int> sampledTex = [], sampledSamp = [], storageImages = [], storageBuffers = [], uniforms = [];
+		List<int> sampledTex = [], sampledSamp = [], storageImages = [], storageBuffers = [], uniforms = [], uniformBytes = [];
 		var material = (Slot: (int?)null, Bytes: 0);
 		if (reflectionJson is not null)
-			material = ReadReflection(reflectionJson, sampledTex, sampledSamp, storageImages, storageBuffers, uniforms);
+			material = ReadReflection(reflectionJson, sampledTex, sampledSamp, storageImages, storageBuffers, uniforms, uniformBytes);
 
 		// 3. The push block: a WGSL uniform binding that reflection did not attribute to a descriptor-bound uniform.
 		var pushBinding = -1;
@@ -195,6 +198,7 @@ internal sealed partial class WebGpuBindingModel
 			StorageImageBindings = [.. storageImages],
 			StorageBufferBindings = [.. storageBuffers],
 			UniformBufferBindings = [.. uniforms],
+			UniformBufferBytes = [.. uniformBytes],
 			PushBinding = pushBinding,
 			PushByteSize = pushBinding >= 0 ? PushBlockSize : 0,
 			MaterialUniformSlot = material.Slot,
@@ -202,9 +206,9 @@ internal sealed partial class WebGpuBindingModel
 		};
 	}
 
-	// Fills the per-category binding lists and returns which uniform slot (if any) is the reserved per-material
-	// parameter block, plus its laid-out size.
-	private static (int? Slot, int Bytes) ReadReflection(byte[] json, List<int> sampledTex, List<int> sampledSamp, List<int> storageImages, List<int> storageBuffers, List<int> uniforms)
+	// Fills the per-category binding lists — including each uniform buffer's declared size, parallel to `uniforms` —
+	// and returns which uniform slot (if any) is the reserved per-material parameter block, plus its laid-out size.
+	private static (int? Slot, int Bytes) ReadReflection(byte[] json, List<int> sampledTex, List<int> sampledSamp, List<int> storageImages, List<int> storageBuffers, List<int> uniforms, List<int> uniformBytes)
 	{
 		int? materialSlot = null;
 		var materialBytes = 0;
@@ -227,16 +231,18 @@ internal sealed partial class WebGpuBindingModel
 
 			if (kind == "constantBuffer")
 			{
+				var bytes = type.TryGetProperty("elementVarLayout", out var evl)
+					&& evl.TryGetProperty("binding", out var evlBinding)
+					&& evlBinding.TryGetProperty("size", out var evlSize)
+					? evlSize.GetInt32()
+					: 0;
 				if (p.TryGetProperty("name", out var cbName) && cbName.GetString() == ShaderReflection.MaterialParameterName)
 				{
 					materialSlot = uniforms.Count; // the slot is this block's ordinal among the uniform buffers
-					materialBytes = type.TryGetProperty("elementVarLayout", out var evl)
-						&& evl.TryGetProperty("binding", out var evlBinding)
-						&& evlBinding.TryGetProperty("size", out var evlSize)
-						? evlSize.GetInt32()
-						: 0;
+					materialBytes = bytes;
 				}
 				uniforms.Add(index);
+				uniformBytes.Add(bytes);
 				continue;
 			}
 			if (kind != "resource")

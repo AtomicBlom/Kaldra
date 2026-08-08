@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Loom.Core.Geometry;
+using Loom.Core.Hosting;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
 
@@ -31,7 +32,7 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 	public DirectX12Technique GetOrBake(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
 		if (!_templates.TryGetValue(name, out var template))
-			throw new InvalidOperationException($"DirectX12: technique '{name}' was not defined — call DefineTechnique first.");
+			throw new TechniqueNotDefinedException(name);
 
 		var key = BuildKey(name, colorFormats, depthFormat, depthReadOnly, template);
 		if (_baked.TryGetValue(key, out var cached))

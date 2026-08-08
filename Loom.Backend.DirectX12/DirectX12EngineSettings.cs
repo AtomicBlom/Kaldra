@@ -37,7 +37,7 @@ public sealed class DirectX12EngineSettings : EngineSettings
 	/// <see cref="IEngine.DefineTechnique"/>, the counterpart of <c>VulkanEngineSettings.ShaderDirectory</c>.
 	/// Defaults to a <c>shaders</c> folder next to the executable (where the Loom SDK deposits the compiled DXIL) —
 	/// the same absolute default as Vulkan, so a host that leaves it unset resolves app shaders on both backends.
-	/// A shader with no resolved DXIL falls back to the backend's built-in stand-in.
+	/// A shader whose DXIL or reflection sidecar cannot be resolved throws; there is no substitute shader.
 	/// </summary>
 	public string ShaderDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "shaders");
 }

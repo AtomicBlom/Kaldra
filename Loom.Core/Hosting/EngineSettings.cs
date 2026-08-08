@@ -17,6 +17,20 @@ public class EngineSettings
 	public bool EnableValidation { get; set; } = true;
 
 	/// <summary>
+	/// Check each recorded draw against what its pass actually declared: that every bound resource carries a matching
+	/// access edge, that a mesh is only handed to a technique that reads vertices, and that a procedural draw supplies
+	/// a vertex count. Deriving the graph already rejects a self-contradictory <em>declaration</em>; this catches the
+	/// recording contradicting it.
+	/// <para>
+	/// Independent of <see cref="EnableValidation"/>, which enables the <em>GPU driver's</em> debug layer. These are
+	/// integer comparisons against the pass's access list — no device involvement — and they are on by default because
+	/// what they catch is otherwise silent: an undeclared binding is read in whatever layout the previous pass left,
+	/// which means plausible-looking wrong pixels rather than a crash.
+	/// </para>
+	/// </summary>
+	public bool ValidateRecording { get; set; } = true;
+
+	/// <summary>
 	/// Present with v-sync — a paced, tear-free present (FIFO/Mailbox). When false the backend uses the
 	/// lowest-latency present mode it has (Immediate where available, else Mailbox); pair with
 	/// <see cref="MaxFramesPerSecond"/> to bound the uncapped loop.
@@ -71,6 +85,7 @@ public class EngineSettings
 	{
 		ArgumentNullException.ThrowIfNull(target);
 		target.EnableValidation = EnableValidation;
+		target.ValidateRecording = ValidateRecording;
 		target.VSync = VSync;
 		target.MaxFramesPerSecond = MaxFramesPerSecond;
 		target.HdrOutput = HdrOutput;

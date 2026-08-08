@@ -16,6 +16,7 @@ internal sealed partial class WebGpuRenderContext
 	public void FullScreen(string technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs)
 	{
 		var baked = Bake(technique);
+		_validate.FullScreen(technique, inputs);
 		var transients = _engine.Transients;
 
 		Span<int> views = stackalloc int[inputs.Length];
@@ -27,7 +28,7 @@ internal sealed partial class WebGpuRenderContext
 		// through the push channel; a larger per-draw constant buffer (e.g. CSM's cascade matrices, register(b2)) is a
 		// descriptor-bound uniform and is filled through the per-draw-uniform channel. A technique has one or the
 		// other, so passing the same bytes to both lets its binding model bind whichever slot it actually declares.
-		BindAndSet(baked, views, MemoryMarshal.AsBytes(push), push);
+		BindAndSet(baked, technique, views, MemoryMarshal.AsBytes(push), push);
 		_engine.Writer.Draw(3, 1, 0, 0); // three fabricated verts cover the target; no vertex buffer
 	}
 
@@ -35,6 +36,7 @@ internal sealed partial class WebGpuRenderContext
 	{
 		var baked = Bake(call.Technique);
 		var template = baked.Template;
+		_validate.Draw(call);
 		_engine.Writer.SetRenderPipeline(baked.Pipeline);
 
 		// Sampled inputs come from a material's textures or the pass's sampled graph resources (mutually exclusive).
@@ -56,7 +58,7 @@ internal sealed partial class WebGpuRenderContext
 				views[i] = transients.ViewHandle(call.Sampled[i].Id);
 		}
 
-		BindAndSet(baked, views, call.Uniforms, default,
+		BindAndSet(baked, call.Technique, views, call.Uniforms, default,
 			call.Material is { } mat ? _engine.MaterialParameters(mat.Id) : default);
 		RecordGeometry(call, template.Instance?.Stride ?? 0);
 	}
@@ -65,6 +67,7 @@ internal sealed partial class WebGpuRenderContext
 	{
 		var baked = BakeCompute(technique);
 		var bindings = baked.Template.Bindings;
+		_validate.Dispatch(technique, sampled, storage);
 		var writer = _engine.Writer;
 		writer.SetComputePipeline(baked.Pipeline);
 
@@ -96,10 +99,10 @@ internal sealed partial class WebGpuRenderContext
 			var dynCount = 0;
 			if (bindings.PushBinding >= 0)
 			{
+				_validate.PushFits(technique, push.Length * sizeof(float), routesToUniform: false, 0, bindings.PushByteSize);
 				Span<byte> pushBytes = stackalloc byte[bindings.PushByteSize];
 				pushBytes.Clear();
-				var src = MemoryMarshal.AsBytes(push);
-				src[..Math.Min(src.Length, pushBytes.Length)].CopyTo(pushBytes);
+				MemoryMarshal.AsBytes(push).CopyTo(pushBytes);
 				dynOffsets[dynCount++] = _engine.UniformRing.Reserve(pushBytes, bindings.PushByteSize);
 				AddEntry(entries, ref e, bindings.PushBinding, EntryBuffer, _engine.UniformRing.Buffer, 0, bindings.PushByteSize);
 			}
@@ -121,9 +124,9 @@ internal sealed partial class WebGpuRenderContext
 		if (call.Instances.IsEmpty)
 		{
 			if (call.SkinnedVertices is { } sv)
-				meshes.DrawSkinned(writer, call.Mesh!.Value.Id, _engine.Transients.BufferHandle(sv.Id));
+				meshes.DrawSkinned(writer, _validate.RequireMesh(call).Id, _engine.Transients.BufferHandle(sv.Id));
 			else
-				meshes.Draw(writer, call.Mesh!.Value.Id);
+				meshes.Draw(writer, _validate.RequireMesh(call).Id);
 			return;
 		}
 
@@ -148,6 +151,6 @@ internal sealed partial class WebGpuRenderContext
 		if (call.Instances.CpuData.IsEmpty)
 			return;
 		var offset = _engine.InstanceRing.Reserve(call.Instances.CpuData, call.Instances.CpuData.Length);
-		meshes.DrawInstanced(writer, call.Mesh!.Value.Id, _engine.InstanceRing.Buffer, offset, call.Instances.Count);
+		meshes.DrawInstanced(writer, _validate.RequireMesh(call).Id, _engine.InstanceRing.Buffer, offset, call.Instances.Count);
 	}
 }

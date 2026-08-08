@@ -16,6 +16,15 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	// per-command tag slot the context rewrites each draw (the UI block: scale, translate, paper-white, hdr, kind).
 	private const uint ListPushDwords = 8;
 
+	/// <summary>
+	/// Size of a technique's inline scalar root-constant block, the DirectX 12 counterpart of Vulkan's push-constant
+	/// range. A push routed here must fit it.
+	/// </summary>
+	public const int ScalarPushSize = 16 * sizeof(float);
+
+	/// <summary>Size of a draw-list technique's push block, including the trailing per-command tag slot.</summary>
+	public const int ListPushSize = (int)ListPushDwords * sizeof(float);
+
 	public ComPtr<ID3D12RootSignature> RootSignature;
 	public ComPtr<ID3D12PipelineState> Pipeline;
 

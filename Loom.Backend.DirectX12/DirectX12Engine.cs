@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Loom.Assets;
 using Loom.Core.Animation;
+using Loom.Core.Diagnostics;
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
@@ -24,7 +25,6 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private readonly DirectX12EngineSettings _settings;
 	private readonly DirectX12Context _ctx;
 	private readonly IDirectX12PresentTarget _presentTarget;
-	private readonly DirectX12Triangle _triangle;
 	private readonly DirectX12TechniqueCache _techniques;
 	private readonly DirectX12DescriptorRing _ring;
 	private readonly DirectX12MeshStore _meshes;
@@ -100,6 +100,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	}
 
 	private DirectX12Engine(DirectX12EngineSettings settings, DirectX12Context ctx, bool offscreen, nint hwnd, int width, int height)
+		: base(settings)
 	{
 		_settings = settings;
 		_ctx = ctx;
@@ -124,12 +125,11 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		if (_fenceEvent == 0)
 			throw new InvalidOperationException("CreateEvent failed for the DirectX12 frame-pacing fence.");
 
-		_triangle = new DirectX12Triangle(_ctx, _presentTarget.Format);
 		_techniques = new DirectX12TechniqueCache(_ctx);
 		_ring = new DirectX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the resource viewer's debug SRVs
 		_meshes = new DirectX12MeshStore(_ctx);
 		_textures = new DirectX12TextureStore(_ctx);
-		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, Materials, (int)BufferCount);
+		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, Materials, (int)BufferCount, Validation);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
 
@@ -139,7 +139,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		if (_ctx.GraphicsQueue.GetTimestampFrequency(ref frequency) >= 0)
 			_timestampFrequency = frequency;
 
-		Console.WriteLine($"[loom] DirectX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
+		LoomLog.Info($"DirectX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
 
 		// Shader hot-reload, opt-in. Watch the loose DXIL/reflection artifacts; an external process rewrites
 		// them and this picks up the new bytecode + rebuilds affected PSOs. Off by default.
@@ -148,7 +148,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			var source = new LayeredAssetSource(settings.ShaderDirectory);
 			_shaderWatcher = new AssetWatcher(source, [".dxil", ".json"], debounceMs: 150);
 			_shaderWatcher.Changed += OnShaderArtifactChanged;
-			Console.WriteLine($"[loom] watching shaders for hot-reload: {settings.ShaderDirectory}");
+			LoomLog.Info($"watching shaders for hot-reload: {settings.ShaderDirectory}");
 		}
 	}
 
@@ -174,63 +174,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	public override void Render(FrameInputs inputs)
 	{
 		ServicePendingUploads();
-		if (Graph is not null)
-			RenderGraphFrame(inputs);
-		else
-			RenderLegacy(inputs);
-	}
-
-	// Pre-executor path (slices 1-2): a fixed clear + hand-baked triangle, used when no graph is set.
-	private void RenderLegacy(FrameInputs inputs)
-	{
-		var index = _presentTarget.CurrentIndex;
-		WaitForFrame(index); // the allocator we're about to reset must be free on the GPU
-
-		SilkMarshal.ThrowHResult(_allocators[index].Reset());
-		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
-
-		var backbuffer = _presentTarget.BackBuffer(index);
-		Transition(backbuffer, ResourceStates.Present, ResourceStates.RenderTarget);
-
-		var rtv = _presentTarget.RtvHandle(index);
-		_commandList.OMSetRenderTargets(1, &rtv, false, (CpuDescriptorHandle*)null);
-
-		// Animated clear so a headless smoke run visibly varies frame-to-frame (and proves the loop is live).
-		var t = (float)inputs.Time;
-		var color = stackalloc float[4];
-		color[0] = 0.10f + 0.06f * MathF.Sin(t);
-		color[1] = 0.11f;
-		color[2] = 0.20f + 0.06f * MathF.Sin(t * 0.7f);
-		color[3] = 1f;
-		_commandList.ClearRenderTargetView(rtv, color, 0u, (Box2D<int>*)null);
-
-		_triangle.Record(_commandList, _presentTarget.Width, _presentTarget.Height);
-
-		// When capturing, copy the rendered backbuffer into a readback buffer in the same submission, then
-		// present; otherwise just transition straight to PRESENT.
-		var capturing = CapturePath is not null;
-		var rowPitch = capturing ? RecordCapture(backbuffer) : 0u;
-		if (!capturing)
-			Transition(backbuffer, ResourceStates.RenderTarget, ResourceStates.Present);
-		SilkMarshal.ThrowHResult(_commandList.Close());
-
-		var list = (ID3D12CommandList*)_commandList.Handle;
-		_ctx.GraphicsQueue.ExecuteCommandLists(1, &list);
-
-		_presentTarget.Present(_settings.VSync);
-
-		_fenceValue++;
-		SilkMarshal.ThrowHResult(_ctx.GraphicsQueue.Signal(_fence, _fenceValue));
-		_frameFenceValues[index] = _fenceValue;
-
-		_debugErrors += _ctx.DrainDebugMessages(); // surface any D3D12 debug-layer messages this frame produced
-
-		if (capturing)
-		{
-			WaitForFrame(index); // block until this frame's copy finished, then map + encode
-			WriteCapture(CapturePath!, rowPitch);
-			CapturePath = null;
-		}
+		if (Graph is null)
+			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
+		RenderGraphFrame(inputs);
 	}
 
 	private void WaitForFrame(uint index)
@@ -284,7 +230,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 		_debugErrors += _ctx.DrainDebugMessages();
 		if (_ctx.InfoQueue.Handle is not null)
-			Console.WriteLine($"[loom] DirectX12 debug layer: {(_debugErrors == 0 ? "clean (no errors/corruption)" : $"{_debugErrors} error/corruption message(s)")}.");
+			if (_debugErrors == 0)
+				LoomLog.Info("DirectX12 debug layer: clean (no errors/corruption).");
+			else
+				LoomLog.Error($"DirectX12 debug layer: {_debugErrors} error/corruption message(s).");
 
 		if (_fenceEvent != 0)
 			CloseHandle(_fenceEvent);
@@ -305,7 +254,6 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_textures.Dispose();
 		_ring.Dispose();
 		_techniques.Dispose();
-		_triangle.Dispose();
 		_fence.Dispose();
 		_commandList.Dispose();
 		for (uint i = 0; i < BufferCount; i++)
@@ -315,90 +263,57 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	}
 
 	/// <summary>
-	/// Register a technique under a logical name. Resolves the real shader the Loom build emits next to the
-	/// SPIR-V — a cross-target <c>&lt;name&gt;.hlsl</c> (Slang→HLSL) plus its <c>&lt;name&gt;.json</c> reflection
-	/// (which gives the sampled-input count, so the app states only pipeline intent) — exactly as the Vulkan backend
-	/// resolves embedded SPIR-V. A shader with no resolvable/compilable HLSL falls back to the backend's built-in
-	/// stand-in.
+	/// Register a technique under a logical name. Resolves the build-emitted signed DXIL (<c>&lt;name&gt;.cs.dxil</c>
+	/// for compute, <c>&lt;name&gt;.vs.dxil</c> + <c>&lt;name&gt;.ps.dxil</c> for graphics) plus its
+	/// <c>&lt;name&gt;.json</c> reflection, which gives the resource counts so the app states only pipeline intent —
+	/// exactly as the Vulkan backend resolves embedded SPIR-V. A missing artifact throws; there is no substitute
+	/// shader, because one would shade differently and so produce a different image on this backend alone.
 	/// </summary>
-	protected override MaterialLayout BakeTechnique(string name, TechniqueDescriptor descriptor)
+	protected override TechniqueShape BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		var dir = _settings.ShaderDirectory;
 		var shader = descriptor.Shader;
-		// The descriptor-bound resource counts come from the shader's reflection sidecar (the author states only
-		// pipeline intent); a built-in stand-in with no sidecar reflects as empty.
+		// The descriptor-bound resource counts come from the shader's reflection sidecar; the author states only
+		// pipeline intent.
 		var reflection = DirectX12Shaders.ResolveReflection(dir, shader);
 
-		// Prefer the build-emitted SIGNED DXIL (offline, shipped like the Vulkan .spv — no runtime compiler):
-		// compute resolves <name>.cs.dxil; graphics resolves <name>.vs.dxil + <name>.ps.dxil. A shader with no
-		// DXIL yet (not cross-targeted, so the build's emit produced nothing) falls back to the built-in stand-in
-		// FXC-compiled here (d3dcompiler ships with Windows), so the port never breaks a demo mid-way.
+		// The bytecode is compiled offline and shipped, like the Vulkan .spv — no runtime compiler is involved.
 		byte[] vertexBytecode, fragmentBytecode;
-		int inputCount;
+		var inputCount = reflection.SampleCount;
 		var storageImages = 0;
 		var storageBuffers = 0;
 		var storageBufferStride = 0;
-		// Descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound
-		// as a root CBV at b1 (0 for a built-in stand-in, which has no UBO).
+		// Descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound as a
+		// root CBV at b1.
 		var uniformBuffers = reflection.UniformBufferCount;
 		// Read-only structured-buffer inputs, bound as root SRVs: a compute's inputs (skin's bind-pose verts + bone
-		// palette) or a graphics technique's app-writable storage buffers (g.Storage SSBOs). 0 for a built-in
-		// stand-in, whose empty reflection reports none.
+		// palette) or a graphics technique's app-writable storage buffers (g.Storage SSBOs).
 		var inputBuffers = reflection.InputBufferCount;
 		string source;
 
 		if (descriptor.IsCompute)
 		{
-			var cs = DirectX12Shaders.TryResolveStageDxil(dir, shader, "cs");
-			if (cs is not null)
-			{
-				(vertexBytecode, fragmentBytecode) = ([], cs);
-				inputCount = reflection.SampleCount;
-				// Compute storage shape from reflection: a RW texture (exposure) / RW structured buffer (particles)
-				// → UAV table (the stride lets the shader's GetDimensions work); a raw buffer (stride 0) → root UAV.
-				// RW structured/byte buffers = all storage buffers minus the read-only inputs; the stride lets the
-				// shader's GetDimensions work (a UAV descriptor), else a raw buffer (stride 0) rides a root UAV.
-				storageImages = reflection.StorageImageCount;
-				storageBuffers = reflection.StorageBufferCount - reflection.InputBufferCount;
-				storageBufferStride = reflection.StorageBufferStride;
-				source = $"{shader}.cs.dxil (Slang→signed DXIL)";
-			}
-			else if (DirectX12Shaders.Builtins.TryGetValue(shader, out var builtin))
-			{
-				(vertexBytecode, fragmentBytecode) = ([], DirectX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.FragmentEntry, "cs_5_1"));
-				inputCount = builtin.InputCount;
-				storageBuffers = 1; // the built-in compute stand-in is the GPU-particle buffer (root UAV at u0)
-				source = "built-in (FXC)";
-			}
-			else
-			{
-				throw new NotSupportedException($"DirectX12: compute shader '{shader}' has no '{shader}.cs.dxil' in '{dir}' and no built-in stand-in.");
-			}
+			var cs = DirectX12Shaders.TryResolveStageDxil(dir, shader, "cs")
+				?? throw DirectX12Shaders.MissingShader(shader, dir, "cs");
+			(vertexBytecode, fragmentBytecode) = ([], cs);
+			// Compute storage shape from reflection: a RW texture (exposure) / RW structured buffer (particles)
+			// → UAV table (the stride lets the shader's GetDimensions work); a raw buffer (stride 0) → root UAV.
+			// RW structured/byte buffers = all storage buffers minus the read-only inputs.
+			storageImages = reflection.StorageImageCount;
+			storageBuffers = reflection.StorageBufferCount - reflection.InputBufferCount;
+			storageBufferStride = reflection.StorageBufferStride;
+			source = $"{shader}.cs.dxil (Slang→signed DXIL)";
 		}
 		else
 		{
-			var vs = DirectX12Shaders.TryResolveStageDxil(dir, shader, "vs");
-			var ps = DirectX12Shaders.TryResolveStageDxil(dir, shader, "ps");
-			if (vs is not null && ps is not null)
-			{
-				(vertexBytecode, fragmentBytecode) = (vs, ps);
-				inputCount = reflection.SampleCount;
-				source = $"{shader}.{{vs,ps}}.dxil (Slang→signed DXIL)";
-			}
-			else if (DirectX12Shaders.Builtins.TryGetValue(shader, out var builtin))
-			{
-				vertexBytecode = DirectX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.VertexEntry, "vs_5_1");
-				fragmentBytecode = DirectX12Shaders.CompileToBytes(builtin.Hlsl, descriptor.FragmentEntry, "ps_5_1");
-				inputCount = builtin.InputCount;
-				source = "built-in (FXC)";
-			}
-			else
-			{
-				throw new NotSupportedException($"DirectX12: shader '{shader}' has no '{shader}.[vs,ps].dxil' in '{dir}' and no built-in stand-in.");
-			}
+			vertexBytecode = DirectX12Shaders.TryResolveStageDxil(dir, shader, "vs")
+				?? throw DirectX12Shaders.MissingShader(shader, dir, "vs");
+			fragmentBytecode = DirectX12Shaders.TryResolveStageDxil(dir, shader, "ps")
+				?? throw DirectX12Shaders.MissingShader(shader, dir, "ps");
+			source = $"{shader}.{{vs,ps}}.dxil (Slang→signed DXIL)";
 		}
 
-		Console.WriteLine($"[loom] DirectX12 technique '{name}' ← {source}.");
+		LoomLog.Info($"DirectX12 technique '{name}' ← {source}.");
 		// Resolve the per-vertex layout (explicit, else canonical pos/normal/uv for a mesh technique, else none),
 		// mirroring the Vulkan backend — a non-null Instance marks it instanced (per-technique layouts).
 		var layout = descriptor.Layout ?? (descriptor.HasVertexInput ? VertexLayout.MeshStandard : null);
@@ -409,7 +324,11 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
 			descriptor.Cull, descriptor.DepthTest, descriptor.Bias,
 			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes));
-		return new MaterialLayout(inputCount, reflection.MaterialParameterBytes);
+		return new TechniqueShape(
+			new MaterialLayout(inputCount, reflection.MaterialParameterBytes),
+			reflection.UniformBufferBytes,
+			descriptor.HasFragmentPush ? DirectX12Technique.ScalarPushSize : 0,
+			descriptor.HasListPush ? DirectX12Technique.ListPushSize : 0);
 	}
 
 

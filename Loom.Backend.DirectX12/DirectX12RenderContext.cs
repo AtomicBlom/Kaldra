@@ -24,6 +24,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 {
 	private const uint DefaultShader4ComponentMapping = 0x1688; // D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
 
+	private readonly RecordValidator _validate;
 	private readonly DirectX12Context _ctx;
 	private readonly DirectX12TechniqueCache _techniques;
 	private readonly DirectX12DescriptorRing _ring;
@@ -64,8 +65,9 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	public double Time { get; private set; }
 	public bool HdrOutput { get; private set; }
 
-	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, MaterialStore materials, int frameCount)
+	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, MaterialStore materials, int frameCount, RecordValidator validation)
 	{
+		_validate = validation;
 		_ctx = ctx;
 		_techniques = techniques;
 		_ring = ring;
@@ -116,13 +118,13 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	// The parameter buffer (ResourceKind.Constants) the current pass .Reads, or -1 — bound to the technique's root CBV.
 	// The app-writable parameter buffers the current pass .Reads (its ReadUniform edges, in order), bound to the
 	// technique's uniform CBVs b1..bK; an in-closure push follows at b(K+1). The engine fills this in BeginPass.
-	public const int MaxUniformBuffers = 8;
+	public const int MaxUniformBuffers = GraphLimits.MaxUniformBuffersPerPass;
 	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
 	private int _activeConstantsCount;
 
 	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
 	// technique's read-only root SRVs (the structured-buffer SSBO seam). The engine fills this in BeginPass.
-	public const int MaxStorageBuffers = 8;
+	public const int MaxStorageBuffers = GraphLimits.MaxStorageBuffersPerPass;
 	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
 	private int _activeStorageCount;
 
@@ -133,18 +135,22 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	/// <paramref name="constantsIds"/> / <paramref name="storageIds"/> are the parameter and storage buffers the
 	/// pass <c>.Reads</c> (in order), bound to the technique's uniform CBVs b1.. and read-only root SRVs at draw time.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
+	public void BeginPass(GraphPass pass, ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
 	{
+		_validate.BeginPass(pass);
 		if (_colorFormats.Length < colorFormats.Length)
 			_colorFormats = new DxgiFormat[colorFormats.Length];
 		colorFormats.CopyTo(_colorFormats);
 		_colorCount = colorFormats.Length;
 		_depthFormat = depthFormat;
 		_depthReadOnly = depthReadOnly;
-		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
-		constantsIds[.._activeConstantsCount].CopyTo(_activeConstantsIds);
-		_activeStorageCount = Math.Min(storageIds.Length, MaxStorageBuffers);
-		storageIds[.._activeStorageCount].CopyTo(_activeStorageIds);
+		// Derivation rejects a pass that exceeds either cap, so these fit by construction. Copying the whole span
+		// rather than clamping it means an engine bug would throw here instead of silently mis-binding every slot
+		// past the cap, which is what the clamp used to do.
+		_activeConstantsCount = constantsIds.Length;
+		constantsIds.CopyTo(_activeConstantsIds);
+		_activeStorageCount = storageIds.Length;
+		storageIds.CopyTo(_activeStorageIds);
 	}
 
 	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs) =>
@@ -153,6 +159,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	public void FullScreen(string technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs)
 	{
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		_validate.FullScreen(technique, inputs);
 		_cmd.SetGraphicsRootSignature(baked.RootSignature);
 		_cmd.SetPipelineState(baked.Pipeline);
 
@@ -168,9 +175,16 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		if (push.Length > 0)
 		{
 			if (baked.CbvRootParam >= 0 && baked.UniformBufferCount > bound)
+			{
+				_validate.PushFits(technique, push.Length * sizeof(float), routesToUniform: true, bound, scalarPushBytes: 0);
 				_cmd.SetGraphicsRootConstantBufferView((uint)(baked.CbvRootParam + bound), _uniformUpload.Upload(_slot, System.Runtime.InteropServices.MemoryMarshal.AsBytes(push)));
-			else if (baked.CbvRootParam < 0)
-				SetPush(baked, push);
+			}
+			else
+			{
+				// A plain `else`, so a technique whose reflected CBVs are all filled by the pass's .Reads lands here
+				// and is reported rather than dropping the push, as the old `CbvRootParam < 0` condition did.
+				SetPush(baked, technique, push);
+			}
 		}
 		if (inputs.Length > 0)
 			BindInputs(baked, inputs);

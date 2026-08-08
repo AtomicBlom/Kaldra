@@ -1,3 +1,4 @@
+using Loom.Core.Hosting;
 using Loom.Core.Materials;
 
 namespace Loom.Graph;
@@ -116,7 +117,7 @@ public sealed class MaterialStore
 		if (_layouts.TryGetValue(technique, out var layout))
 			Validate(material, technique, layout, entry);
 		else
-			entry.Validated.Add(technique); // no reflection for this technique (a built-in stand-in): nothing to check
+			entry.Validated.Add(technique); // this technique registered no layout, so there is no contract to check against
 	}
 
 	private static void Validate(Material material, string technique, MaterialLayout layout, Entry entry)
@@ -133,6 +134,6 @@ public sealed class MaterialStore
 		var hint = layout.HasParameters && entry.Parameters.Length == 0
 			? $" The shader declares a '{ShaderReflection.MaterialParameterName}' block, so build the material with CreateMaterial<T>(\"{technique}\", in parameters, textures)."
 			: " A technique's expectations come from its shader's reflection, so this is a disagreement between the shader and the material built for it.";
-		throw new InvalidOperationException($"Material {material.Id} cannot drive technique '{technique}': it {problem}.{hint}");
+		throw new TechniqueMismatchException($"Material {material.Id} cannot drive technique '{technique}': it {problem}.{hint}", technique);
 	}
 }

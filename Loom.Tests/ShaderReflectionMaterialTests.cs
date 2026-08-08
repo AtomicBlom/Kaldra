@@ -51,7 +51,7 @@ public class ShaderReflectionMaterialTests
 	public void A_default_reflection_means_no_material_block()
 	{
 		// The trap this guards: with a -1 sentinel, default(ShaderReflection) would claim slot 0 is the material
-		// block, and every shader without a sidecar (the DX12 built-in stand-ins) would bind garbage there.
+		// block, so any shader whose bindings are unknown would bind garbage there.
 		ShaderReflection.Empty.HasMaterialParameters.ShouldBeFalse();
 		default(ShaderReflection).HasMaterialParameters.ShouldBeFalse();
 	}
@@ -139,5 +139,50 @@ public class ShaderReflectionMaterialTests
 		reflection.UniformBufferCount.ShouldBe(3);
 		reflection.MaterialUniformSlot.ShouldBe(2);
 		reflection.MaterialParameterBytes.ShouldBe(48);
+	}
+
+	[Test]
+	public void Every_constant_buffer_reports_its_size_in_slot_order()
+	{
+		// Sizes are read for all cbuffers, not just the reserved block, and land in binding order even when the
+		// sidecar lists them out of order — the same ordering the material slot ordinal uses.
+		var reflection = ShaderReflection.FromBytes(Sidecar(
+			("draw", 5, "constantBuffer", 80),
+			("view", 2, "constantBuffer", 64)));
+
+		reflection.UniformSlotBytes(0).ShouldBe(64); // view, the lower binding
+		reflection.UniformSlotBytes(1).ShouldBe(80); // draw
+	}
+
+	[Test]
+	public void An_unknown_slot_size_reads_as_zero_rather_than_throwing()
+	{
+		// 0 means "no reflected bound", and a caller sizing a write must fall back rather than conclude the buffer
+		// holds nothing. A shader with no sidecar has no sizes at all, so this must not throw on the default array.
+		ShaderReflection.Empty.UniformSlotBytes(0).ShouldBe(0);
+		default(ShaderReflection).UniformSlotBytes(3).ShouldBe(0);
+
+		var reflection = ShaderReflection.FromBytes(Sidecar(("view", 0, "constantBuffer", 64)));
+		reflection.UniformSlotBytes(1).ShouldBe(0);
+		reflection.UniformSlotBytes(-1).ShouldBe(0);
+	}
+
+	[Test]
+	public void The_real_wide_push_shaders_declare_a_block_big_enough_for_what_the_demos_push()
+	{
+		// The guard on the push bound: a push routed to a constant buffer is checked against that buffer's declared
+		// size, so under-reporting it would reject legitimate work. These two are the widest real pushes in the
+		// gallery — CascadedShadowsDemo pushes 68 floats and the sky demos 36 — and both must fit.
+		foreach (var (shader, slot, floats) in new[] { ("lighting_csm", 1, 68), ("sky", 0, 36) })
+		{
+			var path = Path.Combine(AppContext.BaseDirectory, "shaders", $"{shader}.json");
+			if (!File.Exists(path))
+				throw new TUnit.Core.Exceptions.SkipTestException($"reflection sidecar not found at {path}.");
+
+			var reflection = ShaderReflection.FromBytes(File.ReadAllBytes(path));
+
+			reflection.UniformSlotBytes(slot)
+				.ShouldBeGreaterThanOrEqualTo(floats * sizeof(float), $"{shader} slot {slot} must hold the {floats} floats the demo pushes.");
+		}
 	}
 }

@@ -75,13 +75,15 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 	// Push a scalar block to the pass's root constants (the per-pass channel: JFA step, exposure rate, a
 	// light-space matrix). Padded to the layout's 16 floats so the shader always reads defined memory.
-	private void SetPush(DirectX12Technique baked, ReadOnlySpan<float> push)
+	private void SetPush(DirectX12Technique baked, string technique, ReadOnlySpan<float> push)
 	{
-		if (baked.RootConstantParam < 0)
-			throw new InvalidOperationException("DirectX12: technique has no root-constant block but a push was supplied.");
+		// Reports both "no block to push into" and "the push overflows the block" — the second of which used to be a
+		// silent truncation — and reads identically on every backend.
+		_validate.PushFits(technique, push.Length * sizeof(float), routesToUniform: false, 0,
+			baked.RootConstantParam >= 0 ? DirectX12Technique.ScalarPushSize : 0);
 		var block = stackalloc float[16];
-		for (var i = 0; i < push.Length && i < 16; i++)
-			block[i] = push[i];
+		new Span<float>(block, 16).Clear();
+		push.CopyTo(new Span<float>(block, push.Length));
 		_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
 	}
 

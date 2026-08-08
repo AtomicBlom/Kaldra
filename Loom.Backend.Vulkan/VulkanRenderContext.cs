@@ -20,6 +20,7 @@ namespace Loom.Backend.Vulkan;
 /// </summary>
 internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisposable
 {
+	private readonly RecordValidator _validate;
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly VulkanTechniqueCache _techniques;
@@ -99,8 +100,10 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		VulkanTextureStore textures,
 		MaterialStore materials,
 		VMASharp.VulkanMemoryAllocator allocator,
-		int framesInFlight)
+		int framesInFlight,
+		RecordValidator validation)
 	{
+		_validate = validation;
 		_ctx = ctx;
 		_vk = ctx.Vk;
 		_techniques = techniques;
@@ -152,14 +155,15 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 
 	// The parameter buffers (ResourceKind.Constants) the current pass .Reads, in order. The engine resolves them
 	// from the pass's ReadUniform edges in BeginPass; FullScreen binds them to the technique's uniform slots 0..K-1
-	// (an in-closure push fills slot K). MaxUniformBuffers caps the per-pass count.
-	public const int MaxUniformBuffers = 8;
+	// (an in-closure push fills slot K). The cap is the neutral one every backend is held to, and derivation rejects
+	// a pass that exceeds it — so these arrays are sized to a bound that has already been enforced.
+	public const int MaxUniformBuffers = GraphLimits.MaxUniformBuffersPerPass;
 	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
 	private int _activeConstantsCount;
 
 	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
 	// technique's storage-buffer slots (after the sampled inputs, before the uniform slots).
-	public const int MaxStorageBuffers = 8;
+	public const int MaxStorageBuffers = GraphLimits.MaxStorageBuffersPerPass;
 	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
 	private int _activeStorageCount;
 
@@ -170,8 +174,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	/// <paramref name="constantsIds"/> / <paramref name="storageIds"/> are the parameter and storage buffers the
 	/// pass <c>.Reads</c> (in order), bound to the technique's uniform and storage-buffer slots at draw time.
 	/// </summary>
-	public void BeginPass(ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
+	public void BeginPass(GraphPass pass, ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
 	{
+		_validate.BeginPass(pass);
 		// Copy into the inline buffer (no allocation) rather than .ToArray(); the incoming span points into
 		// the executor's stackalloc, which is gone once this returns. Throw — never clamp — on an over-wide
 		// pass: silently dropping formats would bake a pipeline with fewer attachments than the pass writes.
@@ -181,10 +186,13 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		colorFormats.CopyTo(((Span<VkFormat>)_colorFormats)[.._colorCount]);
 		_depthFormat = depthFormat;
 		_depthReadOnly = depthReadOnly;
-		_activeConstantsCount = Math.Min(constantsIds.Length, MaxUniformBuffers);
-		constantsIds[.._activeConstantsCount].CopyTo(_activeConstantsIds);
-		_activeStorageCount = Math.Min(storageIds.Length, MaxStorageBuffers);
-		storageIds[.._activeStorageCount].CopyTo(_activeStorageIds);
+		// Derivation rejects a pass that exceeds either cap, so these fit by construction. Copying the whole span
+		// rather than clamping it means an engine bug would throw here instead of silently mis-binding every slot
+		// past the cap, which is what the clamp used to do.
+		_activeConstantsCount = constantsIds.Length;
+		constantsIds.CopyTo(_activeConstantsIds);
+		_activeStorageCount = storageIds.Length;
+		storageIds.CopyTo(_activeStorageIds);
 	}
 
 	/// <summary>
@@ -207,6 +215,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	{
 		var baked = Bake(technique);
 		var template = _registry[technique];
+		_validate.FullScreen(technique, inputs);
 		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
 
 		// The per-pass data channel. The pass's .Reads Constants buffers bind to the technique's reflected uniform
@@ -219,17 +228,23 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			ubos[uboCount++] = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[j]), 0, Vk.WholeSize);
 		if (push.Length > 0)
 		{
+			var pushBytes = push.Length * sizeof(float);
 			if (template.UniformBufferCount > uboCount && uboCount < MaxUniformBuffers)
 			{
+				_validate.PushFits(technique, pushBytes, routesToUniform: true, uboCount, scalarPushBytes: 0);
 				ubos[uboCount++] = UploadUniforms(System.Runtime.InteropServices.MemoryMarshal.AsBytes(push));
 			}
-			else if (template.UniformBufferCount == 0)
+			else
 			{
-				// The fragment scalar channel: pad to the layout's fixed range so the shader always reads defined
-				// memory, then push to the fragment stage at offset 0.
+				// The scalar channel. A plain `else` rather than a second condition, so the case where the technique
+				// reflects constant buffers but the pass's .Reads already filled them all lands here and is reported —
+				// it used to fall through both branches and drop the push without a word.
+				_validate.PushFits(technique, pushBytes, routesToUniform: false, 0, template.HasFragmentPush ? VulkanTechnique.FragmentPushSize : 0);
+				// Pad to the layout's fixed range so the shader always reads defined memory, then push to the
+				// fragment stage at offset 0. Unclamped: PushFits has already established that it fits.
 				var block = stackalloc float[16];
-				for (var i = 0; i < push.Length && i < 16; i++)
-					block[i] = push[i];
+				new Span<float>(block, 16).Clear();
+				push.CopyTo(new Span<float>(block, push.Length));
 				_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.FragmentPushSize, block);
 			}
 		}
@@ -264,7 +279,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	private VulkanTechnique Bake(string technique)
 	{
 		if (!_registry.TryGetValue(technique, out var template))
-			throw new VulkanException($"No technique registered under the name '{technique}'.");
+			throw new TechniqueNotDefinedException(technique);
 
 		var colorFormats = ((ReadOnlySpan<VkFormat>)_colorFormats)[.._colorCount];
 		var key = new PipelineKey(technique, colorFormats, _depthFormat, _depthReadOnly);

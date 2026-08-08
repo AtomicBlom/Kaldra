@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 
+using Loom.Core.Diagnostics;
 using Loom.Core.Materials;
 
 namespace Loom.Graph;
@@ -66,7 +67,7 @@ public sealed class ShaderReloadRegistry
 				continue;
 			foreach (var name in techniques)
 				redefine(name, _descriptorsByName[name]);
-			Console.WriteLine($"[loom] reloaded shader '{shader}' → {string.Join(", ", techniques)}");
+			LoomLog.Info($"reloaded shader '{shader}' → {string.Join(", ", techniques)}");
 		}
 		resetCaches();
 	}

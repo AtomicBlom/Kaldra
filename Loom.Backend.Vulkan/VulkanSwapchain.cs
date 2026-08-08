@@ -1,3 +1,4 @@
+using Loom.Core.Diagnostics;
 using Silk.NET.Vulkan;
 
 namespace Loom.Backend.Vulkan;
@@ -55,10 +56,10 @@ public sealed unsafe class VulkanSwapchain : IVulkanPresentTarget
 
 		if (oldSwapchain.Handle == 0) // First create only — not every resize.
 		{
-			Console.WriteLine($"[loom] present={presentMode}, vsync={_vsync}");
-			Console.WriteLine($"[loom] swapchain format={surfaceFormat.Format}, colorspace={surfaceFormat.ColorSpace}, hdr={HdrActive}");
+			LoomLog.Info($"present={presentMode}, vsync={_vsync}");
+			LoomLog.Info($"swapchain format={surfaceFormat.Format}, colorspace={surfaceFormat.ColorSpace}, hdr={HdrActive}");
 			if (_hdrOutput && !HdrActive)
-				Console.WriteLine("[loom] HDR output requested but no HDR-capable surface format/colour space available — using SDR.");
+				LoomLog.Warning("HDR output requested but no HDR-capable surface format/colour space available — using SDR.");
 		}
 
 		var imageCount = caps.MinImageCount + 1;

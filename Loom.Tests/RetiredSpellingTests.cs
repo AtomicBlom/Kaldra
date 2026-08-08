@@ -38,6 +38,9 @@ public class RetiredSpellingTests
 		new("--smoke-frames", "the in-process offscreen tests (there is no capture flag)"),
 		new("Loom.Vulkan", "Loom.Backend.Vulkan"),
 		new("Loom.DirectX12", "Loom.Backend.DirectX12"),
+		new("DirectX12Shaders.Builtins", "DirectX12Shaders.TryResolveStageDxil — an unresolvable shader throws rather than substituting one"),
+		new("DirectX12Triangle", "the graph path; a no-graph Render throws on every backend"),
+		new("RenderLegacy", "RenderGraphFrame; a no-graph Render throws on every backend"),
 	];
 
 	// Put this on a line to say "the mention is deliberate" — a doc that tells the reader a flag was removed has to

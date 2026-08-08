@@ -1,5 +1,6 @@
 using Loom.Assets;
 using Loom.Core.Animation;
+using Loom.Core.Diagnostics;
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
@@ -137,6 +138,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	}
 
 	private VulkanEngine(VulkanContext ctx, bool offscreen, int width, int height, VulkanEngineSettings settings)
+		: base(settings)
 	{
 		_ctx = ctx;
 		_offscreen = offscreen;
@@ -148,7 +150,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_timestampPeriod = _ctx.TimestampPeriod;
 		_timestampValidBits = _ctx.GraphicsTimestampValidBits;
 		if (_timestampValidBits == 0)
-			Console.WriteLine("[loom] GPU timing unavailable: the graphics queue reports 0 timestamp valid bits.");
+			LoomLog.Warning("GPU timing unavailable: the graphics queue reports 0 timestamp valid bits.");
 		_windowExtent = new Extent2D((uint)width, (uint)height);
 		_presentTarget = offscreen
 			? new VulkanOffscreenTarget(_ctx, _windowExtent, MaxFramesInFlight)
@@ -164,7 +166,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_meshes = new VulkanMeshStore(_ctx, _allocator, _commandPool);
 		_textures = new VulkanTextureStore(_ctx, _allocator, _commandPool);
 		_descriptors = new VulkanDescriptorAllocator(_ctx, MaxFramesInFlight);
-		_context = new VulkanRenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, Materials, _allocator, MaxFramesInFlight);
+		_context = new VulkanRenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, Materials, _allocator, MaxFramesInFlight, Validation);
 
 		CreateCommandBuffers();
 		CreateSyncObjects();
@@ -176,7 +178,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			var source = new LayeredAssetSource(_shaderDir);
 			_shaderWatcher = new AssetWatcher(source, [".spv", ".json"], debounceMs: 150);
 			_shaderWatcher.Changed += OnShaderArtifactChanged;
-			Console.WriteLine($"[loom] watching shaders for hot-reload: {_shaderDir}");
+			LoomLog.Info($"watching shaders for hot-reload: {_shaderDir}");
 		}
 	}
 
@@ -188,7 +190,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		QueueShaderReload(shader);
 	}
 
-	protected override MaterialLayout BakeTechnique(string name, TechniqueDescriptor descriptor)
+	protected override TechniqueShape BakeTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		// Resolve the logical shader name to backend bytecode + reflection, and fold the neutral descriptor into
 		// the backend's baked-input form. Shaders are named logically — no .spv path in app code.
@@ -235,7 +237,11 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.Bias,
 			reflection.MaterialUniformSlot,
 			reflection.MaterialParameterBytes);
-		return new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes);
+		return new TechniqueShape(
+			new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes),
+			reflection.UniformBufferBytes,
+			descriptor.HasFragmentPush ? VulkanTechnique.FragmentPushSize : 0,
+			descriptor.HasListPush ? VulkanTechnique.ListPushSize : 0);
 	}
 
 	// Evict the baked pipelines after a hot-reload so the next bake rebuilds from the re-registered templates.
@@ -350,7 +356,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		if (File.Exists(path))
 			return File.ReadAllBytes(path);
 
-		throw new VulkanException(
+		throw new ShaderAssetMissingException(
+			name,
 			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Backend.Vulkan?");
 	}
 

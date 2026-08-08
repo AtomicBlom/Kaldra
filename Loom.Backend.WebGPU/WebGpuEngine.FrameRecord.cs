@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Runtime.Versioning;
 
+using Loom.Core.Diagnostics;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Graph;
@@ -14,8 +15,10 @@ internal sealed partial class WebGpuEngine
 	{
 		DrainShaderReloads();
 		ServicePendingUploads();
-		if (_transients is null || Graph is null)
-			return;
+		// Same answer as the other backends: rendering without a graph is a host sequencing bug, and silently
+		// returning turns it into a canvas that never updates with nothing to explain why.
+		if (Graph is null || _transients is null)
+			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
 
 		_elapsed = (float)inputs.Time;
 		_writer.Reset();
@@ -53,7 +56,7 @@ internal sealed partial class WebGpuEngine
 
 		var errors = WebGpuInterop.TakeErrors();
 		if (!string.IsNullOrEmpty(errors))
-			Console.WriteLine($"[loom][webgpu] {errors}");
+			LoomLog.Error($"[webgpu] {errors}");
 	}
 
 	private void EmitBufferUpload(int id, ReadOnlySpan<byte> bytes)
@@ -80,7 +83,7 @@ internal sealed partial class WebGpuEngine
 		{
 			_writer.BeginComputePass();
 			// No colour/depth targets; keeps the bake key stable and supplies the pass's read buffers.
-			_context.BeginPass([], -1, false, [], 0, 0, constantsIds[..constantsCount], storageIds[..storageCount]);
+			_context.BeginPass(pass.Pass, [], -1, false, [], 0, 0, constantsIds[..constantsCount], storageIds[..storageCount]);
 			pass.Pass.Record?.Invoke(_context);
 			_writer.EndPass();
 			return;
@@ -128,7 +131,7 @@ internal sealed partial class WebGpuEngine
 		// The technique pipelines this pass bakes must match the attachment formats declared above. The colour
 		// attachment views + pass area are handed through too, so a draw list's group-opacity layers can suspend and
 		// resume this exact scope below the graph seam.
-		_context.BeginPass(colorFormatIds[..colorCount], depthFormatId, depthReadOnly, colorViews[..colorCount], area.Width, area.Height, constantsIds[..constantsCount], storageIds[..storageCount]);
+		_context.BeginPass(pass.Pass, colorFormatIds[..colorCount], depthFormatId, depthReadOnly, colorViews[..colorCount], area.Width, area.Height, constantsIds[..constantsCount], storageIds[..storageCount]);
 		pass.Pass.Record?.Invoke(_context);
 		_writer.EndPass();
 	}
@@ -139,7 +142,7 @@ internal sealed partial class WebGpuEngine
 	{
 		var n = 0;
 		foreach (var access in pass.Accesses)
-			if (access.Kind == kind && n < ids.Length)
+			if (access.Kind == kind)
 				ids[n++] = access.Resource.Id;
 		return n;
 	}

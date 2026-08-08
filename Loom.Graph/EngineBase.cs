@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Loom.Core.Animation;
+using Loom.Core.Diagnostics;
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
@@ -71,8 +72,20 @@ public abstract class EngineBase : IEngine
 	private readonly Action _waitIdleDelegate;
 	private readonly Action _resetPipelineCachesDelegate;
 
-	public EngineBase()
+	/// <summary>
+	/// The settings the engine was created with. Held here rather than per backend so a base-level knob cannot be
+	/// reachable on one backend and forgotten on another.
+	/// </summary>
+	protected EngineSettings Settings { get; }
+
+	/// <summary>Checks each recorded draw against its pass's declarations; handed to the backend's render context.</summary>
+	protected RecordValidator Validation { get; }
+
+	protected EngineBase(EngineSettings settings)
 	{
+		ArgumentNullException.ThrowIfNull(settings);
+		Settings = settings;
+		Validation = new RecordValidator(settings.ValidateRecording, Techniques);
 		_defineTechniqueDelegate = DefineTechnique;
 		_waitIdleDelegate = WaitIdle;
 		_resetPipelineCachesDelegate = ResetPipelineCaches;
@@ -88,20 +101,27 @@ public abstract class EngineBase : IEngine
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		ArgumentException.ThrowIfNullOrEmpty(name);
+		var shape = BakeTechnique(name, descriptor);
 		// Recording what the shader expects of a material is what lets a mismatch be caught at *definition* — and
 		// because a hot reload replays this, at reload too, against every material already built for the name.
-		Materials.RegisterTechnique(name, BakeTechnique(name, descriptor));
+		Materials.RegisterTechnique(name, shape.Material);
+		Techniques.Register(name, descriptor, shape);
 		_reload.Record(name, descriptor);
 	}
 
 	/// <summary>
-	/// Bake a technique's backend pipeline/PSO inputs from its descriptor — the backend half of
-	/// <see cref="DefineTechnique"/>. Returns what the technique's shader expects a <see cref="Material"/> to supply,
-	/// which the backend already has in hand: it comes from the same reflection sidecar the descriptor counts come
-	/// from. Return <c>default</c> for a technique with no reflection (a built-in stand-in), which reads as
-	/// "no textures, no parameters" and so accepts any material.
+	/// Every technique defined on this engine, for the checks that must consult a technique by name without going
+	/// through a backend's own pipeline cache.
 	/// </summary>
-	protected abstract MaterialLayout BakeTechnique(string name, TechniqueDescriptor descriptor);
+	protected TechniqueRegistry Techniques { get; } = new();
+
+	/// <summary>
+	/// Bake a technique's backend pipeline/PSO inputs from its descriptor — the backend half of
+	/// <see cref="DefineTechnique"/>. Returns what the baked technique can accept, which the backend already has in
+	/// hand: it all comes from the same reflection sidecar the descriptor counts come from. Return <c>default</c> for
+	/// a technique with no reflection, which reads as "nothing is known", not as "it accepts nothing".
+	/// </summary>
+	protected abstract TechniqueShape BakeTechnique(string name, TechniqueDescriptor descriptor);
 
 	/// <inheritdoc/>
 	public MaterialLayout MaterialLayoutOf(string technique)
@@ -319,7 +339,7 @@ public abstract class EngineBase : IEngine
 		Aliases = AliasPlan.Derive(LifetimePlan.Derive(schedule));
 
 		if (Aliases.AliasableCount > Aliases.Buckets.Length)
-			Console.WriteLine($"[loom] {AliasingLogPrefix}transient aliasing: {Aliases.AliasableCount} transients folded into {Aliases.Buckets.Length} memory buckets.");
+			LoomLog.Info($"{AliasingLogPrefix}transient aliasing: {Aliases.AliasableCount} transients folded into {Aliases.Buckets.Length} memory buckets.");
 
 		RebuildGraphResources(graph, executed);
 	}
