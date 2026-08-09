@@ -39,6 +39,9 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	private const int NothingBound = 0;
 	private int _bound = NothingBound;
 
+	// Built on the first indirect draw and kept; one indexed-draw layout covers every indirect draw the engine issues.
+	private ComPtr<ID3D12CommandSignature> _indirectSignature;
+
 	public DirectX12MeshStore(DirectX12Context ctx) => _ctx = ctx;
 
 	/// <summary>
@@ -185,6 +188,47 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	}
 
 	/// <summary>
+	/// Bind a mesh and draw it with the counts taken from <paramref name="arguments"/> at <paramref name="offset"/> —
+	/// <c>D3D12_DRAW_INDEXED_ARGUMENTS</c>: index count, instance count, first index, base vertex, first instance.
+	/// The CPU never learns any of them.
+	/// </summary>
+	public void DrawIndirect(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, ComPtr<ID3D12Resource> arguments, ulong offset)
+	{
+		var mesh = _meshes[Slot(meshId)];
+		var vbv = mesh.VertexView;
+		var ibv = mesh.IndexView;
+		cmd.IASetVertexBuffers(0, 1, &vbv);
+		cmd.IASetIndexBuffer(&ibv);
+		_bound = meshId;
+		cmd.ExecuteIndirect(IndirectSignature(), 1, arguments, offset, default(ComPtr<ID3D12Resource>), 0);
+	}
+
+	// D3D12 has no ExecuteIndirect without a command signature describing the argument layout. One indexed-draw
+	// signature covers every indirect draw the engine issues, so it is built once and kept.
+	private ComPtr<ID3D12CommandSignature> IndirectSignature()
+	{
+		if (_indirectSignature.Handle is not null)
+			return _indirectSignature;
+
+		var argument = new IndirectArgumentDesc { Type = IndirectArgumentType.DrawIndexed };
+		var desc = new CommandSignatureDesc
+		{
+			ByteStride = (uint)sizeof(DrawIndexedArguments),
+			NumArgumentDescs = 1,
+			PArgumentDescs = &argument,
+			NodeMask = 0,
+		};
+		// A signature carrying only DRAW_INDEXED changes no root arguments, so it takes a null root signature. Silk's
+		// typed overloads all want a root signature by reference, which cannot express null, so this goes through the
+		// raw COM entry point.
+		ID3D12CommandSignature* signature = null;
+		SilkMarshal.ThrowHResult(_ctx.Device.Handle->CreateCommandSignature(
+			&desc, (ID3D12RootSignature*)null, SilkMarshal.GuidPtrOf<ID3D12CommandSignature>(), (void**)&signature));
+		_indirectSignature = signature;
+		return _indirectSignature;
+	}
+
+	/// <summary>
 	/// Forget which mesh is bound. Required whenever something other than this store touches the vertex or index
 	/// bindings — a new command list, a draw list's own geometry, the procedural instance stream — because the memo is
 	/// a claim about the command list's recorded state, not about this store's history.
@@ -240,5 +284,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 				mesh.IndexBuffer.Dispose();
 		}
 		_meshes.Clear();
+		if (_indirectSignature.Handle is not null)
+			_indirectSignature.Dispose();
 	}
 }

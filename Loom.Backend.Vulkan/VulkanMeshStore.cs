@@ -186,6 +186,21 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	}
 
 	/// <summary>
+	/// Bind a mesh and draw it with the counts taken from <paramref name="arguments"/> at
+	/// <paramref name="offset"/> — <c>VkDrawIndexedIndirectCommand</c>: index count, instance count, first index,
+	/// vertex offset, first instance. The CPU never learns any of them.
+	/// </summary>
+	public void DrawIndirect(CommandBuffer cmd, int meshId, Buffer arguments, ulong offset)
+	{
+		var mesh = _meshes[Slot(meshId)];
+		var vertexOffset = 0ul;
+		_vk.CmdBindVertexBuffers(cmd, 0, 1, in mesh.VertexBuffer, in vertexOffset);
+		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
+		_bound = meshId;
+		_vk.CmdDrawIndexedIndirect(cmd, arguments, offset, 1, 0);
+	}
+
+	/// <summary>
 	/// Forget which mesh is bound. Required whenever something other than this store touches the vertex or index
 	/// bindings — a new command buffer, a draw list's own geometry, the procedural instance stream — because the
 	/// memo is a claim about the command buffer's recorded state, not about this store's history.

@@ -121,6 +121,15 @@ internal sealed partial class WebGpuRenderContext
 		var meshes = _engine.Meshes;
 		var writer = _engine.Writer;
 
+		if (call.Instances.IndirectBuffer is { } args)
+		{
+			// The counts live in the buffer; the CPU supplies only where to read them. The graph ordered the compute
+			// that filled it before this pass.
+			meshes.DrawIndirect(writer, _validate.RequireMesh(call).Id,
+				_engine.Transients.BufferHandle(args.Id), call.Instances.IndirectOffset);
+			return;
+		}
+
 		if (call.Instances.IsEmpty)
 		{
 			if (call.SkinnedVertices is { } sv)

@@ -30,6 +30,10 @@ public enum ResourceState
 	/// <summary>A buffer read as vertex-attribute input by a draw (GPU particles). Buffers have no layout.</summary>
 	VertexInput,
 
+	/// <summary>A buffer read as draw arguments by the command processor, not by a shader stage. Buffers have no
+	/// layout, and the stage this waits on is the drawing-indirect stage rather than vertex input.</summary>
+	IndirectArgument,
+
 	/// <summary>
 	/// Read by a copy out of the frame — the source of the end-of-frame <c>g.Readback</c> copy to host-visible
 	/// memory, and of a frame capture (<c>TRANSFER_SRC_OPTIMAL</c> / <c>COPY_SOURCE</c>).

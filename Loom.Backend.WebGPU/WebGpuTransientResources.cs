@@ -93,9 +93,11 @@ internal sealed class WebGpuTransientResources : IDisposable
 				return;
 
 			case ResourceKind.Buffer:
-				// GPU-written storage that is also drawn as vertices (the particle path).
+				// GPU-written storage that is also drawn as vertices (the particle path) or read as draw arguments
+				// (the indirect path). WebGPU fixes a buffer's usage at creation and a graph buffer can take either
+				// role, so it carries both — the alternative is knowing every use before the resource exists.
 				_buffers[resource.Id] = CreateBuffer(resource.ByteSize,
-					WebGpuStateMapping.BufferStorage | WebGpuStateMapping.BufferVertex | WebGpuStateMapping.BufferCopyDst, resource.Name);
+					WebGpuStateMapping.BufferStorage | WebGpuStateMapping.BufferVertex | WebGpuStateMapping.BufferIndirect | WebGpuStateMapping.BufferCopyDst, resource.Name);
 				return;
 		}
 	}

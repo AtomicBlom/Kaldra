@@ -65,7 +65,7 @@ public sealed partial class RenderGraph
 	// Reading order for dumps: inputs first, then outputs.
 	private static readonly AccessKind[] DisplayOrder =
 	[
-		AccessKind.Sample, AccessKind.ReadDepth, AccessKind.ReadWrite,
+		AccessKind.Sample, AccessKind.ReadDepth, AccessKind.ReadVertex, AccessKind.ReadIndirect, AccessKind.ReadWrite,
 		AccessKind.Blend, AccessKind.Write, AccessKind.WriteDepth,
 	];
 
@@ -203,7 +203,7 @@ public sealed partial class RenderGraph
 	}
 
 	// Reads (resource -> pass) vs writes (pass -> resource); Blend/ReadWrite are both (read-modify-write).
-	private static bool IsRead(AccessKind kind) => kind is AccessKind.Sample or AccessKind.ReadDepth or AccessKind.ReadVertex;
+	private static bool IsRead(AccessKind kind) => kind is AccessKind.Sample or AccessKind.ReadDepth or AccessKind.ReadVertex or AccessKind.ReadIndirect;
 	private static bool IsWrite(AccessKind kind) => kind is AccessKind.Write or AccessKind.WriteDepth;
 
 	/// <summary>

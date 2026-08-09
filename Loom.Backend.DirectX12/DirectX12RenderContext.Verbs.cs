@@ -36,7 +36,16 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		BindTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 
-		if (call.Instances.IsEmpty)
+		if (call.Instances.IndirectBuffer is { } args)
+		{
+			// The counts live in the buffer; the CPU supplies only where to read them. The graph put the buffer in
+			// INDIRECT_ARGUMENT before this pass, so the compute that filled it has completed.
+			if (_transients is null)
+				throw new InvalidOperationException("DirectX12: an indirect draw requires an active graph (SetGraph).");
+			_meshes.DrawIndirect(_cmd, _validate.RequireMesh(call).Id,
+				_transients.Resource(_slot, args.Id), (ulong)call.Instances.IndirectOffset);
+		}
+		else if (call.Instances.IsEmpty)
 		{
 			// Single-instance draw: skinned override or standard mesh.
 			if (call.SkinnedVertices is { } sv)

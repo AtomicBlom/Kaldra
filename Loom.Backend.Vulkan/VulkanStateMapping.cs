@@ -61,6 +61,14 @@ internal static class VulkanStateMapping
 			PipelineStageFlags2.VertexAttributeInputBit,
 			AccessFlags2.VertexAttributeReadBit),
 
+		// A buffer read as draw arguments. Read by the command processor rather than a shader stage, which is its own
+		// pipeline stage — waiting on vertex input instead would let the fetch of the counts race the compute that
+		// wrote them.
+		GraphState.IndirectArgument => new(
+			ImageLayout.Undefined,
+			PipelineStageFlags2.DrawIndirectBit,
+			AccessFlags2.IndirectCommandReadBit),
+
 		// Source of a copy out of the frame — the g.Readback copy-to-buffer, and a frame capture.
 		GraphState.CopySource => new(
 			ImageLayout.TransferSrcOptimal,

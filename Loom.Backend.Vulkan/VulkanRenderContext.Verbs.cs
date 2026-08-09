@@ -35,7 +35,14 @@ internal sealed unsafe partial class VulkanRenderContext
 			BindSampledInputs(baked, call.Sampled, template.LinearFilter, default, ubos[..uboCount]);
 		}
 
-		if (call.Instances.IsEmpty)
+		if (call.Instances.IndirectBuffer is { } args)
+		{
+			// The counts live in the buffer; the CPU supplies only where to read them. The graph put the buffer in
+			// IndirectArgument before this pass, so the compute that filled it has completed.
+			_meshes.DrawIndirect(_cmd, _validate.RequireMesh(call).Id,
+				_resources.GetBuffer(_frameSlot, args.Id), (ulong)call.Instances.IndirectOffset);
+		}
+		else if (call.Instances.IsEmpty)
 		{
 			// Single-instance draw: skinned override or standard mesh.
 			if (call.SkinnedVertices is { } sv)

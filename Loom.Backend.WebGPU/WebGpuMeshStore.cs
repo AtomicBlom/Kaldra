@@ -97,6 +97,18 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 		writer.DrawIndexed(mesh.IndexCount, 1, 0, 0, 0);
 	}
 
+	/// <summary>
+	/// Bind a mesh and draw it with the counts taken from <paramref name="arguments"/> at <paramref name="offset"/> —
+	/// five 32-bit values the GPU wrote. The CPU never learns any of them.
+	/// </summary>
+	public void DrawIndirect(WebGpuCommandWriter writer, int meshId, int arguments, int offset)
+	{
+		var mesh = _meshes[Slot(meshId)];
+		writer.SetVertexBuffer(0, mesh.VertexBuffer, 0);
+		writer.SetIndexBuffer(mesh.IndexBuffer, indexFormat: 1, 0);
+		writer.DrawIndexedIndirect(arguments, offset);
+	}
+
 	/// <summary>Record an instanced indexed draw: the mesh at binding 0, the per-instance stream at binding 1.</summary>
 	public void DrawInstanced(WebGpuCommandWriter writer, int meshId, int instanceBuffer, int instanceOffset, int instanceCount, in DrawCall.IndexRange range = default)
 	{

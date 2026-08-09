@@ -32,6 +32,7 @@ internal sealed class WebGpuCommandWriter
 	public const int OpDispatch = 13;
 	public const int OpWriteBuffer = 14;
 	public const int OpCopyTextureToBuffer = 15;
+	public const int OpDrawIndexedIndirect = 16;
 
 	// Load/store action encodings (match LOAD_OPS/STORE_OPS in the shim).
 	public const int LoadClear = 0;
@@ -140,6 +141,14 @@ internal sealed class WebGpuCommandWriter
 		WriteInt(firstIndex);
 		WriteInt(baseVertex);
 		WriteInt(firstInstance);
+	}
+
+	/// <summary>Draw with the counts taken from a buffer the GPU filled — WebGPU's drawIndexedIndirect.</summary>
+	public void DrawIndexedIndirect(int bufferHandle, int byteOffset)
+	{
+		WriteInt(OpDrawIndexedIndirect);
+		WriteInt(bufferHandle);
+		WriteInt(byteOffset);
 	}
 
 	public void SetViewport(float x, float y, float width, float height)
