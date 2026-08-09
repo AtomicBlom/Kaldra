@@ -301,7 +301,11 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// Readback staging: one host-visible buffer per frame slot for each g.Readback target.
 		foreach (var target in authored.ReadbackTargets)
 		{
-			var (width, height) = target.Resolve();
+			// Against the live extent, like the transient image itself — the parameterless Resolve() uses the domain's
+			// bake-time size, which is 0×0 for anything anchored to the backbuffer, and would size the staging buffer
+			// to nothing. (DirectX12 already reads the transient's resolved extent, so this is also what keeps the two
+			// backends copying the same number of bytes.)
+			var (width, height) = target.Resolve((int)_presentTarget.Extent.Width, (int)_presentTarget.Extent.Height);
 			var bpt = BytesPerTexel(target.Format);
 			var buffers = new Buffer[MaxFramesInFlight];
 			var memories = new DeviceMemory[MaxFramesInFlight];

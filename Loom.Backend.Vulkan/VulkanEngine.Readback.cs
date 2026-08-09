@@ -8,25 +8,26 @@ namespace Loom.Backend.Vulkan;
 
 internal sealed unsafe partial class VulkanEngine
 {
-	// Copy each readback target (its last graph use is a .Samples, so it's in SHADER_READ) into this slot's
-	// host-visible buffer. The slot's fence guards them; DownloadReadback hands them to the app ~2 frames later.
+	// Copy each readback target into this slot's host-visible buffer. The slot's fence guards them; DownloadReadback
+	// hands them to the app ~2 frames later. The pre-copy transition comes from the derived plan — the last graph use
+	// may be a .Samples (SHADER_READ) or the .Writes that produced it (COLOR_ATTACHMENT), and only derivation knows
+	// which; assuming either one here would emit a barrier with the wrong old layout for the other shape.
 	private void RecordReadback(CommandBuffer cmd)
 	{
+		foreach (var transition in Barriers.ReadbackTransitions)
+			EmitTransition(cmd, transition);
+
+		var copyLayout = VulkanStateMapping.For(ResourceState.CopySource).Layout;
 		foreach (var readback in _readbacks)
 		{
 			ref var image = ref _transients!.Get(_currentFrame, readback.Id);
-			var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
-			TransitionImage(cmd, image.Image, range,
-				ImageLayout.ShaderReadOnlyOptimal, ImageLayout.TransferSrcOptimal,
-				PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit,
-				PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit);
 
 			BufferImageCopy region = new()
 			{
 				ImageSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.ColorBit, LayerCount = 1 },
 				ImageExtent = new Extent3D(image.Extent.Width, image.Extent.Height, 1),
 			};
-			_vk.CmdCopyImageToBuffer(cmd, image.Image, ImageLayout.TransferSrcOptimal, readback.Buffers[_currentFrame], 1, in region);
+			_vk.CmdCopyImageToBuffer(cmd, image.Image, copyLayout, readback.Buffers[_currentFrame], 1, in region);
 			readback.Valid[_currentFrame] = true;
 		}
 	}

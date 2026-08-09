@@ -152,6 +152,51 @@ public class BarrierPlanTests
 	}
 
 	[Test]
+	public void Readback_target_whose_last_use_is_the_write_is_still_stored_and_handed_to_the_copy_out()
+	{
+		// The shape a game hits and the demos don't: nothing samples the id buffer, so the only thing that keeps it
+		// alive is the g.Readback edge. Without the derived keep-alive its own writing pass gets StoreAction.DontCare
+		// and a tile-based GPU discards the contents before the copy-out reads them — silently, and only on some GPUs.
+		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var screen = g.Backbuffer;
+			var ids = g.Screen.Color("ids", Format.R16F);
+			g.Pass("picking").Writes(ids);
+			g.Pass("view").Writes(screen);
+			g.Readback(ids);
+			g.Present(screen);
+		})));
+
+		Attachment(Pass(plan, "picking"), "ids").Store.ShouldBe(StoreAction.Store);
+
+		var copyOut = plan.ReadbackTransitions.ShouldHaveSingleItem();
+		copyOut.Resource.Name.ShouldBe("ids");
+		copyOut.From.ShouldBe(ResourceState.ColorAttachment); // the writing pass's state — not an assumed ShaderRead
+		copyOut.To.ShouldBe(ResourceState.CopySource);
+	}
+
+	[Test]
+	public void Readback_copy_out_starts_from_shader_read_when_a_later_pass_sampled_the_target()
+	{
+		// The demos' shape: the pick buffer is sampled (by the hover outline) after being written, so the copy-out's
+		// source state is ShaderRead. Same derivation, different From — which is exactly why the backend can't assume one.
+		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var screen = g.Backbuffer;
+			var ids = g.Screen.Color("ids", Format.R16F);
+			g.Pass("picking").Writes(ids);
+			g.Pass("outline").Samples(ids).Writes(screen);
+			g.Readback(ids);
+			g.Present(screen);
+		})));
+
+		Attachment(Pass(plan, "picking"), "ids").Store.ShouldBe(StoreAction.Store);
+		var copyOut = plan.ReadbackTransitions.ShouldHaveSingleItem();
+		copyOut.From.ShouldBe(ResourceState.ShaderRead);
+		copyOut.To.ShouldBe(ResourceState.CopySource);
+	}
+
+	[Test]
 	public void Instance_buffer_filled_by_compute_transitions_storage_to_vertex_input_for_the_draw()
 	{
 		// GPU-driven instancing reuses the GPU-particle edge: a compute .ReadWrites the instance buffer, the
