@@ -304,6 +304,15 @@ public abstract class EngineBase : IEngine
 		bytes.CopyTo(buffer);
 	}
 
+	/// <summary>
+	/// Drop a readback target's cached bytes, so <see cref="Read"/> returns an empty span until a fresh copy lands.
+	/// Called by a backend when it reallocates the target at a new size: the bytes it holds describe the <em>old</em>
+	/// dimensions, and an app that indexed them by a cursor position against the new ones would read the wrong texels
+	/// with nothing to signal it. Empty is what <see cref="Read"/> already returns before any graph's first copy
+	/// completes, so every consumer handles it.
+	/// </summary>
+	protected void InvalidateReadback(int id) => _readback.Remove(id);
+
 	/// <summary>Prefix on the aliasing-summary log line for backends that tag it (e.g. <c>"DirectX12 "</c>); empty by default.</summary>
 	protected virtual string AliasingLogPrefix => "";
 

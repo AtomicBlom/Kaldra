@@ -77,9 +77,7 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 				throw new NotSupportedException($"DirectX12: resource kind {resource.Kind} ('{resource.Name}') is not supported yet.");
 			_isTransient[resource.Id] = true; // managed + sampleable (true for persistent too, so it can be sampled)
 
-			// Backbuffer-domain and backbuffer-relative resources track the swapchain extent, so a resize reallocates
-			// them (the same rule the Vulkan backend applies, so both sizes and both resize behaviours agree).
-			_swapchainSized[resource.Id] = resource.Domain.IsBackbuffer || resource.Domain.RelativeScale > 0f;
+			_swapchainSized[resource.Id] = resource.FollowsSwapchain; // reallocated on resize; see ResourceHandle.FollowsSwapchain
 			if (resource.Kind == ResourceKind.Persistent)
 			{
 				// Cross-frame storage (auto-exposure): one R16F UAV texture, allocated once, sampled + read-written.

@@ -142,8 +142,7 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 
 		image.Format = VulkanFormatMapping.ToVulkan(resource.Format);
 		image.Usage = usage;
-		// Backbuffer-domain and backbuffer-relative resources track the swapchain extent, so they're rebuilt on resize.
-		image.SwapchainSized = resource.Domain.IsBackbuffer || resource.Domain.RelativeScale > 0f;
+		image.SwapchainSized = resource.FollowsSwapchain; // rebuilt on resize; see ResourceHandle.FollowsSwapchain
 	}
 
 	// Group the owned (non-backbuffer) resources by their alias bucket and back each bucket with one VMA

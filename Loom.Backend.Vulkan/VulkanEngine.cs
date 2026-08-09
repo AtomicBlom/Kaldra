@@ -300,19 +300,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 		// Readback staging: one host-visible buffer per frame slot for each g.Readback target.
 		foreach (var target in authored.ReadbackTargets)
-		{
-			// Against the live extent, like the transient image itself — the parameterless Resolve() uses the domain's
-			// bake-time size, which is 0×0 for anything anchored to the backbuffer, and would size the staging buffer
-			// to nothing. (DirectX12 already reads the transient's resolved extent, so this is also what keeps the two
-			// backends copying the same number of bytes.)
-			var (width, height) = target.Resolve((int)_presentTarget.Extent.Width, (int)_presentTarget.Extent.Height);
-			var bpt = BytesPerTexel(target.Format);
-			var buffers = new Buffer[MaxFramesInFlight];
-			var memories = new DeviceMemory[MaxFramesInFlight];
-			for (var i = 0; i < MaxFramesInFlight; i++)
-				(buffers[i], memories[i]) = CreateStagingBuffer((ulong)(width * height * bpt));
-			_readbacks.Add(new ReadbackBuffers(target.Id, width, height, bpt, buffers, memories));
-		}
+			_readbacks.Add(CreateReadbackStaging(target));
 
 		// GPU-timing pools: 2 timestamps (begin/end) per pass, one pool per frame slot. Sized to this graph's
 		// pass count, so a swap to a graph with a different count reallocates (DisposeGraphResources freed the old).
@@ -441,11 +429,59 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// frame no longer describes it — drop it and let the plan's Undefined stand, which is what a fresh image needs.
 		foreach (var id in _transients?.Recreate(_presentTarget.Extent) ?? [])
 			_persistentState.Remove(id);
+		RecreateSwapchainSizedReadback();
 
 		if (_presentTarget.ImageCount != oldImageCount)
 		{
 			DestroyRenderFinishedSemaphores();
 			CreateRenderFinishedSemaphores();
+		}
+	}
+
+	// One g.Readback target's per-slot host-visible staging, sized against the live swapchain extent — the same extent
+	// the target's own transient image is sized to, which is what the copy region is built from at record time.
+	private ReadbackBuffers CreateReadbackStaging(ResourceHandle target)
+	{
+		var (width, height) = target.Resolve((int)_presentTarget.Extent.Width, (int)_presentTarget.Extent.Height);
+		var bpt = BytesPerTexel(target.Format);
+		var buffers = new Buffer[MaxFramesInFlight];
+		var memories = new DeviceMemory[MaxFramesInFlight];
+		for (var i = 0; i < MaxFramesInFlight; i++)
+			(buffers[i], memories[i]) = CreateStagingBuffer((ulong)(width * height * bpt));
+		return new ReadbackBuffers(target.Id, width, height, bpt, buffers, memories);
+	}
+
+	private void DestroyReadbackStaging(ReadbackBuffers readback)
+	{
+		for (var i = 0; i < readback.Buffers.Length; i++)
+		{
+			if (readback.Buffers[i].Handle != 0)
+				_vk.DestroyBuffer(_ctx.Device, readback.Buffers[i], null);
+			if (readback.Memories[i].Handle != 0)
+				_vk.FreeMemory(_ctx.Device, readback.Memories[i], null);
+		}
+	}
+
+	// Rebuild the staging for every swapchain-sized readback target at the new extent. Its image was just reallocated
+	// by the transients' own resize, and RecordReadback builds the copy region from that live extent — so a buffer
+	// still sized for the old one is overrun the moment the window grows. A fixed-size target is left alone, exactly
+	// as its image is. The caller has already drained the GPU, so freeing in place is safe.
+	private void RecreateSwapchainSizedReadback()
+	{
+		if (Graph is null)
+			return;
+
+		foreach (var target in Graph.ReadbackTargets)
+		{
+			if (!target.FollowsSwapchain)
+				continue;
+			var index = _readbacks.FindIndex(r => r.Id == target.Id);
+			if (index < 0)
+				continue;
+			DestroyReadbackStaging(_readbacks[index]);
+			_readbacks[index] = CreateReadbackStaging(target);
+			// The bytes already handed to the app describe the old size; an empty Read is honest, a wrong-sized one isn't.
+			InvalidateReadback(target.Id);
 		}
 	}
 
@@ -465,15 +501,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_transients = null;
 
 		foreach (var readback in _readbacks)
-		{
-			for (var i = 0; i < readback.Buffers.Length; i++)
-			{
-				if (readback.Buffers[i].Handle != 0)
-					_vk.DestroyBuffer(_ctx.Device, readback.Buffers[i], null);
-				if (readback.Memories[i].Handle != 0)
-					_vk.FreeMemory(_ctx.Device, readback.Memories[i], null);
-			}
-		}
+			DestroyReadbackStaging(readback);
 		_readbacks.Clear();
 
 		foreach (var pool in _timingPools)

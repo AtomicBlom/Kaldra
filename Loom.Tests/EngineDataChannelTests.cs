@@ -155,6 +155,52 @@ public class EngineDataChannelTests
 		}
 	}
 
+	[Test]
+	public void A_screen_sized_readback_target_still_round_trips_after_a_resize()
+	{
+		// The staging buffer is sized when the graph is set, and its dimensions are what every copy is built from, so a
+		// screen-sized readback target that nobody resized reads back the wrong footprint for the rest of the process —
+		// Vulkan overruns a too-small buffer, DirectX12 copies the old rectangle out of the new image without a word.
+		// Growing is the direction that reads past the end, so grow.
+		foreach (var backend in AvailableBackends())
+		{
+			ResourceHandle? ids = null;
+			var graph = RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				var target = g.Screen.Color("ids", Format.R16F);
+				g.Pass("picking").Writes(target).Draw(ctx => ctx.FullScreen("probe.opaque", Ramp));
+				g.Pass("view").Writes(screen).Draw(ctx => ctx.FullScreen("probe.opaque", Ramp));
+				ids = g.Readback(target);
+				g.Present(screen);
+			});
+
+			using var engine = Engine(backend);
+			engine.SetGraph(graph);
+
+			var inputs = new FrameInputs { Time = 0, DeltaSeconds = 1.0 / 60.0 };
+			for (var frame = 0; frame < 6; frame++)
+				engine.Render(inputs);
+			engine.Read(ids!).Length.ShouldBe(W * H * sizeof(ushort), $"{backend.Name}: baseline readback is the wrong size before any resize.");
+
+			engine.Resize(W * 2, H * 2);
+			for (var frame = 0; frame < 6; frame++)
+				engine.Render(inputs);
+
+			var bytes = engine.Read(ids!);
+			bytes.Length.ShouldBe(W * 2 * H * 2 * sizeof(ushort), $"{backend.Name}: the readback did not follow the resize.");
+
+			// And it is the real gradient at the new size, not a stale or half-copied rectangle.
+			var row = H; // middle row of the resized target
+			Texel(bytes, row, 0, W * 2).ShouldBeLessThan(0.1f, $"{backend.Name}: left edge after resize.");
+			Texel(bytes, row, W * 2 - 1, W * 2).ShouldBeGreaterThan(1.8f, $"{backend.Name}: right edge after resize.");
+			Texel(bytes, row, W, W * 2).ShouldBeInRange(0.9f, 1.1f, $"{backend.Name}: midpoint after resize.");
+		}
+	}
+
+	private static float Texel(ReadOnlySpan<byte> r16f, int row, int column, int width) =>
+		(float)BitConverter.ToHalf(r16f[((row * width + column) * sizeof(ushort))..]);
+
 	private static float Texel(ReadOnlySpan<byte> r16f, int row, int column) =>
 		(float)BitConverter.ToHalf(r16f[((row * W + column) * sizeof(ushort))..]);
 
