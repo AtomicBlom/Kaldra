@@ -45,7 +45,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			}
 			else
 			{
-				_meshes.Draw(_cmd, _validate.RequireMesh(call).Id);
+				_meshes.Draw(_cmd, _validate.RequireMesh(call).Id, call.Indices);
 			}
 		}
 		else if (call.Instances.GpuBuffer is { } gpuBuf)
@@ -55,7 +55,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			if (call.Mesh is { } mesh)
 			{
 				// GPU-resident instance stream + indexed mesh draw (foliage, GPU-driven placement).
-				_meshes.DrawInstanced(_cmd, mesh.Id, gpuBuffer, 0ul, (uint)call.Instances.Count);
+				_meshes.DrawInstanced(_cmd, mesh.Id, gpuBuffer, 0ul, (uint)call.Instances.Count, call.Indices);
 			}
 			else
 			{
@@ -73,7 +73,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			if (call.Instances.CpuData.IsEmpty)
 				return;
 			var (buffer, offset) = _instanceUpload.Upload(_frameSlot, call.Instances.CpuData);
-			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, buffer, offset, (uint)call.Instances.Count);
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, buffer, offset, (uint)call.Instances.Count, call.Indices);
 		}
 	}
 

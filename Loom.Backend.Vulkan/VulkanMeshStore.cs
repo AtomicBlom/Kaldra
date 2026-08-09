@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Loom.Core.Animation;
 using Loom.Core.Geometry;
+using Loom.Core.Hosting;
 using Silk.NET.Vulkan;
 using VMASharp;
 using Buffer = Silk.NET.Vulkan.Buffer;
@@ -133,7 +134,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// skip the binds: the buffers are the mesh's own, so re-binding writes the handles the command buffer already
 	/// holds. <see cref="ResetBindings"/> states when that memory stops being true.
 	/// </summary>
-	public void Draw(CommandBuffer cmd, int meshId)
+	public void Draw(CommandBuffer cmd, int meshId, in DrawCall.IndexRange range = default)
 	{
 		var mesh = _meshes[Slot(meshId)];
 		if (_bound != meshId)
@@ -143,7 +144,25 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 			_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
 			_bound = meshId;
 		}
-		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, 1, 0, 0, 0);
+		var (first, count, baseVertex) = Resolve(meshId, mesh.IndexCount, range);
+		_vk.CmdDrawIndexed(cmd, count, 1, first, baseVertex, 0);
+	}
+
+	// A range of (0, 0, 0) means the whole mesh — the default a draw that never mentions ranges carries. Anything
+	// else is checked against the index buffer here, because reading past its end is undefined behaviour no backend
+	// reports: the draw either renders garbage triangles or faults, depending on the driver.
+	private (uint First, uint Count, int BaseVertex) Resolve(int meshId, uint indexCount, in DrawCall.IndexRange range)
+	{
+		if (range.IsEmpty)
+			return (0, indexCount, 0);
+
+		if ((ulong)range.FirstIndex + (ulong)range.IndexCount > indexCount)
+		{
+			throw new VulkanException(
+				$"Draw asks for indices {range.FirstIndex}..{range.FirstIndex + range.IndexCount} of mesh {meshId}, " +
+				$"which holds {indexCount}. The range and the mesh must come from the same geometry.");
+		}
+		return ((uint)range.FirstIndex, (uint)range.IndexCount, range.BaseVertex);
 	}
 
 	/// <summary>
@@ -152,14 +171,15 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// <paramref name="instanceCount"/> copies (GPU instancing). The instance buffer is either an
 	/// engine-managed per-frame upload buffer (CPU-driven) or a graph storage buffer a compute filled.
 	/// </summary>
-	public void DrawInstanced(CommandBuffer cmd, int meshId, Buffer instanceBuffer, ulong instanceOffset, uint instanceCount)
+	public void DrawInstanced(CommandBuffer cmd, int meshId, Buffer instanceBuffer, ulong instanceOffset, uint instanceCount, in DrawCall.IndexRange range = default)
 	{
 		var mesh = _meshes[Slot(meshId)];
 		var buffers = stackalloc Buffer[2] { mesh.VertexBuffer, instanceBuffer };
 		var offsets = stackalloc ulong[2] { 0ul, instanceOffset };
 		_vk.CmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
 		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
-		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, instanceCount, 0, 0, 0);
+		var (first, count, baseVertex) = Resolve(meshId, mesh.IndexCount, range);
+		_vk.CmdDrawIndexed(cmd, count, instanceCount, first, baseVertex, 0);
 		// Never memoised: binding 1 is a per-draw instance buffer at a per-draw offset, so "same mesh" does not mean
 		// "same bindings" here the way it does for a plain draw.
 		_bound = NothingBound;

@@ -43,6 +43,14 @@ public ref struct DrawCall
 	public int VertexCount;
 
 	/// <summary>
+	/// Which part of <see cref="Mesh"/> to draw. Default (empty) = the whole mesh, which is what nearly every draw
+	/// wants. Set it with <see cref="Range"/> to draw one sub-range of a mesh that holds several — a glTF model's
+	/// primitives, an atlas of static props — so they can share one vertex and index buffer instead of becoming a
+	/// mesh each. Ignored for a procedural draw (no mesh to range into).
+	/// </summary>
+	public IndexRange Indices;
+
+	/// <summary>
 	/// Per-instance data. Default (empty) = single draw. Set via <see cref="From{T}"/> for CPU-driven
 	/// instances or <see cref="Gpu"/> for a GPU-resident buffer.
 	/// </summary>
@@ -131,6 +139,31 @@ public ref struct DrawCall
 				"Size the buffer and the draw from the same count.");
 		}
 		return InstanceSource.FromGpu(buffer, count);
+	}
+
+	/// <summary>
+	/// Draw <paramref name="indexCount"/> indices of the mesh starting at <paramref name="firstIndex"/>, with
+	/// <paramref name="baseVertex"/> added to every index the range reads. That is the sub-mesh shape every graphics
+	/// API already speaks — and the same vocabulary <see cref="DrawCommand"/> uses for a draw list — so one mesh can
+	/// hold many primitives and a draw picks one.
+	/// </summary>
+	public static IndexRange Range(int firstIndex, int indexCount, int baseVertex = 0)
+	{
+		ArgumentOutOfRangeException.ThrowIfNegative(firstIndex);
+		ArgumentOutOfRangeException.ThrowIfNegative(indexCount);
+		ArgumentOutOfRangeException.ThrowIfNegative(baseVertex);
+		return new IndexRange(firstIndex, indexCount, baseVertex);
+	}
+
+	/// <summary>
+	/// A sub-range of a mesh's index buffer. The default is empty, which every backend reads as "the whole mesh" —
+	/// so a draw that says nothing about ranges behaves exactly as it did before ranges existed. Build one with
+	/// <see cref="DrawCall.Range"/>.
+	/// </summary>
+	public readonly record struct IndexRange(int FirstIndex, int IndexCount, int BaseVertex)
+	{
+		/// <summary><c>true</c> when no range is set — the draw covers the mesh's whole index buffer.</summary>
+		public bool IsEmpty => IndexCount == 0;
 	}
 
 	/// <summary>

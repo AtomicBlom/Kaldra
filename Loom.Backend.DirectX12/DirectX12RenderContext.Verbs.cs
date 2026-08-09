@@ -47,7 +47,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 			}
 			else
 			{
-				_meshes.Draw(_cmd, _validate.RequireMesh(call).Id);
+				_meshes.Draw(_cmd, _validate.RequireMesh(call).Id, call.Indices);
 			}
 		}
 		else if (call.Instances.GpuBuffer is { } gpuBuf)
@@ -66,7 +66,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 					SizeInBytes = byteSize,
 					StrideInBytes = baked.InstanceStride > 0 ? (uint)baked.InstanceStride : (count > 0 ? byteSize / (uint)count : byteSize),
 				};
-				_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count);
+				_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count, call.Indices);
 			}
 			else
 			{
@@ -96,7 +96,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 				SizeInBytes = (uint)bytes.Length,
 				StrideInBytes = (uint)call.Instances.Stride,
 			};
-			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, instanceView, (uint)call.Instances.Count);
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, instanceView, (uint)call.Instances.Count, call.Indices);
 		}
 	}
 
