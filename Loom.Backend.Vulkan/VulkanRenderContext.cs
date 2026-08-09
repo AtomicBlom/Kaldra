@@ -79,6 +79,10 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	private CommandBuffer _cmd;
 	// The current pass's color formats, stored inline (not a heap array) so BeginPass copies into them per
 	// pass without allocating; _colorCount is how many of the MaxColorFormats slots are live.
+	// The pipelines the command buffer currently has bound, per bind point. Default (null handle) = none.
+	private Pipeline _boundGraphicsPipeline;
+	private Pipeline _boundComputePipeline;
+
 	private ColorFormatBuffer _colorFormats;
 	private int _colorCount;
 	private VkFormat _depthFormat;
@@ -151,6 +155,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		_storageUpload.BeginFrame(frameSlot);  // and the bone-palette staging
 		_listVtx.BeginFrame(frameSlot);        // and the draw-list geometry staging
 		_listIdx.BeginFrame(frameSlot);
+		ForgetBindings();                      // a fresh command buffer has nothing bound
 	}
 
 	// The parameter buffers (ResourceKind.Constants) the current pass .Reads, in order. The engine resolves them
@@ -193,6 +198,33 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		constantsIds.CopyTo(_activeConstantsIds);
 		_activeStorageCount = storageIds.Length;
 		storageIds.CopyTo(_activeStorageIds);
+		ForgetBindings();
+	}
+
+	/// <summary>
+	/// Bind <paramref name="pipeline"/> unless it is already the bound one. A draw list sorted by state — which is how
+	/// an engine-fed list arrives — is mostly runs of draws sharing a pipeline, so binding it once per run instead of
+	/// once per draw removes the whole run's worth of redundant commands.
+	/// </summary>
+	private void BindPipeline(PipelineBindPoint bindPoint, Pipeline pipeline)
+	{
+		ref var bound = ref bindPoint == PipelineBindPoint.Compute ? ref _boundComputePipeline : ref _boundGraphicsPipeline;
+		if (bound.Handle == pipeline.Handle)
+			return;
+		_vk.CmdBindPipeline(_cmd, bindPoint, pipeline);
+		bound = pipeline;
+	}
+
+	/// <summary>
+	/// Drop every "what is currently bound" memo. The memos describe the command buffer's recorded state, so anything
+	/// that starts a new one — or records binds this context did not — has to say so, or a later draw will skip a bind
+	/// it genuinely needed.
+	/// </summary>
+	private void ForgetBindings()
+	{
+		_boundGraphicsPipeline = default;
+		_boundComputePipeline = default;
+		_meshes.ResetBindings();
 	}
 
 	/// <summary>
@@ -216,7 +248,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		var baked = Bake(technique);
 		var template = _registry[technique];
 		_validate.FullScreen(technique, inputs);
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		BindPipeline(PipelineBindPoint.Graphics, baked.Pipeline);
 
 		// The per-pass data channel. The pass's .Reads Constants buffers bind to the technique's reflected uniform
 		// slots 0..K-1; an in-closure push then fills slot K if a reflected uniform slot remains (uniform seam:

@@ -15,8 +15,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 	{
 		var baked = _techniques.GetOrBake(call.Technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_validate.Draw(call);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
+		BindGraphicsState(baked);
 
 		// The technique's CBVs (b1..) in slot order: the slot reflection named as the per-material block (when the draw
 		// carries a material) takes the material's parameter bytes; the rest take the pass's .Reads constants in order,
@@ -35,7 +34,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 			BindInputs(baked, call.Sampled);
 		}
 
-		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		BindTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 
 		if (call.Instances.IsEmpty)
 		{
@@ -79,6 +78,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 					SizeInBytes = _transients.ByteSize(gpuBuf.Id),
 					StrideInBytes = (uint)baked.InstanceStride,
 				};
+				_meshes.ResetBindings(); // slot 0 becomes the instance stream, not a mesh's vertices
 				_cmd.IASetVertexBuffers(0, 1, &vbv);
 				_cmd.DrawInstanced((uint)call.VertexCount, (uint)call.Instances.Count, 0, 0);
 			}
@@ -107,8 +107,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
 		_validate.Dispatch(technique, sampled, storage);
-		_cmd.SetComputeRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
+		BindComputeState(baked);
 
 		if (push.Length > 0)
 		{
@@ -195,8 +194,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 			return;
 
 		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
-		_cmd.SetComputeRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
+		BindComputeState(baked);
 
 		// vertexCount rides the compute root constant (as a float — exact for any realistic count).
 		if (baked.RootConstantParam >= 0)

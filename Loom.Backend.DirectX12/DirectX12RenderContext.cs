@@ -56,6 +56,13 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	private uint _slot;
 	private uint _fbWidth;
 	private uint _fbHeight;
+	// What the command list currently has bound. D3D12 has one pipeline-state slot shared by graphics and compute, but
+	// separate root-signature slots, so the root signatures are tracked apart and the pipeline together.
+	private ComPtr<ID3D12RootSignature> _boundRootSignature;
+	private ComPtr<ID3D12RootSignature> _boundComputeRootSignature;
+	private ComPtr<ID3D12PipelineState> _boundPipeline;
+	private D3DPrimitiveTopology _boundTopology = D3DPrimitiveTopology.D3DPrimitiveTopologyUndefined;
+
 	private DxgiFormat[] _colorFormats = [];
 	private int _colorCount;
 	private DxgiFormat _depthFormat;
@@ -113,6 +120,71 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		_storageUpload.BeginFrame(slot);  // and the bone-palette staging
 		_listVtx.BeginFrame(slot);        // and the draw-list geometry staging
 		_listIdx.BeginFrame(slot);
+		ForgetBindings();                 // a freshly reset command list has nothing bound
+	}
+
+	/// <summary>
+	/// Bind <paramref name="baked"/>'s root signature and pipeline for a graphics draw, skipping whichever is already
+	/// bound. A draw list sorted by state — which is how an engine-fed list arrives — is mostly runs of draws sharing a
+	/// pipeline, so binding once per run instead of once per draw removes the whole run's worth of redundant commands.
+	/// <para>
+	/// Skipping the root signature is what makes this worth doing rather than merely tidy: setting one <em>clears every
+	/// root parameter binding</em>, so a redundant set is not free even when the value is unchanged.
+	/// </para>
+	/// </summary>
+	private void BindGraphicsState(DirectX12Technique baked)
+	{
+		if (_boundRootSignature.Handle != baked.RootSignature.Handle)
+		{
+			_cmd.SetGraphicsRootSignature(baked.RootSignature);
+			_boundRootSignature = baked.RootSignature;
+		}
+		BindPipelineState(baked.Pipeline);
+	}
+
+	/// <summary>The compute counterpart of <see cref="BindGraphicsState"/>: root signatures are per-bind-point on
+	/// D3D12, so compute keeps its own memo, and setting one clears the compute root parameters just the same.</summary>
+	private void BindComputeState(DirectX12Technique baked)
+	{
+		if (_boundComputeRootSignature.Handle != baked.RootSignature.Handle)
+		{
+			_cmd.SetComputeRootSignature(baked.RootSignature);
+			_boundComputeRootSignature = baked.RootSignature;
+		}
+		BindPipelineState(baked.Pipeline);
+	}
+
+	/// <summary>Bind a pipeline state object unless it is already bound. Shared by the graphics and compute paths —
+	/// D3D12 has one pipeline-state slot, not one per bind point.</summary>
+	private void BindPipelineState(ComPtr<ID3D12PipelineState> pipeline)
+	{
+		if (_boundPipeline.Handle == pipeline.Handle)
+			return;
+		_cmd.SetPipelineState(pipeline);
+		_boundPipeline = pipeline;
+	}
+
+	/// <summary>Set the primitive topology unless it is already set.</summary>
+	private void BindTopology(D3DPrimitiveTopology topology)
+	{
+		if (_boundTopology == topology)
+			return;
+		_cmd.IASetPrimitiveTopology(topology);
+		_boundTopology = topology;
+	}
+
+	/// <summary>
+	/// Drop every "what is currently bound" memo. The memos describe the command list's recorded state, so anything
+	/// that starts a new one — or records binds this context did not — has to say so, or a later draw will skip a bind
+	/// it genuinely needed.
+	/// </summary>
+	private void ForgetBindings()
+	{
+		_boundRootSignature = default;
+		_boundComputeRootSignature = default;
+		_boundPipeline = default;
+		_boundTopology = D3DPrimitiveTopology.D3DPrimitiveTopologyUndefined;
+		_meshes.ResetBindings();
 	}
 
 	// The parameter buffer (ResourceKind.Constants) the current pass .Reads, or -1 — bound to the technique's root CBV.
@@ -151,6 +223,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		constantsIds.CopyTo(_activeConstantsIds);
 		_activeStorageCount = storageIds.Length;
 		storageIds.CopyTo(_activeStorageIds);
+		ForgetBindings();
 	}
 
 	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs) =>
@@ -160,8 +233,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	{
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_validate.FullScreen(technique, inputs);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
+		BindGraphicsState(baked);
 
 		// The per-pass data channel. The pass's .Reads Constants buffers bind to the technique's CBVs b1..bK; an
 		// in-closure push then fills the next CBV (b(K+1)) if a reflected slot remains (no 16-float cap),
@@ -195,7 +267,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 				_cmd.SetGraphicsRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients!.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
 		}
 
-		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		BindTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.DrawInstanced(3, 1, 0, 0); // fullscreen triangle, vertices fabricated from SV_VertexID
 	}
 

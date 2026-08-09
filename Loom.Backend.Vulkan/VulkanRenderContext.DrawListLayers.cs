@@ -30,7 +30,9 @@ internal sealed unsafe partial class VulkanRenderContext
 		var (vtxBuffer, vtxOffset) = _listVtx.Upload(_frameSlot, MemoryMarshal.AsBytes(vertices));
 		var (idxBuffer, idxOffset) = _listIdx.Upload(_frameSlot, MemoryMarshal.AsBytes(indices));
 
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		BindPipeline(PipelineBindPoint.Graphics, baked.Pipeline);
+		// The list brings its own geometry, so whatever mesh the store thought was bound no longer is.
+		_meshes.ResetBindings();
 		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
 		_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
 

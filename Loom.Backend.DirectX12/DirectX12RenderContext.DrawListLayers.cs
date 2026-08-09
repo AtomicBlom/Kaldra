@@ -26,8 +26,9 @@ internal sealed unsafe partial class DirectX12RenderContext
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
+		BindGraphicsState(baked);
+		// The list brings its own geometry, so whatever mesh the store thought was bound no longer is.
+		_meshes.ResetBindings();
 
 		// Stage this frame's geometry into the dynamic rings (bump-allocated: several draw lists in one frame
 		// append at successive offsets rather than overwrite each other).
@@ -38,7 +39,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		var vbv = new VertexBufferView { BufferLocation = vtxAddr, SizeInBytes = (uint)vtxBytes.Length, StrideInBytes = (uint)Unsafe.SizeOf<TVertex>() };
 		var ibv = new IndexBufferView { BufferLocation = idxAddr, SizeInBytes = (uint)idxBytes.Length, Format = DxgiFormat.FormatR16Uint };
-		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		BindTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.IASetVertexBuffers(0, 1, &vbv);
 		_cmd.IASetIndexBuffer(&ibv);
 

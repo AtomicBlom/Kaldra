@@ -33,6 +33,11 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	private readonly DirectX12Context _ctx;
 	private readonly List<StoredMesh> _meshes = [];
 
+	// Mesh ids are 1-based, so 0 is a value no mesh can have — "the command list's vertex/index bindings are not this
+	// store's doing".
+	private const int NothingBound = 0;
+	private int _bound = NothingBound;
+
 	public DirectX12MeshStore(DirectX12Context ctx) => _ctx = ctx;
 
 	/// <summary>
@@ -116,21 +121,28 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	{
 		var mesh = _meshes[Slot(meshId)];
 		var ibv = mesh.IndexView;
-		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		cmd.IASetVertexBuffers(0, 1, &vertexView);
 		cmd.IASetIndexBuffer(&ibv);
 		cmd.DrawIndexedInstanced(mesh.IndexCount, 1, 0, 0, 0);
+		_bound = NothingBound; // slot 0 came from the caller, not the mesh
 	}
 
-	/// <summary>Bind a mesh's vertex + index buffers and record an indexed draw into the command list.</summary>
+	/// <summary>
+	/// Bind a mesh's vertex + index buffers and record an indexed draw into the command list. Consecutive draws of the
+	/// same mesh skip the binds: the views are the mesh's own, so re-binding writes what the command list already
+	/// holds. <see cref="ResetBindings"/> states when that memory stops being true.
+	/// </summary>
 	public void Draw(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId)
 	{
 		var mesh = _meshes[Slot(meshId)];
-		var vbv = mesh.VertexView;
-		var ibv = mesh.IndexView;
-		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
-		cmd.IASetVertexBuffers(0, 1, &vbv);
-		cmd.IASetIndexBuffer(&ibv);
+		if (_bound != meshId)
+		{
+			var vbv = mesh.VertexView;
+			var ibv = mesh.IndexView;
+			cmd.IASetVertexBuffers(0, 1, &vbv);
+			cmd.IASetIndexBuffer(&ibv);
+			_bound = meshId;
+		}
 		cmd.DrawIndexedInstanced(mesh.IndexCount, 1, 0, 0, 0);
 	}
 
@@ -144,11 +156,20 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		var mesh = _meshes[Slot(meshId)];
 		var ibv = mesh.IndexView;
 		var views = stackalloc VertexBufferView[2] { mesh.VertexView, instanceView };
-		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		cmd.IASetVertexBuffers(0, 2, views);
 		cmd.IASetIndexBuffer(&ibv);
 		cmd.DrawIndexedInstanced(mesh.IndexCount, instanceCount, 0, 0, 0);
+		// Never memoised: slot 1 is a per-draw instance view, so "same mesh" does not mean "same bindings" here the
+		// way it does for a plain draw.
+		_bound = NothingBound;
 	}
+
+	/// <summary>
+	/// Forget which mesh is bound. Required whenever something other than this store touches the vertex or index
+	/// bindings — a new command list, a draw list's own geometry, the procedural instance stream — because the memo is
+	/// a claim about the command list's recorded state, not about this store's history.
+	/// </summary>
+	public void ResetBindings() => _bound = NothingBound;
 
 	// An UPLOAD-heap committed buffer holding the data, left in GENERIC_READ so the GPU can read it directly
 	// as a vertex/index buffer without a transition (upload-heap resources are created in GENERIC_READ).

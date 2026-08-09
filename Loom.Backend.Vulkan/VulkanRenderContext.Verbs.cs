@@ -14,7 +14,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		var baked = Bake(call.Technique);
 		var template = _registry[call.Technique];
 		_validate.Draw(call);
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		BindPipeline(PipelineBindPoint.Graphics, baked.Pipeline);
 
 		// Gather the technique's uniform buffers in slot order. The slot reflection named as the material block (when
 		// the draw carries a material) takes that slot; every other slot takes the next of the pass's .Reads constants
@@ -62,6 +62,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				// Procedural: GPU buffer IS the per-instance vertex stream; vertexCount verts per instance
 				// fabricated from SV_VertexID (the GPU-particle path).
 				ulong offset = 0;
+				_meshes.ResetBindings(); // binding 0 becomes the instance stream, not a mesh's vertices
 				_vk.CmdBindVertexBuffers(_cmd, 0, 1, in gpuBuffer, in offset);
 				_vk.CmdDraw(_cmd, (uint)call.VertexCount, (uint)call.Instances.Count, 0, 0);
 			}
@@ -80,7 +81,7 @@ internal sealed unsafe partial class VulkanRenderContext
 	{
 		var baked = Bake(technique);
 		_validate.Dispatch(technique, sampled, storage);
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Compute, baked.Pipeline);
+		BindPipeline(PipelineBindPoint.Compute, baked.Pipeline);
 
 		if (push.Length > 0)
 		{
@@ -152,7 +153,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		if (vertexCount <= 0 || palette.Length == 0)
 			return;
 		var baked = Bake(technique);
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Compute, baked.Pipeline);
+		BindPipeline(PipelineBindPoint.Compute, baked.Pipeline);
 
 		// vertexCount rides the compute scalar push (as a float — exact for any realistic count).
 		var block = stackalloc float[16];

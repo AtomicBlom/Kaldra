@@ -32,6 +32,11 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	private readonly CommandPool _commandPool;
 	private readonly List<StoredMesh> _meshes = [];
 
+	// Mesh ids are 1-based, so 0 is a value no mesh can have — "the command buffer's vertex/index bindings are not
+	// this store's doing".
+	private const int NothingBound = 0;
+	private int _bound = NothingBound;
+
 	public VulkanMeshStore(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool)
 	{
 		_ctx = ctx;
@@ -120,15 +125,24 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		_vk.CmdBindVertexBuffers(cmd, 0, 1, in vertexBuffer, in offset);
 		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
 		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, 1, 0, 0, 0);
+		_bound = NothingBound; // binding 0 came from the caller, not the mesh
 	}
 
-	/// <summary>Bind a mesh's buffers and record an indexed draw into the command buffer.</summary>
+	/// <summary>
+	/// Bind a mesh's buffers and record an indexed draw into the command buffer. Consecutive draws of the same mesh
+	/// skip the binds: the buffers are the mesh's own, so re-binding writes the handles the command buffer already
+	/// holds. <see cref="ResetBindings"/> states when that memory stops being true.
+	/// </summary>
 	public void Draw(CommandBuffer cmd, int meshId)
 	{
 		var mesh = _meshes[Slot(meshId)];
-		var offset = 0ul;
-		_vk.CmdBindVertexBuffers(cmd, 0, 1, in mesh.VertexBuffer, in offset);
-		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
+		if (_bound != meshId)
+		{
+			var offset = 0ul;
+			_vk.CmdBindVertexBuffers(cmd, 0, 1, in mesh.VertexBuffer, in offset);
+			_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
+			_bound = meshId;
+		}
 		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, 1, 0, 0, 0);
 	}
 
@@ -146,7 +160,17 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		_vk.CmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
 		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
 		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, instanceCount, 0, 0, 0);
+		// Never memoised: binding 1 is a per-draw instance buffer at a per-draw offset, so "same mesh" does not mean
+		// "same bindings" here the way it does for a plain draw.
+		_bound = NothingBound;
 	}
+
+	/// <summary>
+	/// Forget which mesh is bound. Required whenever something other than this store touches the vertex or index
+	/// bindings — a new command buffer, a draw list's own geometry, the procedural instance stream — because the
+	/// memo is a claim about the command buffer's recorded state, not about this store's history.
+	/// </summary>
+	public void ResetBindings() => _bound = NothingBound;
 
 	// Stage in host-visible memory, copy into a device-local buffer, free the staging buffer.
 	private Buffer Upload(ReadOnlySpan<byte> data, BufferUsageFlags usage, out Allocation allocation)
