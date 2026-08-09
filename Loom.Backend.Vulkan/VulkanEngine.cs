@@ -89,12 +89,12 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	// One g.Readback target's GPU→CPU staging: a host-visible buffer per frame slot the executor copies the target's
 	// image into. The copy is tightly packed (Vulkan's image→buffer copy carries no row padding), so a slot's buffer
 	// is handed straight to StoreReadback once its fence signals.
-	private sealed class ReadbackBuffers(int id, int width, int height, int bytesPerTexel, Buffer[] buffers, DeviceMemory[] memories)
+	private sealed class ReadbackBuffers(int id, int width, int height, int bytesPerTexel, Buffer[] buffers, Allocation[] allocations)
 	{
 		public int Id => id;
 		public int ByteCount => width * height * bytesPerTexel;
 		public Buffer[] Buffers => buffers;
-		public DeviceMemory[] Memories => memories;
+		public Allocation[] Allocations => allocations;
 		public bool[] Valid { get; } = new bool[buffers.Length];
 	}
 
@@ -451,10 +451,10 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		var (width, height) = target.Resolve((int)_presentTarget.Extent.Width, (int)_presentTarget.Extent.Height);
 		var bpt = BytesPerTexel(target.Format);
 		var buffers = new Buffer[MaxFramesInFlight];
-		var memories = new DeviceMemory[MaxFramesInFlight];
+		var allocations = new Allocation[MaxFramesInFlight];
 		for (var i = 0; i < MaxFramesInFlight; i++)
-			(buffers[i], memories[i]) = CreateStagingBuffer((ulong)(width * height * bpt));
-		return new ReadbackBuffers(target.Id, width, height, bpt, buffers, memories);
+			(buffers[i], allocations[i]) = CreateStagingBuffer((ulong)(width * height * bpt));
+		return new ReadbackBuffers(target.Id, width, height, bpt, buffers, allocations);
 	}
 
 	private void DestroyReadbackStaging(ReadbackBuffers readback)
@@ -463,8 +463,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		{
 			if (readback.Buffers[i].Handle != 0)
 				_vk.DestroyBuffer(_ctx.Device, readback.Buffers[i], null);
-			if (readback.Memories[i].Handle != 0)
-				_vk.FreeMemory(_ctx.Device, readback.Memories[i], null);
+			readback.Allocations[i]?.Dispose();
 		}
 	}
 

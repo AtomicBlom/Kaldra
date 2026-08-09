@@ -4,6 +4,7 @@ using Loom.Core.Diagnostics;
 using Loom.Core.Graph;
 using Loom.Graph;
 using Silk.NET.Vulkan;
+using VMASharp;
 using Buffer = Silk.NET.Vulkan.Buffer;
 using VkFormat = Silk.NET.Vulkan.Format;
 
@@ -64,9 +65,9 @@ internal sealed unsafe partial class VulkanEngine
 		}
 		var captureSize = (ulong)_presentTarget.Extent.Width * _presentTarget.Extent.Height * 4;
 		Buffer captureBuffer = default;
-		DeviceMemory captureMemory = default;
+		Allocation? captureAllocation = null;
 		if (capturePath is not null)
-			(captureBuffer, captureMemory) = CreateStagingBuffer(captureSize);
+			(captureBuffer, captureAllocation) = CreateStagingBuffer(captureSize);
 
 		// This frame slot's prior work is done (fence waited), so its descriptor sets are idle: recycle them.
 		_descriptors.BeginFrame(_currentFrame);
@@ -111,9 +112,9 @@ internal sealed unsafe partial class VulkanEngine
 		if (capturePath is not null)
 		{
 			_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
-			WriteCapture(captureMemory, captureSize, _presentTarget.Extent.Width, _presentTarget.Extent.Height, capturePath);
+			WriteCapture(captureAllocation!, captureSize, _presentTarget.Extent.Width, _presentTarget.Extent.Height, capturePath);
 			_vk.DestroyBuffer(_ctx.Device, captureBuffer, null);
-			_vk.FreeMemory(_ctx.Device, captureMemory, null);
+			captureAllocation!.Dispose();
 			CapturePath = null;
 		}
 
