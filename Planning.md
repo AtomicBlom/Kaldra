@@ -67,7 +67,7 @@ These need new describe-layer verbs / Execute derivation / backend machinery / a
 
 | # | Gap | Missing primitive | What it unlocks |
 |---|-----|-------------------|-----------------|
-| ① | **Indirect / GPU-driven draw + Hi-Z occlusion** | No `DrawIndirect`/`ExecuteIndirect`/count-buffer verb; every draw & instance count is a CPU `int`. | GPU-driven rendering at factory/foliage scale; GPU culling; Hi-Z (also needs ②'s mip-chained depth target). |
+| ① | **GPU-driven draw + Hi-Z occlusion** — *the verb is built; the architecture is not* | `DrawCall.Indirect` + `.ReadsIndirect` exist on all three backends, so a compute pass can fill a draw's counts and the hand-off is derived (`AccessKind.ReadIndirect` → `ResourceState.IndirectArgument`). Still missing: a **count buffer**, multi-draw, a GPU culling pass, and Hi-Z (which also needs ②'s mip-chained depth target). | GPU-driven rendering at factory/foliage scale; GPU culling; occlusion. |
 | ② | **Renderable cube / array / 3D / mipped / depth-array targets** | Graph targets are hardcoded single-layer single-mip 2D; `ResourceHandle`/`Format`/`Domain` carry no layer/dimension axis. (*Loading* cube/HDR textures already works — this is the **render-target** side.) | Rendering *into* a cubemap (point-light shadows, dynamic reflection probes, env capture); CSM as a clean layered array; froxel volumetrics (3D). |
 | ③ | **Temporal stack** | `Persistent(size>1)` throws (single physical image); `FrameInputs` has no previous-frame view; no motion-vector channel. | TAA, temporal AA/denoise, temporal GI, any reprojection technique. The single biggest temporal blocker. |
 | ④ | **MSAA resolve** | `Domain.Samples` is dead-plumbed on Vulkan (multisample target allocated, never resolved) and ignored on DirectX 12 (`SampleDesc.Count=1`). | Forward/simple MSAA anti-aliasing at cross-backend parity. |
@@ -114,7 +114,7 @@ Resolve each before the work it gates; record the decision on the board.
 
 | # | Decision | Gates | Leaning |
 |---|----------|-------|---------|
-| 1 | Pursue the GPU-driven direction (indirect + bindless + Hi-Z) at all? | §5.1 ①, optional bindless | Decide by whether a target game needs tens-of-thousands-of-objects scale; it is the largest single engine investment. |
+| 1 | Pursue the GPU-driven direction (count buffers + bindless + Hi-Z + a culling pass) at all? | §5.1 ①, optional bindless | **Still open, and deliberately so.** The indirect *verb* landed with the scale milestone because it is the derivation seam — a compute pass fills the arguments, a draw consumes them, ordering derived. That was cheap and additive; it does not commit to the architecture. Decide the rest by whether a target game needs tens-of-thousands-of-objects scale; it remains the largest single engine investment. |
 | 2 | Cube/array **render-target** representation | §5.1 ② (probes, CSM arrays, froxels) | Add a layer/mip axis to `ResourceHandle` + a `Domain` array dimension; keep it a derived intent. |
 | 3 | Temporal stack shape | §5.1 ③ (TAA/temporal GI) | A `Persistent(size:N)` ring of physical images + a previous-frame `Constants` channel + a velocity target; derive the ring ping-pong like JFA. |
 | 4 | Split `Storage` into read/write/read-write states | WebGPU backend; typed storage images | Additive, no API break — do it when a WebGPU backend or a write-only-storage shader needs it. |
