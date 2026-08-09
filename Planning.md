@@ -77,6 +77,7 @@ These need new describe-layer verbs / Execute derivation / backend machinery / a
 - **Async compute / multi-queue** — `Queue.AsyncCompute` exists but throws at derive; needs queue partitioning in `GraphSchedule` (the DAG is already preserved), cross-queue semaphores, and a compute queue per backend. Pure performance, never a correctness blocker.
 - **Write-only / typed storage states + bindless** — `Storage` collapses to one `GENERAL` read-write state, and binding is positional (`DescriptorCount=1`, no descriptor indexing). Splitting `Storage` into read/write/read-write is also the one **WebGPU**-relevant item; bindless is the enabler for a GPU-driven / virtual-texturing architecture.
 - **Streaming / partial residency** — asset upload is synchronous and fully resident; virtual texturing / mega-texture streaming needs a residency seam.
+- **Byte-aware transient alias packing** — `AliasPlan` partitions transients by lifetime interval with first-fit, which is optimal in bucket *count* but blind to byte sizes, and a bucket's block is sized to its largest member × frames-in-flight. A full-res `Rgba16F` sharing a bucket with a quarter-res mip therefore pays the full-res block twice over. Both VMA and D3D12 placed resources already support offset sub-allocation, so the fix is a packing change with no API surface. Immaterial at demo scale; real memory once a frame carries thousands of transients, so it belongs with the streaming / large-content direction.
 
 ### 5.2 Content / shader work (no new engine primitive)
 
