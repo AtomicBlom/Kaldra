@@ -21,24 +21,37 @@ namespace Loom.Backend.DirectX12;
 /// </summary>
 internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 {
+	/// <summary>The most colour targets a D3D12 pass can bind (<c>D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT</c>).</summary>
+	private const int MaxColorTargets = 8;
+
 	private readonly DirectX12Context _ctx;
-	private readonly Dictionary<string, DirectX12TechniqueTemplate> _templates = [];
-	private readonly Dictionary<string, DirectX12Technique> _baked = [];
+	private readonly Dictionary<string, RegisteredTemplate> _templates = [];
+	private readonly Dictionary<BakeKey, DirectX12Technique> _baked = [];
+
+	// A registered template plus the content digest of it, computed once here rather than per lookup — the digest is
+	// a SHA-256 over the whole DXIL, and GetOrBake runs on the per-draw path.
+	private readonly record struct RegisteredTemplate(DirectX12TechniqueTemplate Template, string Digest);
+
+	// The identity of a baked PSO: the logical name, the digest of the template it was baked from (so re-registering
+	// a name with new bytecode bakes fresh instead of returning the stale PSO), and the exact target formats the PSO
+	// is compiled against. A struct key, because looking one up happens once per draw and must not allocate.
+	private readonly record struct BakeKey(string Name, string Digest, ulong ColorFormats, int ColorCount, Format DepthFormat, bool DepthReadOnly);
 
 	public DirectX12TechniqueCache(DirectX12Context ctx) => _ctx = ctx;
 
-	public void Register(string name, DirectX12TechniqueTemplate template) => _templates[name] = template;
+	public void Register(string name, DirectX12TechniqueTemplate template) =>
+		_templates[name] = new RegisteredTemplate(template, TemplateDigest(template));
 
 	public DirectX12Technique GetOrBake(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
 	{
-		if (!_templates.TryGetValue(name, out var template))
+		if (!_templates.TryGetValue(name, out var registered))
 			throw new TechniqueNotDefinedException(name);
 
-		var key = BuildKey(name, colorFormats, depthFormat, depthReadOnly, template);
+		var key = new BakeKey(name, registered.Digest, PackFormats(colorFormats), colorFormats.Length, depthFormat, depthReadOnly);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
-		var technique = new DirectX12Technique(_ctx, template, colorFormats, depthFormat, depthReadOnly);
+		var technique = new DirectX12Technique(_ctx, registered.Template, colorFormats, depthFormat, depthReadOnly);
 		// Name the baked PSO + root signature for GPU debuggers (DirectX12 has no separate shader objects — the DXIL
 		// lives in the PSO, so naming the PSO is the shader-naming equivalent). [Conditional]: stripped without
 		// UseNamedGPUObjects. Distinct target-format variants of one technique share the logical name.
@@ -48,16 +61,23 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 		return technique;
 	}
 
-	private static string BuildKey(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, in DirectX12TechniqueTemplate template)
+	// A pass's colour formats packed one byte per target — exact (every DXGI format value fits a byte), so the key
+	// distinguishes PSO variants without hashing and without allocating. Both bounds throw rather than fold, since
+	// silently colliding two format sets would hand a pass a PSO compiled for different targets.
+	private static ulong PackFormats(ReadOnlySpan<Format> colorFormats)
 	{
-		var key = name;
-		foreach (var format in colorFormats)
-			key += "|" + (int)format;
-		key += "|d" + (int)depthFormat + (depthReadOnly ? "r" : "w");
-		// Fold the template's content into the key (mirroring the Vulkan cache's content hash) so re-registering a
-		// name with different bytecode / state / layout bakes a fresh PSO instead of returning the stale one.
-		key += "|t" + TemplateDigest(template);
-		return key;
+		if (colorFormats.Length > MaxColorTargets)
+			throw new NotSupportedException($"DirectX12: a pass binds {colorFormats.Length} colour targets; D3D12 allows at most {MaxColorTargets}.");
+
+		var packed = 0UL;
+		for (var i = 0; i < colorFormats.Length; i++)
+		{
+			var value = (uint)colorFormats[i];
+			if (value > byte.MaxValue)
+				throw new NotSupportedException($"DirectX12: DXGI format {colorFormats[i]} ({value}) does not fit the pipeline cache key's byte-per-target packing.");
+			packed |= (ulong)value << (8 * i);
+		}
+		return packed;
 	}
 
 	// SHA-256 over the template's bytecode plus every input that affects the baked PSO — the DirectX12 counterpart of

@@ -200,7 +200,7 @@ public abstract class EngineBase : IEngine
 
 	/// <summary>The active graph's parameter-buffer shadows (id → bytes) for the backend to upload into the current
 	/// frame slot before recording. Empty until <see cref="SetGraph"/>; rebuilt (zeroed) on every swap.</summary>
-	protected IReadOnlyDictionary<int, byte[]> ConstantsShadows => _constants;
+	protected ShadowBuffers ConstantsShadows => new(_constants);
 
 	public void Write<T>(ConstantsHandle handle, in T value) where T : unmanaged
 	{
@@ -221,7 +221,22 @@ public abstract class EngineBase : IEngine
 	private readonly Dictionary<int, byte[]> _storage = [];
 
 	/// <summary>The active graph's storage-buffer shadows (id → bytes) for the backend to upload into the current frame slot before recording. Empty until <see cref="SetGraph"/>; rebuilt (zeroed) on every swap.</summary>
-	protected IReadOnlyDictionary<int, byte[]> StorageShadows => _storage;
+	protected ShadowBuffers StorageShadows => new(_storage);
+
+	/// <summary>
+	/// A read-only view over a shadow dictionary that a backend walks once per frame. It exists so that walk costs
+	/// nothing: exposing the shadows as an <see cref="IReadOnlyDictionary{TKey,TValue}"/> would box a fresh enumerator
+	/// on every frame for every shadow set, which the no-allocations-on-the-hot-path pillar does not allow — and
+	/// handing out the <see cref="Dictionary{TKey,TValue}"/> itself would hand out the ability to mutate it.
+	/// </summary>
+	protected readonly struct ShadowBuffers(Dictionary<int, byte[]> shadows)
+	{
+		/// <summary>The concrete struct enumerator, so <c>foreach</c> over this allocates nothing.</summary>
+		public Dictionary<int, byte[]>.Enumerator GetEnumerator() => shadows.GetEnumerator();
+
+		/// <summary>How many shadows the active graph declared.</summary>
+		public int Count => shadows.Count;
+	}
 
 	public void Write<T>(StorageBufferHandle handle, ReadOnlySpan<T> values) where T : unmanaged
 	{

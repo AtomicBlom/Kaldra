@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Loom.Core.Diagnostics;
 using Silk.NET.Core;
 using Silk.NET.Core.Contexts;
@@ -266,16 +267,46 @@ public sealed unsafe class VulkanContext : IDisposable
 		SilkMarshal.Free((nint)pName);
 	}
 
-	/// <summary>Open a named debug-label region on a command buffer (a RenderDoc marker scope).</summary>
+	/// <summary>
+	/// Open a named debug-label region on a command buffer (a RenderDoc marker scope). Unlike
+	/// <see cref="SetObjectName"/>, which runs once per object at creation, this runs once per pass <em>per frame</em>
+	/// — so the label is encoded into a stack buffer rather than marshalled through the heap. A capture annotation
+	/// must not put the steady render loop in the GC's way.
+	/// </summary>
 	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
 	public void BeginDebugLabel(CommandBuffer cmd, string label)
 	{
 		if (_debugUtils is null)
 			return;
-		var pLabel = (byte*)SilkMarshal.StringToPtr(label);
-		DebugUtilsLabelEXT info = new() { SType = StructureType.DebugUtilsLabelExt, PLabelName = pLabel };
-		_debugUtils.CmdBeginDebugUtilsLabel(cmd, in info);
-		SilkMarshal.Free((nint)pLabel);
+		Span<byte> utf8 = stackalloc byte[MaxDebugLabelBytes];
+		EncodeLabel(label, utf8);
+		fixed (byte* pLabel = utf8)
+		{
+			DebugUtilsLabelEXT info = new() { SType = StructureType.DebugUtilsLabelExt, PLabelName = pLabel };
+			_debugUtils.CmdBeginDebugUtilsLabel(cmd, in info);
+		}
+	}
+
+	/// <summary>Stack buffer size for a per-frame debug label; longer names are clipped rather than allocated for.</summary>
+	private const int MaxDebugLabelBytes = 256;
+
+	/// <summary>
+	/// UTF-8 encode <paramref name="label"/> into <paramref name="destination"/> with a trailing NUL, returning the
+	/// byte count including it. A label too long for the buffer is clipped on a whole character (so the encoding stays
+	/// valid) rather than growing the buffer: it is a capture annotation, and a clipped pass name in a capture beats an
+	/// allocation on the frame path.
+	/// </summary>
+	private static int EncodeLabel(string label, Span<byte> destination)
+	{
+		var body = destination[..^1]; // reserve the NUL
+		var chars = label.AsSpan();
+		if (chars.Length > body.Length)
+			chars = chars[..body.Length]; // one char is at least one UTF-8 byte, so this is the first useful bound
+		int written;
+		while (!Encoding.UTF8.TryGetBytes(chars, body, out written))
+			chars = chars[..^1];
+		destination[written] = 0;
+		return written + 1;
 	}
 
 	/// <summary>Close the most recently opened debug-label region on a command buffer.</summary>

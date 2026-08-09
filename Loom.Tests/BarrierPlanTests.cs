@@ -152,6 +152,42 @@ public class BarrierPlanTests
 	}
 
 	[Test]
+	public void Sampling_and_writing_one_resource_in_the_same_pass_is_rejected_at_derive_time()
+	{
+		// A GPU feedback loop Loom does not model. The use-priority reduction would silently drop the read and derive a
+		// plain colour-attachment barrier, so the pass would sample undefined contents with no diagnostic anywhere —
+		// hence a derive-time throw rather than a best effort. Scheduling accepts it (a pass's own write is not a
+		// self-dependency), so barrier derivation is the layer that has to catch it.
+		var schedule = GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var world = g.Domain("world", 320, 180);
+			var feedback = world.Color("feedback", Format.Rgba16F);
+			g.Pass("seed").Writes(feedback);
+			g.Pass("blur").Samples(feedback).Writes(feedback);
+		}));
+
+		var thrown = Should.Throw<GraphValidationException>(() => BarrierPlan.Derive(schedule));
+		thrown.Message.ShouldContain("feedback");
+		thrown.Message.ShouldContain("same pass");
+	}
+
+	[Test]
+	public void Blending_and_sampling_one_resource_in_the_same_pass_is_rejected_too()
+	{
+		// .Blends is the other write verb, and the same hazard: the pass would be reading the target it is accumulating
+		// into. Covered separately because the reduction tests Write and Blend as distinct flags.
+		var schedule = GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var world = g.Domain("world", 320, 180);
+			var lit = world.Color("lit", Format.Rgba16F);
+			g.Pass("base").Writes(lit);
+			g.Pass("smear").Samples(lit).Blends(lit);
+		}));
+
+		Should.Throw<GraphValidationException>(() => BarrierPlan.Derive(schedule));
+	}
+
+	[Test]
 	public void Readback_target_whose_last_use_is_the_write_is_still_stored_and_handed_to_the_copy_out()
 	{
 		// The shape a game hits and the demos don't: nothing samples the id buffer, so the only thing that keeps it
