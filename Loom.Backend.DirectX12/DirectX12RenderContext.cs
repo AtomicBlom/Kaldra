@@ -27,7 +27,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	private readonly RecordValidator _validate;
 	private readonly DirectX12Context _ctx;
 	private readonly DirectX12TechniqueCache _techniques;
-	private readonly DirectX12DescriptorRing _ring;
+	private readonly DirectX12DescriptorHeap _descriptors;
 	private readonly DirectX12MeshStore _meshes;
 	private readonly DirectX12TextureStore _textures;
 	private readonly MaterialStore _materials;
@@ -65,12 +65,12 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	public double Time { get; private set; }
 	public bool HdrOutput { get; private set; }
 
-	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorRing ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, MaterialStore materials, int frameCount, RecordValidator validation)
+	public DirectX12RenderContext(DirectX12Context ctx, DirectX12TechniqueCache techniques, DirectX12DescriptorHeap ring, DirectX12MeshStore meshes, DirectX12TextureStore textures, MaterialStore materials, int frameCount, RecordValidator validation)
 	{
 		_validate = validation;
 		_ctx = ctx;
 		_techniques = techniques;
-		_ring = ring;
+		_descriptors = ring;
 		_meshes = meshes;
 		_textures = textures;
 		_materials = materials;

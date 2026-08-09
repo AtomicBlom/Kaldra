@@ -64,6 +64,10 @@ internal sealed unsafe partial class DirectX12RenderContext
 		_layerStack.Clear();
 		var layerClear = stackalloc float[4] { 0f, 0f, 0f, 0f }; // transparent: a layer starts empty
 
+		// The texture whose SRV the bound table currently describes, and that table's handle. -1 = nothing bound yet.
+		var listTextureId = -1;
+		var listTable = default(GpuDescriptorHandle);
+
 		foreach (var c in commands)
 		{
 			if (layersSupported && c.Tag == TagBeginLayer && _layerStack.Count < DirectX12LayerTargets.MaxNesting)
@@ -107,9 +111,11 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 				CompositeLayer(baked, target.Resource, tint, block, pushLen, push);
 
-				// Restore the list's geometry for the following commands (the composite bound its own quad buffer).
+				// Restore the list's geometry for the following commands (the composite bound its own quad buffer),
+				// and forget the memoised texture table — the composite replaced it with the layer's own.
 				_cmd.IASetVertexBuffers(0, 1, &vbv);
 				_cmd.IASetIndexBuffer(&ibv);
+				listTextureId = -1;
 				continue;
 			}
 
@@ -126,11 +132,21 @@ internal sealed unsafe partial class DirectX12RenderContext
 				_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, (uint)(pushLen + 1), block, 0);
 
 			// Write the bound texture's SRV (real format + full mip chain) into a fresh ring slot, then bind the table.
+			// A UI list is mostly one texture — the glyph atlas — for run after run of commands, so the descriptor is
+			// only rewritten when the texture actually changes; otherwise the table from the previous command still
+			// describes it. Reset per submission, since the ring rewinds and a stale handle would point at another
+			// frame's descriptors.
 			if (baked.TableParam >= 0)
 			{
-				var (cpu, gpu) = _ring.Allocate(1);
-				WriteListTextureSrv(textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id, cpu);
-				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
+				var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
+				if (texId != listTextureId)
+				{
+					var (cpu, gpu) = _descriptors.Allocate(1);
+					WriteListTextureSrv(texId, cpu);
+					listTextureId = texId;
+					listTable = gpu;
+				}
+				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, listTable);
 			}
 
 			var scissor = new Box2D<int>((int)minX, (int)minY, (int)maxX, (int)maxY);
@@ -184,7 +200,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		if (baked.TableParam >= 0)
 		{
-			var (cpu, gpu) = _ring.Allocate(1);
+			var (cpu, gpu) = _descriptors.Allocate(1);
 			var srv = new ShaderResourceViewDesc
 			{
 				Format = _layerTargets.Format,

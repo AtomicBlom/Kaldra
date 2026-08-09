@@ -26,7 +26,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private readonly DirectX12Context _ctx;
 	private readonly IDirectX12PresentTarget _presentTarget;
 	private readonly DirectX12TechniqueCache _techniques;
-	private readonly DirectX12DescriptorRing _ring;
+	private readonly DirectX12DescriptorHeap _ring;
 	private readonly DirectX12MeshStore _meshes;
 	private readonly DirectX12TextureStore _textures;
 	private readonly DirectX12RenderContext _context;
@@ -126,7 +126,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			throw new InvalidOperationException("CreateEvent failed for the DirectX12 frame-pacing fence.");
 
 		_techniques = new DirectX12TechniqueCache(_ctx);
-		_ring = new DirectX12DescriptorRing(_ctx, 512, BufferCount); // per-slot headroom for per-pass SRVs + the resource viewer's debug SRVs
+		// Starting sizes, not budgets — the heap grows when a scene wants more. The persistent region holds one table
+		// per (material, technique) and the transient region a frame's per-pass SRVs plus the resource viewer's debug SRVs.
+		_ring = new DirectX12DescriptorHeap(_ctx, persistentCapacity: 256, transientPerFrame: 256, BufferCount);
 		_meshes = new DirectX12MeshStore(_ctx);
 		_textures = new DirectX12TextureStore(_ctx);
 		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, Materials, (int)BufferCount, Validation);

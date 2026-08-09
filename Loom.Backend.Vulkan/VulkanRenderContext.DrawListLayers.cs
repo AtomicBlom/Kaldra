@@ -68,6 +68,9 @@ internal sealed unsafe partial class VulkanRenderContext
 			_layerTargets.Configure(layerArea, _colorFormats[0]);
 		_layerStack.Clear();
 
+		// The texture the currently bound descriptor set describes. -1 = nothing bound yet.
+		var listTextureId = -1;
+
 		foreach (var c in commands)
 		{
 			if (layersSupported && c.Tag == TagBeginLayer)
@@ -104,9 +107,11 @@ internal sealed unsafe partial class VulkanRenderContext
 
 				CompositeLayer(baked, layer.View, layer.Tint, sampler, block, pushLen, push, layerArea);
 
-				// Restore the list's geometry for the following commands (the composite bound its own quad buffer).
+				// Restore the list's geometry for the following commands (the composite bound its own quad buffer),
+				// and forget the memoised texture set — the composite replaced it with the layer's own.
 				_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
 				_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
+				listTextureId = -1;
 				continue;
 			}
 
@@ -122,24 +127,31 @@ internal sealed unsafe partial class VulkanRenderContext
 			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, block);
 
 			var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
-			// An id offset by DebugTextureBase is an inspectable graph resource (the resource viewer): sample this
-			// frame's live transient image instead of a loaded texture-store entry.
-			var view = texId >= InspectableResource.DebugTextureBase
-				? _resources.Get(_frameSlot, texId - InspectableResource.DebugTextureBase).View
-				: _textures.View(texId);
-			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-			var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
-			var write = new WriteDescriptorSet
+			// A UI list is mostly one texture — the glyph atlas — for run after run of commands, and the set holds
+			// nothing else, so a run of same-texture commands can keep the set the first of them bound. Only a change
+			// of texture costs an allocate + update + bind.
+			if (texId != listTextureId)
 			{
-				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
-				DstBinding = 0,
-				DescriptorCount = 1,
-				DescriptorType = DescriptorType.CombinedImageSampler,
-				PImageInfo = &imageInfo,
-			};
-			_vk.UpdateDescriptorSets(_ctx.Device, 1, in write, 0, null);
-			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+				// An id offset by DebugTextureBase is an inspectable graph resource (the resource viewer): sample this
+				// frame's live transient image instead of a loaded texture-store entry.
+				var view = texId >= InspectableResource.DebugTextureBase
+					? _resources.Get(_frameSlot, texId - InspectableResource.DebugTextureBase).View
+					: _textures.View(texId);
+				var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+				var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
+				var write = new WriteDescriptorSet
+				{
+					SType = StructureType.WriteDescriptorSet,
+					DstSet = set,
+					DstBinding = 0,
+					DescriptorCount = 1,
+					DescriptorType = DescriptorType.CombinedImageSampler,
+					PImageInfo = &imageInfo,
+				};
+				_vk.UpdateDescriptorSets(_ctx.Device, 1, in write, 0, null);
+				_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+				listTextureId = texId;
+			}
 
 			Rect2D scissor = new(new Offset2D((int)minX, (int)minY), new Extent2D((uint)(maxX - minX), (uint)(maxY - minY)));
 			_vk.CmdSetScissor(_cmd, 0, 1, in scissor);

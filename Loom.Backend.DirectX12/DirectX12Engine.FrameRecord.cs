@@ -30,10 +30,10 @@ public sealed unsafe partial class DirectX12Engine
 		SilkMarshal.ThrowHResult(_allocators[index].Reset());
 		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
 
-		// Bind the shader-visible heap for this command list, then reset its per-frame bump allocator.
-		var heap = _ring.Heap.Handle;
-		_commandList.SetDescriptorHeaps(1, &heap);
-		_ring.Reset(index); // this slot's own region — must not clobber the other in-flight frame's live descriptors
+		// Bind the shader-visible heap for this command list and rewind this slot's own transient region — it must not
+		// clobber the other in-flight frame's live descriptors. The heap keeps the command list so that growing
+		// mid-frame can re-bind the replacement itself.
+		_ring.BeginFrame(_commandList, index);
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
 		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _presentTarget.Width, _presentTarget.Height);
 

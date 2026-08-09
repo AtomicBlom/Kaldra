@@ -122,12 +122,17 @@ internal sealed unsafe partial class DirectX12RenderContext
 			_cmd.SetComputeRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
 		}
 
+		// A dispatch can bind two descriptor tables — sampled SRVs and storage UAVs — so the descriptors for both are
+		// reserved before either is bound. Growing the heap between them would leave the first table addressing the
+		// heap that was just retired while its replacement is the one bound, which reads as garbage on the GPU.
+		_descriptors.Reserve((uint)(sampled.Length + storage.Length));
+
 		// Sampled inputs → an SRV descriptor table (e.g. the auto-exposure compute metering the lit scene).
 		if (sampled.Length > 0 && baked.TableParam >= 0)
 		{
-			var (cpu, gpu) = _ring.Allocate((uint)sampled.Length);
+			var (cpu, gpu) = _descriptors.Allocate((uint)sampled.Length);
 			for (var i = 0; i < sampled.Length; i++)
-				WriteSrv(sampled[i].Id, _ring.Offset(cpu, (uint)i));
+				WriteSrv(sampled[i].Id, _descriptors.Offset(cpu, (uint)i));
 			_cmd.SetComputeRootDescriptorTable((uint)baked.TableParam, gpu);
 		}
 
@@ -146,7 +151,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 		}
 		else if (storage.Length > 0 && baked.UavTableParam >= 0)
 		{
-			var (cpu, gpu) = _ring.Allocate((uint)storage.Length);
+			var (cpu, gpu) = _descriptors.Allocate((uint)storage.Length);
 			for (var i = 0; i < storage.Length; i++)
 			{
 				var id = storage[i].Id;
@@ -173,7 +178,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 						Anonymous = new UnorderedAccessViewDescUnion { Texture2D = new Tex2DUav { MipSlice = 0, PlaneSlice = 0 } }
 					};
 				}
-				_ctx.Device.CreateUnorderedAccessView(_transients.Resource(_slot, id), default(ComPtr<ID3D12Resource>), &uav, _ring.Offset(cpu, (uint)i));
+				_ctx.Device.CreateUnorderedAccessView(_transients.Resource(_slot, id), default(ComPtr<ID3D12Resource>), &uav, _descriptors.Offset(cpu, (uint)i));
 			}
 			_cmd.SetComputeRootDescriptorTable((uint)baked.UavTableParam, gpu);
 		}
