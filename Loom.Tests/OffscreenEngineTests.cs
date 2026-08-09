@@ -13,6 +13,7 @@ namespace Loom.Tests;
 /// (no GPU backend usable on this box). Each available backend is exercised independently in its own loop
 /// iteration, so one backend being unavailable never hides a regression in another.
 /// </summary>
+[NotInParallel] // brings backend devices up and down; concurrent bring-up is not something either backend survives
 public class OffscreenEngineTests
 {
 	private const int Width = 256;

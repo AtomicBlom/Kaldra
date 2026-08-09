@@ -71,6 +71,19 @@ public abstract class ResourceHandle
 	/// <summary>True if this is the swapchain present target.</summary>
 	public bool IsBackbuffer => Kind == ResourceKind.Backbuffer;
 
+	/// <summary>
+	/// Whether this resource's size tracks the swapchain, so a window resize has to reallocate it (and everything
+	/// sized from it) at the new extent. True in the backbuffer domain and in a backbuffer-relative one; false for a
+	/// fixed-size domain, which a resize leaves entirely alone — which is also why a <see cref="ResourceKind.Persistent"/>
+	/// target on a fixed domain keeps its cross-frame contents across a resize while a screen-sized one cannot.
+	/// <para>
+	/// Stated once here rather than re-derived per backend: every place that has to decide what a resize rebuilds —
+	/// transient images, persistent history, readback staging, on either backend — reads this, so the two backends
+	/// cannot drift into resizing different sets of things.
+	/// </para>
+	/// </summary>
+	public bool FollowsSwapchain => Domain.IsBackbuffer || Domain.RelativeScale > 0f;
+
 	private protected ResourceHandle(int id, string name, Format format, ResourceKind kind, Domain domain, float scale, int count, int byteSize, bool growable = false, int stride = 0, int elementCount = 0)
 	{
 		Id = id;

@@ -91,20 +91,17 @@ public sealed unsafe partial class DirectX12Engine
 		LoomLog.Info($"DirectX12 captured {width}x{height} -> {path}");
 	}
 
-	// Record the copy of each readback target into the slot's READBACK buffer (after the passes that wrote + read
-	// it). Transition the target to COPY_SOURCE and track the new state, so next frame's first use of it transitions
-	// from the right state (D3D12 needs the exact current state). No-op when the graph has no readback target.
+	// Record the copy of each readback target into the slot's READBACK buffer (after the passes that wrote + read it).
+	// The pre-copy transitions come from the derived plan; EmitGraphTransition tracks the real D3D12 state, so next
+	// frame's first use of the target transitions from the right one. No-op when the graph has no readback target.
 	private void RecordReadback(uint index)
 	{
+		foreach (var transition in Barriers.ReadbackTransitions)
+			EmitGraphTransition(index, transition);
+
+		var transients = _transients!; // non-null throughout recording (SetGraph built it)
 		foreach (var readback in _readbacks)
 		{
-			var current = _transients!.State(index, readback.Id);
-			if (current != ResourceStates.CopySource)
-			{
-				Transition(_transients.Resource(index, readback.Id), current, ResourceStates.CopySource);
-				_transients.SetState(index, readback.Id, ResourceStates.CopySource);
-			}
-
 			var dst = new TextureCopyLocation
 			{
 				PResource = readback.Readback[index].Handle,
@@ -114,13 +111,13 @@ public sealed unsafe partial class DirectX12Engine
 					PlacedFootprint = new PlacedSubresourceFootprint
 					{
 						Offset = 0,
-						Footprint = new SubresourceFootprint { Format = _transients.Format(index, readback.Id), Width = readback.Width, Height = readback.Height, Depth = 1, RowPitch = readback.RowPitch }
+						Footprint = new SubresourceFootprint { Format = transients.Format(index, readback.Id), Width = readback.Width, Height = readback.Height, Depth = 1, RowPitch = readback.RowPitch }
 					}
 				}
 			};
 			var src = new TextureCopyLocation
 			{
-				PResource = _transients.Resource(index, readback.Id).Handle,
+				PResource = transients.Resource(index, readback.Id).Handle,
 				Type = TextureCopyType.SubresourceIndex,
 				Anonymous = new TextureCopyLocationUnion { SubresourceIndex = 0 }
 			};

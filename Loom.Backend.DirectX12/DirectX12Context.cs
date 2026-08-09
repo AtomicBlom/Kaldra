@@ -194,15 +194,42 @@ internal sealed unsafe class DirectX12Context : IDisposable
 	// D3D12 debug layer silently drops (the begin goes uncounted while its EndEvent still does — an imbalance).
 	private const uint PixEventAnsiVersion = 1;
 
-	/// <summary>Open a named debug-label region on a command list (a PIX/RenderDoc marker scope).</summary>
+	/// <summary>
+	/// Open a named debug-label region on a command list (a PIX/RenderDoc marker scope). Unlike
+	/// <see cref="SetObjectName"/>, which runs once per object at creation, this runs once per pass <em>per frame</em>
+	/// — so the label is encoded into a stack buffer rather than marshalled through the heap. A capture annotation
+	/// must not put the steady render loop in the GC's way.
+	/// </summary>
 	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
 	public void BeginDebugLabel(ComPtr<ID3D12GraphicsCommandList> cmd, string label)
 	{
 		// ANSI string event: a null-terminated UTF-8 payload, Size in bytes including the NUL.
-		var bytes = (uint)Encoding.UTF8.GetByteCount(label) + 1;
-		var p = (byte*)SilkMarshal.StringToPtr(label, NativeStringEncoding.UTF8);
-		cmd.BeginEvent(PixEventAnsiVersion, p, bytes);
-		SilkMarshal.Free((nint)p);
+		Span<byte> utf8 = stackalloc byte[MaxDebugLabelBytes];
+		var bytes = (uint)EncodeLabel(label, utf8);
+		fixed (byte* p = utf8)
+			cmd.BeginEvent(PixEventAnsiVersion, p, bytes);
+	}
+
+	/// <summary>Stack buffer size for a per-frame debug label; longer names are clipped rather than allocated for.</summary>
+	private const int MaxDebugLabelBytes = 256;
+
+	/// <summary>
+	/// UTF-8 encode <paramref name="label"/> into <paramref name="destination"/> with a trailing NUL, returning the
+	/// byte count including it. A label too long for the buffer is clipped on a whole character (so the encoding stays
+	/// valid) rather than growing the buffer: it is a capture annotation, and a clipped pass name in a capture beats an
+	/// allocation on the frame path.
+	/// </summary>
+	private static int EncodeLabel(string label, Span<byte> destination)
+	{
+		var body = destination[..^1]; // reserve the NUL
+		var chars = label.AsSpan();
+		if (chars.Length > body.Length)
+			chars = chars[..body.Length]; // one char is at least one UTF-8 byte, so this is the first useful bound
+		int written;
+		while (!Encoding.UTF8.TryGetBytes(chars, body, out written))
+			chars = chars[..^1];
+		destination[written] = 0;
+		return written + 1;
 	}
 
 	/// <summary>Close the most recently opened debug-label region on a command list.</summary>

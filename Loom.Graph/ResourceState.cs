@@ -30,6 +30,12 @@ public enum ResourceState
 	/// <summary>A buffer read as vertex-attribute input by a draw (GPU particles). Buffers have no layout.</summary>
 	VertexInput,
 
+	/// <summary>
+	/// Read by a copy out of the frame — the source of the end-of-frame <c>g.Readback</c> copy to host-visible
+	/// memory, and of a frame capture (<c>TRANSFER_SRC_OPTIMAL</c> / <c>COPY_SOURCE</c>).
+	/// </summary>
+	CopySource,
+
 	/// <summary>Ready to be presented to the screen (<c>PRESENT_SRC_KHR</c>).</summary>
 	Present,
 }

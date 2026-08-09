@@ -195,12 +195,16 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_presentTarget.Resize(width, height);
 		Array.Clear(_frameFenceValues);
 
-		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size).
+		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size). The replacement is
+		// built before the old one is released so it can adopt the persistents that survive a resize — their contents
+		// are cross-frame history, and rebuilding them would throw it away.
 		if (Graph is not null)
 		{
-			_transients?.Dispose();
-			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height);
+			var previous = _transients;
+			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height, previous);
+			previous?.Dispose();
 			_context.SetTransients(_transients);
+			RecreateSwapchainSizedReadback();
 			for (uint i = 0; i < BufferCount; i++)
 				_backbufferState[i] = ResourceStates.Present;
 		}
@@ -384,29 +388,62 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private void SetupReadback(RenderGraph graph)
 	{
 		foreach (var readback in _readbacks)
-			foreach (ref var buffer in readback.Readback.AsSpan())
-				if (buffer.Handle is not null) { buffer.Dispose(); buffer = default; }
+			DestroyReadbackStaging(readback);
 		_readbacks.Clear();
 
 		foreach (var target in graph.ReadbackTargets)
+			_readbacks.Add(CreateReadbackStaging(target));
+	}
+
+	// One g.Readback target's per-slot READBACK staging, sized from the transient's resolved extent. The dimensions
+	// and row pitch are captured here and reused by every copy, so they have to be rebuilt whenever the target is.
+	private ReadbackBuffers CreateReadbackStaging(ResourceHandle target)
+	{
+		var (width, height) = _transients!.Extent(target.Id);
+		var bpt = BytesPerTexel(target.Format);
+		var rowPitch = Align(width * bpt, 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
+		var readback = new ComPtr<ID3D12Resource>[BufferCount];
+		for (uint i = 0; i < BufferCount; i++)
+			readback[i] = CreateReadbackBuffer((ulong)rowPitch * height);
+		return new ReadbackBuffers
 		{
-			var (width, height) = _transients!.Extent(target.Id);
-			var bpt = BytesPerTexel(target.Format);
-			var rowPitch = Align(width * bpt, 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
-			var readback = new ComPtr<ID3D12Resource>[BufferCount];
-			for (uint i = 0; i < BufferCount; i++)
-				readback[i] = CreateReadbackBuffer((ulong)rowPitch * height);
-			_readbacks.Add(new ReadbackBuffers
-			{
-				Id = target.Id,
-				Width = width,
-				Height = height,
-				RowPitch = rowPitch,
-				BytesPerTexel = bpt,
-				Readback = readback,
-				Valid = new bool[BufferCount],
-				Packed = new byte[(int)(width * bpt * height)],
-			});
+			Id = target.Id,
+			Width = width,
+			Height = height,
+			RowPitch = rowPitch,
+			BytesPerTexel = bpt,
+			Readback = readback,
+			Valid = new bool[BufferCount],
+			Packed = new byte[(int)(width * bpt * height)],
+		};
+	}
+
+	private static void DestroyReadbackStaging(ReadbackBuffers readback)
+	{
+		foreach (ref var buffer in readback.Readback.AsSpan())
+			if (buffer.Handle is not null) { buffer.Dispose(); buffer = default; }
+	}
+
+	// Rebuild the staging for every swapchain-sized readback target at the new extent, after Resize has rebuilt the
+	// transients it mirrors. Unlike Vulkan, this backend copies with the width/height/row-pitch captured when the
+	// staging was built — so stale dimensions here read the *old* footprint out of the *new* resource, silently.
+	// A fixed-size target is left alone, exactly as its image is.
+	private void RecreateSwapchainSizedReadback()
+	{
+		if (Graph is null)
+			return;
+
+		foreach (var target in Graph.ReadbackTargets)
+		{
+			if (!target.FollowsSwapchain)
+				continue;
+			var index = _readbacks.FindIndex(r => r.Id == target.Id);
+			if (index < 0)
+				continue;
+			DestroyReadbackStaging(_readbacks[index]);
+			_readbacks[index] = CreateReadbackStaging(target);
+			// The bytes already handed to the app describe the old size; an empty Read is honest, a wrong-sized one isn't.
+			InvalidateReadback(target.Id);
 		}
 	}
 

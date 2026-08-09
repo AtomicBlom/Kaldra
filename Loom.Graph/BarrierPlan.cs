@@ -13,7 +13,9 @@ namespace Loom.Graph;
 /// It walks each resource's <see cref="ResourceState"/> timeline in execution order. A transition is
 /// emitted before a pass whenever the required state differs from the resource's current state (a layout
 /// change) or the pass writes the resource (a write always hazards with the prior usage, even at the same
-/// layout). Pure read-after-read needs nothing. The present target gets a terminal transition to
+/// layout). Pure read-after-read needs nothing. Two consumers outlive the passes and are derived separately:
+/// each <c>g.Readback</c> target transitions to <see cref="ResourceState.CopySource"/> for the copy-out (and is
+/// kept alive with <see cref="StoreAction.Store"/>), and the present target gets a terminal transition to
 /// <see cref="ResourceState.Present"/>.
 /// </para>
 /// </summary>
@@ -22,15 +24,27 @@ public sealed class BarrierPlan
 	/// <summary>Per-pass synchronisation, in execution order (aligned with the schedule).</summary>
 	public ImmutableArray<PassBarriers> Passes { get; }
 
-	/// <summary>Transitions to emit after the last pass — currently the present target to <see cref="ResourceState.Present"/>.</summary>
+	/// <summary>
+	/// Transitions to emit after the last pass but <em>before</em> the end-of-frame readback copy — each
+	/// <c>g.Readback</c> target from the state its last graph use left it in, to <see cref="ResourceState.CopySource"/>.
+	/// Empty for a graph that declares no readback target.
+	/// </summary>
+	public ImmutableArray<ResourceTransition> ReadbackTransitions { get; }
+
+	/// <summary>Transitions to emit after the readback copy — currently the present target to <see cref="ResourceState.Present"/>.</summary>
 	public ImmutableArray<ResourceTransition> FinalTransitions { get; }
 
 	/// <summary>Debug-label groups still open after the last pass — the backend closes this many before the frame ends (see <see cref="DebugLabelScopes"/>).</summary>
 	public int TrailingLabelCloses { get; }
 
-	private BarrierPlan(ImmutableArray<PassBarriers> passes, ImmutableArray<ResourceTransition> finalTransitions, int trailingLabelCloses)
+	private BarrierPlan(
+		ImmutableArray<PassBarriers> passes,
+		ImmutableArray<ResourceTransition> readbackTransitions,
+		ImmutableArray<ResourceTransition> finalTransitions,
+		int trailingLabelCloses)
 	{
 		Passes = passes;
+		ReadbackTransitions = readbackTransitions;
 		FinalTransitions = finalTransitions;
 		TrailingLabelCloses = trailingLabelCloses;
 	}
@@ -50,6 +64,13 @@ public sealed class BarrierPlan
 				(usageOrders.TryGetValue(id, out var list) ? list : usageOrders[id] = []).Add(scheduled.Order);
 
 		var presentId = schedule.Graph.PresentTarget?.Id ?? -1;
+
+		// A g.Readback target is copied out after every pass has run. That copy is not a pass, so the usage walk
+		// above cannot see it: a target whose last graph use is the pass that *writes* it would derive
+		// StoreAction.DontCare and a tile-based GPU that honours DONT_CARE is then entitled to discard the contents
+		// before the copy reads them (picking reads garbage, and only on some GPUs). Treat every readback target as
+		// used after everything, exactly as LifetimePlan extends its span past the final pass for the aliaser.
+		var readbackIds = schedule.Graph.ReadbackTargets.Select(r => r.Id).ToHashSet();
 
 		// Derive the nested GPU debug-label scopes from the dotted pass names (diagnostic-only, computed once).
 		var labels = DebugLabelScopes.Derive([.. ordered.Select(s => s.Pass.Name)]);
@@ -107,9 +128,10 @@ public sealed class BarrierPlan
 						load = LoadAction.DontCare;     // non-colour, non-depth first write (buffers etc.)
 					else
 						load = LoadAction.Load;         // write over an already-populated target
+					var consumedAfterTheFrame = id == presentId || readbackIds.Contains(id);
 					var store = use.IsReadOnlyAttachment
 						? StoreAction.DontCare
-						: (UsedAfter(usageOrders, id, scheduled.Order) || id == presentId ? StoreAction.Store : StoreAction.DontCare);
+						: (UsedAfter(usageOrders, id, scheduled.Order) || consumedAfterTheFrame ? StoreAction.Store : StoreAction.DontCare);
 					attachments.Add(new AttachmentAction(use.Resource, use.State, load, store, clearValue, depthClear));
 				}
 
@@ -121,6 +143,18 @@ public sealed class BarrierPlan
 			passBarriers.Add(new PassBarriers(scheduled.Pass, scheduled.Order, transitions.ToImmutable(), attachments.ToImmutable(), label.Closes, label.Opens, label.Leaf));
 		}
 
+		// Hand each readback target to the copy-out in a derived transition rather than letting the backend assume a
+		// from-state: the last use may have been a .Samples (ShaderRead) or a .Writes (ColorAttachment), and only the
+		// derivation knows which. A target no pass touches has nothing to copy and gets no transition.
+		var readbacks = ImmutableArray.CreateBuilder<ResourceTransition>();
+		foreach (var target in schedule.Graph.ReadbackTargets)
+		{
+			if (!currentState.TryGetValue(target.Id, out var from))
+				continue;
+			readbacks.Add(new ResourceTransition(target, from, ResourceState.CopySource));
+			currentState[target.Id] = ResourceState.CopySource; // the copy leaves it here, so a later final transition starts from it
+		}
+
 		var finals = ImmutableArray.CreateBuilder<ResourceTransition>();
 		if (schedule.Graph.PresentTarget is { } present)
 		{
@@ -128,7 +162,7 @@ public sealed class BarrierPlan
 			finals.Add(new ResourceTransition(present, from, ResourceState.Present));
 		}
 
-		return new BarrierPlan(passBarriers.ToImmutable(), finals.ToImmutable(), labels.TrailingCloses);
+		return new BarrierPlan(passBarriers.ToImmutable(), readbacks.ToImmutable(), finals.ToImmutable(), labels.TrailingCloses);
 	}
 
 	private static bool IsWritingState(ResourceState state) =>
@@ -212,6 +246,8 @@ public sealed class BarrierPlan
 			foreach (var a in pass.Attachments)
 				sb.AppendLine($"      attach   {a.Resource.Name} ({a.State})  load={a.Load} store={a.Store}");
 		}
+		foreach (var t in ReadbackTransitions)
+			sb.AppendLine($"  readback barrier  {t.Resource.Name}: {t.From} -> {t.To}");
 		foreach (var t in FinalTransitions)
 			sb.AppendLine($"  final barrier  {t.Resource.Name}: {t.From} -> {t.To}");
 		return sb.ToString();

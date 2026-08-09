@@ -1,3 +1,4 @@
+using System.Numerics;
 using Loom.Core.Graph;
 
 namespace Loom.Tests;
@@ -107,6 +108,58 @@ public class RenderGraphTests
 			g.Pass("p").Blends(lit);
 		});
 		blends.Hash().ShouldNotBe(writes.Hash());
+	}
+
+	// The hash is the bake key: SetGraph skips the GPU rebuild when it matches. So every declaration the Execute layer
+	// or a backend *derives* from has to be in it — anything left out means two graphs that need different GPU work
+	// hash equal, and the second one silently keeps the first one's.
+	[Test]
+	public void Hash_is_sensitive_to_clear_colour()
+	{
+		var black = RenderGraph.Define(g => g.Domain("world", 320, 180).Color("a", Format.Rgba8Srgb, clearValue: Vector4.Zero));
+		var white = RenderGraph.Define(g => g.Domain("world", 320, 180).Color("a", Format.Rgba8Srgb, clearValue: Vector4.One));
+		white.Hash().ShouldNotBe(black.Hash());
+	}
+
+	[Test]
+	public void Hash_is_sensitive_to_noclear()
+	{
+		var cleared = RenderGraph.Define(g => g.Domain("world", 320, 180).Color("a", Format.Rgba8Srgb));
+		var dontCare = RenderGraph.Define(g => g.Domain("world", 320, 180).Color("a", Format.Rgba8Srgb, noClear: true));
+		dontCare.Hash().ShouldNotBe(cleared.Hash());
+	}
+
+	[Test]
+	public void Hash_is_sensitive_to_the_depth_clear_value()
+	{
+		var conventional = RenderGraph.Define(g => g.Domain("world", 320, 180).Depth("d", Format.Depth32F));
+		var reversedZ = RenderGraph.Define(g => g.Domain("world", 320, 180).Depth("d", Format.Depth32F, clearDepth: 0f));
+		reversedZ.Hash().ShouldNotBe(conventional.Hash());
+	}
+
+	[Test]
+	public void Hash_is_sensitive_to_a_readback_edge()
+	{
+		var plain = RenderGraph.Define(g =>
+		{
+			var ids = g.Domain("world", 320, 180).Color("ids", Format.R16F);
+			g.Pass("p").Writes(ids);
+		});
+		var readBack = RenderGraph.Define(g =>
+		{
+			var ids = g.Domain("world", 320, 180).Color("ids", Format.R16F);
+			g.Pass("p").Writes(ids);
+			g.Readback(ids);
+		});
+		readBack.Hash().ShouldNotBe(plain.Hash());
+	}
+
+	[Test]
+	public void Hash_is_sensitive_to_growable_storage()
+	{
+		var fixedSize = RenderGraph.Define(g => g.Storage<Vector4>("lights", 16));
+		var growable = RenderGraph.Define(g => g.Storage<Vector4>("lights", 16, growable: true));
+		growable.Hash().ShouldNotBe(fixedSize.Hash());
 	}
 
 	[Test]

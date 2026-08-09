@@ -61,6 +61,12 @@ internal static class VulkanStateMapping
 			PipelineStageFlags2.VertexAttributeInputBit,
 			AccessFlags2.VertexAttributeReadBit),
 
+		// Source of a copy out of the frame — the g.Readback copy-to-buffer, and a frame capture.
+		GraphState.CopySource => new(
+			ImageLayout.TransferSrcOptimal,
+			PipelineStageFlags2.AllTransferBit,
+			AccessFlags2.TransferReadBit),
+
 		// Terminal: hand the image to the presentation engine.
 		GraphState.Present => new(ImageLayout.PresentSrcKhr, PipelineStageFlags2.BottomOfPipeBit, AccessFlags2.None),
 

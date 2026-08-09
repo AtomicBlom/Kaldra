@@ -45,15 +45,20 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 										  // and never aliased. Stored in slot 0; the accessors redirect persistent ids there so state is shared (a
 										  // transition this frame must see where last frame left it), exactly as the Vulkan backend shares one image.
 	private readonly bool[] _isPersistent; // by resourceId
+	private readonly bool[] _swapchainSized; // by resourceId — its extent follows the swapchain, so a resize reallocates it
 	private readonly List<ComPtr<ID3D12Heap>> _heaps = []; // per-bucket-per-slot placed-resource heaps
 	private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
 	private ComPtr<ID3D12DescriptorHeap> _dsvHeap;
 
-	public DirectX12Transients(DirectX12Context ctx, RenderGraph graph, AliasPlan aliasPlan, uint bufferCount, uint swapWidth, uint swapHeight)
+	// `previous` is the instance this one replaces on a window resize (null when building a graph's resources from
+	// scratch). Any Persistent resource whose size does NOT follow the swapchain is taken over from it rather than
+	// recreated, so cross-frame history survives a resize instead of silently re-converging.
+	public DirectX12Transients(DirectX12Context ctx, RenderGraph graph, AliasPlan aliasPlan, uint bufferCount, uint swapWidth, uint swapHeight, DirectX12Transients? previous = null)
 	{
 		var count = graph.Resources.Length;
 		_isTransient = new bool[count];
 		_isPersistent = new bool[count];
+		_swapchainSized = new bool[count];
 		_extents = new (uint, uint)[count];
 		_byteSizes = new uint[count];
 
@@ -71,6 +76,8 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 			if (resource.Kind is not (ResourceKind.Color or ResourceKind.Depth or ResourceKind.Buffer or ResourceKind.Persistent or ResourceKind.Constants or ResourceKind.Storage))
 				throw new NotSupportedException($"DirectX12: resource kind {resource.Kind} ('{resource.Name}') is not supported yet.");
 			_isTransient[resource.Id] = true; // managed + sampleable (true for persistent too, so it can be sampled)
+
+			_swapchainSized[resource.Id] = resource.FollowsSwapchain; // reallocated on resize; see ResourceHandle.FollowsSwapchain
 			if (resource.Kind == ResourceKind.Persistent)
 			{
 				// Cross-frame storage (auto-exposure): one R16F UAV texture, allocated once, sampled + read-written.
@@ -137,7 +144,7 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 			AllocateAliasedTargets(ctx, aliasPlan, aliasable, slot, rtvStart, dsvStart, rtvInc, dsvInc, ref rtvCursor, ref dsvCursor);
 
 		AllocateBuffers(ctx, bufferTargets, bufferCount);
-		AllocatePersistent(ctx, persistentTargets);
+		AllocatePersistent(ctx, persistentTargets, previous);
 		AllocateConstants(ctx, constantTargets, bufferCount);
 		AllocateStorage(ctx, storageTargets, bufferCount);
 	}
@@ -226,10 +233,19 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 	// Created with AllowUnorderedAccess (a compute read-writes it as a storage image) and sampled later as an SRV;
 	// R16F is directly UAV- and SRV-creatable, so no typeless split is needed (unlike depth). Uninitialised on the
 	// first frame by design — the auto-exposure shader clamps the garbage into a sane range before easing from it.
-	private void AllocatePersistent(DirectX12Context ctx, List<ResourceHandle> persistentTargets)
+	private void AllocatePersistent(DirectX12Context ctx, List<ResourceHandle> persistentTargets, DirectX12Transients? previous)
 	{
 		foreach (var resource in persistentTargets)
 		{
+			// A resize rebuilds this whole object, but a persistent whose extent doesn't follow the swapchain has no
+			// reason to be rebuilt — take the old texture over, contents and tracked state intact, so resizing the
+			// window doesn't quietly reset (say) the exposure history the way recreating it would.
+			if (previous?.DetachPersistent(resource.Id) is { } adopted)
+			{
+				_targets[0][resource.Id] = adopted;
+				continue;
+			}
+
 			var (w, h) = _extents[resource.Id];
 			var (resFormat, _, srvFormat) = DirectX12FormatMapping.ToDxgiViews(resource.Format);
 			var heapProps = new HeapProperties { Type = HeapType.Default, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
@@ -326,6 +342,18 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 			_storagePtr[slot][id] = (nint)mapped;
 			_targets[slot][id] = new Target { Resource = buffer, View = default, Format = DxgiFormat.FormatUnknown, SrvFormat = DxgiFormat.FormatUnknown, State = ResourceStates.GenericRead, IsDepth = false };
 		}
+	}
+
+	// Hand a Persistent resource's texture to the instance replacing this one on a resize: this instance forgets it, so
+	// its Dispose leaves it alive and the replacement owns it. Only for a persistent whose size doesn't follow the
+	// swapchain — a swapchain-sized one has to be reallocated at the new extent, and its contents are lost with it.
+	private Target? DetachPersistent(int id)
+	{
+		if (!_isPersistent[id] || _swapchainSized[id] || _targets[0][id].Resource.Handle is null)
+			return null;
+		var target = _targets[0][id];
+		_targets[0][id] = default;
+		return target;
 	}
 
 	// Persistent resources live in slot 0 only (one shared instance); redirect their lookups there.

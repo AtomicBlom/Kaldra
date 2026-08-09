@@ -30,6 +30,8 @@ internal static class DirectX12StateMapping
 		GraphState.ShaderRead => ResourceStates.PixelShaderResource | ResourceStates.NonPixelShaderResource,
 		GraphState.Storage => ResourceStates.UnorderedAccess,
 		GraphState.VertexInput => ResourceStates.VertexAndConstantBuffer,
+		// Source of a copy out of the frame — the g.Readback copy-to-buffer, and a frame capture.
+		GraphState.CopySource => ResourceStates.CopySource,
 		GraphState.Present => ResourceStates.Present,
 		_ => throw new ArgumentOutOfRangeException(nameof(state), state, "No DirectX12 resource-state mapping."),
 	};

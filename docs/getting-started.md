@@ -206,7 +206,9 @@ engine.DefineTechnique("tonemap", new TechniqueDescriptor("tonemap"));
 
 ### 3. Define the render graph
 
-A graph is built once with `RenderGraph.Define` (it is immutable and cached by hash) and set on the engine with `SetGraph`. You declare each pass's reads and writes — never the order or the barriers — and `g.Present` names the target shown on screen. Per-frame view data rides a neutral `Constants` channel the scene pass reads; the engine names no camera.
+A graph is built once with `RenderGraph.Define` and set on the engine with `SetGraph`. You declare each pass's reads and writes — never the order or the barriers — and `g.Present` names the target shown on screen. Per-frame view data rides a neutral `Constants` channel the scene pass reads; the engine names no camera.
+
+The graph is immutable and cached by hash, so re-setting a structurally identical one is cheap: the engine reuses the GPU resources it already built (and everything they hold — cross-frame `Persistent` history, your written parameter buffers) and only re-derives the plan. You can rebuild and set the graph whenever the structure *might* have changed rather than tracking that by hand; only a real structural change pays for a rebuild.
 
 ```csharp
 using System.Numerics;

@@ -14,6 +14,7 @@ namespace Loom.Tests;
 /// frame — with no window and no host capture/smoke CLI mode. This is how a hosted app is smoke-tested now that
 /// those test-only flags don't live on the production host. GPU-gated — SKIPPED when no backend is usable here.
 /// </summary>
+[NotInParallel] // brings a backend device up and down; concurrent bring-up is not something either backend survives
 public class HostedApplicationSmokeTests
 {
 	private const int Width = 256;

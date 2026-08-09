@@ -210,6 +210,31 @@ public class DomainAndResourceTests
 		history.Count.ShouldBe(1);
 	}
 
+	// Which persistents a resize reallocates comes straight from their domain, and that is the whole resize semantic:
+	// a screen-sized history buffer follows the swapchain and loses its contents, a fixed-size one is left alone and
+	// keeps them. Both backends read the same rule off the handle, which is what keeps them from diverging.
+	[Test]
+	public void Backbuffer_anchored_persistent_is_screen_sized_so_a_resize_reallocates_it()
+	{
+		ResourceHandle? history = null;
+		RenderGraph.Define(g => history = g.Persistent("taa_history", Format.Rgba16F));
+
+		history!.Domain.IsBackbuffer.ShouldBeTrue();
+		history.Resolve(1920, 1080).ShouldBe((1920, 1080));
+		history.Resolve(1280, 720).ShouldBe((1280, 720)); // follows the swapchain, so a resize has to rebuild it
+	}
+
+	[Test]
+	public void Fixed_domain_persistent_keeps_its_size_across_a_resize()
+	{
+		ResourceHandle? meter = null;
+		RenderGraph.Define(g => meter = g.Domain("meter", 1, 1).Persistent("exposure", Format.R32F));
+
+		meter!.Domain.IsBackbuffer.ShouldBeFalse();
+		meter.Resolve(1920, 1080).ShouldBe((1, 1));
+		meter.Resolve(1280, 720).ShouldBe((1, 1)); // nothing to rebuild, so its cross-frame contents survive
+	}
+
 	[Test]
 	public void Persistent_rejects_an_unimplemented_history_ring() =>
 		// size > 1 over-promises a cross-frame ring the backends don't allocate yet — reject it (WS-2 honesty).
