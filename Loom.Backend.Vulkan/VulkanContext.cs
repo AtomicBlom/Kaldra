@@ -40,6 +40,17 @@ public sealed unsafe class VulkanContext : IDisposable
 	public uint PresentFamily { get; private set; }
 	public string DeviceName { get; private set; } = "<unknown>";
 
+	/// <summary>The selected physical device's properties — vendor/device ids, limits, and the pipeline-cache UUID a
+	/// persistent cache is keyed and validated by.</summary>
+	public PhysicalDeviceProperties PhysicalDeviceProperties
+	{
+		get
+		{
+			Vk.GetPhysicalDeviceProperties(PhysicalDevice, out var properties);
+			return properties;
+		}
+	}
+
 	/// <summary>Nanoseconds per timestamp tick (<c>VkPhysicalDeviceLimits.timestampPeriod</c>) — converts query
 	/// ticks to wall time for the GPU profiler.</summary>
 	public float TimestampPeriod { get; private set; }

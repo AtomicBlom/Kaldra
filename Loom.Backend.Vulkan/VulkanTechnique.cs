@@ -17,6 +17,8 @@ public sealed unsafe class VulkanTechnique : IDisposable
 {
 	private readonly Vk _vk;
 	private readonly Device _device;
+	// The persistent driver cache the two vkCreate*Pipelines calls consult. Null handle = no cache, which they accept.
+	private readonly PipelineCache _pipelineCache;
 
 	public Pipeline Pipeline { get; }
 	public PipelineLayout Layout { get; }
@@ -27,10 +29,11 @@ public sealed unsafe class VulkanTechnique : IDisposable
 	/// </summary>
 	public DescriptorSetLayout DescriptorSetLayout { get; }
 
-	public VulkanTechnique(VulkanContext ctx, in VulkanTechniqueDescription description, byte[] spirv, string name)
+	public VulkanTechnique(VulkanContext ctx, in VulkanTechniqueDescription description, byte[] spirv, string name, PipelineCache pipelineCache = default)
 	{
 		_vk = ctx.Vk;
 		_device = ctx.Device;
+		_pipelineCache = pipelineCache;
 
 		var module = CreateShaderModule(spirv);
 		// Name the module for GPU debuggers before it's destroyed below ([Conditional] — stripped without
@@ -166,7 +169,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			},
 			Layout = Layout,
 		};
-		_vk.CreateComputePipelines(_device, default, 1, in createInfo, null, out var pipeline)
+		_vk.CreateComputePipelines(_device, _pipelineCache, 1, in createInfo, null, out var pipeline)
 			.Check("vkCreateComputePipelines");
 		return pipeline;
 	}
@@ -390,7 +393,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			Subpass = 0,
 		};
 
-		_vk.CreateGraphicsPipelines(_device, default, 1, in createInfo, null, out var pipeline)
+		_vk.CreateGraphicsPipelines(_device, _pipelineCache, 1, in createInfo, null, out var pipeline)
 			.Check("vkCreateGraphicsPipelines");
 		return pipeline;
 	}

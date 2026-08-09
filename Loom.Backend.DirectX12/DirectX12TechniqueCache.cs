@@ -43,7 +43,13 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 	// alone identifies one bytecode revision of one technique.
 	private int _versions;
 
-	public DirectX12TechniqueCache(DirectX12Context ctx) => _ctx = ctx;
+	private readonly DirectX12PipelineBlobCache? _blobs;
+
+	public DirectX12TechniqueCache(DirectX12Context ctx, DirectX12PipelineBlobCache? blobs = null)
+	{
+		_ctx = ctx;
+		_blobs = blobs;
+	}
 
 	public void Register(string name, DirectX12TechniqueTemplate template)
 	{
@@ -66,7 +72,10 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
-		var technique = new DirectX12Technique(_ctx, registered.Template, colorFormats, depthFormat, depthReadOnly);
+		// The disk key is the content digest rather than the version, because a version is only meaningful within one
+		// run — the next process would hand out the same numbers to different bytecode.
+		var blobKey = $"{registered.Digest}|{key.ColorFormats:x}|{key.ColorCount}|{(int)depthFormat}|{(depthReadOnly ? 1 : 0)}";
+		var technique = new DirectX12Technique(_ctx, registered.Template, colorFormats, depthFormat, depthReadOnly, _blobs, blobKey);
 		// Name the baked PSO + root signature for GPU debuggers (DirectX12 has no separate shader objects — the DXIL
 		// lives in the PSO, so naming the PSO is the shader-naming equivalent). [Conditional]: stripped without
 		// UseNamedGPUObjects. Distinct target-format variants of one technique share the logical name.

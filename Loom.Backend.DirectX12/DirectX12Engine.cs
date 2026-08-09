@@ -27,6 +27,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private readonly IDirectX12PresentTarget _presentTarget;
 	private readonly DirectX12TechniqueCache _techniques;
 	private readonly DirectX12DescriptorHeap _ring;
+	private readonly DirectX12PipelineBlobCache _pipelineBlobs;
 	private readonly DirectX12UploadBatch _uploads;
 	private readonly DirectX12MeshStore _meshes;
 	private readonly DirectX12TextureStore _textures;
@@ -126,7 +127,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		if (_fenceEvent == 0)
 			throw new InvalidOperationException("CreateEvent failed for the DirectX12 frame-pacing fence.");
 
-		_techniques = new DirectX12TechniqueCache(_ctx);
+		_pipelineBlobs = new DirectX12PipelineBlobCache(_ctx, settings.PersistentPipelineCache);
+		_techniques = new DirectX12TechniqueCache(_ctx, _pipelineBlobs);
 		// Starting sizes, not budgets — the heap grows when a scene wants more. The persistent region holds one table
 		// per (material, technique) and the transient region a frame's per-pass SRVs plus the resource viewer's debug SRVs.
 		_ring = new DirectX12DescriptorHeap(_ctx, persistentCapacity: 256, transientPerFrame: 256, BufferCount);
@@ -261,6 +263,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_transients?.Dispose();
 		_context.Dispose();
 		_meshes.Dispose();
+		_pipelineBlobs.Save(); // write back whatever this run compiled, before the device goes away
 		_uploads.Dispose(); // before the stores — it holds their staging resources until the last execute retires
 		_textures.Dispose();
 		_ring.Dispose();

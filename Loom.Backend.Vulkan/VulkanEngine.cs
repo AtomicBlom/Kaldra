@@ -51,6 +51,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private readonly string _shaderDir;
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly VulkanTechniqueCache _techniques;
+	private readonly VulkanPipelineCache _pipelineCache;
 	private readonly VulkanUploadBatch _uploads;
 	private readonly VulkanMeshStore _meshes;
 	private readonly VulkanTextureStore _textures;
@@ -163,7 +164,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			Vk.Version13, _vk, _ctx.Instance, _ctx.PhysicalDevice, _ctx.Device));
 		CreateCommandPool();
 
-		_techniques = new VulkanTechniqueCache(_ctx);
+		_pipelineCache = new VulkanPipelineCache(_ctx, settings.PersistentPipelineCache);
+		_techniques = new VulkanTechniqueCache(_ctx, _pipelineCache.Handle);
 		_uploads = new VulkanUploadBatch(_ctx, _commandPool);
 		_meshes = new VulkanMeshStore(_ctx, _allocator, _uploads);
 		_textures = new VulkanTextureStore(_ctx, _allocator, _uploads);
@@ -530,6 +532,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_textures.Dispose(); // before the allocator — it holds VMA image allocations
 		_allocator.Dispose(); // after every image/buffer it backed is freed
 		_techniques.Dispose();
+		_pipelineCache.Dispose(); // after the pipelines it seeded — this is where the blob is written back out
 
 		DestroyRenderFinishedSemaphores();
 		foreach (var semaphore in _imageAvailable)
