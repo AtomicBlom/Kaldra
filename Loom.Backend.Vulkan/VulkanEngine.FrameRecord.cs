@@ -363,22 +363,28 @@ internal sealed unsafe partial class VulkanEngine
 
 		if (captureBuffer.Handle != 0)
 		{
+			// The copy-out replaces the derived present transition, so it must start from the same place that
+			// transition would have: the state the graph's last writer actually left the target in. Assuming
+			// ColorAttachmentOptimal is wrong the moment the terminal pass isn't a colour write (a compute
+			// post-process leaves it in General), and a wrong old layout discards the frame being captured.
+			var from = VulkanStateMapping.For(PresentFromState(present));
+			var copy = VulkanStateMapping.For(ResourceState.CopySource);
 			TransitionImage(cmd, image.Image, range,
-				ImageLayout.ColorAttachmentOptimal, ImageLayout.TransferSrcOptimal,
-				PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit,
-				PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit);
+				from.Layout, copy.Layout,
+				from.Stage, from.Access,
+				copy.Stage, copy.Access);
 
 			BufferImageCopy region = new()
 			{
 				ImageSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.ColorBit, LayerCount = 1 },
 				ImageExtent = new Extent3D(image.Extent.Width, image.Extent.Height, 1),
 			};
-			_vk.CmdCopyImageToBuffer(cmd, image.Image, ImageLayout.TransferSrcOptimal, captureBuffer, 1, in region);
+			_vk.CmdCopyImageToBuffer(cmd, image.Image, copy.Layout, captureBuffer, 1, in region);
 
 			var rest = PresentRestScope;
 			TransitionImage(cmd, image.Image, range,
-				ImageLayout.TransferSrcOptimal, rest.Layout,
-				PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit,
+				copy.Layout, rest.Layout,
+				copy.Stage, copy.Access,
 				rest.Stage, rest.Access);
 		}
 		else
@@ -386,6 +392,16 @@ internal sealed unsafe partial class VulkanEngine
 			foreach (var transition in Barriers.FinalTransitions)
 				EmitTransition(cmd, transition);
 		}
+	}
+
+	// The derived state the present target is in when the frame's passes are done — the From of its terminal
+	// transition. Undefined if derivation emitted none (a graph that presents a target no pass writes).
+	private ResourceState PresentFromState(ResourceHandle present)
+	{
+		foreach (var transition in Barriers.FinalTransitions)
+			if (transition.Resource.Id == present.Id)
+				return transition.From;
+		return ResourceState.Undefined;
 	}
 
 	private static AttachmentLoadOp ToLoadOp(LoadAction load) => load switch
