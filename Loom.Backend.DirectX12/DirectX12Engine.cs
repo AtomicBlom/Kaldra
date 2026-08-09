@@ -27,6 +27,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private readonly IDirectX12PresentTarget _presentTarget;
 	private readonly DirectX12TechniqueCache _techniques;
 	private readonly DirectX12DescriptorHeap _ring;
+	private readonly DirectX12UploadBatch _uploads;
 	private readonly DirectX12MeshStore _meshes;
 	private readonly DirectX12TextureStore _textures;
 	private readonly DirectX12RenderContext _context;
@@ -130,7 +131,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		// per (material, technique) and the transient region a frame's per-pass SRVs plus the resource viewer's debug SRVs.
 		_ring = new DirectX12DescriptorHeap(_ctx, persistentCapacity: 256, transientPerFrame: 256, BufferCount);
 		_meshes = new DirectX12MeshStore(_ctx);
-		_textures = new DirectX12TextureStore(_ctx);
+		_uploads = new DirectX12UploadBatch(_ctx);
+		_textures = new DirectX12TextureStore(_ctx, _uploads);
 		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, Materials, (int)BufferCount, Validation);
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present; // a fresh flip-model buffer starts presentable
@@ -165,6 +167,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	}
 
 	// Evict the baked PSOs after a hot-reload so the next GetOrBake rebuilds from the re-registered templates.
+	protected override void FlushUploads() => _uploads.Flush();
+
 	protected override void ResetPipelineCaches() => _techniques.Reset();
 
 	public override string BackendName => "DirectX12";
@@ -257,6 +261,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_transients?.Dispose();
 		_context.Dispose();
 		_meshes.Dispose();
+		_uploads.Dispose(); // before the stores — it holds their staging resources until the last execute retires
 		_textures.Dispose();
 		_ring.Dispose();
 		_techniques.Dispose();

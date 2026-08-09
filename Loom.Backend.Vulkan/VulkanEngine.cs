@@ -51,6 +51,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private readonly string _shaderDir;
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly VulkanTechniqueCache _techniques;
+	private readonly VulkanUploadBatch _uploads;
 	private readonly VulkanMeshStore _meshes;
 	private readonly VulkanTextureStore _textures;
 	private readonly VulkanDescriptorAllocator _descriptors;
@@ -163,8 +164,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		CreateCommandPool();
 
 		_techniques = new VulkanTechniqueCache(_ctx);
-		_meshes = new VulkanMeshStore(_ctx, _allocator, _commandPool);
-		_textures = new VulkanTextureStore(_ctx, _allocator, _commandPool);
+		_uploads = new VulkanUploadBatch(_ctx, _commandPool);
+		_meshes = new VulkanMeshStore(_ctx, _allocator, _uploads);
+		_textures = new VulkanTextureStore(_ctx, _allocator, _uploads);
 		_descriptors = new VulkanDescriptorAllocator(_ctx, MaxFramesInFlight);
 		_context = new VulkanRenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, Materials, _allocator, MaxFramesInFlight, Validation);
 
@@ -245,6 +247,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	}
 
 	// Evict the baked pipelines after a hot-reload so the next bake rebuilds from the re-registered templates.
+	protected override void FlushUploads() => _uploads.Flush();
+
 	protected override void ResetPipelineCaches()
 	{
 		_context.ClearBaked(); // drop per-(name,formats) cached pipelines
@@ -521,6 +525,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		DisposeGraphResources();    // transients + readback staging (graph-level)
 		_context.Dispose();
 		_descriptors.Dispose();
+		_uploads.Dispose(); // before the stores — it holds their staging buffers until the last submission retires
 		_meshes.Dispose();
 		_textures.Dispose(); // before the allocator — it holds VMA image allocations
 		_allocator.Dispose(); // after every image/buffer it backed is freed

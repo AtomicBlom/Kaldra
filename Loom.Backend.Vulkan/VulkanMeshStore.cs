@@ -29,7 +29,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly VulkanMemoryAllocator _allocator;
-	private readonly CommandPool _commandPool;
+	private readonly VulkanUploadBatch _uploads;
 	private readonly List<StoredMesh> _meshes = [];
 
 	// Mesh ids are 1-based, so 0 is a value no mesh can have — "the command buffer's vertex/index bindings are not
@@ -37,12 +37,12 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	private const int NothingBound = 0;
 	private int _bound = NothingBound;
 
-	public VulkanMeshStore(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool)
+	public VulkanMeshStore(VulkanContext ctx, VulkanMemoryAllocator allocator, VulkanUploadBatch uploads)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
 		_allocator = allocator;
-		_commandPool = commandPool;
+		_uploads = uploads;
 	}
 
 	/// <summary>
@@ -200,42 +200,42 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 
 		CopyBuffer(staging, device, size);
 
-		_vk.DestroyBuffer(_ctx.Device, staging, null);
-		stagingAllocation.Dispose();
+		_uploads.Retire(staging, stagingAllocation);
 		return device;
 	}
 
-	// One-time blocking copy on the graphics queue — fine for up-front uploads.
+	// Record the staging→device copy into the shared upload batch. A mesh used to cost two full GPU drains — one for
+	// its vertices and one for its indices — where now both land in the batch the frame submits, alongside every
+	// other resource created in the same drain.
 	private void CopyBuffer(Buffer source, Buffer destination, ulong size)
 	{
-		CommandBufferAllocateInfo allocInfo = new()
-		{
-			SType = StructureType.CommandBufferAllocateInfo,
-			CommandPool = _commandPool,
-			Level = CommandBufferLevel.Primary,
-			CommandBufferCount = 1,
-		};
-		_vk.AllocateCommandBuffers(_ctx.Device, in allocInfo, out var cmd).Check("vkAllocateCommandBuffers");
-
-		CommandBufferBeginInfo begin = new()
-		{
-			SType = StructureType.CommandBufferBeginInfo,
-			Flags = CommandBufferUsageFlags.OneTimeSubmitBit,
-		};
-		_vk.BeginCommandBuffer(cmd, in begin).Check("vkBeginCommandBuffer");
+		var cmd = _uploads.Recorder();
 		BufferCopy region = new() { Size = size };
 		_vk.CmdCopyBuffer(cmd, source, destination, 1, in region);
-		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
 
-		SubmitInfo submit = new()
+		// Geometry is read at vertex-input, not in a shader, so its visibility barrier names that stage. Without it
+		// the copy would be ordered against later submissions only by the batch's own submission order, which
+		// guarantees execution start rather than write visibility.
+		BufferMemoryBarrier2 barrier = new()
 		{
-			SType = StructureType.SubmitInfo,
-			CommandBufferCount = 1,
-			PCommandBuffers = &cmd,
+			SType = StructureType.BufferMemoryBarrier2,
+			SrcStageMask = PipelineStageFlags2.AllTransferBit,
+			SrcAccessMask = AccessFlags2.TransferWriteBit,
+			DstStageMask = PipelineStageFlags2.VertexInputBit | PipelineStageFlags2.ComputeShaderBit,
+			DstAccessMask = AccessFlags2.VertexAttributeReadBit | AccessFlags2.IndexReadBit | AccessFlags2.ShaderStorageReadBit,
+			SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			Buffer = destination,
+			Offset = 0,
+			Size = Vk.WholeSize,
 		};
-		_vk.QueueSubmit(_ctx.GraphicsQueue, 1, in submit, default).Check("vkQueueSubmit");
-		_vk.QueueWaitIdle(_ctx.GraphicsQueue);
-		_vk.FreeCommandBuffers(_ctx.Device, _commandPool, 1, in cmd);
+		DependencyInfo dependency = new()
+		{
+			SType = StructureType.DependencyInfo,
+			BufferMemoryBarrierCount = 1,
+			PBufferMemoryBarriers = &barrier,
+		};
+		_vk.CmdPipelineBarrier2(cmd, in dependency);
 	}
 
 	public void Dispose()

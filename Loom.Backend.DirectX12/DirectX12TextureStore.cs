@@ -12,8 +12,8 @@ namespace Loom.Backend.DirectX12;
 /// uploaded once from an UPLOAD-heap staging buffer via per-subresource <c>CopyTextureRegion</c>, then left in
 /// <c>PixelShaderResource</c>. Mip levels arrive pre-built on the CPU in <see cref="TextureData"/>, so the
 /// store just lays each level into the staging buffer at the footprint <c>GetCopyableFootprints</c> reports.
-/// The upload is synchronous (a private allocator + list + fence), like the Vulkan store's queue-wait — fine
-/// for build-once assets.
+/// The copies are recorded into the shared <see cref="DirectX12UploadBatch"/>, which executes them ahead of the
+/// frame that samples them rather than blocking on each one.
 /// </summary>
 internal sealed unsafe class DirectX12TextureStore : IDisposable
 {
@@ -28,22 +28,12 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 	private readonly DirectX12Context _ctx;
 	private readonly List<StoredTexture> _textures = [];
 
-	private ComPtr<ID3D12CommandAllocator> _allocator;
-	private ComPtr<ID3D12GraphicsCommandList> _cmd;
-	private ComPtr<ID3D12Fence> _fence;
-	private ulong _fenceValue;
-	private readonly nint _fenceEvent;
+	private readonly DirectX12UploadBatch _uploads;
 
-	public DirectX12TextureStore(DirectX12Context ctx)
+	public DirectX12TextureStore(DirectX12Context ctx, DirectX12UploadBatch uploads)
 	{
 		_ctx = ctx;
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandAllocator(CommandListType.Direct, out _allocator));
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandList(0, CommandListType.Direct, _allocator, default(ComPtr<ID3D12PipelineState>), out _cmd));
-		SilkMarshal.ThrowHResult(_cmd.Close());
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out _fence));
-		_fenceEvent = CreateEventW(0, 0, 0, 0);
-		if (_fenceEvent == 0)
-			throw new InvalidOperationException("DirectX12: CreateEvent failed for the texture-upload fence.");
+		_uploads = uploads;
 	}
 
 	/// <summary>Upload a texture + its mip chain and return a handle a material can bundle.</summary>
@@ -104,9 +94,10 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		}
 		staging.Unmap(0, (Silk.NET.Direct3D12.Range*)null);
 
-		// One-time copy: lay each subresource in, then transition the whole texture to a shader resource.
-		SilkMarshal.ThrowHResult(_allocator.Reset());
-		SilkMarshal.ThrowHResult(_cmd.Reset(_allocator, default(ComPtr<ID3D12PipelineState>)));
+		// Recorded into the shared upload batch rather than a list of its own: lay each subresource in, then
+		// transition the whole texture to a shader resource. The batch executes before the frame that samples it, so
+		// nothing has to wait here.
+		var cmd = _uploads.Recorder();
 		for (var i = 0u; i < subresourceCount; i++)
 		{
 			var dst = new TextureCopyLocation
@@ -121,7 +112,7 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 				Type = TextureCopyType.PlacedFootprint,
 				Anonymous = new TextureCopyLocationUnion { PlacedFootprint = layouts[i] },
 			};
-			_cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, (Box*)null);
+			cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, (Box*)null);
 		}
 		var barrier = new ResourceBarrier
 		{
@@ -138,13 +129,8 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 				},
 			},
 		};
-		_cmd.ResourceBarrier(1, &barrier);
-		SilkMarshal.ThrowHResult(_cmd.Close());
-
-		var list = (ID3D12CommandList*)_cmd.Handle;
-		_ctx.GraphicsQueue.ExecuteCommandLists(1, &list);
-		WaitForGpu();
-		staging.Dispose();
+		cmd.ResourceBarrier(1, &barrier);
+		_uploads.Retire(staging);
 
 		var id = _textures.Count;
 		_textures.Add(new StoredTexture { Resource = texture, Format = format, MipLevels = mipsPerFace, IsCube = data.IsCube });
@@ -185,39 +171,11 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		return buffer;
 	}
 
-	private void WaitForGpu()
-	{
-		_fenceValue++;
-		SilkMarshal.ThrowHResult(_ctx.GraphicsQueue.Signal(_fence, _fenceValue));
-		if (_fence.GetCompletedValue() < _fenceValue)
-		{
-			SilkMarshal.ThrowHResult(_fence.SetEventOnCompletion(_fenceValue, (void*)_fenceEvent));
-			WaitForSingleObject(_fenceEvent, 0xFFFFFFFF);
-		}
-	}
-
 	public void Dispose()
 	{
 		foreach (var texture in _textures)
 			if (texture.Resource.Handle is not null)
 				texture.Resource.Dispose();
 		_textures.Clear();
-		if (_cmd.Handle is not null)
-			_cmd.Dispose();
-		if (_allocator.Handle is not null)
-			_allocator.Dispose();
-		if (_fence.Handle is not null)
-			_fence.Dispose();
-		if (_fenceEvent != 0)
-			CloseHandle(_fenceEvent);
 	}
-
-	[DllImport("kernel32", SetLastError = true)]
-	private static extern nint CreateEventW(nint lpEventAttributes, int bManualReset, int bInitialState, nint lpName);
-
-	[DllImport("kernel32", SetLastError = true)]
-	private static extern uint WaitForSingleObject(nint hHandle, uint dwMilliseconds);
-
-	[DllImport("kernel32", SetLastError = true)]
-	private static extern int CloseHandle(nint hObject);
 }
