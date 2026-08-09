@@ -88,8 +88,14 @@ public sealed class Domain
 	/// <summary>
 	/// Declare a <see cref="ResourceKind.Persistent"/> target sized to this domain — contents survive across
 	/// frames and its memory is never aliased. Use a tiny domain (e.g. 1×1) for a scalar
-	/// history like the auto-exposure value. (<see cref="GraphBuilder.Persistent"/> is the resolution-agnostic
+	/// history like the auto-exposure value. (<see cref="GraphBuilder.Persistent"/> is the screen-sized
 	/// form anchored to the backbuffer domain.)
+	/// <para>
+	/// On a <b>fixed-size</b> domain the contents also survive a window resize, since nothing about the image needs to
+	/// change. A domain that follows the swapchain (the backbuffer domain, or one declared with a relative scale) makes
+	/// this a screen-sized target instead, which a resize reallocates at the new extent — see
+	/// <see cref="GraphBuilder.Persistent"/> for what that costs.
+	/// </para>
 	/// </summary>
 	public ColorHandle Persistent(string name, Format format) =>
 		(ColorHandle)_graph.AddResource(name, format, ResourceKind.Persistent, this, scale: 1f);

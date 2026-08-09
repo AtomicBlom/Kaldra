@@ -437,7 +437,10 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_vk.DeviceWaitIdle(_ctx.Device);
 		var oldImageCount = _presentTarget.ImageCount;
 		_presentTarget.Recreate(_windowExtent);
-		_transients?.Recreate(_presentTarget.Extent);
+		// A reallocated persistent is a different image with no contents, so the layout carried over from the previous
+		// frame no longer describes it — drop it and let the plan's Undefined stand, which is what a fresh image needs.
+		foreach (var id in _transients?.Recreate(_presentTarget.Extent) ?? [])
+			_persistentState.Remove(id);
 
 		if (_presentTarget.ImageCount != oldImageCount)
 		{

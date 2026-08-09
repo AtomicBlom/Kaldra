@@ -195,11 +195,14 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_presentTarget.Resize(width, height);
 		Array.Clear(_frameFenceValues);
 
-		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size).
+		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size). The replacement is
+		// built before the old one is released so it can adopt the persistents that survive a resize — their contents
+		// are cross-frame history, and rebuilding them would throw it away.
 		if (Graph is not null)
 		{
-			_transients?.Dispose();
-			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height);
+			var previous = _transients;
+			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height, previous);
+			previous?.Dispose();
 			_context.SetTransients(_transients);
 			for (uint i = 0; i < BufferCount; i++)
 				_backbufferState[i] = ResourceStates.Present;

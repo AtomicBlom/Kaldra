@@ -19,7 +19,7 @@ A graph is built once with `RenderGraph.Define(g => { … })` and set on the eng
 | `g.Buffer("name", byteSize)` | The same as an opaque block of `byteSize` bytes. Declares no element contract, so neither draw-path guard applies — prefer one of the two above. |
 | `g.Constants<T>("name")` | An app-written uniform/constant block of `sizeof(T)` bytes → `ConstantsHandle`. Fill with `engine.Write`. |
 | `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. |
-| `g.Persistent("name", format, size=1)` | A cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. |
+| `g.Persistent("name", format, size=1)` | A screen-sized cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. A window resize reallocates it at the new extent, so its contents are lost (there is no resample) — use `domain.Persistent` on a fixed-size domain for history that must outlive a resize. |
 
 ### Pass access declarations (`PassBuilder`, all chainable)
 
@@ -51,7 +51,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `domain.Color("name", format, clearValue?=null, noClear?=false)` | A colour target in this domain → `ColorHandle`. `noClear: true` skips the clear (only when the first pass covers every pixel). |
 | `domain.Color("name", format, scale, …)` | A colour target at a fraction of the domain's resolution (mip chains, bloom pyramid). |
 | `domain.Depth("name", format, clearDepth = 1f, noClear = false)` | A depth target in this domain → `DepthHandle`. `clearDepth: 0f` is the reversed-Z far plane; `noClear` skips the clear (only correct when the first depth-writing pass covers every pixel). |
-| `domain.Persistent("name", format)` | A cross-frame target sized to this domain (use a tiny domain for a scalar history). |
+| `domain.Persistent("name", format)` | A cross-frame target sized to this domain (use a tiny domain for a scalar history). On a fixed-size domain its contents survive a window resize; on a backbuffer-relative one it is reallocated like any other screen-sized target. |
 | `g.BackbufferClear` / `g.BackbufferNoClear` | Set the backbuffer's first-write clear colour / skip the clear — before the first `g.Backbuffer` access. |
 
 So a target is declared `g.Screen.Color("hdr", Format.Rgba16F)` or `g.Screen.Depth("depth", Format.Depth32F)`.

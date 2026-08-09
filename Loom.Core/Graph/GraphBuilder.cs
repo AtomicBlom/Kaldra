@@ -156,6 +156,14 @@ public sealed class GraphBuilder
 	/// cross-frame history that tolerates one-frame-stale self-feedback (e.g. auto-exposure), where a single
 	/// pass reads and writes the same physical image.
 	/// <para>
+	/// This form is anchored to the backbuffer domain, so it is <b>screen-sized</b> — the shape a full-resolution
+	/// history buffer (TAA, temporal GI) wants. <b>Its contents do not survive a window resize:</b> the image is
+	/// reallocated at the new extent and starts undefined, because there is no resample from the old size (both
+	/// backends do this identically). A history buffer must therefore tolerate a reset, exactly as it tolerates the
+	/// undefined first frame. For history that <em>should</em> outlive a resize, declare it on a fixed-size domain
+	/// (<see cref="Domain.Persistent"/>) — a 1×1 exposure meter has no reason to be rebuilt and is left alone.
+	/// </para>
+	/// <para>
 	/// <paramref name="size"/> is reserved as the history-ring depth for true read-previous / write-current
 	/// temporal buffers (TAA, temporal GI). That ring is not implemented yet — both backends allocate a single
 	/// physical image — so only <c>size == 1</c> is accepted; a larger value would silently alias to one image
@@ -171,7 +179,7 @@ public sealed class GraphBuilder
 			throw new NotSupportedException(
 				$"Persistent '{name}' requests a history-ring depth of {size}, but multi-slot history rings are not implemented yet (both backends allocate a single image). Use size == 1 (single-buffered self-feedback) until cross-frame ping-pong lands.");
 		}
-		// Persistent resources aren't resolution-bound; anchor them to the backbuffer domain.
+		// The backbuffer domain at scale 1 — a full-resolution history buffer that follows the swapchain.
 		return (ColorHandle)AddResource(name, format, ResourceKind.Persistent, BackbufferDomainForPersistent(), scale: 1f, count: size);
 	}
 

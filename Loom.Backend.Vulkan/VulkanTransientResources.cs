@@ -62,7 +62,7 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 	private readonly VkFormat _backbufferFormat;
 	private readonly ResourceImage[][] _images; // [frameSlot][ResourceHandle.Id]
 	private readonly SlotBucket[][] _buckets;    // [frameSlot][bucketOrdinal]
-	private readonly List<(Image Image, ImageView View, Allocation Allocation)> _persistent = []; // shared across slots
+	private readonly List<(int Id, Image Image, ImageView View, Allocation Allocation)> _persistent = []; // one per Persistent resource, shared across slots
 	private readonly Buffer[][] _buffers;        // [frameSlot][ResourceHandle.Id] — storage/vertex buffers (GPU particles)
 	private readonly List<Allocation> _bufferAllocations = [];
 	private readonly Buffer[][] _constantBuffers;        // [frameSlot][ResourceHandle.Id] — host-visible param buffers (IEngine.Write)
@@ -358,8 +358,13 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 		}
 	}
 
-	/// <summary>Rebuild swapchain-sized buckets (all slots) after a resize; fixed-domain buckets are untouched.</summary>
-	public void Recreate(Extent2D swapExtent)
+	/// <summary>
+	/// Rebuild swapchain-sized images (all slots) after a resize; fixed-domain ones are untouched. Returns the ids of
+	/// the <see cref="ResourceKind.Persistent"/> resources this reallocated — the caller must forget the layout it was
+	/// tracking for each, since a brand-new image starts <see cref="ResourceState.Undefined"/> and a barrier claiming
+	/// the old layout would be a lie about a different image.
+	/// </summary>
+	public IReadOnlyList<int> Recreate(Extent2D swapExtent)
 	{
 		_swapExtent = swapExtent;
 		for (var slot = 0; slot < _buckets.Length; slot++)
@@ -373,6 +378,23 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 				bucket.Allocation.Dispose();
 				_buckets[slot][b] = AllocateBucket(slot, bucket.MemberIds);
 			}
+
+		// Persistents live outside the buckets, so the loop above can't reach them — but a persistent anchored to the
+		// backbuffer (or a backbuffer-relative) domain is swapchain-sized like any other target, and keeping the old
+		// extent would leave it bound alongside resized attachments and sampled at the wrong size forever. Reallocate
+		// it at the new extent; its contents are lost, which is the documented cost of resizing a screen-sized history
+		// buffer (there is no resample). A fixed-domain persistent (the 1×1 exposure meter) is left completely alone,
+		// so the history that actually can survive a resize does.
+		var reset = new List<int>();
+		foreach (var resource in _graph.Resources)
+		{
+			if (resource.Kind != ResourceKind.Persistent || !_images[0][resource.Id].SwapchainSized)
+				continue;
+			DestroyPersistent(resource.Id);
+			CreatePersistent(resource, _images.Length);
+			reset.Add(resource.Id);
+		}
+		return reset;
 	}
 
 	// Marshal the neutral resource sizing to a Vulkan extent. The scaling rules (backbuffer × own scale,
@@ -443,27 +465,52 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 	private void AllocatePersistentResources(int framesInFlight)
 	{
 		foreach (var resource in _graph.Resources)
+			if (resource.Kind == ResourceKind.Persistent)
+				CreatePersistent(resource, framesInFlight);
+	}
+
+	// Create one Persistent resource's shared image + dedicated allocation at the current extent, and point every
+	// frame slot's entry at it. Also the resize path, so a persistent is recreated exactly the way it was born.
+	private void CreatePersistent(ResourceHandle resource, int framesInFlight)
+	{
+		ref var image = ref _images[0][resource.Id]; // metadata (format/usage/aspect) already set per slot
+		CreateImage(ref image, ExtentOf(resource));
+		_vk.GetImageMemoryRequirements(_ctx.Device, image.Image, out var req);
+		MemoryRequirements reqs = new() { Size = req.Size, Alignment = req.Alignment, MemoryTypeBits = req.MemoryTypeBits };
+		var allocation = _allocator.AllocateMemory(in reqs, new AllocationCreateInfo { Usage = MemoryUsage.GPU_Only });
+		allocation.BindImageMemory(image.Image).Check("vmaBindImageMemory");
+		CreateView(ref image);
+		NameImage(0, resource.Id, in image); // shared across slots; named once
+		_persistent.Add((resource.Id, image.Image, image.View, allocation));
+
+		// Point every slot's entry at the one shared image/view.
+		for (var slot = 0; slot < framesInFlight; slot++)
 		{
-			if (resource.Kind != ResourceKind.Persistent)
+			_images[slot][resource.Id].Image = image.Image;
+			_images[slot][resource.Id].View = image.View;
+			_images[slot][resource.Id].Extent = image.Extent;
+		}
+	}
+
+	// Release one Persistent resource's shared image, view and dedicated allocation, and clear every slot's entry.
+	private void DestroyPersistent(int id)
+	{
+		for (var i = _persistent.Count - 1; i >= 0; i--)
+		{
+			var (owned, image, view, allocation) = _persistent[i];
+			if (owned != id)
 				continue;
-
-			ref var image = ref _images[0][resource.Id]; // metadata (format/usage/aspect) already set per slot
-			CreateImage(ref image, ExtentOf(resource));
-			_vk.GetImageMemoryRequirements(_ctx.Device, image.Image, out var req);
-			MemoryRequirements reqs = new() { Size = req.Size, Alignment = req.Alignment, MemoryTypeBits = req.MemoryTypeBits };
-			var allocation = _allocator.AllocateMemory(in reqs, new AllocationCreateInfo { Usage = MemoryUsage.GPU_Only });
-			allocation.BindImageMemory(image.Image).Check("vmaBindImageMemory");
-			CreateView(ref image);
-			NameImage(0, resource.Id, in image); // shared across slots; named once
-			_persistent.Add((image.Image, image.View, allocation));
-
-			// Point every slot's entry at the one shared image/view.
-			for (var slot = 0; slot < framesInFlight; slot++)
-			{
-				_images[slot][resource.Id].Image = image.Image;
-				_images[slot][resource.Id].View = image.View;
-				_images[slot][resource.Id].Extent = image.Extent;
-			}
+			if (view.Handle != 0)
+				_vk.DestroyImageView(_ctx.Device, view, null);
+			if (image.Handle != 0)
+				_vk.DestroyImage(_ctx.Device, image, null);
+			allocation.Dispose();
+			_persistent.RemoveAt(i);
+		}
+		for (var slot = 0; slot < _images.Length; slot++)
+		{
+			_images[slot][id].Image = default;
+			_images[slot][id].View = default;
 		}
 	}
 
@@ -488,7 +535,7 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 				bucket.Allocation.Dispose(); // returns the bucket's block to VMA
 			}
 		// Persistent images are shared across slots, so destroy each exactly once here.
-		foreach (var (image, view, allocation) in _persistent)
+		foreach (var (_, image, view, allocation) in _persistent)
 		{
 			if (view.Handle != 0)
 				_vk.DestroyImageView(_ctx.Device, view, null);
