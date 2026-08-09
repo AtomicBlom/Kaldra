@@ -14,8 +14,7 @@ internal sealed unsafe partial class VulkanEngine
 	// which; assuming either one here would emit a barrier with the wrong old layout for the other shape.
 	private void RecordReadback(CommandBuffer cmd)
 	{
-		foreach (var transition in Barriers.ReadbackTransitions)
-			EmitTransition(cmd, transition);
+		EmitTransitions(cmd, Barriers.ReadbackTransitions.AsSpan());
 
 		var copyLayout = VulkanStateMapping.For(ResourceState.CopySource).Layout;
 		foreach (var readback in _readbacks)

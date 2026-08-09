@@ -6,9 +6,42 @@ namespace Loom.Backend.DirectX12;
 
 public sealed unsafe partial class DirectX12Engine
 {
-	// Track the resource's real D3D12 state and emit a transition only when the required state differs (D3D12
+	// One pass's worth of pending barriers, grown on demand and reused. Aliasing barriers are kept apart from
+	// transitions because they have to be submitted first — see EmitGraphTransitions.
+	private ResourceBarrier[] _aliasingBarriers = new ResourceBarrier[8];
+	private ResourceBarrier[] _transitionBarriers = new ResourceBarrier[32];
+	private int _aliasingBarrierCount;
+	private int _transitionBarrierCount;
+
+	/// <summary>
+	/// Emit every transition in <paramref name="transitions"/> in as few submissions as the ordering allows: one
+	/// <c>ResourceBarrier</c> call for the aliasing barriers, then one for the state transitions. A G-buffer hand-off
+	/// is four or five transitions, and one call expressing all of them lets the driver resolve the dependency once
+	/// instead of stalling five times over.
+	/// <para>
+	/// The two batches cannot merge: barriers within a single submission are unordered with respect to each other, and
+	/// a resource's aliasing barrier must be seen before the transition that activates it. Batching the transitions
+	/// among themselves is sound because derivation folds a pass's accesses to one use per resource, so no pass
+	/// carries two transitions of the same resource.
+	/// </para>
+	/// </summary>
+	private void EmitGraphTransitions(uint index, ReadOnlySpan<ResourceTransition> transitions)
+	{
+		_aliasingBarrierCount = 0;
+		_transitionBarrierCount = 0;
+		foreach (var transition in transitions)
+			QueueGraphTransition(index, transition);
+		FlushBarriers(_aliasingBarriers, ref _aliasingBarrierCount);
+		FlushTransitions();
+	}
+
+	/// <summary>Submit the queued state transitions. Public within the engine so a path that queues a barrier outside
+	/// a pass — the capture copy — can submit it before the command that depends on it.</summary>
+	private void FlushTransitions() => FlushBarriers(_transitionBarriers, ref _transitionBarrierCount);
+
+	// Track the resource's real D3D12 state and queue a transition only when the required state differs (D3D12
 	// barriers need the exact current state, unlike Vulkan's "Undefined" old layout — see DirectX12StateMapping).
-	private void EmitGraphTransition(uint index, ResourceTransition transition)
+	private void QueueGraphTransition(uint index, ResourceTransition transition)
 	{
 		var target = DirectX12StateMapping.For(transition.To);
 		var id = transition.Resource.Id;
@@ -17,7 +50,7 @@ public sealed unsafe partial class DirectX12Engine
 		{
 			if (_backbufferState[index] == target)
 				return;
-			Transition(_presentTarget.BackBuffer(index), _backbufferState[index], target);
+			QueueTransition(_presentTarget.BackBuffer(index), _backbufferState[index], target);
 			_backbufferState[index] = target;
 			return;
 		}
@@ -29,20 +62,23 @@ public sealed unsafe partial class DirectX12Engine
 		// contents undefined, which the pass's clear/full-write then initialises). The DirectX12 analogue of the
 		// Vulkan backend's widened-source-scope birth barrier; once per resource per frame.
 		if (_aliasedHandoffIds.Contains(id) && _aliasBarriered.Add(id))
-			EmitAliasingBarrier(transients.Resource(index, id));
+			QueueAliasingBarrier(transients.Resource(index, id));
 
 		var current = transients.State(index, id);
 		if (current == target)
 			return;
-		Transition(transients.Resource(index, id), current, target);
+		QueueTransition(transients.Resource(index, id), current, target);
 		transients.SetState(index, id, target);
 	}
 
 	// A D3D12 aliasing barrier handing the bucket's shared memory to <paramref name="after"/> (before = null:
 	// any resource previously on that memory is deactivated — conservative but correct, and hand-offs are few).
-	private void EmitAliasingBarrier(ComPtr<ID3D12Resource> after)
+	private void QueueAliasingBarrier(ComPtr<ID3D12Resource> after)
 	{
-		var barrier = new ResourceBarrier
+		if (_aliasingBarrierCount == _aliasingBarriers.Length)
+			Array.Resize(ref _aliasingBarriers, _aliasingBarriers.Length * 2);
+
+		_aliasingBarriers[_aliasingBarrierCount++] = new ResourceBarrier
 		{
 			Type = ResourceBarrierType.Aliasing,
 			Flags = ResourceBarrierFlags.None,
@@ -51,12 +87,14 @@ public sealed unsafe partial class DirectX12Engine
 				Aliasing = new ResourceAliasingBarrier { PResourceBefore = (ID3D12Resource*)null, PResourceAfter = after.Handle }
 			}
 		};
-		_commandList.ResourceBarrier(1, &barrier);
 	}
 
-	private void Transition(ComPtr<ID3D12Resource> resource, ResourceStates before, ResourceStates after)
+	private void QueueTransition(ComPtr<ID3D12Resource> resource, ResourceStates before, ResourceStates after)
 	{
-		var barrier = new ResourceBarrier
+		if (_transitionBarrierCount == _transitionBarriers.Length)
+			Array.Resize(ref _transitionBarriers, _transitionBarriers.Length * 2);
+
+		_transitionBarriers[_transitionBarrierCount++] = new ResourceBarrier
 		{
 			Type = ResourceBarrierType.Transition,
 			Flags = ResourceBarrierFlags.None,
@@ -71,6 +109,14 @@ public sealed unsafe partial class DirectX12Engine
 				}
 			}
 		};
-		_commandList.ResourceBarrier(1, &barrier);
+	}
+
+	private void FlushBarriers(ResourceBarrier[] barriers, ref int count)
+	{
+		if (count == 0)
+			return;
+		fixed (ResourceBarrier* p = barriers)
+			_commandList.ResourceBarrier((uint)count, p);
+		count = 0;
 	}
 }

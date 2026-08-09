@@ -57,8 +57,7 @@ public sealed unsafe partial class DirectX12Engine
 			// capture reads as a "bloom" group containing "down1", … instead of a flat list. [Conditional]:
 			// vanishes without UseNamedGPUObjects.
 			BeginPassLabels(pass);
-			foreach (var transition in pass.Transitions)
-				EmitGraphTransition(index, transition);
+			EmitGraphTransitions(index, pass.Transitions.AsSpan());
 
 			if (timing)
 				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex));
@@ -92,14 +91,16 @@ public sealed unsafe partial class DirectX12Engine
 			var backbuffer = _presentTarget.BackBuffer(index);
 			if (_backbufferState[index] != ResourceStates.CopySource)
 			{
-				Transition(backbuffer, _backbufferState[index], ResourceStates.CopySource);
+				// Queued and flushed on the spot: the copy below reads the backbuffer immediately, so this one cannot
+				// wait to be batched with the final transitions that follow it.
+				QueueTransition(backbuffer, _backbufferState[index], ResourceStates.CopySource);
+				FlushTransitions();
 				_backbufferState[index] = ResourceStates.CopySource;
 			}
 			rowPitch = CopyBackbufferToReadback(backbuffer);
 		}
 
-		foreach (var transition in Barriers.FinalTransitions)
-			EmitGraphTransition(index, transition);
+		EmitGraphTransitions(index, Barriers.FinalTransitions.AsSpan());
 
 		SilkMarshal.ThrowHResult(_commandList.Close());
 		var list = (ID3D12CommandList*)_commandList.Handle;
