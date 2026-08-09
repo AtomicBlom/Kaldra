@@ -21,7 +21,7 @@ internal sealed partial class WebGpuRenderContext
 	private const uint KindImage = 4;
 
 	// The offscreen layer stack: each entry is a suspended scope's resolved view + its premultiplied group-alpha tint.
-	private readonly List<(int View, Half4 Tint)> _layerStack = [];
+	private readonly List<(int View, Half4 Tint, (float X0, float Y0, float X1, float Y1) Bounds)> _layerStack = [];
 
 	/// <summary>
 	/// Record a flattened draw list (the UI compositor's batched output): stage its vertex/index streams into the
@@ -61,6 +61,11 @@ internal sealed partial class WebGpuRenderContext
 			_engine.LayerTargets.Configure(_scopeWidth, _scopeHeight, _colorFormatIds[0]);
 		_layerStack.Clear();
 
+		// The list's own coordinate space, recovered from the push that maps it to clip. A layer's bounds arrive in
+		// surface pixels.
+		var surfaceWidth = layersSupported ? 2f / push[0] : _scopeWidth;
+		var surfaceHeight = layersSupported ? 2f / push[1] : _scopeHeight;
+
 		foreach (var c in commands)
 		{
 			if (layersSupported && c.Tag == TagBeginLayer)
@@ -71,7 +76,9 @@ internal sealed partial class WebGpuRenderContext
 				var target = _engine.LayerTargets.Acquire(_layerStack.Count);
 				BeginColorScope([target.View], WebGpuCommandWriter.LoadClear);
 				RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
-				_layerStack.Add((target.View, overlay[c.VertexOffset].Color));
+				// WebGPU render passes cover the whole attachment — there is no render area, so unlike the desktop
+				// backends the clear cannot be narrowed to the group. The composite still is.
+				_layerStack.Add((target.View, overlay[c.VertexOffset].Color, LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight)));
 				continue;
 			}
 			if (layersSupported && c.Tag == TagEndLayer)
@@ -85,7 +92,7 @@ internal sealed partial class WebGpuRenderContext
 				writer.EndPass();
 				ResumeParentScope();
 				RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
-				CompositeLayer(baked, sampler, layer.View, layer.Tint, push);
+				CompositeLayer(baked, sampler, layer.View, layer.Tint, push, layer.Bounds, surfaceWidth, surfaceHeight);
 				// Restore the list's geometry for the following commands (the composite bound its own quad buffer).
 				writer.SetVertexBuffer(0, _engine.ListVertexRing.Buffer, vtxOffset);
 				continue;
@@ -180,20 +187,40 @@ internal sealed partial class WebGpuRenderContext
 	// layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once. The HDR paper-white
 	// lift is forced off here — the layer's primitives already lifted, and the lift commutes with the premultiplied
 	// alpha-over, so re-lifting would double it (the CPU rasteriser is the reference for this).
-	private void CompositeLayer(WebGpuTechnique baked, int sampler, int layerView, Half4 tint, ReadOnlySpan<float> push)
+	// A layer's bounds in the list's own coordinate space, clamped to the surface and grown by a pixel so a rounded
+	// edge cannot clip the antialiased fringe of whatever sits against the group's boundary. Degenerate bounds fall
+	// back to the whole surface, which is what this path did before it looked at the rect at all.
+	private static (float X0, float Y0, float X1, float Y1) LayerBounds(Rect clip, float surfaceWidth, float surfaceHeight)
 	{
-		var coordX = 2f / push[0];
-		var coordY = 2f / push[1];
+		const float Slop = 1f;
+		var x0 = MathF.Max(0f, clip.X - Slop);
+		var y0 = MathF.Max(0f, clip.Y - Slop);
+		var x1 = MathF.Min(surfaceWidth, clip.X + clip.Width + Slop);
+		var y1 = MathF.Min(surfaceHeight, clip.Y + clip.Height + Slop);
+		return x1 > x0 && y1 > y0 ? (x0, y0, x1, y1) : (0f, 0f, surfaceWidth, surfaceHeight);
+	}
+
+	private void CompositeLayer(WebGpuTechnique baked, int sampler, int layerView, Half4 tint, ReadOnlySpan<float> push,
+		(float X0, float Y0, float X1, float Y1) bounds, float surfaceWidth, float surfaceHeight)
+	{
+		// The quad covers the group's bounds rather than the surface. Outside them the layer is transparent, so the
+		// premultiplied over contributes nothing there and the result is identical to compositing the whole surface.
 		var custom = default(Vector4);
+		var (x0, y0, x1, y1) = bounds;
+		var u0 = x0 / surfaceWidth;
+		var v0 = y0 / surfaceHeight;
+		var u1 = x1 / surfaceWidth;
+		var v1 = y1 / surfaceHeight;
 		Span<OverlayVertex> quad =
 		[
-			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
-			new(new Vector2(coordX, 0), new Vector2(1, 0), tint, custom),
-			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
-			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
-			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
-			new(new Vector2(0, coordY), new Vector2(0, 1), tint, custom),
+			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
+			new(new Vector2(x1, y0), new Vector2(u1, v0), tint, custom),
+			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
+			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
+			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
+			new(new Vector2(x0, y1), new Vector2(u0, v1), tint, custom),
 		];
+
 		var quadOffset = _engine.ListVertexRing.Reserve(MemoryMarshal.AsBytes(quad), MemoryMarshal.AsBytes(quad).Length);
 		_engine.Writer.SetVertexBuffer(0, _engine.ListVertexRing.Buffer, quadOffset);
 

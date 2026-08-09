@@ -45,7 +45,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	// Renderer-private offscreen targets backing UI group-opacity layers (BeginLayer/EndLayer), below the graph seam.
 	private readonly DirectX12LayerTargets _layerTargets;
 	// Reused across calls so an opacity layer never allocates per frame.
-	private readonly List<(int Depth, Half4 Tint)> _layerStack = [];
+	private readonly List<(int Depth, Half4 Tint, (float X0, float Y0, float X1, float Y1) Bounds)> _layerStack = [];
 	// The current pass's colour-target RTV handle(s) + extent, captured by the engine before the pass records, so a
 	// draw-list layer can rebind (suspend/resume) the pass's render targets around its offscreen target.
 	private readonly CpuDescriptorHandle[] _scopeRtvs = new CpuDescriptorHandle[8];
