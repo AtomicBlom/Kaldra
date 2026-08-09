@@ -292,18 +292,43 @@ public abstract class EngineBase : IEngine
 	/// <summary>Prefix on the aliasing-summary log line for backends that tag it (e.g. <c>"DirectX12 "</c>); empty by default.</summary>
 	protected virtual string AliasingLogPrefix => "";
 
+	// The bake key of the active graph: its structural hash plus the inspection flag, because inspection injects
+	// debug-sample edges and so changes the graph that is actually derived and executed. Null until the first SetGraph.
+	private string? _activeBakeKey;
+
+	private string BakeKey(RenderGraph graph) => $"{graph.Hash()}|inspect={ResourceInspectionEnabled}";
+
 	/// <summary>
 	/// Make <paramref name="graph"/> the active graph: drain the GPU and release the previous graph's resources,
-	/// enumerate inspectable resources, derive the schedule/barriers/aliasing once, then rebuild the per-graph GPU
+	/// enumerate inspectable resources, derive the schedule/barriers/aliasing, then rebuild the per-graph GPU
 	/// resources. The device and pipeline cache are reused — only the per-graph plan and resources are rebuilt.
+	/// <para>
+	/// <b>Baked and cached by hash.</b> A graph whose <see cref="RenderGraph.Hash"/> matches the active one derives to
+	/// the same schedule, barriers and aliasing, and needs the same GPU resources — so the GPU half is skipped
+	/// entirely: no drain, no reallocation, and no loss of what those resources hold (cross-frame
+	/// <see cref="ResourceKind.Persistent"/> history, the app's written parameter buffers, pending readback bytes). The
+	/// derivation itself still re-runs, cheaply and on the CPU only, because the plan carries <em>this</em> graph's
+	/// <c>.Draw</c>/<c>.Dispatch</c> callbacks — reusing the previous graph's would silently render whatever the old
+	/// closures captured. Setting an equivalent graph is therefore cheap, and safe to do per frame.
+	/// </para>
 	/// </summary>
 	public void SetGraph(RenderGraph graph)
 	{
 		ArgumentNullException.ThrowIfNull(graph);
+		var key = BakeKey(graph);
+
+		if (Graph is not null && key == _activeBakeKey)
+		{
+			Graph = graph;
+			DeriveGraphPlans(graph);
+			return;
+		}
+
 		if (Graph is not null)
 			WaitIdle();
 		ReleaseGraphResources();
 		Graph = graph;
+		_activeBakeKey = key;
 
 		// Reset the app-writable buffer shadows for this graph (ids are graph-local, so a swap re-mints them). Each
 		// starts zero-filled, so a technique that reads a buffer the app hasn't written yet sees a defined value.
@@ -320,6 +345,20 @@ public abstract class EngineBase : IEngine
 		// Drop the previous graph's readback bytes; the backend refills per target as frames retire.
 		_readback.Clear();
 
+		var executed = DeriveGraphPlans(graph);
+
+		if (Aliases.AliasableCount > Aliases.Buckets.Length)
+			LoomLog.Info($"{AliasingLogPrefix}transient aliasing: {Aliases.AliasableCount} transients folded into {Aliases.Buckets.Length} memory buckets.");
+
+		RebuildGraphResources(graph, executed);
+	}
+
+	// Enumerate the inspectable resources and derive the schedule/barrier/alias plans, returning the graph the engine
+	// actually executes (the author's, widened with debug-sample edges when inspection is on). Pure CPU work over
+	// immutable data — no GPU calls — which is what lets a bake-cache hit re-run it to pick up the new graph's
+	// per-frame callbacks without touching a single GPU resource.
+	private RenderGraph DeriveGraphPlans(RenderGraph graph)
+	{
 		// Resource viewer: enumerate the colour/depth resources the host can preview, and (when inspection is on)
 		// inject debug-sample edges so the Execute layer keeps them alive in a sampleable layout. The author's graph
 		// is untouched — the engine derives and renders `executed`.
@@ -333,15 +372,11 @@ public abstract class EngineBase : IEngine
 			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
 		}
 
-		// Derive once — the graph is immutable, so order/barriers/load-store/lifetimes/aliasing are frame-invariant.
+		// The graph is immutable, so order/barriers/load-store/lifetimes/aliasing are frame-invariant.
 		var schedule = GraphSchedule.Derive(executed);
 		Barriers = BarrierPlan.Derive(schedule);
 		Aliases = AliasPlan.Derive(LifetimePlan.Derive(schedule));
-
-		if (Aliases.AliasableCount > Aliases.Buckets.Length)
-			LoomLog.Info($"{AliasingLogPrefix}transient aliasing: {Aliases.AliasableCount} transients folded into {Aliases.Buckets.Length} memory buckets.");
-
-		RebuildGraphResources(graph, executed);
+		return executed;
 	}
 
 	/// <summary>Release the previous graph's per-graph GPU resources (transients, readback, timing pools). Called after a GPU drain.</summary>

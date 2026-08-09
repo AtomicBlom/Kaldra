@@ -158,6 +158,13 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// and prepare per-graph GPU resources, reusing the device and pipeline cache. Call once before the first
 	/// frame; calling it again swaps the active graph at runtime (the engine drains the GPU, releases the old
 	/// graph's transients, and binds the new one) — the basis for runtime demo switching.
+	/// <para>
+	/// The GPU half is cached by <see cref="RenderGraph.Hash"/>: a graph structurally equal to the active one reuses
+	/// its transients, readback buffers, and cross-frame <see cref="ResourceKind.Persistent"/> contents instead of
+	/// draining and rebuilding them, so re-setting an equivalent graph costs only the (CPU-only) re-derivation and
+	/// causes no frame hitch. That makes it safe to rebuild and set the graph whenever the structure might have
+	/// changed, rather than tracking structural changes by hand.
+	/// </para>
 	/// </summary>
 	void SetGraph(RenderGraph graph);
 

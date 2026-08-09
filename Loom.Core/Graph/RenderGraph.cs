@@ -70,10 +70,14 @@ public sealed partial class RenderGraph
 	];
 
 	/// <summary>
-	/// A stable, content-addressed hash of the graph's <em>structure</em> (domains, resources, passes and
-	/// their access edges, the present target). Record callbacks are excluded — they are frame data, not
-	/// structure. Accesses within a pass are canonicalised by sorting, so reordering sibling reads/writes
-	/// doesn't bust the cache; pass order is preserved because program order is a real derivation input.
+	/// A stable, content-addressed hash of everything about the graph that the Execute layer or a backend
+	/// <em>derives</em> from: domains, resources (including the clear attributes that feed load-action derivation and
+	/// the backend's clear hint), passes and their access edges, the present target, and the readback targets. Two
+	/// graphs with equal hashes therefore derive to the same schedule and barrier plan and need the same GPU resources,
+	/// which is what makes the hash usable as the bake key in <c>IEngine.SetGraph</c>. Record callbacks are excluded —
+	/// they are frame data, not structure — as is metadata that only records how a declaration was spelled. Accesses within a
+	/// pass are canonicalised by sorting, so reordering sibling reads/writes doesn't bust the cache; pass order is
+	/// preserved because program order is a real derivation input.
 	/// </summary>
 	public string Hash()
 	{
@@ -85,7 +89,25 @@ public sealed partial class RenderGraph
 
 		sb.Append("resources\n");
 		foreach (var resource in Resources)
-			sb.Append($"  {resource.Id}|{resource.Name}|{resource.Kind}|{resource.Format}|@{resource.Domain.Name}|s={resource.Scale:R}|n={resource.Count}|b={resource.ByteSize}\n");
+		{
+			sb.Append($"  {resource.Id}|{resource.Name}|{resource.Kind}|{resource.Format}|@{resource.Domain.Name}|s={resource.Scale:R}|n={resource.Count}|b={resource.ByteSize}");
+			// Growable is a capability, not spelling: it decides whether a write past the declared size grows the
+			// buffer (reallocating its GPU storage) or is refused. Stride/ElementCount are deliberately absent — they
+			// only record how the author spelled the byte size, and hashing them would bust the cache on a purely
+			// cosmetic migration to the typed overloads.
+			sb.Append($"|grow={resource.Growable}");
+			// The clear attributes are derivation inputs, not cosmetics: they decide the derived LoadAction and the
+			// value the backend bakes into its clear (and, on DirectX12, the resource's optimized-clear hint). Two
+			// graphs differing only in clear colour must not hash equal, or a rebake gets skipped and the frame clears
+			// to the old colour.
+			sb.Append(resource switch
+			{
+				ColorHandle color => $"|clear={(color.ClearValue is { } v ? $"{v.X:R},{v.Y:R},{v.Z:R},{v.W:R}" : "none")}|noclear={color.NoClear}",
+				DepthHandle depth => $"|cleardepth={depth.ClearDepth:R}|noclear={depth.NoClear}",
+				_ => "",
+			});
+			sb.Append('\n');
+		}
 
 		sb.Append("passes\n");
 		foreach (var pass in Passes)
@@ -96,6 +118,9 @@ public sealed partial class RenderGraph
 		}
 
 		sb.Append($"present {PresentTarget?.Id.ToString() ?? "none"}\n");
+		// Readback edges change the derived plan (keep-alive stores, the copy-out transitions, lifetime spans), so
+		// they belong to the graph's identity as much as the present target does.
+		sb.Append($"readback {(ReadbackTargets.IsEmpty ? "none" : string.Join(",", ReadbackTargets.Select(r => r.Id)))}\n");
 
 		var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
 		return Convert.ToHexString(bytes);
