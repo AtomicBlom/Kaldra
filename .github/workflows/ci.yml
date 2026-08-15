@@ -44,10 +44,28 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Compiling the Slang shaders dominates a run, and checkout wipes obj/ so it happens every time. This restores
+      # the compiled outputs from a directory on the runner's own disk, keyed by a hash of the shader sources, the
+      # package versions (which pin slangc + DXC), and the shader targets (which hold the compile flags).
+      #
+      # Local rather than actions/cache on purpose: the runner is self-hosted, so a directory costs no network
+      # round-trip and none of the repository's 10 GB cache allowance. Restore deletes each destination before
+      # copying, so a stale .dxil from a renamed shader can never survive into the package — see the script's header.
+      - name: Restore shader cache
+        id: shader-cache
+        shell: pwsh
+        run: pwsh tools/shader-cache.ps1 -Mode restore
+
       # Build the tests and everything they reference — the engine, both GPU backends, and the Slang/DXC shader
       # toolchain that the backends compile through (hence the Windows runner; see runs-on above).
       - name: Build (engine + backends + tests)
         run: dotnet build Loom.Tests/Loom.Tests.csproj -c Release
+
+      # Only on a miss: a hit restored exactly what this key produces, so there is nothing new to store.
+      - name: Save shader cache
+        if: steps.shader-cache.outputs.hit != 'true'
+        shell: pwsh
+        run: pwsh tools/shader-cache.ps1 -Mode save
 
       # TUnit runs on Microsoft.Testing.Platform; the repo-root global.json opts `dotnet test` into MTP mode,
       # which takes the project via --project (the bare path form is VSTest-only and removed in the .NET 10 SDK).
