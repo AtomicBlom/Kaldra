@@ -39,6 +39,12 @@ public abstract class EngineBase : IEngine
 	public abstract string DeviceName { get; }
 
 	/// <summary>
+	/// What the device this engine runs on can do, probed once during backend creation. <see cref="SetGraph"/>
+	/// validates the graph against it, so a backend that under-reports here rejects graphs it could have run.
+	/// </summary>
+	public abstract EngineCapabilities Capabilities { get; }
+
+	/// <summary>
 	/// The engine family's clip-space convention: negate clip-space Y. Both current backends adopt it (Vulkan's
 	/// native +Y-down NDC; DirectX12 pairs it with a negative-height viewport), so the shared shaders need no
 	/// per-backend branch. A backend with a different convention overrides this; the app composes it into its
@@ -48,16 +54,13 @@ public abstract class EngineBase : IEngine
 
 	/// <summary>
 	/// Enable per-pass GPU timestamp collection. Enabling is refused when the device/queue can't time
-	/// (<see cref="CanEnableGpuTiming"/> is false), so <see cref="LastFrameTimings"/> then stays empty.
+	/// (<see cref="EngineCapabilities.GpuTiming"/> is false), so <see cref="LastFrameTimings"/> then stays empty.
 	/// </summary>
 	public bool GpuTimingEnabled
 	{
 		get => _gpuTimingEnabled;
-		set => _gpuTimingEnabled = value && CanEnableGpuTiming;
+		set => _gpuTimingEnabled = value && Capabilities.GpuTiming;
 	}
-
-	/// <summary>Whether the device/queue can collect timestamps at all; gates <see cref="GpuTimingEnabled"/>.</summary>
-	protected abstract bool CanEnableGpuTiming { get; }
 
 	/// <summary>Per-pass GPU timings from the most recently completed frame (empty when timing is disabled).</summary>
 	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
@@ -339,6 +342,13 @@ public abstract class EngineBase : IEngine
 	public void SetGraph(RenderGraph graph)
 	{
 		ArgumentNullException.ThrowIfNull(graph);
+
+		// Above the bake-cache check rather than inside the derivation: an equal bake key does imply an equal verdict
+		// today (the hash covers both the sample count and the queue), but resting a correctness guarantee on the hash
+		// continuing to cover them is a worse trade than a handful of integer comparisons on a path that already
+		// re-derives the whole plan.
+		GraphCapabilities.Validate(graph, Capabilities);
+
 		var key = BakeKey(graph);
 
 		if (Graph is not null && key == _activeBakeKey)

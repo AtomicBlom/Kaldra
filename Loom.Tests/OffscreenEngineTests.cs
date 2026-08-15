@@ -102,6 +102,49 @@ public class OffscreenEngineTests
 	}
 
 	[Test]
+	public void Every_backend_reports_capabilities_a_real_device_must_have()
+	{
+		// A backend that forgot to probe would report an all-default record, and the graph check would then reject
+		// graphs the device can actually run. Asserting the floor every real GPU clears is what catches that — the
+		// exact values are the device's business, but "at least single-sampled" and "a power-of-two alignment" are
+		// not negotiable on any adapter that can bring an engine up at all.
+		_ = new VulkanEngineSettings();
+		_ = new DirectX12EngineSettings();
+
+		if (Backends.Available.Count == 0)
+			throw new TUnit.Core.Exceptions.SkipTestException("No GPU backend is available on this box (Backends.Available is empty).");
+
+		var failures = new List<string>();
+
+		foreach (var backend in Backends.Available)
+		{
+			using var engine = backend.Create(Surface.Offscreen(Width, Height), Width, Height, new EngineSettings());
+			var caps = engine.Capabilities;
+
+			if ((caps.SampleCounts & SampleCounts.X1) == 0)
+				failures.Add($"{backend.Name}: does not report single-sampled support.");
+			if (caps.MaxColorAttachments < 4)
+				failures.Add($"{backend.Name}: reports only {caps.MaxColorAttachments} colour attachments.");
+			var alignment = caps.MinUniformBufferOffsetAlignment;
+			if (alignment <= 0 || (alignment & (alignment - 1)) != 0)
+				failures.Add($"{backend.Name}: uniform offset alignment {alignment} is not a positive power of two.");
+
+			// No backend derives cross-queue scheduling yet, so a backend claiming otherwise would open a gate with
+			// nothing behind it — the graph check would accept a Queue.AsyncCompute pass the engine cannot honour.
+			if (caps.AsyncCompute)
+				failures.Add($"{backend.Name}: claims async compute, which no backend implements yet.");
+
+			// The capability and the property must agree, since the property is the one an app reads.
+			engine.GpuTimingEnabled = true;
+			if (engine.GpuTimingEnabled != caps.GpuTiming)
+				failures.Add($"{backend.Name}: GpuTimingEnabled settled at {engine.GpuTimingEnabled} but Capabilities.GpuTiming is {caps.GpuTiming}.");
+			engine.GpuTimingEnabled = false;
+		}
+
+		failures.ShouldBeEmpty("Capability reporting failures:\n  " + string.Join("\n  ", failures));
+	}
+
+	[Test]
 	public void Every_backend_reports_the_same_authoring_mistakes_the_same_way()
 	{
 		// The point of the neutral exception family: an app catches one type with one message whichever backend is

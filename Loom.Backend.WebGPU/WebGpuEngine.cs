@@ -67,6 +67,18 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_listIndexRing = new WebGpuBufferRing(_handles, _arena, _writer, WebGpuStateMapping.BufferIndex, minAlignment: 4, "ui-index-ring");
 		_layerTargets = new WebGpuLayerTargets(_handles);
 		_context = new WebGpuRenderContext(this, Validation);
+		Capabilities = new EngineCapabilities
+		{
+			// Timestamp queries are an optional WebGPU feature, unavailable on many browsers/adapters; timing lands
+			// once the feature is negotiated at device request.
+			GpuTiming = false,
+			AsyncCompute = false,
+			// WebGPU defines exactly these two: every device supports 1 and 4, and nothing else is expressible.
+			SampleCounts = SampleCounts.X1 | SampleCounts.X4,
+			MaxColorAttachments = 8,
+			MinUniformBufferOffsetAlignment = surface.MinUniformBufferOffsetAlignment,
+			Float32Filterable = surface.Float32Filterable,
+		};
 		WebGpuInterop.ConfigureCanvas(_width, _height);
 	}
 
@@ -112,9 +124,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 	// The engine's own WGSL shaders are embedded under "<assembly>.Shaders." (the build's LoomEmbedManifestPrefix).
 	private static readonly string EmbeddedShaderPrefix = typeof(WebGpuEngine).Assembly.GetName().Name + ".Shaders.";
 
-	// Timestamp queries are an optional WebGPU feature and unavailable on many browsers/adapters; timing lands
-	// once the feature is negotiated at device request.
-	protected override bool CanEnableGpuTiming => false;
+	public override EngineCapabilities Capabilities { get; }
 
 	// Build the technique's format-agnostic inputs: resolve the logical shader to its WGSL module + reflection,
 	// parse the binding model, and create the shader module + group-0 layouts on the JS side. The render pipeline

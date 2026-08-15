@@ -117,8 +117,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	public override string BackendName => "Vulkan";
 	public override string DeviceName => _ctx.DeviceName;
 
-	// 0 valid bits ⇒ the graphics queue can't timestamp, so the profiler stays permanently unavailable.
-	protected override bool CanEnableGpuTiming => _timestampValidBits != 0;
+	public override EngineCapabilities Capabilities { get; }
 
 	// The real swapchain, for the two calls only it (not VulkanOffscreenTarget) supports — vkAcquireNextImageKHR
 	// and vkQueuePresentKHR. Only ever accessed when !_offscreen, where _presentTarget is guaranteed to be one.
@@ -153,6 +152,17 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_timestampValidBits = _ctx.GraphicsTimestampValidBits;
 		if (_timestampValidBits == 0)
 			LoomLog.Warning("GPU timing unavailable: the graphics queue reports 0 timestamp valid bits.");
+
+		Capabilities = new EngineCapabilities
+		{
+			GpuTiming = _timestampValidBits != 0,
+			// Queue.AsyncCompute derives no cross-queue synchronisation yet and the backend owns one queue.
+			AsyncCompute = false,
+			SampleCounts = MapSampleCounts(_ctx.FramebufferSampleCounts),
+			MaxColorAttachments = (int)_ctx.MaxColorAttachments,
+			MinUniformBufferOffsetAlignment = (int)_ctx.MinUniformBufferOffsetAlignment,
+			Float32Filterable = _ctx.Float32Filterable,
+		};
 		_windowExtent = new Extent2D((uint)width, (uint)height);
 		_presentTarget = offscreen
 			? new VulkanOffscreenTarget(_ctx, _windowExtent, MaxFramesInFlight)
@@ -184,6 +194,18 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			_shaderWatcher.Changed += OnShaderArtifactChanged;
 			LoomLog.Info($"watching shaders for hot-reload: {_shaderDir}");
 		}
+	}
+
+	// Vulkan's sample-count flag values are the counts themselves, and so are the neutral enum's, so this filters
+	// rather than translates. Counts above 16 have no neutral spelling and are dropped: the graph's own ceiling is
+	// 16, so reporting 32x would advertise something a domain cannot ask for.
+	private static SampleCounts MapSampleCounts(SampleCountFlags flags)
+	{
+		var counts = SampleCounts.None;
+		for (var count = 1; count <= 16; count <<= 1)
+			if (((uint)flags & (uint)count) != 0)
+				counts |= (SampleCounts)count;
+		return counts;
 	}
 
 	// Background-thread watcher callback: map the changed artifact (e.g. "gbuffer.spv") back to its shader name and,

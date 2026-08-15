@@ -110,6 +110,7 @@ public class OnDemandRenderTests
 
 		public string BackendName => "counting";
 		public string DeviceName => "counting";
+		public EngineCapabilities Capabilities { get; } = TestCapabilities.Permissive;
 		public Matrix4x4 ClipSpaceCorrection => Matrix4x4.Identity;
 		public bool GpuTimingEnabled { get; set; }
 		public bool ResourceInspectionEnabled { get; set; }
