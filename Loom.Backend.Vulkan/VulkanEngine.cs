@@ -223,7 +223,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// The descriptor-binding counts come from the shader's reflection, not the app: the author states
 		// only the pipeline intent (geometry/blend/filter/compute), and Slang's reflection says how many things
 		// the shader binds.
-		var reflection = ShaderReflection.FromBytes(ResolveShaderAsset(descriptor.Shader, ".json"));
+		var reflection = ShaderReflection.FromBytes(ResolveShaderAsset(descriptor.Shader, ".json"), ShaderBindingTarget.SpirV);
 		// Resolve the per-vertex layout: an explicit one, else the canonical pos/normal/uv when the technique
 		// reads geometry, else none (a fullscreen/compute technique). A non-null Instance marks it instanced
 		// (a second per-instance stream at binding 1).
@@ -245,18 +245,15 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			spirv,
 			vertexEntry,
 			fragmentEntry,
-			reflection.SampleCount,
+			ShaderBindingMap.From(reflection),
 			descriptor.HasVertexInput,
 			descriptor.Blend,
 			descriptor.LinearFilter,
 			descriptor.HasFragmentPush,
 			descriptor.IsCompute,
-			reflection.StorageImageCount,
-			reflection.StorageBufferCount,
 			descriptor.Address,
 			layout,
 			descriptor.Instance,
-			reflection.UniformBufferCount,
 			descriptor.HasListPush,
 			descriptor.Cull,
 			descriptor.DepthTest,

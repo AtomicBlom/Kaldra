@@ -32,7 +32,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		}
 		else if (!call.Sampled.IsEmpty || uboCount > 0)
 		{
-			BindSampledInputs(baked, call.Sampled, template.LinearFilter, default, ubos[..uboCount]);
+			BindSampledInputs(baked, template.Bindings, call.Sampled, template.LinearFilter, default, ubos[..uboCount]);
 		}
 
 		if (call.Instances.IndirectBuffer is { } args)
@@ -105,26 +105,32 @@ internal sealed unsafe partial class VulkanRenderContext
 		{
 			// Sampled inputs use the technique's declared filter (matching the Draw/FullScreen path and DirectX12's
 			// static sampler) — not a hardcoded nearest, which silently diverged from DirectX12 for a LinearFilter pass.
-			var sampler = _registry[technique].LinearFilter ? _linearSampler : _nearestSampler;
-			// Binding order matches the layout: sampled inputs (combined image samplers, ShaderReadOnly), then
-			// storage resources — a storage IMAGE (GENERAL) or, for a Buffer-kind resource, a storage BUFFER.
+			var template = _registry[technique];
+			var sampler = template.LinearFilter ? _linearSampler : _nearestSampler;
+			// Each descriptor's slot and its type come from the same reflected binding, so they cannot disagree.
+			// They could before: the slot was this loop's index while the type was chosen from the runtime handle's
+			// kind, and the layout groups every storage image ahead of every storage buffer — so a pass that supplied
+			// a Buffer before an Image wrote a StorageBuffer descriptor into a slot the layout declared as a
+			// StorageImage. No shipped pass supplies them in that order, which is why nothing had caught it.
+			var map = template.Bindings;
 			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 			var imageInfos = stackalloc DescriptorImageInfo[total];
 			var bufferInfos = stackalloc DescriptorBufferInfo[total];
 			var writes = stackalloc WriteDescriptorSet[total];
+			int nextImage = 0, nextBuffer = 0;
 			for (var i = 0; i < total; i++)
 			{
 				var write = new WriteDescriptorSet
 				{
 					SType = StructureType.WriteDescriptorSet,
 					DstSet = set,
-					DstBinding = (uint)i,
 					DescriptorCount = 1,
 				};
 				if (i < sampled.Length)
 				{
 					ref var image = ref _resources.Get(_frameSlot, sampled[i].Id);
 					imageInfos[i] = new DescriptorImageInfo { Sampler = sampler, ImageView = image.View, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
+					write.DstBinding = (uint)map.SampledTextures[i].Index;
 					write.DescriptorType = DescriptorType.CombinedImageSampler;
 					write.PImageInfo = &imageInfos[i];
 				}
@@ -134,6 +140,7 @@ internal sealed unsafe partial class VulkanRenderContext
 					if (handle.Kind == ResourceKind.Buffer)
 					{
 						bufferInfos[i] = new DescriptorBufferInfo { Buffer = _resources.GetBuffer(_frameSlot, handle.Id), Offset = 0, Range = Vk.WholeSize };
+						write.DstBinding = (uint)map.StorageBuffers[nextBuffer++].Index;
 						write.DescriptorType = DescriptorType.StorageBuffer;
 						write.PBufferInfo = &bufferInfos[i];
 					}
@@ -141,6 +148,7 @@ internal sealed unsafe partial class VulkanRenderContext
 					{
 						ref var image = ref _resources.Get(_frameSlot, handle.Id);
 						imageInfos[i] = new DescriptorImageInfo { ImageView = image.View, ImageLayout = ImageLayout.General };
+						write.DstBinding = (uint)map.StorageImages[nextImage++].Index;
 						write.DescriptorType = DescriptorType.StorageImage;
 						write.PImageInfo = &imageInfos[i];
 					}

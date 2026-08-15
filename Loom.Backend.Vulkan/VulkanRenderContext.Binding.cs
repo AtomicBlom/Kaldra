@@ -1,17 +1,20 @@
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Vulkan;
 
 namespace Loom.Backend.Vulkan;
 
 internal sealed unsafe partial class VulkanRenderContext
 {
-	// Bind sampled graph resources (transients) as combined image samplers at bindings 0..N-1 — the path
-	// FullScreen and the instanced light volumes share. The graph put each in ShaderReadOnly before this pass.
-	// A present uniform buffer is written as the last binding (index inputs.Length), matching the set
-	// layout's category order (samplers, then the UBO).
-	private void BindSampledInputs(VulkanTechnique baked, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<Silk.NET.Vulkan.Buffer> storageBuffers = default, ReadOnlySpan<UniformBinding> ubos = default)
+	// Bind sampled graph resources (transients) as combined image samplers — the path FullScreen and the instanced
+	// light volumes share. The graph put each in ShaderReadOnly before this pass. Every destination slot comes from
+	// the technique's reflected bindings, so the k-th supplied input lands on the k-th sampler slot the shader
+	// declared whatever number that is. (The slots used to be counted out here as 0..N-1, then the storage buffers
+	// and UBOs offset past `inputs.Length` — the count the *pass* supplied, not the count the *shader* declares, so
+	// a pass supplying fewer inputs than the shader reflects shifted every following descriptor onto a wrong slot.)
+	private void BindSampledInputs(VulkanTechnique baked, in ShaderBindingMap map, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<Silk.NET.Vulkan.Buffer> storageBuffers = default, ReadOnlySpan<UniformBinding> ubos = default)
 	{
 		var sampler = linear ? _linearSampler : _nearestSampler;
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
@@ -33,13 +36,13 @@ internal sealed unsafe partial class VulkanRenderContext
 			{
 				SType = StructureType.WriteDescriptorSet,
 				DstSet = set,
-				DstBinding = (uint)i,
+				DstBinding = (uint)map.SampledTextures[i].Index,
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.CombinedImageSampler,
 				PImageInfo = &imageInfos[i],
 			};
 		}
-		// Read-only storage buffers (SSBOs) follow the samplers, as StorageBuffer descriptors.
+		// Read-only storage buffers (SSBOs), at the slots the shader gave them.
 		for (var s = 0; s < storageBuffers.Length; s++)
 		{
 			bufferInfos[s] = new DescriptorBufferInfo { Buffer = storageBuffers[s], Offset = 0, Range = Vk.WholeSize };
@@ -47,13 +50,13 @@ internal sealed unsafe partial class VulkanRenderContext
 			{
 				SType = StructureType.WriteDescriptorSet,
 				DstSet = set,
-				DstBinding = (uint)(inputs.Length + s),
+				DstBinding = (uint)map.StorageBuffers[s].Index,
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.StorageBuffer,
 				PBufferInfo = &bufferInfos[s],
 			};
 		}
-		// Uniform buffers follow the storage buffers.
+		// Uniform buffers, likewise at their declared slots.
 		for (var u = 0; u < ubos.Length; u++)
 		{
 			bufferInfos[storageBuffers.Length + u] = ubos[u].Info;
@@ -61,7 +64,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			{
 				SType = StructureType.WriteDescriptorSet,
 				DstSet = set,
-				DstBinding = (uint)(inputs.Length + storageBuffers.Length + u),
+				DstBinding = (uint)map.UniformBuffers[u].Index,
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.UniformBuffer,
 				PBufferInfo = &bufferInfos[storageBuffers.Length + u],
@@ -71,11 +74,11 @@ internal sealed unsafe partial class VulkanRenderContext
 		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
 	}
 
-	// Bind a material's loaded textures (VulkanTextureStore views) into the technique's reflected sampler slots 0..N-1,
-	// with the technique's address mode + filter. Shared by Draw(mesh, material), textured instancing, and
-	// textured particles. The caller checks SampleCount > 0 (or any UBOs). The technique's uniform buffers follow
-	// the samplers at bindings SampleCount.. in slot order (a pass's .Reads constants, then the per-draw block —
-	// e.g. a view-projection then the model, or foliage's wind, read in the vertex stage).
+	// Bind a material's loaded textures (VulkanTextureStore views) into the technique's reflected sampler slots, with
+	// the technique's address mode + filter. Shared by Draw(mesh, material), textured instancing, and textured
+	// particles. The caller checks SampleCount > 0 (or any UBOs). The technique's uniform buffers go to their own
+	// declared slots, in slot order (a pass's .Reads constants, then the per-draw block — e.g. a view-projection then
+	// the model, or foliage's wind, read in the vertex stage).
 	private void BindMaterialTextures(VulkanTechnique baked, VulkanTechniqueTemplate template, Material material, string technique, ReadOnlySpan<UniformBinding> ubos = default)
 	{
 		_materials.ValidateAgainst(material, technique);
@@ -107,13 +110,13 @@ internal sealed unsafe partial class VulkanRenderContext
 			{
 				SType = StructureType.WriteDescriptorSet,
 				DstSet = set,
-				DstBinding = (uint)i,
+				DstBinding = (uint)template.Bindings.SampledTextures[i].Index,
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.CombinedImageSampler,
 				PImageInfo = &imageInfos[i],
 			};
 		}
-		// Uniform buffers follow the samplers at bindings SampleCount.. in slot order.
+		// Uniform buffers, at the slots the shader declared, in slot order.
 		for (var u = 0; u < ubos.Length; u++)
 		{
 			bufferInfos[u] = ubos[u].Info;
@@ -121,7 +124,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			{
 				SType = StructureType.WriteDescriptorSet,
 				DstSet = set,
-				DstBinding = (uint)(template.SampleCount + u),
+				DstBinding = (uint)template.Bindings.UniformBuffers[u].Index,
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.UniformBuffer,
 				PBufferInfo = &bufferInfos[u],

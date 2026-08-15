@@ -5,45 +5,108 @@ namespace Loom.Graph;
 
 /// <summary>
 /// The descriptor-bound resource shape of a shader, read from the <c>slangc -reflection-json</c> sidecar that the
-/// shader build emits next to each compiled module. It counts how many sampled inputs, storage images, storage
-/// buffers, read-only input buffers, and uniform (constant) buffers the shader binds — so the app states only
-/// pipeline intent (geometry/blend/filter/compute) and the backend derives the descriptor/root-signature layout
-/// from reflection rather than the author hand-counting them. The JSON is the same across backends, so this parse
-/// is shared; each backend maps the neutral counts onto its own layout objects.
+/// shader build emits next to each compiled module. Every parameter is recorded with the slot the shader actually
+/// gave it (<see cref="Bindings"/>), so a backend builds its descriptor layout from real indices rather than
+/// assuming a category order the author had to hand-number to match. The per-category counts remain available as
+/// derived views, computed from the same array a layout is built from, so the two cannot disagree.
+/// <para>
+/// The JSON is target-specific, not shared: see <see cref="ShaderBindingTarget"/>. Which target a reflection was
+/// parsed for is carried in <see cref="Target"/> and must be checked before its indices are used.
+/// </para>
 /// </summary>
-/// <param name="SampleCount">Sampled textures (read-only), bound as combined image samplers / an SRV table.</param>
-/// <param name="StorageImageCount">Read-write textures (e.g. <c>RWTexture2D</c>), bound as storage images / UAV textures.</param>
-/// <param name="StorageBufferCount">All structured / byte-address buffers, read-only and read-write (the Vulkan SSBO count).</param>
-/// <param name="UniformBufferCount">Descriptor-bound constant buffers (distinct from a push/root constant).</param>
-/// <param name="InputBufferCount">Read-only structured / byte-address buffers, the subset of <paramref name="StorageBufferCount"/> bound for reading (e.g. a compute input).</param>
-/// <param name="StorageBufferStride">A read-write structured buffer's element stride in bytes (0 for a raw byte-address buffer or no sidecar).</param>
-/// <param name="MaterialUniformSlot">
-/// Which of the shader's uniform slots is the per-material parameter block — the ordinal, among this shader's
-/// constant buffers in binding order, of the one declared with the reserved name
-/// <see cref="MaterialParameterName"/>. <c>null</c> when the shader declares no material block, which is every
-/// shader that takes its parameters from the pass or the draw. Nullable rather than a <c>-1</c> sentinel so that a
-/// <c>default</c> reflection means "no material block" instead of "slot 0 is the material block".
-/// </param>
-/// <param name="MaterialParameterBytes">
-/// The size of that block as the shader lays it out, including trailing padding to the cbuffer's alignment — the
-/// number of bytes the backend stages per draw. 0 when there is no material block.
-/// </param>
-/// <param name="UniformBufferBytes">
-/// Every constant buffer's declared size, in slot (binding) order — the bound a write into that slot must respect.
-/// Prefer <see cref="UniformSlotBytes"/> over indexing this directly: it is <c>default</c> for a shader with no
-/// sidecar, and reads as 0 ("unknown") rather than throwing.
-/// </param>
-public readonly record struct ShaderReflection(
-	int SampleCount,
-	int StorageImageCount,
-	int StorageBufferCount,
-	int UniformBufferCount,
-	int InputBufferCount,
-	int StorageBufferStride,
-	int? MaterialUniformSlot = null,
-	int MaterialParameterBytes = 0,
-	ImmutableArray<int> UniformBufferBytes = default)
+public readonly record struct ShaderReflection
 {
+	private ShaderReflection(ImmutableArray<ShaderBinding> bindings, ShaderBindingTarget target)
+	{
+		Bindings = bindings;
+		Target = target;
+
+		// Derive every count in one pass and store it: these are read per draw on the record path, so recomputing
+		// them per access would put a scan of the binding array in the hot loop.
+		var slotBytes = ImmutableArray.CreateBuilder<int>();
+		var uniformSlot = 0;
+		foreach (var binding in bindings)
+		{
+			switch (binding.Kind)
+			{
+				case ShaderBindingKind.SampledTexture:
+					SampleCount++;
+					break;
+				case ShaderBindingKind.StorageImage:
+					StorageImageCount++;
+					break;
+				case ShaderBindingKind.StorageBufferReadOnly:
+					StorageBufferCount++;
+					InputBufferCount++;
+					break;
+				case ShaderBindingKind.StorageBufferReadWrite:
+					StorageBufferCount++;
+					StorageBufferStride = Math.Max(StorageBufferStride, binding.ElementStride);
+					break;
+				case ShaderBindingKind.UniformBuffer:
+					UniformBufferCount++;
+					slotBytes.Add(binding.ByteSize);
+					if (binding.Name == MaterialParameterName)
+					{
+						MaterialUniformSlot = uniformSlot;
+						MaterialParameterBytes = binding.ByteSize;
+					}
+					uniformSlot++;
+					break;
+			}
+		}
+		UniformBufferBytes = slotBytes.ToImmutable();
+	}
+
+	/// <summary>
+	/// Every descriptor-bound parameter the shader declares, ascending by <see cref="ShaderBinding.Index"/>. The
+	/// single source of truth: the counts below are views over this.
+	/// </summary>
+	public ImmutableArray<ShaderBinding> Bindings { get; }
+
+	/// <summary>Which compilation target's numbering <see cref="Bindings"/> uses.</summary>
+	public ShaderBindingTarget Target { get; }
+
+	/// <summary>Sampled textures (read-only), bound as combined image samplers / an SRV table.</summary>
+	public int SampleCount { get; }
+
+	/// <summary>Read-write textures (e.g. <c>RWTexture2D</c>), bound as storage images / UAV textures.</summary>
+	public int StorageImageCount { get; }
+
+	/// <summary>All structured / byte-address buffers, read-only and read-write (the Vulkan SSBO count).</summary>
+	public int StorageBufferCount { get; }
+
+	/// <summary>Descriptor-bound constant buffers (distinct from a push/root constant).</summary>
+	public int UniformBufferCount { get; }
+
+	/// <summary>Read-only structured / byte-address buffers, the subset of <see cref="StorageBufferCount"/> bound for reading (e.g. a compute input).</summary>
+	public int InputBufferCount { get; }
+
+	/// <summary>A read-write structured buffer's element stride in bytes (0 for a raw byte-address buffer or no sidecar).</summary>
+	public int StorageBufferStride { get; }
+
+	/// <summary>
+	/// Which of the shader's uniform slots is the per-material parameter block — the ordinal, among this shader's
+	/// constant buffers in binding order, of the one declared with the reserved name
+	/// <see cref="MaterialParameterName"/>. <c>null</c> when the shader declares no material block, which is every
+	/// shader that takes its parameters from the pass or the draw. Nullable rather than a <c>-1</c> sentinel so that a
+	/// <c>default</c> reflection means "no material block" instead of "slot 0 is the material block".
+	/// </summary>
+	public int? MaterialUniformSlot { get; }
+
+	/// <summary>
+	/// The size of that block as the shader lays it out, including trailing padding to the cbuffer's alignment — the
+	/// number of bytes the backend stages per draw. 0 when there is no material block.
+	/// </summary>
+	public int MaterialParameterBytes { get; }
+
+	/// <summary>
+	/// Every constant buffer's declared size, in slot (binding) order — the bound a write into that slot must respect.
+	/// Prefer <see cref="UniformSlotBytes"/> over indexing this directly: it is <c>default</c> for a shader with no
+	/// sidecar, and reads as 0 ("unknown") rather than throwing.
+	/// </summary>
+	public ImmutableArray<int> UniformBufferBytes { get; }
+
 	/// <summary>
 	/// The declared size of the constant buffer bound at <paramref name="slot"/> (the same slot ordinal
 	/// <see cref="MaterialUniformSlot"/> uses), or 0 when the shader has no such slot or reflected no sidecar.
@@ -70,25 +133,33 @@ public readonly record struct ShaderReflection(
 	public static ShaderReflection Empty => default;
 
 	/// <summary>
-	/// Parse slangc reflection JSON held in memory. Only the top-level <c>parameters</c> array is counted — each
-	/// entry point re-lists the parameters it uses (with bindings but without the resource type), so counting those
-	/// too would double-count. Only <c>descriptorTableSlot</c> parameters are counted (push constants, varyings, and
+	/// Build a reflection from bindings resolved some other way than parsing a sidecar — a backend that recovers its
+	/// real assignments from the emitted shader text, or a test. <paramref name="bindings"/> need not be sorted.
+	/// </summary>
+	public static ShaderReflection FromBindings(IEnumerable<ShaderBinding> bindings, ShaderBindingTarget target)
+	{
+		ArgumentNullException.ThrowIfNull(bindings);
+		return new ShaderReflection([.. bindings.OrderBy(b => b.Index)], target);
+	}
+
+	/// <summary>
+	/// Parse slangc reflection JSON held in memory. Only the top-level <c>parameters</c> array is read — each
+	/// entry point re-lists the parameters it uses (with bindings but without the resource type), so reading those
+	/// too would double-count. Only <c>descriptorTableSlot</c> parameters are read (push constants, varyings, and
 	/// per-field uniforms reach the GPU by other means); each is classified by its shape/access: a
 	/// <c>constantBuffer</c>-typed slot is a uniform buffer, a structured/byte-address buffer is a storage buffer
 	/// (further split into read-only inputs vs read-write), a read-write texture is a storage image, and any other
 	/// sampled texture is a combined image sampler.
 	/// </summary>
-	public static ShaderReflection FromBytes(byte[] json)
+	/// <param name="json">The sidecar's bytes.</param>
+	/// <param name="target">
+	/// Which target emitted <paramref name="json"/>. Required rather than inferred: the sidecars are indistinguishable
+	/// by content but their indices are not interchangeable.
+	/// </param>
+	public static ShaderReflection FromBytes(byte[] json, ShaderBindingTarget target)
 	{
 		using var doc = JsonDocument.Parse(json);
-		int samplers = 0, storageImages = 0, storageBuffers = 0, uniformBuffers = 0, inputBuffers = 0, storageBufferStride = 0;
-		// A uniform slot ordinal is a constant buffer's position *in binding order*, because that is the order the
-		// backends bind them in (Vulkan's set-0 puts uniform buffers last as a block, ascending). Every cbuffer is
-		// collected as (bindingIndex, byteSize) and the ordering resolved after the walk, rather than trusting the
-		// JSON array to already be sorted.
-		var materialBinding = -1;
-		var materialBytes = 0;
-		var cbuffers = new List<(int Binding, int Bytes)>();
+		var bindings = ImmutableArray.CreateBuilder<ShaderBinding>();
 
 		if (doc.RootElement.TryGetProperty("parameters", out var parameters) && parameters.ValueKind == JsonValueKind.Array)
 		{
@@ -102,19 +173,16 @@ public readonly record struct ShaderReflection(
 					|| !type.TryGetProperty("kind", out var typeKind))
 					continue;
 
+				var name = p.TryGetProperty("name", out var nameElement) ? nameElement.GetString() ?? "" : "";
+				// An older sidecar may omit the index; int.MaxValue sorts it last rather than colliding at 0.
+				var index = binding.TryGetProperty("index", out var indexElement) ? indexElement.GetInt32() : int.MaxValue;
+				var slotCount = binding.TryGetProperty("count", out var countElement) ? Math.Max(1, countElement.GetInt32()) : 1;
+
 				var kind = typeKind.GetString();
 				// A descriptor-bound ConstantBuffer<T>, distinct from a pushConstantBuffer push.
 				if (kind == "constantBuffer")
 				{
-					uniformBuffers++;
-					var bindingIndex = binding.TryGetProperty("index", out var bi) ? bi.GetInt32() : int.MaxValue;
-					var bytes = ConstantBufferByteSize(type);
-					cbuffers.Add((bindingIndex, bytes));
-					if (p.TryGetProperty("name", out var name) && name.GetString() == MaterialParameterName)
-					{
-						materialBinding = bindingIndex;
-						materialBytes = bytes;
-					}
+					bindings.Add(new ShaderBinding(name, index, ShaderBindingKind.UniformBuffer, slotCount, ByteSize: ConstantBufferByteSize(type)));
 					continue;
 				}
 				if (kind != "resource")
@@ -125,42 +193,27 @@ public readonly record struct ShaderReflection(
 
 				if (baseShape is "structuredBuffer" or "byteAddressBuffer")
 				{
-					storageBuffers++;
-					if (readWrite)
-					{
-						if (baseShape == "structuredBuffer" && type.TryGetProperty("resultType", out var resultType))
-							storageBufferStride = Math.Max(storageBufferStride, TypeByteSize(resultType)); // element size → a UAV's StructureByteStride
-					}
-					else
-					{
-						inputBuffers++; // a read-only structured/byte buffer, bound for reading
-					}
-				}
-				else if (readWrite)
-				{
-					storageImages++; // RWTexture* — a storage image
+					// A read-write structured buffer's element size becomes a UAV's StructureByteStride; a raw
+					// byte-address buffer has no element type and stays 0.
+					var stride = readWrite && baseShape == "structuredBuffer" && type.TryGetProperty("resultType", out var resultType)
+						? TypeByteSize(resultType)
+						: 0;
+					var bufferKind = readWrite ? ShaderBindingKind.StorageBufferReadWrite : ShaderBindingKind.StorageBufferReadOnly;
+					bindings.Add(new ShaderBinding(name, index, bufferKind, slotCount, ElementStride: stride));
 				}
 				else
 				{
-					samplers++;      // a sampled texture, bound as a combined image sampler
+					var textureKind = readWrite ? ShaderBindingKind.StorageImage : ShaderBindingKind.SampledTexture;
+					bindings.Add(new ShaderBinding(name, index, textureKind, slotCount));
 				}
 			}
 		}
 
-		// Slot ordinals are positions in binding order, so sort once and let both the material slot and the per-slot
-		// sizes read off the same ordering — they would otherwise disagree whenever the JSON is not already sorted.
-		cbuffers.Sort((a, b) => a.Binding.CompareTo(b.Binding));
-		var slotBytes = ImmutableArray.CreateBuilder<int>(cbuffers.Count);
-		foreach (var (_, bytes) in cbuffers)
-			slotBytes.Add(bytes);
-
-		int? materialSlot = null;
-		if (materialBinding >= 0)
-			materialSlot = cbuffers.FindIndex(c => c.Binding == materialBinding);
-
-		return new ShaderReflection(
-			samplers, storageImages, storageBuffers, uniformBuffers, inputBuffers, storageBufferStride,
-			materialSlot, materialSlot.HasValue ? materialBytes : 0, slotBytes.MoveToImmutable());
+		// Slot ordinals are positions in binding order, so sort once and let the layout, the per-slot sizes, and the
+		// material slot all read off the same ordering — they would otherwise disagree whenever the JSON is not
+		// already sorted, which nothing guarantees.
+		bindings.Sort((a, b) => a.Index.CompareTo(b.Index));
+		return new ShaderReflection(bindings.ToImmutable(), target);
 	}
 
 	// A constant buffer's laid-out size in bytes, as the shader sees it — Slang reports it on the element's var

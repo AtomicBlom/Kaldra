@@ -288,7 +288,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			storageBuffers[storageCount++] = _resources.GetStorageBuffer(_frameSlot, _activeStorageIds[j]);
 
 		if (inputs.Length > 0 || storageCount > 0 || uboCount > 0)
-			BindSampledInputs(baked, inputs, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount]);
+			BindSampledInputs(baked, template.Bindings, inputs, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount]);
 
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
@@ -323,10 +323,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		// is a one-time warmup allocation per unique pipeline, not per-frame churn.
 		var baked = _techniques.GetOrBake(new VulkanTechniqueDescription(
 			template.Spirv, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
-			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
-			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
-			StorageBufferCount: template.StorageBufferCount,
-			Layout: template.Layout, Instance: template.Instance, UniformBufferCount: template.UniformBufferCount,
+			template.Bindings, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
+			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute,
+			Layout: template.Layout, Instance: template.Instance,
 			HasListPush: template.HasListPush, Cull: template.Cull,
 			DepthTest: template.DepthTest, Bias: template.Bias), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
