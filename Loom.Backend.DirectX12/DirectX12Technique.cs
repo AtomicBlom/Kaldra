@@ -70,8 +70,52 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// <summary>Which uniform slot carries the per-material parameter block, or null when the shader declares none.</summary>
 	public int? MaterialUniformSlot { get; }
 
-	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	// The on-disk blob cache and this pipeline's key in it. Null cache = this run does not persist pipelines.
+	private readonly DirectX12PipelineBlobCache? _blobs;
+	private readonly string _blobKey = "";
+
+	/// <summary>
+	/// Create a graphics pipeline, offering the driver the blob a previous run compiled and falling back to a real
+	/// compile when it refuses it. A refusal is the expected outcome after a driver update — every blob goes stale at
+	/// once — so it is a fall-through, not an error.
+	/// </summary>
+	private void CreateGraphicsPipeline(DirectX12Context ctx, GraphicsPipelineStateDesc* pso)
 	{
+		if (_blobs?.TryGet(_blobKey) is { } cached)
+		{
+			fixed (byte* p = cached)
+			{
+				pso->CachedPSO = new CachedPipelineState { PCachedBlob = p, CachedBlobSizeInBytes = (nuint)cached.Length };
+				if (ctx.Device.CreateGraphicsPipelineState(pso, out Pipeline) >= 0)
+					return;
+			}
+			pso->CachedPSO = default;
+		}
+		SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(pso, out Pipeline));
+		_blobs?.Capture(_blobKey, Pipeline);
+	}
+
+	/// <summary>The compute counterpart of <see cref="CreateGraphicsPipeline"/>.</summary>
+	private void CreateComputePipeline(DirectX12Context ctx, ComputePipelineStateDesc* pso)
+	{
+		if (_blobs?.TryGet(_blobKey) is { } cached)
+		{
+			fixed (byte* p = cached)
+			{
+				pso->CachedPSO = new CachedPipelineState { PCachedBlob = p, CachedBlobSizeInBytes = (nuint)cached.Length };
+				if (ctx.Device.CreateComputePipelineState(pso, out Pipeline) >= 0)
+					return;
+			}
+			pso->CachedPSO = default;
+		}
+		SilkMarshal.ThrowHResult(ctx.Device.CreateComputePipelineState(pso, out Pipeline));
+		_blobs?.Capture(_blobKey, Pipeline);
+	}
+
+	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, DirectX12PipelineBlobCache? blobs = null, string blobKey = "")
+	{
+		_blobs = blobs;
+		_blobKey = blobKey;
 		IsCompute = template.IsCompute;
 		StorageBufferStride = template.StorageBufferStride;
 		InputCount = template.InputCount;
@@ -198,7 +242,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				NodeMask = 0,
 				Flags = PipelineStateFlags.None,
 			};
-			SilkMarshal.ThrowHResult(ctx.Device.CreateComputePipelineState(&pso, out Pipeline));
+			CreateComputePipeline(ctx, &pso);
 		}
 	}
 
@@ -442,12 +486,12 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				}
 
 				pso.InputLayout = new InputLayoutDesc { NumElements = (uint)total, PInputElementDescs = elements };
-				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
+				CreateGraphicsPipeline(ctx, &pso);
 			}
 			else
 			{
 				pso.InputLayout = new InputLayoutDesc { NumElements = 0, PInputElementDescs = null };
-				SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(&pso, out Pipeline));
+				CreateGraphicsPipeline(ctx, &pso);
 			}
 		}
 	}

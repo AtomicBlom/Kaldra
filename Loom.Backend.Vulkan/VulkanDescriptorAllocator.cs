@@ -1,3 +1,4 @@
+using Loom.Core.Diagnostics;
 using Silk.NET.Vulkan;
 
 namespace Loom.Backend.Vulkan;
@@ -91,7 +92,13 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 			}
 			_poolIndex++;
 			if (_poolIndex >= _framePools[_frameIndex].Count)
+			{
 				_framePools[_frameIndex].Add(CreatePool());
+				// Reported for the same reason DirectX12 reports its heap growth: growing is the right answer to a
+				// scene that got bigger, and the wrong answer to a leak, and only a number distinguishes them.
+				LoomLog.Info($"Vulkan descriptor pool chain grew to {_framePools[_frameIndex].Count} pools " +
+					$"for frame slot {_frameIndex} ({_maxSetsPerFrame} sets each).");
+			}
 		}
 	}
 

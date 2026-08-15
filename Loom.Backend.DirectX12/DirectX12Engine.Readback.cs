@@ -96,8 +96,7 @@ public sealed unsafe partial class DirectX12Engine
 	// frame's first use of the target transitions from the right one. No-op when the graph has no readback target.
 	private void RecordReadback(uint index)
 	{
-		foreach (var transition in Barriers.ReadbackTransitions)
-			EmitGraphTransition(index, transition);
+		EmitGraphTransitions(index, Barriers.ReadbackTransitions.AsSpan());
 
 		var transients = _transients!; // non-null throughout recording (SetGraph built it)
 		foreach (var readback in _readbacks)

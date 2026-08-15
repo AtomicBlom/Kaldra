@@ -26,6 +26,7 @@ internal static class WebGpuStateMapping
 	public const int BufferVertex = 0x0020;
 	public const int BufferUniform = 0x0040;
 	public const int BufferStorage = 0x0080;
+	public const int BufferIndirect = 0x0100;
 
 	/// <summary>The texture-usage bits a single <see cref="ResourceState"/> implies.</summary>
 	public static int TextureUsageOf(ResourceState state) => state switch

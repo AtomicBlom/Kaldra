@@ -32,10 +32,14 @@ public class AliasPlanTests
 		plan.AliasableCount.ShouldBe(4);
 		plan.Buckets.Length.ShouldBe(2); // peak overlap is 2
 
-		// a and c share; b and d share; a and b do not.
+		// a and c share; b and d share; a and b do not. The expected sets are hoisted out of the assertions because
+		// Shouldly takes a predicate as an expression tree: an array built *inside* one is constructed at runtime,
+		// which NativeAOT cannot do and reports as IL3050 — a captured variable is just a closure field.
+		string[] ac = ["a", "c"];
+		string[] bd = ["b", "d"];
 		var names = plan.Buckets.Select(bk => bk.Members.Select(m => m.Name).ToHashSet()).ToList();
-		names.ShouldContain(s => s.SetEquals(new[] { "a", "c" }));
-		names.ShouldContain(s => s.SetEquals(new[] { "b", "d" }));
+		names.ShouldContain(s => s.SetEquals(ac));
+		names.ShouldContain(s => s.SetEquals(bd));
 	}
 
 	[Test]

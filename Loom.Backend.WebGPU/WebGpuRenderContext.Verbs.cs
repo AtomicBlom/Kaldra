@@ -121,12 +121,21 @@ internal sealed partial class WebGpuRenderContext
 		var meshes = _engine.Meshes;
 		var writer = _engine.Writer;
 
+		if (call.Instances.IndirectBuffer is { } args)
+		{
+			// The counts live in the buffer; the CPU supplies only where to read them. The graph ordered the compute
+			// that filled it before this pass.
+			meshes.DrawIndirect(writer, _validate.RequireMesh(call).Id,
+				_engine.Transients.BufferHandle(args.Id), call.Instances.IndirectOffset);
+			return;
+		}
+
 		if (call.Instances.IsEmpty)
 		{
 			if (call.SkinnedVertices is { } sv)
 				meshes.DrawSkinned(writer, _validate.RequireMesh(call).Id, _engine.Transients.BufferHandle(sv.Id));
 			else
-				meshes.Draw(writer, _validate.RequireMesh(call).Id);
+				meshes.Draw(writer, _validate.RequireMesh(call).Id, call.Indices);
 			return;
 		}
 
@@ -136,7 +145,7 @@ internal sealed partial class WebGpuRenderContext
 			var gpuBuffer = _engine.Transients.BufferHandle(gpuBuf.Id);
 			if (call.Mesh is { } mesh)
 			{
-				meshes.DrawInstanced(writer, mesh.Id, gpuBuffer, 0, call.Instances.Count);
+				meshes.DrawInstanced(writer, mesh.Id, gpuBuffer, 0, call.Instances.Count, call.Indices);
 			}
 			else
 			{
@@ -151,6 +160,6 @@ internal sealed partial class WebGpuRenderContext
 		if (call.Instances.CpuData.IsEmpty)
 			return;
 		var offset = _engine.InstanceRing.Reserve(call.Instances.CpuData, call.Instances.CpuData.Length);
-		meshes.DrawInstanced(writer, _validate.RequireMesh(call).Id, _engine.InstanceRing.Buffer, offset, call.Instances.Count);
+		meshes.DrawInstanced(writer, _validate.RequireMesh(call).Id, _engine.InstanceRing.Buffer, offset, call.Instances.Count, call.Indices);
 	}
 }

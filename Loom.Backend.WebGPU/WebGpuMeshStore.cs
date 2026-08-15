@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 
 using Loom.Core.Animation;
 using Loom.Core.Geometry;
+using Loom.Core.Hosting;
 
 namespace Loom.Backend.WebGPU;
 
@@ -60,13 +61,31 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 
 	public int VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;
 
-	/// <summary>Record a plain indexed draw of a mesh into the frame's command stream.</summary>
-	public void Draw(WebGpuCommandWriter writer, int meshId)
+	/// <summary>Record a plain indexed draw of a mesh, or of <paramref name="range"/> within it, into the frame's command stream.</summary>
+	public void Draw(WebGpuCommandWriter writer, int meshId, in DrawCall.IndexRange range = default)
 	{
 		var mesh = _meshes[Slot(meshId)];
 		writer.SetVertexBuffer(0, mesh.VertexBuffer, 0);
 		writer.SetIndexBuffer(mesh.IndexBuffer, indexFormat: 1, 0); // uint32
-		writer.DrawIndexed(mesh.IndexCount, 1, 0, 0, 0);
+		var (first, count, baseVertex) = Resolve(meshId, mesh.IndexCount, range);
+		writer.DrawIndexed(count, 1, first, baseVertex, 0);
+	}
+
+	// A range of (0, 0, 0) means the whole mesh — the default a draw that never mentions ranges carries. Anything
+	// else is checked against the index buffer here, because reading past its end is undefined behaviour no backend
+	// reports: the draw either renders garbage triangles or faults, depending on the driver.
+	private static (int First, int Count, int BaseVertex) Resolve(int meshId, int indexCount, in DrawCall.IndexRange range)
+	{
+		if (range.IsEmpty)
+			return (0, indexCount, 0);
+
+		if ((long)range.FirstIndex + range.IndexCount > indexCount)
+		{
+			throw new InvalidOperationException(
+				$"Draw asks for indices {range.FirstIndex}..{range.FirstIndex + range.IndexCount} of mesh {meshId}, " +
+				$"which holds {indexCount}. The range and the mesh must come from the same geometry.");
+		}
+		return (range.FirstIndex, range.IndexCount, range.BaseVertex);
 	}
 
 	/// <summary>Record an indexed draw whose per-vertex stream is <paramref name="vertexBuffer"/> (the pre-skinned buffer).</summary>
@@ -78,14 +97,27 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 		writer.DrawIndexed(mesh.IndexCount, 1, 0, 0, 0);
 	}
 
+	/// <summary>
+	/// Bind a mesh and draw it with the counts taken from <paramref name="arguments"/> at <paramref name="offset"/> —
+	/// five 32-bit values the GPU wrote. The CPU never learns any of them.
+	/// </summary>
+	public void DrawIndirect(WebGpuCommandWriter writer, int meshId, int arguments, int offset)
+	{
+		var mesh = _meshes[Slot(meshId)];
+		writer.SetVertexBuffer(0, mesh.VertexBuffer, 0);
+		writer.SetIndexBuffer(mesh.IndexBuffer, indexFormat: 1, 0);
+		writer.DrawIndexedIndirect(arguments, offset);
+	}
+
 	/// <summary>Record an instanced indexed draw: the mesh at binding 0, the per-instance stream at binding 1.</summary>
-	public void DrawInstanced(WebGpuCommandWriter writer, int meshId, int instanceBuffer, int instanceOffset, int instanceCount)
+	public void DrawInstanced(WebGpuCommandWriter writer, int meshId, int instanceBuffer, int instanceOffset, int instanceCount, in DrawCall.IndexRange range = default)
 	{
 		var mesh = _meshes[Slot(meshId)];
 		writer.SetVertexBuffer(0, mesh.VertexBuffer, 0);
 		writer.SetVertexBuffer(1, instanceBuffer, instanceOffset);
 		writer.SetIndexBuffer(mesh.IndexBuffer, indexFormat: 1, 0);
-		writer.DrawIndexed(mesh.IndexCount, instanceCount, 0, 0, 0);
+		var (first, count, baseVertex) = Resolve(meshId, mesh.IndexCount, range);
+		writer.DrawIndexed(count, instanceCount, first, baseVertex, 0);
 	}
 
 	private (int Vertex, int Index) Upload(ReadOnlySpan<byte> vertexData, ReadOnlySpan<uint> indices)

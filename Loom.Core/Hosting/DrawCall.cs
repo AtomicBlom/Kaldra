@@ -43,6 +43,14 @@ public ref struct DrawCall
 	public int VertexCount;
 
 	/// <summary>
+	/// Which part of <see cref="Mesh"/> to draw. Default (empty) = the whole mesh, which is what nearly every draw
+	/// wants. Set it with <see cref="Range"/> to draw one sub-range of a mesh that holds several — a glTF model's
+	/// primitives, an atlas of static props — so they can share one vertex and index buffer instead of becoming a
+	/// mesh each. Ignored for a procedural draw (no mesh to range into).
+	/// </summary>
+	public IndexRange Indices;
+
+	/// <summary>
 	/// Per-instance data. Default (empty) = single draw. Set via <see cref="From{T}"/> for CPU-driven
 	/// instances or <see cref="Gpu"/> for a GPU-resident buffer.
 	/// </summary>
@@ -134,6 +142,49 @@ public ref struct DrawCall
 	}
 
 	/// <summary>
+	/// Take the draw's counts from <paramref name="buffer"/> at <paramref name="byteOffset"/> instead of from the
+	/// CPU — five 32-bit values (index count, instance count, first index, base vertex, first instance), the layout
+	/// every graphics API uses for an indexed indirect draw. The buffer must be declared <c>.ReadsIndirect</c> by
+	/// the pass, which is what lets a compute pass fill the arguments and this draw consume them in the same frame
+	/// with the hand-off derived rather than declared.
+	/// <para>
+	/// <see cref="DrawCall.Mesh"/> still supplies the geometry, and <see cref="DrawCall.Indices"/> is ignored — the
+	/// range comes from the buffer, which is the point.
+	/// </para>
+	/// </summary>
+	public static InstanceSource Indirect(BufferHandle buffer, int byteOffset = 0)
+	{
+		ArgumentNullException.ThrowIfNull(buffer);
+		ArgumentOutOfRangeException.ThrowIfNegative(byteOffset);
+		return InstanceSource.FromIndirect(buffer, byteOffset);
+	}
+
+	/// <summary>
+	/// Draw <paramref name="indexCount"/> indices of the mesh starting at <paramref name="firstIndex"/>, with
+	/// <paramref name="baseVertex"/> added to every index the range reads. That is the sub-mesh shape every graphics
+	/// API already speaks — and the same vocabulary <see cref="DrawCommand"/> uses for a draw list — so one mesh can
+	/// hold many primitives and a draw picks one.
+	/// </summary>
+	public static IndexRange Range(int firstIndex, int indexCount, int baseVertex = 0)
+	{
+		ArgumentOutOfRangeException.ThrowIfNegative(firstIndex);
+		ArgumentOutOfRangeException.ThrowIfNegative(indexCount);
+		ArgumentOutOfRangeException.ThrowIfNegative(baseVertex);
+		return new IndexRange(firstIndex, indexCount, baseVertex);
+	}
+
+	/// <summary>
+	/// A sub-range of a mesh's index buffer. The default is empty, which every backend reads as "the whole mesh" —
+	/// so a draw that says nothing about ranges behaves exactly as it did before ranges existed. Build one with
+	/// <see cref="DrawCall.Range"/>.
+	/// </summary>
+	public readonly record struct IndexRange(int FirstIndex, int IndexCount, int BaseVertex)
+	{
+		/// <summary><c>true</c> when no range is set — the draw covers the mesh's whole index buffer.</summary>
+		public bool IsEmpty => IndexCount == 0;
+	}
+
+	/// <summary>
 	/// The per-instance data for a <see cref="DrawCall"/>: CPU-sourced (uploaded per frame) or GPU-resident.
 	/// Construct via <see cref="DrawCall.From{T}"/> or <see cref="DrawCall.Gpu"/>; the default is empty (single draw).
 	/// </summary>
@@ -147,13 +198,25 @@ public ref struct DrawCall
 		public BufferHandle? GpuBuffer;
 		private int _gpuCount;
 
-		/// <summary><c>true</c> when no instance data is set — the draw executes once.</summary>
-		public bool IsEmpty => CpuData.IsEmpty && GpuBuffer is null;
+		/// <summary>
+		/// The buffer holding this draw's arguments, or null when the counts come from the CPU. Set by
+		/// <see cref="DrawCall.Indirect"/>; must be declared <c>.ReadsIndirect</c>.
+		/// </summary>
+		public BufferHandle? IndirectBuffer { get; private set; }
 
-		/// <summary>Total instance count: CPU data bytes / stride, or the explicit GPU count.</summary>
+		/// <summary>Byte offset of the argument block within <see cref="IndirectBuffer"/>.</summary>
+		public int IndirectOffset { get; private set; }
+
+		/// <summary><c>true</c> when no instance data is set — the draw executes once.</summary>
+		public bool IsEmpty => CpuData.IsEmpty && GpuBuffer is null && IndirectBuffer is null;
+
+		/// <summary>Total instance count: CPU data bytes / stride, or the explicit GPU count. Zero for an indirect
+		/// draw, whose count only the GPU knows.</summary>
 		public int Count => CpuData.IsEmpty ? _gpuCount : CpuData.Length / Stride;
 
 		internal static InstanceSource Cpu(ReadOnlySpan<byte> data, int stride) => new() { CpuData = data, Stride = stride };
 		internal static InstanceSource FromGpu(BufferHandle buffer, int count) => new() { GpuBuffer = buffer, _gpuCount = count };
+		internal static InstanceSource FromIndirect(BufferHandle buffer, int byteOffset) =>
+			new() { IndirectBuffer = buffer, IndirectOffset = byteOffset };
 	}
 }

@@ -15,8 +15,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 	{
 		var baked = _techniques.GetOrBake(call.Technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
 		_validate.Draw(call);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
+		BindGraphicsState(baked);
 
 		// The technique's CBVs (b1..) in slot order: the slot reflection named as the per-material block (when the draw
 		// carries a material) takes the material's parameter bytes; the rest take the pass's .Reads constants in order,
@@ -35,9 +34,18 @@ internal sealed unsafe partial class DirectX12RenderContext
 			BindInputs(baked, call.Sampled);
 		}
 
-		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		BindTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 
-		if (call.Instances.IsEmpty)
+		if (call.Instances.IndirectBuffer is { } args)
+		{
+			// The counts live in the buffer; the CPU supplies only where to read them. The graph put the buffer in
+			// INDIRECT_ARGUMENT before this pass, so the compute that filled it has completed.
+			if (_transients is null)
+				throw new InvalidOperationException("DirectX12: an indirect draw requires an active graph (SetGraph).");
+			_meshes.DrawIndirect(_cmd, _validate.RequireMesh(call).Id,
+				_transients.Resource(_slot, args.Id), (ulong)call.Instances.IndirectOffset);
+		}
+		else if (call.Instances.IsEmpty)
 		{
 			// Single-instance draw: skinned override or standard mesh.
 			if (call.SkinnedVertices is { } sv)
@@ -48,7 +56,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 			}
 			else
 			{
-				_meshes.Draw(_cmd, _validate.RequireMesh(call).Id);
+				_meshes.Draw(_cmd, _validate.RequireMesh(call).Id, call.Indices);
 			}
 		}
 		else if (call.Instances.GpuBuffer is { } gpuBuf)
@@ -67,7 +75,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 					SizeInBytes = byteSize,
 					StrideInBytes = baked.InstanceStride > 0 ? (uint)baked.InstanceStride : (count > 0 ? byteSize / (uint)count : byteSize),
 				};
-				_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count);
+				_meshes.DrawInstanced(_cmd, mesh.Id, instanceView, (uint)count, call.Indices);
 			}
 			else
 			{
@@ -79,6 +87,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 					SizeInBytes = _transients.ByteSize(gpuBuf.Id),
 					StrideInBytes = (uint)baked.InstanceStride,
 				};
+				_meshes.ResetBindings(); // slot 0 becomes the instance stream, not a mesh's vertices
 				_cmd.IASetVertexBuffers(0, 1, &vbv);
 				_cmd.DrawInstanced((uint)call.VertexCount, (uint)call.Instances.Count, 0, 0);
 			}
@@ -96,7 +105,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 				SizeInBytes = (uint)bytes.Length,
 				StrideInBytes = (uint)call.Instances.Stride,
 			};
-			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, instanceView, (uint)call.Instances.Count);
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, instanceView, (uint)call.Instances.Count, call.Indices);
 		}
 	}
 
@@ -107,8 +116,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
 		_validate.Dispatch(technique, sampled, storage);
-		_cmd.SetComputeRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
+		BindComputeState(baked);
 
 		if (push.Length > 0)
 		{
@@ -122,12 +130,17 @@ internal sealed unsafe partial class DirectX12RenderContext
 			_cmd.SetComputeRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
 		}
 
+		// A dispatch can bind two descriptor tables — sampled SRVs and storage UAVs — so the descriptors for both are
+		// reserved before either is bound. Growing the heap between them would leave the first table addressing the
+		// heap that was just retired while its replacement is the one bound, which reads as garbage on the GPU.
+		_descriptors.Reserve((uint)(sampled.Length + storage.Length));
+
 		// Sampled inputs → an SRV descriptor table (e.g. the auto-exposure compute metering the lit scene).
 		if (sampled.Length > 0 && baked.TableParam >= 0)
 		{
-			var (cpu, gpu) = _ring.Allocate((uint)sampled.Length);
+			var (cpu, gpu) = _descriptors.Allocate((uint)sampled.Length);
 			for (var i = 0; i < sampled.Length; i++)
-				WriteSrv(sampled[i].Id, _ring.Offset(cpu, (uint)i));
+				WriteSrv(sampled[i].Id, _descriptors.Offset(cpu, (uint)i));
 			_cmd.SetComputeRootDescriptorTable((uint)baked.TableParam, gpu);
 		}
 
@@ -146,7 +159,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 		}
 		else if (storage.Length > 0 && baked.UavTableParam >= 0)
 		{
-			var (cpu, gpu) = _ring.Allocate((uint)storage.Length);
+			var (cpu, gpu) = _descriptors.Allocate((uint)storage.Length);
 			for (var i = 0; i < storage.Length; i++)
 			{
 				var id = storage[i].Id;
@@ -173,7 +186,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 						Anonymous = new UnorderedAccessViewDescUnion { Texture2D = new Tex2DUav { MipSlice = 0, PlaneSlice = 0 } }
 					};
 				}
-				_ctx.Device.CreateUnorderedAccessView(_transients.Resource(_slot, id), default(ComPtr<ID3D12Resource>), &uav, _ring.Offset(cpu, (uint)i));
+				_ctx.Device.CreateUnorderedAccessView(_transients.Resource(_slot, id), default(ComPtr<ID3D12Resource>), &uav, _descriptors.Offset(cpu, (uint)i));
 			}
 			_cmd.SetComputeRootDescriptorTable((uint)baked.UavTableParam, gpu);
 		}
@@ -190,8 +203,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 			return;
 
 		var baked = _techniques.GetOrBake(technique, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false);
-		_cmd.SetComputeRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
+		BindComputeState(baked);
 
 		// vertexCount rides the compute root constant (as a float — exact for any realistic count).
 		if (baked.RootConstantParam >= 0)

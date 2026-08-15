@@ -33,6 +33,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `.WritesDepth(DepthHandle)` / `.ReadsDepth(DepthHandle)` | Depth write / depth test without write. |
 | `.ReadWrites(params IStorageHandle[])` | Read-modify-write storage images or buffers (compute UAV). |
 | `.ReadsVertex(BufferHandle)` | Bind a buffer as a vertex / instance stream (a compute pass filled it). |
+| `.ReadsIndirect(BufferHandle)` | Bind a buffer as draw arguments — the counts the command processor reads instead of the CPU supplying them. |
 | `.Reads(IUniformHandle)` | Read a `g.Constants` block as the technique's uniform input. |
 | `.Reads(IStorageBufferHandle)` | Read a `g.Storage` SSBO read-only (an overload of `.Reads`). |
 | `.Queue(Queue)` | Assign the pass to a queue (see `Queue` below). |
@@ -259,13 +260,16 @@ Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projec
 | `SkinnedVertices` (`BufferHandle?`) | A pre-skinned vertex buffer override (the mesh still supplies its indices); must be a `.ReadsVertex` buffer. |
 | `VertexCount` (`int`) | Vertices per instance for procedural draws (when `Mesh` is null). |
 | `Instances` (`InstanceSource`) | Per-instance data — empty (default) = single draw. |
+| `Indices` (`IndexRange`) | Which sub-range of the mesh to draw; empty (default) = the whole mesh. |
 | `Material` (`Material?`) | Material whose textures fill the technique's sampler slots; `null` for untextured techniques. |
 | `Uniforms` / `.SetUniforms<T>(ref T)` / `.SetUniforms<T>(ReadOnlySpan<T>)` | The per-draw uniform block (raw bytes matching the shader's cbuffer); set it from a typed value or span. |
 | `Sampled` (`ReadOnlySpan<ResourceHandle>`) | Graph resources bound as sampled inputs (each declared via `.Samples`). |
 | `DrawCall.From<T>(ReadOnlySpan<T>)` | Build an `InstanceSource` from a CPU instance span (uploaded per frame). |
 | `DrawCall.Gpu(BufferHandle, count)` | Build an `InstanceSource` from a GPU-resident buffer a compute pass filled. |
+| `DrawCall.Indirect(BufferHandle, byteOffset)` | Build an `InstanceSource` whose counts come from a buffer (declared `.ReadsIndirect`); `Indices` is ignored — the range comes from the buffer. |
+| `DrawCall.Range(firstIndex, indexCount, baseVertex)` | Build an `IndexRange`, so one mesh can hold several primitives. |
 
-`InstanceSource` (a nested `ref struct`) exposes `IsEmpty` and `Count`; construct it only via `DrawCall.From` / `DrawCall.Gpu`. Skinning is `ctx.DispatchSkin(...)` (a compute pre-skin into a `.ReadsVertex` buffer) followed by an ordinary `ctx.Draw` of that buffer.
+`InstanceSource` (a nested `ref struct`) exposes `IsEmpty` and `Count`; construct it only via `DrawCall.From` / `DrawCall.Gpu` / `DrawCall.Indirect`. An indirect draw has no CPU-known `Count` — it reports zero, because only the GPU knows. Skinning is `ctx.DispatchSkin(...)` (a compute pre-skin into a `.ReadsVertex` buffer) followed by an ordinary `ctx.Draw` of that buffer.
 
 ## Geometry & materials
 

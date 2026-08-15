@@ -25,15 +25,15 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly VulkanMemoryAllocator _allocator;
-	private readonly CommandPool _commandPool;
+	private readonly VulkanUploadBatch _uploads;
 	private readonly List<StoredTexture> _textures = [];
 
-	public VulkanTextureStore(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool)
+	public VulkanTextureStore(VulkanContext ctx, VulkanMemoryAllocator allocator, VulkanUploadBatch uploads)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
 		_allocator = allocator;
-		_commandPool = commandPool;
+		_uploads = uploads;
 	}
 
 	/// <summary>Upload a texture + its mip chain and return a handle a material can bundle.</summary>
@@ -138,8 +138,11 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 		}
 		stagingAllocation.Unmap();
 
+		// Recorded into the shared upload batch rather than a command buffer of its own: the transition to
+		// ShaderReadOnly at the end is what orders this copy before any later-submitted draw that samples the
+		// texture, so nothing has to wait here.
 		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, mipsPerFace, 0, layerCount);
-		var cmd = BeginOneTime();
+		var cmd = _uploads.Recorder();
 		TransitionImage(cmd, image, range,
 			ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
 			PipelineStageFlags2.TopOfPipeBit, AccessFlags2.None,
@@ -150,43 +153,8 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 			ImageLayout.TransferDstOptimal, ImageLayout.ShaderReadOnlyOptimal,
 			PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferWriteBit,
 			PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit);
-		EndOneTime(cmd);
 
-		_vk.DestroyBuffer(_ctx.Device, staging, null);
-		stagingAllocation.Dispose();
-	}
-
-	private CommandBuffer BeginOneTime()
-	{
-		CommandBufferAllocateInfo allocInfo = new()
-		{
-			SType = StructureType.CommandBufferAllocateInfo,
-			CommandPool = _commandPool,
-			Level = CommandBufferLevel.Primary,
-			CommandBufferCount = 1,
-		};
-		_vk.AllocateCommandBuffers(_ctx.Device, in allocInfo, out var cmd).Check("vkAllocateCommandBuffers");
-		CommandBufferBeginInfo begin = new()
-		{
-			SType = StructureType.CommandBufferBeginInfo,
-			Flags = CommandBufferUsageFlags.OneTimeSubmitBit,
-		};
-		_vk.BeginCommandBuffer(cmd, in begin).Check("vkBeginCommandBuffer");
-		return cmd;
-	}
-
-	private void EndOneTime(CommandBuffer cmd)
-	{
-		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
-		SubmitInfo submit = new()
-		{
-			SType = StructureType.SubmitInfo,
-			CommandBufferCount = 1,
-			PCommandBuffers = &cmd,
-		};
-		_vk.QueueSubmit(_ctx.GraphicsQueue, 1, in submit, default).Check("vkQueueSubmit");
-		_vk.QueueWaitIdle(_ctx.GraphicsQueue);
-		_vk.FreeCommandBuffers(_ctx.Device, _commandPool, 1, in cmd);
+		_uploads.Retire(staging, stagingAllocation);
 	}
 
 	private void TransitionImage(

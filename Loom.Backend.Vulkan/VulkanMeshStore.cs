@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Loom.Core.Animation;
 using Loom.Core.Geometry;
+using Loom.Core.Hosting;
 using Silk.NET.Vulkan;
 using VMASharp;
 using Buffer = Silk.NET.Vulkan.Buffer;
@@ -29,15 +30,20 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly VulkanMemoryAllocator _allocator;
-	private readonly CommandPool _commandPool;
+	private readonly VulkanUploadBatch _uploads;
 	private readonly List<StoredMesh> _meshes = [];
 
-	public VulkanMeshStore(VulkanContext ctx, VulkanMemoryAllocator allocator, CommandPool commandPool)
+	// Mesh ids are 1-based, so 0 is a value no mesh can have — "the command buffer's vertex/index bindings are not
+	// this store's doing".
+	private const int NothingBound = 0;
+	private int _bound = NothingBound;
+
+	public VulkanMeshStore(VulkanContext ctx, VulkanMemoryAllocator allocator, VulkanUploadBatch uploads)
 	{
 		_ctx = ctx;
 		_vk = ctx.Vk;
 		_allocator = allocator;
-		_commandPool = commandPool;
+		_uploads = uploads;
 	}
 
 	/// <summary>
@@ -120,16 +126,43 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		_vk.CmdBindVertexBuffers(cmd, 0, 1, in vertexBuffer, in offset);
 		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
 		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, 1, 0, 0, 0);
+		_bound = NothingBound; // binding 0 came from the caller, not the mesh
 	}
 
-	/// <summary>Bind a mesh's buffers and record an indexed draw into the command buffer.</summary>
-	public void Draw(CommandBuffer cmd, int meshId)
+	/// <summary>
+	/// Bind a mesh's buffers and record an indexed draw into the command buffer. Consecutive draws of the same mesh
+	/// skip the binds: the buffers are the mesh's own, so re-binding writes the handles the command buffer already
+	/// holds. <see cref="ResetBindings"/> states when that memory stops being true.
+	/// </summary>
+	public void Draw(CommandBuffer cmd, int meshId, in DrawCall.IndexRange range = default)
 	{
 		var mesh = _meshes[Slot(meshId)];
-		var offset = 0ul;
-		_vk.CmdBindVertexBuffers(cmd, 0, 1, in mesh.VertexBuffer, in offset);
-		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
-		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, 1, 0, 0, 0);
+		if (_bound != meshId)
+		{
+			var offset = 0ul;
+			_vk.CmdBindVertexBuffers(cmd, 0, 1, in mesh.VertexBuffer, in offset);
+			_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
+			_bound = meshId;
+		}
+		var (first, count, baseVertex) = Resolve(meshId, mesh.IndexCount, range);
+		_vk.CmdDrawIndexed(cmd, count, 1, first, baseVertex, 0);
+	}
+
+	// A range of (0, 0, 0) means the whole mesh — the default a draw that never mentions ranges carries. Anything
+	// else is checked against the index buffer here, because reading past its end is undefined behaviour no backend
+	// reports: the draw either renders garbage triangles or faults, depending on the driver.
+	private (uint First, uint Count, int BaseVertex) Resolve(int meshId, uint indexCount, in DrawCall.IndexRange range)
+	{
+		if (range.IsEmpty)
+			return (0, indexCount, 0);
+
+		if ((ulong)range.FirstIndex + (ulong)range.IndexCount > indexCount)
+		{
+			throw new VulkanException(
+				$"Draw asks for indices {range.FirstIndex}..{range.FirstIndex + range.IndexCount} of mesh {meshId}, " +
+				$"which holds {indexCount}. The range and the mesh must come from the same geometry.");
+		}
+		return ((uint)range.FirstIndex, (uint)range.IndexCount, range.BaseVertex);
 	}
 
 	/// <summary>
@@ -138,15 +171,41 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// <paramref name="instanceCount"/> copies (GPU instancing). The instance buffer is either an
 	/// engine-managed per-frame upload buffer (CPU-driven) or a graph storage buffer a compute filled.
 	/// </summary>
-	public void DrawInstanced(CommandBuffer cmd, int meshId, Buffer instanceBuffer, ulong instanceOffset, uint instanceCount)
+	public void DrawInstanced(CommandBuffer cmd, int meshId, Buffer instanceBuffer, ulong instanceOffset, uint instanceCount, in DrawCall.IndexRange range = default)
 	{
 		var mesh = _meshes[Slot(meshId)];
 		var buffers = stackalloc Buffer[2] { mesh.VertexBuffer, instanceBuffer };
 		var offsets = stackalloc ulong[2] { 0ul, instanceOffset };
 		_vk.CmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
 		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
-		_vk.CmdDrawIndexed(cmd, mesh.IndexCount, instanceCount, 0, 0, 0);
+		var (first, count, baseVertex) = Resolve(meshId, mesh.IndexCount, range);
+		_vk.CmdDrawIndexed(cmd, count, instanceCount, first, baseVertex, 0);
+		// Never memoised: binding 1 is a per-draw instance buffer at a per-draw offset, so "same mesh" does not mean
+		// "same bindings" here the way it does for a plain draw.
+		_bound = NothingBound;
 	}
+
+	/// <summary>
+	/// Bind a mesh and draw it with the counts taken from <paramref name="arguments"/> at
+	/// <paramref name="offset"/> — <c>VkDrawIndexedIndirectCommand</c>: index count, instance count, first index,
+	/// vertex offset, first instance. The CPU never learns any of them.
+	/// </summary>
+	public void DrawIndirect(CommandBuffer cmd, int meshId, Buffer arguments, ulong offset)
+	{
+		var mesh = _meshes[Slot(meshId)];
+		var vertexOffset = 0ul;
+		_vk.CmdBindVertexBuffers(cmd, 0, 1, in mesh.VertexBuffer, in vertexOffset);
+		_vk.CmdBindIndexBuffer(cmd, mesh.IndexBuffer, 0, IndexType.Uint32);
+		_bound = meshId;
+		_vk.CmdDrawIndexedIndirect(cmd, arguments, offset, 1, 0);
+	}
+
+	/// <summary>
+	/// Forget which mesh is bound. Required whenever something other than this store touches the vertex or index
+	/// bindings — a new command buffer, a draw list's own geometry, the procedural instance stream — because the
+	/// memo is a claim about the command buffer's recorded state, not about this store's history.
+	/// </summary>
+	public void ResetBindings() => _bound = NothingBound;
 
 	// Stage in host-visible memory, copy into a device-local buffer, free the staging buffer.
 	private Buffer Upload(ReadOnlySpan<byte> data, BufferUsageFlags usage, out Allocation allocation)
@@ -176,42 +235,42 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 
 		CopyBuffer(staging, device, size);
 
-		_vk.DestroyBuffer(_ctx.Device, staging, null);
-		stagingAllocation.Dispose();
+		_uploads.Retire(staging, stagingAllocation);
 		return device;
 	}
 
-	// One-time blocking copy on the graphics queue — fine for up-front uploads.
+	// Record the staging→device copy into the shared upload batch. A mesh used to cost two full GPU drains — one for
+	// its vertices and one for its indices — where now both land in the batch the frame submits, alongside every
+	// other resource created in the same drain.
 	private void CopyBuffer(Buffer source, Buffer destination, ulong size)
 	{
-		CommandBufferAllocateInfo allocInfo = new()
-		{
-			SType = StructureType.CommandBufferAllocateInfo,
-			CommandPool = _commandPool,
-			Level = CommandBufferLevel.Primary,
-			CommandBufferCount = 1,
-		};
-		_vk.AllocateCommandBuffers(_ctx.Device, in allocInfo, out var cmd).Check("vkAllocateCommandBuffers");
-
-		CommandBufferBeginInfo begin = new()
-		{
-			SType = StructureType.CommandBufferBeginInfo,
-			Flags = CommandBufferUsageFlags.OneTimeSubmitBit,
-		};
-		_vk.BeginCommandBuffer(cmd, in begin).Check("vkBeginCommandBuffer");
+		var cmd = _uploads.Recorder();
 		BufferCopy region = new() { Size = size };
 		_vk.CmdCopyBuffer(cmd, source, destination, 1, in region);
-		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
 
-		SubmitInfo submit = new()
+		// Geometry is read at vertex-input, not in a shader, so its visibility barrier names that stage. Without it
+		// the copy would be ordered against later submissions only by the batch's own submission order, which
+		// guarantees execution start rather than write visibility.
+		BufferMemoryBarrier2 barrier = new()
 		{
-			SType = StructureType.SubmitInfo,
-			CommandBufferCount = 1,
-			PCommandBuffers = &cmd,
+			SType = StructureType.BufferMemoryBarrier2,
+			SrcStageMask = PipelineStageFlags2.AllTransferBit,
+			SrcAccessMask = AccessFlags2.TransferWriteBit,
+			DstStageMask = PipelineStageFlags2.VertexInputBit | PipelineStageFlags2.ComputeShaderBit,
+			DstAccessMask = AccessFlags2.VertexAttributeReadBit | AccessFlags2.IndexReadBit | AccessFlags2.ShaderStorageReadBit,
+			SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			Buffer = destination,
+			Offset = 0,
+			Size = Vk.WholeSize,
 		};
-		_vk.QueueSubmit(_ctx.GraphicsQueue, 1, in submit, default).Check("vkQueueSubmit");
-		_vk.QueueWaitIdle(_ctx.GraphicsQueue);
-		_vk.FreeCommandBuffers(_ctx.Device, _commandPool, 1, in cmd);
+		DependencyInfo dependency = new()
+		{
+			SType = StructureType.DependencyInfo,
+			BufferMemoryBarrierCount = 1,
+			PBufferMemoryBarriers = &barrier,
+		};
+		_vk.CmdPipelineBarrier2(cmd, in dependency);
 	}
 
 	public void Dispose()

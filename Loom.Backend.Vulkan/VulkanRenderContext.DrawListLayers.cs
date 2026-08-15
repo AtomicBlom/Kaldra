@@ -30,7 +30,9 @@ internal sealed unsafe partial class VulkanRenderContext
 		var (vtxBuffer, vtxOffset) = _listVtx.Upload(_frameSlot, MemoryMarshal.AsBytes(vertices));
 		var (idxBuffer, idxOffset) = _listIdx.Upload(_frameSlot, MemoryMarshal.AsBytes(indices));
 
-		_vk.CmdBindPipeline(_cmd, PipelineBindPoint.Graphics, baked.Pipeline);
+		BindPipeline(PipelineBindPoint.Graphics, baked.Pipeline);
+		// The list brings its own geometry, so whatever mesh the store thought was bound no longer is.
+		_meshes.ResetBindings();
 		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
 		_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
 
@@ -68,6 +70,16 @@ internal sealed unsafe partial class VulkanRenderContext
 			_layerTargets.Configure(layerArea, _colorFormats[0]);
 		_layerStack.Clear();
 
+		// The list's own coordinate space, recovered from the push that maps it to clip, and the scale from it to
+		// framebuffer pixels. A layer's bounds arrive in surface pixels; its render area is needed in framebuffer ones.
+		var surfaceWidth = layersSupported ? 2f / push[0] : layerArea.Width;
+		var surfaceHeight = layersSupported ? 2f / push[1] : layerArea.Height;
+		var toFramebufferX = layerArea.Width / surfaceWidth;
+		var toFramebufferY = layerArea.Height / surfaceHeight;
+
+		// The texture the currently bound descriptor set describes. -1 = nothing bound yet.
+		var listTextureId = -1;
+
 		foreach (var c in commands)
 		{
 			if (layersSupported && c.Tag == TagBeginLayer)
@@ -79,9 +91,15 @@ internal sealed unsafe partial class VulkanRenderContext
 				TransitionImage(target.Image, ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
 					PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit,
 					PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit);
-				BeginColorScope(target.View, AttachmentLoadOp.Clear, layerArea);
+
+				// The group's own bounds, not the whole surface. A layer costs two render-pass breaks and a clear, and
+				// on a tile-based GPU those are priced by area — a checkbox fading in should not clear and store a
+				// screen's worth of tiles. The marker carries the bounds as its ClipRect precisely so a backend can
+				// use them.
+				var bounds = LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight);
+				BeginColorScope(target.View, AttachmentLoadOp.Clear, FramebufferRect(bounds, toFramebufferX, toFramebufferY, layerArea));
 				_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
-				_layerStack.Add((target.Image, target.View, overlay[c.VertexOffset].Color));
+				_layerStack.Add((target.Image, target.View, overlay[c.VertexOffset].Color, bounds));
 				continue;
 			}
 			if (layersSupported && c.Tag == TagEndLayer)
@@ -96,17 +114,21 @@ internal sealed unsafe partial class VulkanRenderContext
 				TransitionImage(layer.Image, ImageLayout.ColorAttachmentOptimal, ImageLayout.ShaderReadOnlyOptimal,
 					PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit,
 					PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit);
+				// The parent resumes over its whole area — commands after this one draw anywhere — but only the
+				// layer's own bounds are composited back into it.
 				if (_layerStack.Count > 0)
-					BeginColorScope(_layerStack[^1].View, AttachmentLoadOp.Load, layerArea);
+					BeginColorScope(_layerStack[^1].View, AttachmentLoadOp.Load, new Rect2D(default, layerArea));
 				else
-					BeginColorScope(_scopeColorViews.AsSpan(0, _scopeColorCount), AttachmentLoadOp.Load, layerArea);
+					BeginColorScope(_scopeColorViews.AsSpan(0, _scopeColorCount), AttachmentLoadOp.Load, new Rect2D(default, layerArea));
 				_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
 
-				CompositeLayer(baked, layer.View, layer.Tint, sampler, block, pushLen, push, layerArea);
+				CompositeLayer(baked, layer.View, layer.Tint, sampler, block, pushLen, layer.Bounds, surfaceWidth, surfaceHeight, layerArea);
 
-				// Restore the list's geometry for the following commands (the composite bound its own quad buffer).
+				// Restore the list's geometry for the following commands (the composite bound its own quad buffer),
+				// and forget the memoised texture set — the composite replaced it with the layer's own.
 				_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
 				_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
+				listTextureId = -1;
 				continue;
 			}
 
@@ -122,24 +144,31 @@ internal sealed unsafe partial class VulkanRenderContext
 			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, block);
 
 			var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
-			// An id offset by DebugTextureBase is an inspectable graph resource (the resource viewer): sample this
-			// frame's live transient image instead of a loaded texture-store entry.
-			var view = texId >= InspectableResource.DebugTextureBase
-				? _resources.Get(_frameSlot, texId - InspectableResource.DebugTextureBase).View
-				: _textures.View(texId);
-			var set = _descriptors.Allocate(baked.DescriptorSetLayout);
-			var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
-			var write = new WriteDescriptorSet
+			// A UI list is mostly one texture — the glyph atlas — for run after run of commands, and the set holds
+			// nothing else, so a run of same-texture commands can keep the set the first of them bound. Only a change
+			// of texture costs an allocate + update + bind.
+			if (texId != listTextureId)
 			{
-				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
-				DstBinding = 0,
-				DescriptorCount = 1,
-				DescriptorType = DescriptorType.CombinedImageSampler,
-				PImageInfo = &imageInfo,
-			};
-			_vk.UpdateDescriptorSets(_ctx.Device, 1, in write, 0, null);
-			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+				// An id offset by DebugTextureBase is an inspectable graph resource (the resource viewer): sample this
+				// frame's live transient image instead of a loaded texture-store entry.
+				var view = texId >= InspectableResource.DebugTextureBase
+					? _resources.Get(_frameSlot, texId - InspectableResource.DebugTextureBase).View
+					: _textures.View(texId);
+				var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+				var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
+				var write = new WriteDescriptorSet
+				{
+					SType = StructureType.WriteDescriptorSet,
+					DstSet = set,
+					DstBinding = 0,
+					DescriptorCount = 1,
+					DescriptorType = DescriptorType.CombinedImageSampler,
+					PImageInfo = &imageInfo,
+				};
+				_vk.UpdateDescriptorSets(_ctx.Device, 1, in write, 0, null);
+				_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+				listTextureId = texId;
+			}
 
 			Rect2D scissor = new(new Offset2D((int)minX, (int)minY), new Extent2D((uint)(maxX - minX), (uint)(maxY - minY)));
 			_vk.CmdSetScissor(_cmd, 0, 1, in scissor);
@@ -153,13 +182,38 @@ internal sealed unsafe partial class VulkanRenderContext
 		{
 			_layerStack.RemoveAt(_layerStack.Count - 1);
 			_vk.CmdEndRendering(_cmd);
-			BeginColorScope(((ReadOnlySpan<ImageView>)_scopeColorViews)[.._scopeColorCount], AttachmentLoadOp.Load, layerArea);
+			BeginColorScope(((ReadOnlySpan<ImageView>)_scopeColorViews)[.._scopeColorCount], AttachmentLoadOp.Load, new Rect2D(default, layerArea));
 		}
 	}
 
-	// Begin a dynamic-rendering scope over the given colour attachment view(s) at the pass render area — used to
-	// open a layer's offscreen target (LoadOp.Clear) and to resume the suspended parent scope (LoadOp.Load).
-	private void BeginColorScope(ReadOnlySpan<ImageView> views, AttachmentLoadOp load, Extent2D area)
+	// A layer's bounds in the list's own coordinate space, clamped to the surface and grown by a pixel so a rounded
+	// edge cannot clip the antialiased fringe of whatever sits against the group's boundary. Degenerate bounds fall
+	// back to the whole surface, which is what this path did before it looked at the rect at all.
+	private static (float X0, float Y0, float X1, float Y1) LayerBounds(Rect clip, float surfaceWidth, float surfaceHeight)
+	{
+		const float Slop = 1f;
+		var x0 = MathF.Max(0f, clip.X - Slop);
+		var y0 = MathF.Max(0f, clip.Y - Slop);
+		var x1 = MathF.Min(surfaceWidth, clip.X + clip.Width + Slop);
+		var y1 = MathF.Min(surfaceHeight, clip.Y + clip.Height + Slop);
+		return x1 > x0 && y1 > y0 ? (x0, y0, x1, y1) : (0f, 0f, surfaceWidth, surfaceHeight);
+	}
+
+	// The same bounds as a framebuffer-pixel render area: floor the origin and ceil the far edge so the area never
+	// covers less than the bounds it came from, then clamp to the attachment.
+	private static Rect2D FramebufferRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, Extent2D area)
+	{
+		var x = Math.Clamp((int)MathF.Floor(bounds.X0 * scaleX), 0, (int)area.Width);
+		var y = Math.Clamp((int)MathF.Floor(bounds.Y0 * scaleY), 0, (int)area.Height);
+		var right = Math.Clamp((int)MathF.Ceiling(bounds.X1 * scaleX), x, (int)area.Width);
+		var bottom = Math.Clamp((int)MathF.Ceiling(bounds.Y1 * scaleY), y, (int)area.Height);
+		return new Rect2D(new Offset2D(x, y), new Extent2D((uint)(right - x), (uint)(bottom - y)));
+	}
+
+	// Begin a dynamic-rendering scope over the given colour attachment view(s) at the given render area — used to
+	// open a layer's offscreen target (LoadOp.Clear, sized to the group) and to resume the suspended parent scope
+	// (LoadOp.Load, over everything).
+	private void BeginColorScope(ReadOnlySpan<ImageView> views, AttachmentLoadOp load, Rect2D area)
 	{
 		var color = stackalloc RenderingAttachmentInfo[views.Length];
 		for (var i = 0; i < views.Length; i++)
@@ -175,7 +229,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		RenderingInfo info = new()
 		{
 			SType = StructureType.RenderingInfo,
-			RenderArea = new Rect2D(new Offset2D(0, 0), area),
+			RenderArea = area,
 			LayerCount = 1,
 			ColorAttachmentCount = (uint)views.Length,
 			PColorAttachments = color,
@@ -183,26 +237,33 @@ internal sealed unsafe partial class VulkanRenderContext
 		_vk.CmdBeginRendering(_cmd, in info);
 	}
 
-	private void BeginColorScope(ImageView view, AttachmentLoadOp load, Extent2D area) =>
+	private void BeginColorScope(ImageView view, AttachmentLoadOp load, Rect2D area) =>
 		BeginColorScope(new ReadOnlySpan<ImageView>(in view), load, area);
 
 	// Composite a resolved layer target back into the (now-resumed) parent: one full-surface KIND_IMAGE quad that
 	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once. The
 	// HDR paper-white lift is forced off here — the layer's primitives already lifted, and the lift commutes with
 	// the premultiplied alpha-over, so re-lifting would double it (the CPU rasterizer is the reference for this).
-	private void CompositeLayer(VulkanTechnique baked, ImageView layerView, Half4 tint, Sampler sampler, float* block, int pushLen, ReadOnlySpan<float> push, Extent2D area)
+	private void CompositeLayer(VulkanTechnique baked, ImageView layerView, Half4 tint, Sampler sampler, float* block, int pushLen,
+		(float X0, float Y0, float X1, float Y1) bounds, float surfaceWidth, float surfaceHeight, Extent2D area)
 	{
-		var coordX = 2f / push[0];
-		var coordY = 2f / push[1];
+		// The quad covers the group's bounds rather than the surface. The layer target still holds its content at the
+		// content's own position — the render area restricted which pixels were written, it did not move them — so the
+		// texture coordinates are the bounds as a fraction of the surface, not a fixed 0..1.
 		var custom = default(Vector4);
+		var (x0, y0, x1, y1) = bounds;
+		var u0 = x0 / surfaceWidth;
+		var v0 = y0 / surfaceHeight;
+		var u1 = x1 / surfaceWidth;
+		var v1 = y1 / surfaceHeight;
 		Span<OverlayVertex> quad =
 		[
-			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
-			new(new Vector2(coordX, 0), new Vector2(1, 0), tint, custom),
-			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
-			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
-			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
-			new(new Vector2(0, coordY), new Vector2(0, 1), tint, custom),
+			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
+			new(new Vector2(x1, y0), new Vector2(u1, v0), tint, custom),
+			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
+			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
+			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
+			new(new Vector2(x0, y1), new Vector2(u0, v1), tint, custom),
 		];
 		var (quadBuffer, quadOffset) = _listVtx.Upload(_frameSlot, MemoryMarshal.AsBytes(quad));
 		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in quadBuffer, in quadOffset);

@@ -30,10 +30,10 @@ public sealed unsafe partial class DirectX12Engine
 		SilkMarshal.ThrowHResult(_allocators[index].Reset());
 		SilkMarshal.ThrowHResult(_commandList.Reset(_allocators[index], default(ComPtr<ID3D12PipelineState>)));
 
-		// Bind the shader-visible heap for this command list, then reset its per-frame bump allocator.
-		var heap = _ring.Heap.Handle;
-		_commandList.SetDescriptorHeaps(1, &heap);
-		_ring.Reset(index); // this slot's own region — must not clobber the other in-flight frame's live descriptors
+		// Bind the shader-visible heap for this command list and rewind this slot's own transient region — it must not
+		// clobber the other in-flight frame's live descriptors. The heap keeps the command list so that growing
+		// mid-frame can re-bind the replacement itself.
+		_ring.BeginFrame(_commandList, index);
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
 		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _presentTarget.Width, _presentTarget.Height);
 
@@ -57,8 +57,7 @@ public sealed unsafe partial class DirectX12Engine
 			// capture reads as a "bloom" group containing "down1", … instead of a flat list. [Conditional]:
 			// vanishes without UseNamedGPUObjects.
 			BeginPassLabels(pass);
-			foreach (var transition in pass.Transitions)
-				EmitGraphTransition(index, transition);
+			EmitGraphTransitions(index, pass.Transitions.AsSpan());
 
 			if (timing)
 				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex));
@@ -92,14 +91,16 @@ public sealed unsafe partial class DirectX12Engine
 			var backbuffer = _presentTarget.BackBuffer(index);
 			if (_backbufferState[index] != ResourceStates.CopySource)
 			{
-				Transition(backbuffer, _backbufferState[index], ResourceStates.CopySource);
+				// Queued and flushed on the spot: the copy below reads the backbuffer immediately, so this one cannot
+				// wait to be batched with the final transitions that follow it.
+				QueueTransition(backbuffer, _backbufferState[index], ResourceStates.CopySource);
+				FlushTransitions();
 				_backbufferState[index] = ResourceStates.CopySource;
 			}
 			rowPitch = CopyBackbufferToReadback(backbuffer);
 		}
 
-		foreach (var transition in Barriers.FinalTransitions)
-			EmitGraphTransition(index, transition);
+		EmitGraphTransitions(index, Barriers.FinalTransitions.AsSpan());
 
 		SilkMarshal.ThrowHResult(_commandList.Close());
 		var list = (ID3D12CommandList*)_commandList.Handle;

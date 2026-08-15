@@ -26,8 +26,9 @@ internal sealed unsafe partial class DirectX12RenderContext
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
-		_cmd.SetGraphicsRootSignature(baked.RootSignature);
-		_cmd.SetPipelineState(baked.Pipeline);
+		BindGraphicsState(baked);
+		// The list brings its own geometry, so whatever mesh the store thought was bound no longer is.
+		_meshes.ResetBindings();
 
 		// Stage this frame's geometry into the dynamic rings (bump-allocated: several draw lists in one frame
 		// append at successive offsets rather than overwrite each other).
@@ -38,7 +39,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		var vbv = new VertexBufferView { BufferLocation = vtxAddr, SizeInBytes = (uint)vtxBytes.Length, StrideInBytes = (uint)Unsafe.SizeOf<TVertex>() };
 		var ibv = new IndexBufferView { BufferLocation = idxAddr, SizeInBytes = (uint)idxBytes.Length, Format = DxgiFormat.FormatR16Uint };
-		_cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
+		BindTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.IASetVertexBuffers(0, 1, &vbv);
 		_cmd.IASetIndexBuffer(&ibv);
 
@@ -64,6 +65,17 @@ internal sealed unsafe partial class DirectX12RenderContext
 		_layerStack.Clear();
 		var layerClear = stackalloc float[4] { 0f, 0f, 0f, 0f }; // transparent: a layer starts empty
 
+		// The list's own coordinate space, recovered from the push that maps it to clip, and the scale from it to
+		// framebuffer pixels. A layer's bounds arrive in surface pixels; its clear rect is needed in framebuffer ones.
+		var surfaceWidth = layersSupported ? 2f / push[0] : _scopeWidth;
+		var surfaceHeight = layersSupported ? 2f / push[1] : _scopeHeight;
+		var toFramebufferX = _scopeWidth / surfaceWidth;
+		var toFramebufferY = _scopeHeight / surfaceHeight;
+
+		// The texture whose SRV the bound table currently describes, and that table's handle. -1 = nothing bound yet.
+		var listTextureId = -1;
+		var listTable = default(GpuDescriptorHandle);
+
 		foreach (var c in commands)
 		{
 			if (layersSupported && c.Tag == TagBeginLayer && _layerStack.Count < DirectX12LayerTargets.MaxNesting)
@@ -79,15 +91,20 @@ internal sealed unsafe partial class DirectX12RenderContext
 				}
 				var rtv = target.Rtv;
 				_cmd.OMSetRenderTargets(1, &rtv, false, (CpuDescriptorHandle*)null);
-				_cmd.ClearRenderTargetView(rtv, layerClear, 0u, (Box2D<int>*)null);
-				_layerStack.Add((depth, overlay[c.VertexOffset].Color));
+				// The group's own bounds, not the whole surface. A layer costs two render-target switches and a clear,
+				// and on a tile-based GPU those are priced by area — a checkbox fading in should not clear a screen's
+				// worth of tiles. The marker carries the bounds as its ClipRect precisely so a backend can use them.
+				var bounds = LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight);
+				var clearRect = FramebufferRect(bounds, toFramebufferX, toFramebufferY, _scopeWidth, _scopeHeight);
+				_cmd.ClearRenderTargetView(rtv, layerClear, 1u, &clearRect);
+				_layerStack.Add((depth, overlay[c.VertexOffset].Color, bounds));
 				continue;
 			}
 			if (layersSupported && c.Tag == TagEndLayer)
 			{
 				if (_layerStack.Count == 0)
 					continue;
-				var (depth, tint) = _layerStack[^1];
+				var (depth, tint, bounds) = _layerStack[^1];
 				_layerStack.RemoveAt(_layerStack.Count - 1);
 
 				// Resolve the layer (render-target → shader-resource) and rebind the parent's render targets.
@@ -105,11 +122,13 @@ internal sealed unsafe partial class DirectX12RenderContext
 						_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
 				}
 
-				CompositeLayer(baked, target.Resource, tint, block, pushLen, push);
+				CompositeLayer(baked, target.Resource, tint, block, pushLen, bounds, surfaceWidth, surfaceHeight);
 
-				// Restore the list's geometry for the following commands (the composite bound its own quad buffer).
+				// Restore the list's geometry for the following commands (the composite bound its own quad buffer),
+				// and forget the memoised texture table — the composite replaced it with the layer's own.
 				_cmd.IASetVertexBuffers(0, 1, &vbv);
 				_cmd.IASetIndexBuffer(&ibv);
+				listTextureId = -1;
 				continue;
 			}
 
@@ -126,11 +145,21 @@ internal sealed unsafe partial class DirectX12RenderContext
 				_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, (uint)(pushLen + 1), block, 0);
 
 			// Write the bound texture's SRV (real format + full mip chain) into a fresh ring slot, then bind the table.
+			// A UI list is mostly one texture — the glyph atlas — for run after run of commands, so the descriptor is
+			// only rewritten when the texture actually changes; otherwise the table from the previous command still
+			// describes it. Reset per submission, since the ring rewinds and a stale handle would point at another
+			// frame's descriptors.
 			if (baked.TableParam >= 0)
 			{
-				var (cpu, gpu) = _ring.Allocate(1);
-				WriteListTextureSrv(textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id, cpu);
-				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
+				var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
+				if (texId != listTextureId)
+				{
+					var (cpu, gpu) = _descriptors.Allocate(1);
+					WriteListTextureSrv(texId, cpu);
+					listTextureId = texId;
+					listTable = gpu;
+				}
+				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, listTable);
 			}
 
 			var scissor = new Box2D<int>((int)minX, (int)minY, (int)maxX, (int)maxY);
@@ -148,23 +177,54 @@ internal sealed unsafe partial class DirectX12RenderContext
 		}
 	}
 
-	// Composite a resolved layer target back into the (now-rebound) parent: one full-surface KIND_IMAGE quad that
+	// A layer's bounds in the list's own coordinate space, clamped to the surface and grown by a pixel so a rounded
+	// edge cannot clip the antialiased fringe of whatever sits against the group's boundary. Degenerate bounds fall
+	// back to the whole surface, which is what this path did before it looked at the rect at all.
+	private static (float X0, float Y0, float X1, float Y1) LayerBounds(Rect clip, float surfaceWidth, float surfaceHeight)
+	{
+		const float Slop = 1f;
+		var x0 = MathF.Max(0f, clip.X - Slop);
+		var y0 = MathF.Max(0f, clip.Y - Slop);
+		var x1 = MathF.Min(surfaceWidth, clip.X + clip.Width + Slop);
+		var y1 = MathF.Min(surfaceHeight, clip.Y + clip.Height + Slop);
+		return x1 > x0 && y1 > y0 ? (x0, y0, x1, y1) : (0f, 0f, surfaceWidth, surfaceHeight);
+	}
+
+	// The same bounds as a framebuffer-pixel rect: floor the origin and ceil the far edge so the rect never covers
+	// less than the bounds it came from, then clamp to the target.
+	private static Box2D<int> FramebufferRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, uint width, uint height)
+	{
+		var x = Math.Clamp((int)MathF.Floor(bounds.X0 * scaleX), 0, (int)width);
+		var y = Math.Clamp((int)MathF.Floor(bounds.Y0 * scaleY), 0, (int)height);
+		var right = Math.Clamp((int)MathF.Ceiling(bounds.X1 * scaleX), x, (int)width);
+		var bottom = Math.Clamp((int)MathF.Ceiling(bounds.Y1 * scaleY), y, (int)height);
+		return new Box2D<int>(x, y, right, bottom);
+	}
+
+	// Composite a resolved layer target back into the (now-rebound) parent: a KIND_IMAGE quad over the group that
 	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once. The HDR
 	// paper-white lift is forced off here — the layer's primitives already lifted, and the lift commutes with the
 	// premultiplied alpha-over, so re-lifting would double it (the CPU rasterizer is the reference).
-	private void CompositeLayer(DirectX12Technique baked, ComPtr<ID3D12Resource> layer, Half4 tint, float* block, int pushLen, ReadOnlySpan<float> push)
+	private void CompositeLayer(DirectX12Technique baked, ComPtr<ID3D12Resource> layer, Half4 tint, float* block, int pushLen,
+		(float X0, float Y0, float X1, float Y1) bounds, float surfaceWidth, float surfaceHeight)
 	{
-		var coordX = 2f / push[0];
-		var coordY = 2f / push[1];
+		// The quad covers the group's bounds rather than the surface. The layer target still holds its content at the
+		// content's own position — the clear rect restricted which pixels were reset, it did not move them — so the
+		// texture coordinates are the bounds as a fraction of the surface, not a fixed 0..1.
 		var custom = default(Vector4);
+		var (x0, y0, x1, y1) = bounds;
+		var u0 = x0 / surfaceWidth;
+		var v0 = y0 / surfaceHeight;
+		var u1 = x1 / surfaceWidth;
+		var v1 = y1 / surfaceHeight;
 		Span<OverlayVertex> quad =
 		[
-			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
-			new(new Vector2(coordX, 0), new Vector2(1, 0), tint, custom),
-			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
-			new(new Vector2(0, 0), new Vector2(0, 0), tint, custom),
-			new(new Vector2(coordX, coordY), new Vector2(1, 1), tint, custom),
-			new(new Vector2(0, coordY), new Vector2(0, 1), tint, custom),
+			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
+			new(new Vector2(x1, y0), new Vector2(u1, v0), tint, custom),
+			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
+			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
+			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
+			new(new Vector2(x0, y1), new Vector2(u0, v1), tint, custom),
 		];
 		var quadBytes = MemoryMarshal.AsBytes(quad);
 		var quadAddr = _listVtx.Upload(_slot, quadBytes);
@@ -184,7 +244,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		if (baked.TableParam >= 0)
 		{
-			var (cpu, gpu) = _ring.Allocate(1);
+			var (cpu, gpu) = _descriptors.Allocate(1);
 			var srv = new ShaderResourceViewDesc
 			{
 				Format = _layerTargets.Format,

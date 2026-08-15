@@ -185,7 +185,7 @@ public sealed class BarrierPlan
 	/// </summary>
 	private static IEnumerable<Use> UsesOf(GraphPass pass)
 	{
-		var flags = new Dictionary<int, (ResourceHandle Res, bool Write, bool Blend, bool Sample, bool WriteDepth, bool ReadDepth, bool Storage, bool Vertex)>();
+		var flags = new Dictionary<int, (ResourceHandle Res, bool Write, bool Blend, bool Sample, bool WriteDepth, bool ReadDepth, bool Storage, bool Vertex, bool Indirect)>();
 		foreach (var access in pass.Accesses)
 		{
 			// An app-written parameter or storage buffer is host-coherent and needs no layout/state transition — it
@@ -203,6 +203,7 @@ public sealed class BarrierPlan
 				case AccessKind.ReadDepth: f.ReadDepth = true; break;
 				case AccessKind.ReadWrite: f.Storage = true; break;
 				case AccessKind.ReadVertex: f.Vertex = true; break;
+				case AccessKind.ReadIndirect: f.Indirect = true; break;
 			}
 			flags[access.Resource.Id] = f;
 		}
@@ -227,6 +228,8 @@ public sealed class BarrierPlan
 					return new Use(f.Res, ResourceState.Storage, IsAttachment: false, IsBlend: false, IsReadOnlyAttachment: false);
 				if (f.Vertex)
 					return new Use(f.Res, ResourceState.VertexInput, IsAttachment: false, IsBlend: false, IsReadOnlyAttachment: false);
+				if (f.Indirect)
+					return new Use(f.Res, ResourceState.IndirectArgument, IsAttachment: false, IsBlend: false, IsReadOnlyAttachment: false);
 				if (f.Write || f.Blend)
 					return new Use(f.Res, ResourceState.ColorAttachment, IsAttachment: true, IsBlend: f.Blend && !f.Write, IsReadOnlyAttachment: false);
 				return new Use(f.Res, ResourceState.ShaderRead, IsAttachment: false, IsBlend: false, IsReadOnlyAttachment: false);

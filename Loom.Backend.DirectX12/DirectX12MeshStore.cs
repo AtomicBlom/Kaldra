@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Loom.Core.Animation;
 using Loom.Core.Geometry;
+using Loom.Core.Hosting;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using DxgiFormat = Silk.NET.DXGI.Format;
@@ -32,6 +33,14 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 
 	private readonly DirectX12Context _ctx;
 	private readonly List<StoredMesh> _meshes = [];
+
+	// Mesh ids are 1-based, so 0 is a value no mesh can have — "the command list's vertex/index bindings are not this
+	// store's doing".
+	private const int NothingBound = 0;
+	private int _bound = NothingBound;
+
+	// Built on the first indirect draw and kept; one indexed-draw layout covers every indirect draw the engine issues.
+	private ComPtr<ID3D12CommandSignature> _indirectSignature;
 
 	public DirectX12MeshStore(DirectX12Context ctx) => _ctx = ctx;
 
@@ -116,22 +125,47 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	{
 		var mesh = _meshes[Slot(meshId)];
 		var ibv = mesh.IndexView;
-		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		cmd.IASetVertexBuffers(0, 1, &vertexView);
 		cmd.IASetIndexBuffer(&ibv);
 		cmd.DrawIndexedInstanced(mesh.IndexCount, 1, 0, 0, 0);
+		_bound = NothingBound; // slot 0 came from the caller, not the mesh
 	}
 
-	/// <summary>Bind a mesh's vertex + index buffers and record an indexed draw into the command list.</summary>
-	public void Draw(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId)
+	/// <summary>
+	/// Bind a mesh's vertex + index buffers and record an indexed draw into the command list. Consecutive draws of the
+	/// same mesh skip the binds: the views are the mesh's own, so re-binding writes what the command list already
+	/// holds. <see cref="ResetBindings"/> states when that memory stops being true.
+	/// </summary>
+	public void Draw(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, in DrawCall.IndexRange range = default)
 	{
 		var mesh = _meshes[Slot(meshId)];
-		var vbv = mesh.VertexView;
-		var ibv = mesh.IndexView;
-		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
-		cmd.IASetVertexBuffers(0, 1, &vbv);
-		cmd.IASetIndexBuffer(&ibv);
-		cmd.DrawIndexedInstanced(mesh.IndexCount, 1, 0, 0, 0);
+		if (_bound != meshId)
+		{
+			var vbv = mesh.VertexView;
+			var ibv = mesh.IndexView;
+			cmd.IASetVertexBuffers(0, 1, &vbv);
+			cmd.IASetIndexBuffer(&ibv);
+			_bound = meshId;
+		}
+		var (first, count, baseVertex) = Resolve(meshId, mesh.IndexCount, range);
+		cmd.DrawIndexedInstanced(count, 1, first, baseVertex, 0);
+	}
+
+	// A range of (0, 0, 0) means the whole mesh — the default a draw that never mentions ranges carries. Anything
+	// else is checked against the index buffer here, because reading past its end is undefined behaviour no backend
+	// reports: the draw either renders garbage triangles or faults, depending on the driver.
+	private static (uint First, uint Count, int BaseVertex) Resolve(int meshId, uint indexCount, in DrawCall.IndexRange range)
+	{
+		if (range.IsEmpty)
+			return (0, indexCount, 0);
+
+		if ((ulong)range.FirstIndex + (ulong)range.IndexCount > indexCount)
+		{
+			throw new InvalidOperationException(
+				$"Draw asks for indices {range.FirstIndex}..{range.FirstIndex + range.IndexCount} of mesh {meshId}, " +
+				$"which holds {indexCount}. The range and the mesh must come from the same geometry.");
+		}
+		return ((uint)range.FirstIndex, (uint)range.IndexCount, range.BaseVertex);
 	}
 
 	/// <summary>
@@ -139,16 +173,67 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	/// record an instanced indexed draw of <paramref name="instanceCount"/> copies. The instance view points at
 	/// either an engine-managed per-frame upload buffer or a graph storage buffer a compute filled.
 	/// </summary>
-	public void DrawInstanced(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, VertexBufferView instanceView, uint instanceCount)
+	public void DrawInstanced(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, VertexBufferView instanceView, uint instanceCount, in DrawCall.IndexRange range = default)
 	{
 		var mesh = _meshes[Slot(meshId)];
 		var ibv = mesh.IndexView;
 		var views = stackalloc VertexBufferView[2] { mesh.VertexView, instanceView };
-		cmd.IASetPrimitiveTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		cmd.IASetVertexBuffers(0, 2, views);
 		cmd.IASetIndexBuffer(&ibv);
-		cmd.DrawIndexedInstanced(mesh.IndexCount, instanceCount, 0, 0, 0);
+		var (first, count, baseVertex) = Resolve(meshId, mesh.IndexCount, range);
+		cmd.DrawIndexedInstanced(count, instanceCount, first, baseVertex, 0);
+		// Never memoised: slot 1 is a per-draw instance view, so "same mesh" does not mean "same bindings" here the
+		// way it does for a plain draw.
+		_bound = NothingBound;
 	}
+
+	/// <summary>
+	/// Bind a mesh and draw it with the counts taken from <paramref name="arguments"/> at <paramref name="offset"/> —
+	/// <c>D3D12_DRAW_INDEXED_ARGUMENTS</c>: index count, instance count, first index, base vertex, first instance.
+	/// The CPU never learns any of them.
+	/// </summary>
+	public void DrawIndirect(ComPtr<ID3D12GraphicsCommandList> cmd, int meshId, ComPtr<ID3D12Resource> arguments, ulong offset)
+	{
+		var mesh = _meshes[Slot(meshId)];
+		var vbv = mesh.VertexView;
+		var ibv = mesh.IndexView;
+		cmd.IASetVertexBuffers(0, 1, &vbv);
+		cmd.IASetIndexBuffer(&ibv);
+		_bound = meshId;
+		cmd.ExecuteIndirect(IndirectSignature(), 1, arguments, offset, default(ComPtr<ID3D12Resource>), 0);
+	}
+
+	// D3D12 has no ExecuteIndirect without a command signature describing the argument layout. One indexed-draw
+	// signature covers every indirect draw the engine issues, so it is built once and kept.
+	private ComPtr<ID3D12CommandSignature> IndirectSignature()
+	{
+		if (_indirectSignature.Handle is not null)
+			return _indirectSignature;
+
+		var argument = new IndirectArgumentDesc { Type = IndirectArgumentType.DrawIndexed };
+		var desc = new CommandSignatureDesc
+		{
+			ByteStride = (uint)sizeof(DrawIndexedArguments),
+			NumArgumentDescs = 1,
+			PArgumentDescs = &argument,
+			NodeMask = 0,
+		};
+		// A signature carrying only DRAW_INDEXED changes no root arguments, so it takes a null root signature. Silk's
+		// typed overloads all want a root signature by reference, which cannot express null, so this goes through the
+		// raw COM entry point.
+		ID3D12CommandSignature* signature = null;
+		SilkMarshal.ThrowHResult(_ctx.Device.Handle->CreateCommandSignature(
+			&desc, (ID3D12RootSignature*)null, SilkMarshal.GuidPtrOf<ID3D12CommandSignature>(), (void**)&signature));
+		_indirectSignature = signature;
+		return _indirectSignature;
+	}
+
+	/// <summary>
+	/// Forget which mesh is bound. Required whenever something other than this store touches the vertex or index
+	/// bindings — a new command list, a draw list's own geometry, the procedural instance stream — because the memo is
+	/// a claim about the command list's recorded state, not about this store's history.
+	/// </summary>
+	public void ResetBindings() => _bound = NothingBound;
 
 	// An UPLOAD-heap committed buffer holding the data, left in GENERIC_READ so the GPU can read it directly
 	// as a vertex/index buffer without a transition (upload-heap resources are created in GENERIC_READ).
@@ -199,5 +284,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 				mesh.IndexBuffer.Dispose();
 		}
 		_meshes.Clear();
+		if (_indirectSignature.Handle is not null)
+			_indirectSignature.Dispose();
 	}
 }

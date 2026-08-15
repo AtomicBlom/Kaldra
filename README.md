@@ -35,6 +35,8 @@ You declare *what* each render pass reads and writes; Loom derives ordering, bar
 
 **Debug & profiling spine** — per-pass GPU timing HUD (both backends), a resource / G-buffer channel viewer, shader/asset hot-reload, render-graph export (`Dump`/DOT/JSON), a detached debug camera + frustum freeze, and a Dear ImGui debug HUD.
 
+**Draw throughput** — 10,000 *discrete* draws (own model matrix, own material — not one instanced call) render on both backends with **zero managed allocations per frame**. Materials keep their descriptor tables rather than rewriting them per draw, redundant pipeline/geometry re-binds are elided, each pass's barriers go in one submission, resource uploads batch into the frame instead of draining the GPU per resource, and compiled pipelines persist between runs. The `Draw Scale` demo is the workload; `DrawScaleTests` is the headless gate and prints µs/draw — reported, never asserted, since it moves with machine and driver.
+
 **Game UI** — [`SUIsei`](external/SUIsei), a standalone WinUI-3-compatible, NativeAOT-clean XAML UI runtime, rendered through Loom's neutral draw-list path (the same one ImGui uses).
 
 ## How to use it
@@ -83,6 +85,7 @@ These are the whole scheduling vocabulary — you declare intent and the engine 
 | `.WritesDepth(d)` / `.ReadsDepth(d)` | depth write / depth test without write |
 | `.ReadWrites(r)` | storage read-modify-write (compute) |
 | `.ReadsVertex(b)` | read a buffer as a vertex / instance stream |
+| `.ReadsIndirect(b)` | read a buffer as draw arguments (counts the GPU wrote, not the CPU) |
 | `.Reads(c)` | read a constants buffer (an app-filled uniform) |
 | `.Reads(b)` | read a read-only storage buffer / SSBO (an overload of `.Reads`) |
 | `.Queue(q)` | assign the pass to a queue — `Queue.AsyncCompute` throws at derive time until multi-queue scheduling lands, rather than pretending an overlap that never happens |
@@ -135,6 +138,10 @@ Shaders are authored in **Slang** and compiled offline by the Loom shader SDK to
 ### Draw, instance, skin
 
 `ctx.Draw(in DrawCall)` is the unified draw verb. Build a call with `DrawCall.Create(mesh, technique)` or an object initializer, then set what you need: `.Material` (its textures fill the technique's reflected sampler slots), `.SetUniforms(value)` (a per-draw block), or instances — `DrawCall.From(span)` for CPU instances, `DrawCall.Gpu(buffer, count)` for a buffer a compute pass filled. Skinning is `ctx.DispatchSkin(...)` (a compute pre-skin into a `.ReadsVertex` buffer) followed by an ordinary draw of that buffer.
+
+`.Indices = DrawCall.Range(firstIndex, indexCount, baseVertex)` draws one sub-range of a mesh, so a model's primitives can share a single vertex and index buffer instead of becoming a mesh each. The default is the whole mesh.
+
+`.Instances = DrawCall.Indirect(buffer, offset)` takes the counts from a buffer instead of the CPU — the pass declares it `.ReadsIndirect`, and the engine derives the compute→draw hand-off exactly as it does for a compute-filled instance stream. (Count buffers, multi-draw, and GPU culling are not built; this is the verb they would need.)
 
 ### Build & run
 

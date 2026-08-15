@@ -21,6 +21,7 @@ public class EngineSettingsTests
 		(nameof(EngineSettings.PreferredBackend), s => s.PreferredBackend),
 		(nameof(EngineSettings.WatchShaderDirectory), s => s.WatchShaderDirectory),
 		(nameof(EngineSettings.PreferSoftwareAdapter), s => s.PreferSoftwareAdapter),
+		(nameof(EngineSettings.PersistentPipelineCache), s => s.PersistentPipelineCache),
 	];
 
 	[Test]
@@ -56,6 +57,7 @@ public class EngineSettingsTests
 			PreferredBackend = "DirectX12",
 			WatchShaderDirectory = true,
 			PreferSoftwareAdapter = true,
+			PersistentPipelineCache = false,
 		};
 		var target = new EngineSettings();
 

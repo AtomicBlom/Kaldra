@@ -36,11 +36,16 @@ public class PassBuilderTests
 			var depth = world.Depth("depth", Format.Depth32F);
 			var storage = world.Color("storage", Format.Rgba16F);
 
+			var instances = g.Buffer("instances", 1024);
+			var arguments = g.Buffer("arguments", 20);
+
 			g.Pass("p")
 				.Samples(sampled)
 				.Blends(color)
 				.WritesDepth(depth)
-				.ReadWrites(storage);
+				.ReadWrites(storage)
+				.ReadsVertex(instances)
+				.ReadsIndirect(arguments);
 
 			// ReadsDepth lives on a second pass to avoid a write+read conflict on one resource.
 			g.Pass("q").ReadsDepth(depth);
@@ -51,6 +56,8 @@ public class PassBuilderTests
 		p.ResourcesWith(AccessKind.Blend).ShouldHaveSingleItem().Name.ShouldBe("color");
 		p.ResourcesWith(AccessKind.WriteDepth).ShouldHaveSingleItem().Name.ShouldBe("depth");
 		p.ResourcesWith(AccessKind.ReadWrite).ShouldHaveSingleItem().Name.ShouldBe("storage");
+		p.ResourcesWith(AccessKind.ReadVertex).ShouldHaveSingleItem().Name.ShouldBe("instances");
+		p.ResourcesWith(AccessKind.ReadIndirect).ShouldHaveSingleItem().Name.ShouldBe("arguments");
 		graph.Passes[1].ResourcesWith(AccessKind.ReadDepth).ShouldHaveSingleItem().Name.ShouldBe("depth");
 	}
 

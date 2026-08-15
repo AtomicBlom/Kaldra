@@ -72,6 +72,30 @@ public class RecordValidationTests
 	}
 
 	[Test]
+	public void Drawing_indirectly_from_a_buffer_the_pass_never_declared_throws()
+	{
+		// An indirect draw whose argument buffer was not declared reads counts the graph derived no hand-off for —
+		// so the command processor may fetch them before the compute that wrote them retired. Silent on the GPU,
+		// which is why it is reported here, naming the verb that fixes it.
+		BufferHandle arguments = null!;
+		var pass = PassOf(g =>
+		{
+			var world = g.Domain("world", 64, 64);
+			arguments = g.Buffer("draw.args", 20);
+			g.Compute("fill").ReadWrites(arguments);
+			g.Pass("p").Writes(world.Color("out", Format.Rgba8Srgb));
+		});
+		var validator = ValidatorOn(pass);
+
+		// Built inside the lambda: DrawCall is a ref struct, so it cannot be captured by one.
+		var ex = Should.Throw<PassBindingException>(() =>
+			validator.Draw(new DrawCall { Technique = "mesh", Mesh = new Mesh(1), Instances = DrawCall.Indirect(arguments) }));
+
+		ex.Resource.ShouldBe("draw.args");
+		ex.Message.ShouldContain(".ReadsIndirect(draw.args)");
+	}
+
+	[Test]
 	public void Binding_a_declared_resource_is_accepted()
 	{
 		var (pass, declared, _) = SamplingPass();

@@ -33,6 +33,14 @@ public enum AccessKind
 	ReadVertex,
 
 	/// <summary>
+	/// A buffer read as draw arguments by the command processor — index count, instance count, offsets — rather than
+	/// by any shader stage. (<c>.ReadsIndirect</c>.) The edge is what lets a compute pass fill the arguments and a
+	/// draw consume them in the same frame with the hand-off derived, exactly as <see cref="ReadVertex"/> does for a
+	/// compute-filled instance stream.
+	/// </summary>
+	ReadIndirect,
+
+	/// <summary>
 	/// An app-writable parameter buffer read as a shader uniform/constant block. (<c>.Reads</c> of a
 	/// <see cref="ConstantsHandle"/>.) Host-written and host-coherent, so it derives no barrier — the edge only
 	/// binds the buffer to the technique's uniform slot and keeps the resource alive.

@@ -1,5 +1,6 @@
 using Loom.Graph;
 using Silk.NET.Vulkan;
+using VMASharp;
 using Buffer = Silk.NET.Vulkan.Buffer;
 using GraphFormat = Loom.Core.Graph.Format;
 using VkFormat = Silk.NET.Vulkan.Format;
@@ -14,8 +15,7 @@ internal sealed unsafe partial class VulkanEngine
 	// which; assuming either one here would emit a barrier with the wrong old layout for the other shape.
 	private void RecordReadback(CommandBuffer cmd)
 	{
-		foreach (var transition in Barriers.ReadbackTransitions)
-			EmitTransition(cmd, transition);
+		EmitTransitions(cmd, Barriers.ReadbackTransitions.AsSpan());
 
 		var copyLayout = VulkanStateMapping.For(ResourceState.CopySource).Layout;
 		foreach (var readback in _readbacks)
@@ -42,10 +42,10 @@ internal sealed unsafe partial class VulkanEngine
 			if (!readback.Valid[slot])
 				continue;
 			var count = readback.ByteCount;
-			void* mapped;
-			_vk.MapMemory(_ctx.Device, readback.Memories[slot], 0, (ulong)count, 0, &mapped).Check("vkMapMemory");
+			var allocation = readback.Allocations[slot];
+			var mapped = (void*)allocation.Map();
 			StoreReadback(readback.Id, new ReadOnlySpan<byte>(mapped, count));
-			_vk.UnmapMemory(_ctx.Device, readback.Memories[slot]);
+			allocation.Unmap();
 		}
 	}
 
@@ -80,7 +80,11 @@ internal sealed unsafe partial class VulkanEngine
 		DecodeTimings(new ReadOnlySpan<ulong>(raw, n), Barriers, _timestampPeriod / 1_000_000.0);
 	}
 
-	private (Buffer Buffer, DeviceMemory Memory) CreateStagingBuffer(ulong size)
+	// Host-visible staging a GPU→CPU copy lands in. Allocated through VMA like every other buffer the backend owns:
+	// a raw vkAllocateMemory per readback slot and per capture spends a device allocation from the driver's
+	// maxMemoryAllocationCount — a budget as low as 4096 on some drivers — where VMA sub-allocates out of blocks it
+	// already holds.
+	private (Buffer Buffer, Allocation Allocation) CreateStagingBuffer(ulong size)
 	{
 		BufferCreateInfo info = new()
 		{
@@ -89,20 +93,8 @@ internal sealed unsafe partial class VulkanEngine
 			Usage = BufferUsageFlags.TransferDstBit,
 			SharingMode = SharingMode.Exclusive,
 		};
-		_vk.CreateBuffer(_ctx.Device, in info, null, out var buffer).Check("vkCreateBuffer");
-
-		_vk.GetBufferMemoryRequirements(_ctx.Device, buffer, out var requirements);
-		MemoryAllocateInfo alloc = new()
-		{
-			SType = StructureType.MemoryAllocateInfo,
-			AllocationSize = requirements.Size,
-			MemoryTypeIndex = _ctx.FindMemoryType(
-				requirements.MemoryTypeBits,
-				MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit),
-		};
-		_vk.AllocateMemory(_ctx.Device, in alloc, null, out var memory).Check("vkAllocateMemory");
-		_vk.BindBufferMemory(_ctx.Device, buffer, memory, 0).Check("vkBindBufferMemory");
-		return (buffer, memory);
+		var buffer = _allocator.CreateBuffer(in info, new AllocationCreateInfo { Usage = MemoryUsage.GPU_To_CPU }, out var allocation);
+		return (buffer, allocation);
 	}
 
 	// PNG capture only handles an 8-bit RGBA/BGRA present target (the formats WriteCapture decodes); an HDR
@@ -110,10 +102,9 @@ internal sealed unsafe partial class VulkanEngine
 	private bool CaptureSupported() =>
 		_presentTarget.ImageFormat is VkFormat.B8G8R8A8Srgb or VkFormat.B8G8R8A8Unorm or VkFormat.R8G8B8A8Srgb or VkFormat.R8G8B8A8Unorm;
 
-	private void WriteCapture(DeviceMemory memory, ulong size, uint width, uint height, string path)
+	private void WriteCapture(Allocation allocation, ulong size, uint width, uint height, string path)
 	{
-		void* mapped;
-		_vk.MapMemory(_ctx.Device, memory, 0, size, 0, &mapped).Check("vkMapMemory");
+		var mapped = (void*)allocation.Map();
 		var src = new ReadOnlySpan<byte>(mapped, (int)size);
 
 		// The present target is typically B8G8R8A8; PNG wants RGBA, so swap R/B for those formats.
@@ -127,7 +118,7 @@ internal sealed unsafe partial class VulkanEngine
 			rgba[o + 2] = swizzle ? src[o] : src[o + 2];
 			rgba[o + 3] = src[o + 3];
 		}
-		_vk.UnmapMemory(_ctx.Device, memory);
+		allocation.Unmap();
 
 		PngWriter.WriteRgba(path, (int)width, (int)height, rgba);
 	}

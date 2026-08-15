@@ -51,6 +51,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private readonly string _shaderDir;
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly VulkanTechniqueCache _techniques;
+	private readonly VulkanPipelineCache _pipelineCache;
+	private readonly VulkanUploadBatch _uploads;
 	private readonly VulkanMeshStore _meshes;
 	private readonly VulkanTextureStore _textures;
 	private readonly VulkanDescriptorAllocator _descriptors;
@@ -87,12 +89,12 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	// One g.Readback target's GPU→CPU staging: a host-visible buffer per frame slot the executor copies the target's
 	// image into. The copy is tightly packed (Vulkan's image→buffer copy carries no row padding), so a slot's buffer
 	// is handed straight to StoreReadback once its fence signals.
-	private sealed class ReadbackBuffers(int id, int width, int height, int bytesPerTexel, Buffer[] buffers, DeviceMemory[] memories)
+	private sealed class ReadbackBuffers(int id, int width, int height, int bytesPerTexel, Buffer[] buffers, Allocation[] allocations)
 	{
 		public int Id => id;
 		public int ByteCount => width * height * bytesPerTexel;
 		public Buffer[] Buffers => buffers;
-		public DeviceMemory[] Memories => memories;
+		public Allocation[] Allocations => allocations;
 		public bool[] Valid { get; } = new bool[buffers.Length];
 	}
 
@@ -162,9 +164,11 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			Vk.Version13, _vk, _ctx.Instance, _ctx.PhysicalDevice, _ctx.Device));
 		CreateCommandPool();
 
-		_techniques = new VulkanTechniqueCache(_ctx);
-		_meshes = new VulkanMeshStore(_ctx, _allocator, _commandPool);
-		_textures = new VulkanTextureStore(_ctx, _allocator, _commandPool);
+		_pipelineCache = new VulkanPipelineCache(_ctx, settings.PersistentPipelineCache);
+		_techniques = new VulkanTechniqueCache(_ctx, _pipelineCache.Handle);
+		_uploads = new VulkanUploadBatch(_ctx, _commandPool);
+		_meshes = new VulkanMeshStore(_ctx, _allocator, _uploads);
+		_textures = new VulkanTextureStore(_ctx, _allocator, _uploads);
 		_descriptors = new VulkanDescriptorAllocator(_ctx, MaxFramesInFlight);
 		_context = new VulkanRenderContext(_ctx, _techniques, _registry, _descriptors, _meshes, _textures, Materials, _allocator, MaxFramesInFlight, Validation);
 
@@ -245,6 +249,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	}
 
 	// Evict the baked pipelines after a hot-reload so the next bake rebuilds from the re-registered templates.
+	protected override void FlushUploads() => _uploads.Flush();
+
 	protected override void ResetPipelineCaches()
 	{
 		_context.ClearBaked(); // drop per-(name,formats) cached pipelines
@@ -445,10 +451,10 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		var (width, height) = target.Resolve((int)_presentTarget.Extent.Width, (int)_presentTarget.Extent.Height);
 		var bpt = BytesPerTexel(target.Format);
 		var buffers = new Buffer[MaxFramesInFlight];
-		var memories = new DeviceMemory[MaxFramesInFlight];
+		var allocations = new Allocation[MaxFramesInFlight];
 		for (var i = 0; i < MaxFramesInFlight; i++)
-			(buffers[i], memories[i]) = CreateStagingBuffer((ulong)(width * height * bpt));
-		return new ReadbackBuffers(target.Id, width, height, bpt, buffers, memories);
+			(buffers[i], allocations[i]) = CreateStagingBuffer((ulong)(width * height * bpt));
+		return new ReadbackBuffers(target.Id, width, height, bpt, buffers, allocations);
 	}
 
 	private void DestroyReadbackStaging(ReadbackBuffers readback)
@@ -457,8 +463,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		{
 			if (readback.Buffers[i].Handle != 0)
 				_vk.DestroyBuffer(_ctx.Device, readback.Buffers[i], null);
-			if (readback.Memories[i].Handle != 0)
-				_vk.FreeMemory(_ctx.Device, readback.Memories[i], null);
+			readback.Allocations[i]?.Dispose();
 		}
 	}
 
@@ -521,10 +526,12 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		DisposeGraphResources();    // transients + readback staging (graph-level)
 		_context.Dispose();
 		_descriptors.Dispose();
+		_uploads.Dispose(); // before the stores — it holds their staging buffers until the last submission retires
 		_meshes.Dispose();
 		_textures.Dispose(); // before the allocator — it holds VMA image allocations
 		_allocator.Dispose(); // after every image/buffer it backed is freed
 		_techniques.Dispose();
+		_pipelineCache.Dispose(); // after the pipelines it seeded — this is where the blob is written back out
 
 		DestroyRenderFinishedSemaphores();
 		foreach (var semaphore in _imageAvailable)

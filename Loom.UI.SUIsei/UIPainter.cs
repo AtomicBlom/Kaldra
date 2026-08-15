@@ -36,6 +36,22 @@ public sealed class UIPainter
 	private readonly Texture[] _baseTextures;
 	// Images uploaded once and cached by their stable ImageSource.TextureIndex (≥ 2).
 	private readonly Dictionary<int, Texture> _imageTextures = [];
+	// The resolved texture array per draw list, rebuilt only when that list's Revision moves. Per list rather than
+	// one shared array because a painter can serve several surfaces, whose revisions advance independently.
+	private readonly Dictionary<DrawListId, ResolvedTextures> _resolved = [];
+
+	/// <summary>
+	/// One draw list's texture array, kept across frames. A UI that references any image used to allocate a fresh
+	/// <c>Texture[]</c> on every single frame — a per-frame-always allocation the hot-path pillar does not allow, and
+	/// one that grew with every <c>ImageSource</c> the process had ever constructed, because the array is indexed by a
+	/// globally monotonic <c>TextureIndex</c>.
+	/// </summary>
+	private sealed class ResolvedTextures
+	{
+		public Texture[] Textures = [];
+		public int Count;
+		public uint Revision = uint.MaxValue; // no real revision, so the first frame always builds
+	}
 
 	private UIPainter(IEngine engine, UIHost host, Texture white, Texture? font)
 	{
@@ -102,16 +118,27 @@ public sealed class UIPainter
 
 		// SUIsei.Drawing.OverlayVertex has the same binary layout as Loom.Core.Geometry.OverlayVertex;
 		// TVertex is inferred from draw.Vertices.Span — the backend sees raw bytes either way.
-		ctx.DrawList(Technique, ResolveTextures(draw), draw.Vertices.Span, draw.Indices.Span, loomCommands, push);
+		ctx.DrawList(Technique, ResolveTextures(id, draw), draw.Vertices.Span, draw.Indices.Span, loomCommands, push);
 	}
 
-	// The texture array a frame binds, indexed by command TextureIndex. The image-free fast path reuses the shared
-	// base array (white + optional glyph atlas); a frame that references images gets a wider array with each image
-	// uploaded once (cached by index) and any gap filled with the white texel.
-	private Texture[] ResolveTextures(DrawListData draw)
+	/// <summary>
+	/// The texture array a frame binds, indexed by command <c>TextureIndex</c>. The image-free fast path reuses the
+	/// shared base array (white + optional glyph atlas); a list that references images gets a wider array with each
+	/// image uploaded once (cached by index) and any gap filled with the white texel.
+	/// <para>
+	/// Built only when the list's <c>Revision</c> moves — the token the compositor advances exactly when the list
+	/// changed. A steady frame reuses the array it built, so a UI with images costs no allocation per frame.
+	/// </para>
+	/// </summary>
+	private ReadOnlySpan<Texture> ResolveTextures(DrawListId id, DrawListData draw)
 	{
 		if (draw.Images.Count == 0)
 			return _baseTextures;
+
+		if (!_resolved.TryGetValue(id, out var cached))
+			_resolved[id] = cached = new ResolvedTextures();
+		if (cached.Revision == draw.Revision)
+			return cached.Textures.AsSpan(0, cached.Count);
 
 		var max = _baseTextures.Length - 1;
 		foreach (var image in draw.Images)
@@ -120,8 +147,12 @@ public sealed class UIPainter
 				max = image.TextureIndex;
 		}
 
-		var textures = new Texture[max + 1];
-		for (var i = 0; i < textures.Length; i++)
+		var count = max + 1;
+		if (cached.Textures.Length < count)
+			cached.Textures = new Texture[Math.Max(count, cached.Textures.Length + (cached.Textures.Length / 2))];
+
+		var textures = cached.Textures;
+		for (var i = 0; i < count; i++)
 			textures[i] = i < _baseTextures.Length ? _baseTextures[i] : _white;
 
 		foreach (var image in draw.Images)
@@ -134,6 +165,9 @@ public sealed class UIPainter
 			}
 			textures[image.TextureIndex] = texture;
 		}
-		return textures;
+
+		cached.Count = count;
+		cached.Revision = draw.Revision;
+		return textures.AsSpan(0, count);
 	}
 }

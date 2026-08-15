@@ -15,15 +15,42 @@ internal sealed unsafe partial class VulkanEngine
 	private VulkanStateMapping.Scope PresentRestScope =>
 		_offscreen ? VulkanStateMapping.For(ResourceState.ColorAttachment) : VulkanStateMapping.For(ResourceState.Present);
 
-	private void EmitTransition(CommandBuffer cmd, ResourceTransition transition)
+	// One frame's worth of pending barriers, grown on demand and reused — a pass's transitions are gathered here and
+	// submitted together. Sized generously enough that a steady frame never grows them, because growing would
+	// allocate on the hot path.
+	private ImageMemoryBarrier2[] _imageBarriers = new ImageMemoryBarrier2[32];
+	private BufferMemoryBarrier2[] _bufferBarriers = new BufferMemoryBarrier2[16];
+	private int _imageBarrierCount;
+	private int _bufferBarrierCount;
+
+	/// <summary>
+	/// Emit every transition in <paramref name="transitions"/> as a <em>single</em> pipeline barrier. A G-buffer
+	/// hand-off is four or five transitions, and one barrier expressing all of them lets the driver resolve the
+	/// stage/access dependency once instead of stalling five times over.
+	/// <para>
+	/// Batching is only sound because derivation folds a pass's accesses to one use per resource, so a pass never
+	/// carries two transitions of the same resource — barriers inside one submission are unordered with respect to
+	/// each other, and two on one resource would race.
+	/// </para>
+	/// </summary>
+	private void EmitTransitions(CommandBuffer cmd, ReadOnlySpan<ResourceTransition> transitions)
+	{
+		_imageBarrierCount = 0;
+		_bufferBarrierCount = 0;
+		foreach (var transition in transitions)
+			QueueTransition(transition);
+		FlushBarriers(cmd);
+	}
+
+	private void QueueTransition(ResourceTransition transition)
 	{
 		var id = transition.Resource.Id;
 
-		// Buffers have no layout — emit a buffer memory barrier scoped by the from/to stage+access. This is the
+		// Buffers have no layout — queue a buffer memory barrier scoped by the from/to stage+access. This is the
 		// compute(StorageWrite) → vertex-input(VertexAttributeRead) hand-off for GPU particles.
 		if (_bufferIds.Contains(id))
 		{
-			EmitBufferBarrier(cmd, _transients!.GetBuffer(_currentFrame, id), VulkanStateMapping.For(transition.From), VulkanStateMapping.For(transition.To));
+			QueueBufferBarrier(_transients!.GetBuffer(_currentFrame, id), VulkanStateMapping.For(transition.From), VulkanStateMapping.For(transition.To));
 			return;
 		}
 
@@ -59,16 +86,19 @@ internal sealed unsafe partial class VulkanEngine
 		}
 
 		var range = new ImageSubresourceRange(image.Aspect, 0, 1, 0, 1);
-		TransitionImage(cmd, image.Image, range, src.Layout, dst.Layout, srcStage, srcAccess, dst.Stage, dst.Access);
+		QueueImageBarrier(image.Image, range, src.Layout, dst.Layout, srcStage, srcAccess, dst.Stage, dst.Access);
 	}
 
-	private void TransitionImage(
-		CommandBuffer cmd, Image image, ImageSubresourceRange range,
+	private void QueueImageBarrier(
+		Image image, ImageSubresourceRange range,
 		ImageLayout oldLayout, ImageLayout newLayout,
 		PipelineStageFlags2 srcStage, AccessFlags2 srcAccess,
 		PipelineStageFlags2 dstStage, AccessFlags2 dstAccess)
 	{
-		ImageMemoryBarrier2 barrier = new()
+		if (_imageBarrierCount == _imageBarriers.Length)
+			Array.Resize(ref _imageBarriers, _imageBarriers.Length * 2);
+
+		_imageBarriers[_imageBarrierCount++] = new ImageMemoryBarrier2
 		{
 			SType = StructureType.ImageMemoryBarrier2,
 			SrcStageMask = srcStage,
@@ -82,19 +112,15 @@ internal sealed unsafe partial class VulkanEngine
 			Image = image,
 			SubresourceRange = range,
 		};
-		DependencyInfo dependency = new()
-		{
-			SType = StructureType.DependencyInfo,
-			ImageMemoryBarrierCount = 1,
-			PImageMemoryBarriers = &barrier,
-		};
-		_vk.CmdPipelineBarrier2(cmd, in dependency);
 	}
 
 	// A buffer memory barrier (no layout) for the storage→vertex hand-off of a GPU-particle buffer.
-	private void EmitBufferBarrier(CommandBuffer cmd, Buffer buffer, VulkanStateMapping.Scope from, VulkanStateMapping.Scope to)
+	private void QueueBufferBarrier(Buffer buffer, VulkanStateMapping.Scope from, VulkanStateMapping.Scope to)
 	{
-		BufferMemoryBarrier2 barrier = new()
+		if (_bufferBarrierCount == _bufferBarriers.Length)
+			Array.Resize(ref _bufferBarriers, _bufferBarriers.Length * 2);
+
+		_bufferBarriers[_bufferBarrierCount++] = new BufferMemoryBarrier2
 		{
 			SType = StructureType.BufferMemoryBarrier2,
 			SrcStageMask = from.Stage,
@@ -107,12 +133,29 @@ internal sealed unsafe partial class VulkanEngine
 			Offset = 0,
 			Size = Vk.WholeSize,
 		};
-		DependencyInfo dependency = new()
+	}
+
+	// Image and buffer barriers ride the same DependencyInfo: they describe one dependency between the same pair of
+	// scopes, so splitting them into two submissions would be two stalls where the hardware needs one.
+	private void FlushBarriers(CommandBuffer cmd)
+	{
+		if (_imageBarrierCount == 0 && _bufferBarrierCount == 0)
+			return;
+
+		fixed (ImageMemoryBarrier2* images = _imageBarriers)
+		fixed (BufferMemoryBarrier2* buffers = _bufferBarriers)
 		{
-			SType = StructureType.DependencyInfo,
-			BufferMemoryBarrierCount = 1,
-			PBufferMemoryBarriers = &barrier,
-		};
-		_vk.CmdPipelineBarrier2(cmd, in dependency);
+			DependencyInfo dependency = new()
+			{
+				SType = StructureType.DependencyInfo,
+				ImageMemoryBarrierCount = (uint)_imageBarrierCount,
+				PImageMemoryBarriers = _imageBarrierCount > 0 ? images : null,
+				BufferMemoryBarrierCount = (uint)_bufferBarrierCount,
+				PBufferMemoryBarriers = _bufferBarrierCount > 0 ? buffers : null,
+			};
+			_vk.CmdPipelineBarrier2(cmd, in dependency);
+		}
+		_imageBarrierCount = 0;
+		_bufferBarrierCount = 0;
 	}
 }

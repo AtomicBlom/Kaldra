@@ -76,6 +76,15 @@ public class EngineSettings
 	public bool PreferSoftwareAdapter { get; set; }
 
 	/// <summary>
+	/// Keep the backend's compiled-pipeline cache on disk between runs (per user, per backend, per device), so a
+	/// second run of the same build skips most shader compilation. On by default: the file is a hint the backend
+	/// discards whenever it does not match the device or driver, and a cache that cannot be read or written is
+	/// reported and ignored rather than failing engine creation. Turn it off for a run that must not touch the
+	/// user's profile directory, or to time a genuinely cold start.
+	/// </summary>
+	public bool PersistentPipelineCache { get; set; } = true;
+
+	/// <summary>
 	/// Copy every base setting onto <paramref name="target"/> — used by a backend when the host passed the neutral
 	/// base type rather than the backend's own settings subclass, so the backend builds its subclass and inherits
 	/// all the base knobs. Centralised so a newly-added base setting can't be silently dropped by a backend's
@@ -92,5 +101,6 @@ public class EngineSettings
 		target.PreferredBackend = PreferredBackend;
 		target.WatchShaderDirectory = WatchShaderDirectory;
 		target.PreferSoftwareAdapter = PreferSoftwareAdapter;
+		target.PersistentPipelineCache = PersistentPipelineCache;
 	}
 }

@@ -4,6 +4,7 @@ using Loom.Core.Diagnostics;
 using Loom.Core.Graph;
 using Loom.Graph;
 using Silk.NET.Vulkan;
+using VMASharp;
 using Buffer = Silk.NET.Vulkan.Buffer;
 using VkFormat = Silk.NET.Vulkan.Format;
 
@@ -64,9 +65,9 @@ internal sealed unsafe partial class VulkanEngine
 		}
 		var captureSize = (ulong)_presentTarget.Extent.Width * _presentTarget.Extent.Height * 4;
 		Buffer captureBuffer = default;
-		DeviceMemory captureMemory = default;
+		Allocation? captureAllocation = null;
 		if (capturePath is not null)
-			(captureBuffer, captureMemory) = CreateStagingBuffer(captureSize);
+			(captureBuffer, captureAllocation) = CreateStagingBuffer(captureSize);
 
 		// This frame slot's prior work is done (fence waited), so its descriptor sets are idle: recycle them.
 		_descriptors.BeginFrame(_currentFrame);
@@ -111,9 +112,9 @@ internal sealed unsafe partial class VulkanEngine
 		if (capturePath is not null)
 		{
 			_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
-			WriteCapture(captureMemory, captureSize, _presentTarget.Extent.Width, _presentTarget.Extent.Height, capturePath);
+			WriteCapture(captureAllocation!, captureSize, _presentTarget.Extent.Width, _presentTarget.Extent.Height, capturePath);
 			_vk.DestroyBuffer(_ctx.Device, captureBuffer, null);
-			_vk.FreeMemory(_ctx.Device, captureMemory, null);
+			captureAllocation!.Dispose();
 			CapturePath = null;
 		}
 
@@ -183,8 +184,7 @@ internal sealed unsafe partial class VulkanEngine
 			// derived from the dotted pass name — so a RenderDoc capture reads as a "bloom" group containing
 			// "down1", "up0", … instead of a flat command list. [Conditional]: vanishes without UseNamedGPUObjects.
 			BeginPassLabels(cmd, pass);
-			foreach (var transition in pass.Transitions)
-				EmitTransition(cmd, transition);
+			EmitTransitions(cmd, pass.Transitions.AsSpan());
 			// Timestamp the pass's own work (after its pre-barriers, around RecordPass) — the barriers belong to the
 			// transition, not the pass. Top/Bottom-of-pipe is the portable choice; the device coarsens as needed.
 			if (timing)
@@ -369,10 +369,12 @@ internal sealed unsafe partial class VulkanEngine
 			// post-process leaves it in General), and a wrong old layout discards the frame being captured.
 			var from = VulkanStateMapping.For(PresentFromState(present));
 			var copy = VulkanStateMapping.For(ResourceState.CopySource);
-			TransitionImage(cmd, image.Image, range,
+			// Queued and flushed on the spot, not batched: the copy below reads the image immediately.
+			QueueImageBarrier(image.Image, range,
 				from.Layout, copy.Layout,
 				from.Stage, from.Access,
 				copy.Stage, copy.Access);
+			FlushBarriers(cmd);
 
 			BufferImageCopy region = new()
 			{
@@ -382,15 +384,15 @@ internal sealed unsafe partial class VulkanEngine
 			_vk.CmdCopyImageToBuffer(cmd, image.Image, copy.Layout, captureBuffer, 1, in region);
 
 			var rest = PresentRestScope;
-			TransitionImage(cmd, image.Image, range,
+			QueueImageBarrier(image.Image, range,
 				copy.Layout, rest.Layout,
 				copy.Stage, copy.Access,
 				rest.Stage, rest.Access);
+			FlushBarriers(cmd);
 		}
 		else
 		{
-			foreach (var transition in Barriers.FinalTransitions)
-				EmitTransition(cmd, transition);
+			EmitTransitions(cmd, Barriers.FinalTransitions.AsSpan());
 		}
 	}
 

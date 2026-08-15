@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Loom.Core.Geometry;
+using Silk.NET.Vulkan;
 
 namespace Loom.Backend.Vulkan;
 
@@ -8,9 +9,10 @@ namespace Loom.Backend.Vulkan;
 /// Bakes graphics pipelines and caches them by a content hash. The key is a SHA-256 over the
 /// SPIR-V bytecode plus all pipeline state, so identical techniques bake once and share a VkPipeline,
 /// while an edited shader (new bytes) produces a new key and a fresh bake.
-/// In-memory; the same hashing scheme will key a persistent VkPipelineCache later.
+/// In-memory. A persistent <c>VkPipelineCache</c> sits behind it, so a pipeline this cache has to bake is still
+/// usually assembled from the driver blob a previous run left on disk rather than compiled from scratch.
 /// </summary>
-public sealed class VulkanTechniqueCache(VulkanContext ctx) : IDisposable
+public sealed class VulkanTechniqueCache(VulkanContext ctx, PipelineCache pipelineCache = default) : IDisposable
 {
 	private readonly Dictionary<string, VulkanTechnique> _cache = [];
 
@@ -24,7 +26,7 @@ public sealed class VulkanTechniqueCache(VulkanContext ctx) : IDisposable
 			return cached;
 
 		// `name` is diagnostic-only (the shader-module label) — deliberately not part of the content-hash key.
-		var technique = new VulkanTechnique(ctx, description, spirv, name);
+		var technique = new VulkanTechnique(ctx, description, spirv, name, pipelineCache);
 		_cache[key] = technique;
 		return technique;
 	}

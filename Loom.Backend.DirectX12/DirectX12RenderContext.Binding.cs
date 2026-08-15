@@ -7,16 +7,37 @@ namespace Loom.Backend.DirectX12;
 
 internal sealed unsafe partial class DirectX12RenderContext
 {
-	// Bind a material's loaded-texture SRVs into the technique's reflected SRV table (slots 0..N-1). Shared by
-	// Draw(mesh, material), textured instancing, and textured particles. The caller checks TableParam/InputCount.
+	// The persistent SRV table each (material, table width) pair was written into, by descriptor index. Indices rather
+	// than GPU handles because growing the heap moves every handle but keeps every index.
+	private readonly Dictionary<(int Material, int Inputs), uint> _materialTables = [];
+
+	/// <summary>
+	/// Bind a material's loaded-texture SRVs into the technique's reflected SRV table (slots 0..N-1). Shared by
+	/// Draw(mesh, material), textured instancing, and textured particles. The caller checks TableParam/InputCount.
+	/// <para>
+	/// The table is written once and kept. A material's textures are fixed when it is created — only its parameter
+	/// block is writable, and that rides a root CBV, not this table — so re-creating N shader-resource views on every
+	/// draw produced identical descriptors at the cost of the frame's whole heap budget. Now a repeat draw of the same
+	/// material is one root-table set and no descriptor writes at all.
+	/// </para>
+	/// </summary>
 	private void BindMaterialTable(DirectX12Technique baked, Material material, string technique)
 	{
 		_materials.ValidateAgainst(material, technique);
-		var textures = _materials.TexturesOf(material.Id);
-		var (cpu, gpu) = _ring.Allocate((uint)baked.InputCount);
-		for (var i = 0; i < baked.InputCount; i++)
-			WriteTextureSrv(textures[i], _ring.Offset(cpu, (uint)i));
-		_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
+
+		var key = (material.Id, baked.InputCount);
+		if (!_materialTables.TryGetValue(key, out var index))
+		{
+			// Safe to keep for the engine's lifetime because the resources behind these views are: a texture is created
+			// and never destroyed or replaced, so a written view can never come to describe something else.
+			var textures = _materials.TexturesOf(material.Id);
+			index = _descriptors.AllocatePersistent((uint)baked.InputCount);
+			for (var i = 0u; i < baked.InputCount; i++)
+				WriteTextureSrv(textures[(int)i], _descriptors.PersistentCpu(index + i));
+			_descriptors.CommitPersistent(index, (uint)baked.InputCount);
+			_materialTables[key] = index;
+		}
+		_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, _descriptors.PersistentGpu(index));
 	}
 
 	// Create an SRV over a loaded texture, exposing its full mip chain (unlike the transient WriteSrv, which is
@@ -95,13 +116,13 @@ internal sealed unsafe partial class DirectX12RenderContext
 		if (baked.TableParam < 0)
 			throw new InvalidOperationException("DirectX12: technique declares no SRV table but sampled inputs were supplied.");
 
-		var (cpu, gpu) = _ring.Allocate((uint)inputs.Length);
+		var (cpu, gpu) = _descriptors.Allocate((uint)inputs.Length);
 		for (var i = 0; i < inputs.Length; i++)
 		{
 			var id = inputs[i].Id;
 			if (!_transients.IsTransient(id))
 				throw new NotSupportedException("DirectX12: sampling the backbuffer or a buffer resource is not supported.");
-			WriteSrv(id, _ring.Offset(cpu, (uint)i));
+			WriteSrv(id, _descriptors.Offset(cpu, (uint)i));
 		}
 		_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, gpu);
 	}

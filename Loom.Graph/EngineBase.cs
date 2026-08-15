@@ -485,5 +485,13 @@ public abstract class EngineBase : IEngine
 	{
 		while (_pendingGpuWork.TryDequeue(out var work))
 			work();
+		FlushUploads();
 	}
+
+	/// <summary>
+	/// Submit whatever the drained creations recorded. A backend batches a whole drain's copies into one submission
+	/// rather than one per resource, so this is where that batch goes to the queue — before the frame that will read
+	/// from it, which is what orders the two without the CPU waiting on either.
+	/// </summary>
+	protected virtual void FlushUploads() { }
 }

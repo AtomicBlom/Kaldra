@@ -73,6 +73,8 @@ public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques)
 			RequireDeclared(call.Technique, skinned, AccessKind.ReadVertex, ".ReadsVertex");
 		if (call.Instances.GpuBuffer is { } instances)
 			RequireDeclared(call.Technique, instances, AccessKind.ReadVertex, ".ReadsVertex");
+		if (call.Instances.IndirectBuffer is { } arguments)
+			RequireDeclared(call.Technique, arguments, AccessKind.ReadIndirect, ".ReadsIndirect");
 
 		var record = techniques.Find(call.Technique);
 		if (record is null)

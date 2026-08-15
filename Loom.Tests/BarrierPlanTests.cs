@@ -249,4 +249,40 @@ public class BarrierPlanTests
 
 		HasTransition(Pass(plan, "foliage"), "instances", ResourceState.Storage, ResourceState.VertexInput).ShouldBeTrue();
 	}
+
+	[Test]
+	public void Argument_buffer_filled_by_compute_transitions_storage_to_indirect_argument_for_the_draw()
+	{
+		// The GPU-driven draw's own edge: a compute .ReadWrites the argument buffer and the draw .ReadsIndirect it, so
+		// the fill→consume hand-off derives exactly as the instance-stream one above. The state is its own rather
+		// than VertexInput because the command processor reads the arguments at a different pipeline stage than the
+		// vertex fetch — waiting on the wrong one would let the counts be read before they were written.
+		var plan = BarrierPlan.Derive(GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var arguments = g.Buffer("draw.args", 20);
+			var screen = g.Backbuffer;
+			g.Compute("cull").ReadWrites(arguments);
+			g.Pass("scene").Writes(screen).ReadsIndirect(arguments);
+			g.Present(screen);
+		})));
+
+		HasTransition(Pass(plan, "scene"), "draw.args", ResourceState.Storage, ResourceState.IndirectArgument).ShouldBeTrue();
+	}
+
+	[Test]
+	public void Consuming_arguments_no_pass_writes_is_reported()
+	{
+		// An indirect draw whose arguments nothing fills would read whatever the buffer happened to hold — a count of
+		// garbage, which the GPU obeys. Derivation reports it as the read-before-write it is, by the same rule that
+		// covers every other read edge, rather than the new arm quietly bypassing that check.
+		var thrown = Should.Throw<GraphValidationException>(() => GraphSchedule.Derive(RenderGraph.Define(g =>
+		{
+			var arguments = g.Buffer("draw.args", 20);
+			var screen = g.Backbuffer;
+			g.Pass("scene").Writes(screen).ReadsIndirect(arguments);
+			g.Present(screen);
+		})));
+
+		thrown.Message.ShouldContain("draw.args");
+	}
 }

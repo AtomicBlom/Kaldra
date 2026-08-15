@@ -63,6 +63,13 @@ public sealed class PassBuilder
 	public PassBuilder ReadsVertex(BufferHandle buffer) => Add(AccessKind.ReadVertex, buffer);
 
 	/// <summary>
+	/// Read a buffer as draw arguments — the counts and offsets the command processor reads instead of taking them
+	/// from the CPU. Declared like any other read, so a compute pass that fills the arguments and a draw that
+	/// consumes them are ordered by derivation rather than by the author saying so.
+	/// </summary>
+	public PassBuilder ReadsIndirect(BufferHandle buffer) => Add(AccessKind.ReadIndirect, buffer);
+
+	/// <summary>
 	/// Read an app-writable parameter buffer (<see cref="GraphBuilder.Constants{T}"/>) as the technique's
 	/// uniform/constant input. The backend binds it to the technique's reflected uniform slot; the app fills it
 	/// by handle via <c>IEngine.Write</c>. No barrier is derived (the buffer is host-coherent, CPU-written).
