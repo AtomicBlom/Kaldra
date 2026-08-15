@@ -126,9 +126,9 @@ This renders a mesh into an offscreen HDR buffer, then tone-maps that buffer to 
 
 ### 1. Define shaders
 
-Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
+Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings, nor hand-order them. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
 
-Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that `LOOM_BINDING(n)` counts **every** descriptor while `register(bN)` counts **only constant buffers and starts at `b1`** (`b0` is reserved on DirectX 12), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
+Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that `LOOM_BINDING(n)` numbers **every** descriptor (uniquely, in any order) while `register(bN)` counts **only constant buffers and starts at `b1`** (`b0` is reserved on DirectX 12), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
 
 `Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer the pass `.Reads`, and a per-draw model matrix from the per-draw uniform block:
 
@@ -138,7 +138,7 @@ Every shader starts by including the platform module, which owns the places the 
 struct ViewProj { float4x4 viewProj; }   // filled from the app via engine.Write(viewProj, …)
 struct PerDraw  { float4x4 model; }      // staged by DrawCall.SetUniforms(ref block)
 
-// No samplers precede them, so these own descriptors 0 and 1 — and registers b1/b2, since b0 is reserved.
+// Descriptors 0 and 1 because that is what they are numbered — and registers b1/b2, since b0 is reserved.
 // Uniform slots fill in a defined order: the pass's .Reads constants first, then the per-draw block.
 LOOM_BINDING(0) ConstantBuffer<ViewProj> view : register(b1);
 LOOM_BINDING(1) ConstantBuffer<PerDraw>  draw : register(b2);

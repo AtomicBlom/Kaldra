@@ -37,25 +37,22 @@ LOOM_BINDING(1) ConstantBuffer<ViewProj> view : register(b1);
 LOOM_BINDING(2) ConstantBuffer<PerDraw>  draw : register(b2);
 ```
 
-- **`LOOM_BINDING(n)` counts *every descriptor*** in one set, in category order (§3). The sampler is 0, so the first constant buffer is 1.
+- **`LOOM_BINDING(n)` numbers *every descriptor*** in one set. The sampler is 0, so the first constant buffer is 1. The numbers must be **unique**; they need not be contiguous, and they need not be grouped by category — the backend reads each parameter's actual slot out of reflection.
 - **`register(bN)` counts *only constant buffers*, and starts at `b1`.** `b0` is reserved (§4). The first constant buffer is `b1` whether or not samplers precede it.
 
 They coincide only in a shader with no samplers, which is why the mistake survives so long in a post-processing shader and then breaks the first time someone adds a texture. Slang honours `[[vk::binding]]` for SPIR-V and `register(bN)` for DXIL, so both must be right; each target reads the one addressed to it.
 
 ---
 
-## 3. Vulkan: one descriptor set, in category order
+## 3. Vulkan: one descriptor set, numbered by the shader
 
-Everything lands in **set 0**, and `VulkanTechnique.CreateSetLayout` builds the layout in this order:
+Everything lands in **set 0**, and `VulkanTechnique.CreateSetLayout` builds one entry per parameter **at the slot the shader gave it**, with the descriptor type its reflected shape implies and a descriptor count from its reflected slot span. Nothing about the layout is inferred from position, so slots need not be contiguous and need not be grouped by category.
 
-1. sampled textures (combined image samplers)
-2. storage images (`RWTexture2D`)
-3. storage buffers (structured / byte-address)
-4. uniform buffers (`ConstantBuffer<T>`)
+Declaring samplers first and constant buffers last is still the house style and every shipped shader follows it — but it is now a convention, not a requirement. It used to be load-bearing: the backend rebuilt the layout from per-category *counts* at sequential slots, so a shader that numbered a constant buffer before a sampler bound its resources to the wrong descriptors, silently.
 
-`LOOM_BINDING(n)` numbers must follow the same category order, ascending, with no gaps. The counts themselves come from reflection — you never state them in C# — but the *order* is a convention the shader has to observe, because the backend builds the layout from counts and assumes the shader numbered them this way.
+One rule survives, and it is now checked: **no two parameters may claim the same slot** — an arrayed binding claims all of its. A duplicate silently overwrites a descriptor, and nothing noticed before, because the declared numbers were ignored entirely. `ShaderLayoutParityTests` asserts it over every shipped sidecar, so a collision fails the suite rather than the picture.
 
-Practically: **declare samplers first and constant buffers last.**
+The DirectX 12 register rule in §4 is *not* linted — it lives in the `register(bN)` annotations, which the reflection sidecar does not carry.
 
 ---
 
@@ -82,6 +79,8 @@ So a pass declaring `.Reads(viewProj)` and a draw supplying a per-draw block giv
 ## 6. WebGPU derives its own assignments — never hand-number for it
 
 `LOOM_BINDING(n)` expands to nothing under WGSL, deliberately. A combined `Sampler2D` occupies **two** WGSL binding slots (texture + sampler), so the Vulkan numbers would collide. Slang assigns slots in declaration order and the WebGPU backend recovers the real assignments by parsing the emitted WGSL.
+
+The consequence worth naming: the build emits **two reflection sidecars per shader** — `<name>.json` (SPIR-V numbering) and `<name>.wgsl.json` (WGSL numbering) — and they are *different index spaces for the same source*. A `ShaderReflection` records which one it holds, and building a Vulkan or DirectX 12 layout from a WGSL reflection throws rather than producing a layout that looks plausible and binds the wrong things.
 
 Consequences worth knowing: WGSL has no push constants (`LOOM_PUSH_CONSTANT` becomes a uniform), and vertex-input locations may be permuted relative to stream order, which is why the backend parses them rather than assuming.
 
