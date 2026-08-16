@@ -99,7 +99,15 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		Append(bindings, ref next, map.SampledTextures, DescriptorType.CombinedImageSampler, stage);
 		Append(bindings, ref next, map.StorageImages, DescriptorType.StorageImage, stage);
 		Append(bindings, ref next, map.StorageBuffers, DescriptorType.StorageBuffer, stage);
-		Append(bindings, ref next, map.UniformBuffers, DescriptorType.UniformBuffer, stage);
+		// Uniform buffers are dynamic: the descriptor names the buffer and the window size, and the byte offset
+		// within it rides pDynamicOffsets at bind time. That is what lets a material's set — its images, its
+		// sampler, its buffers — be written once and cached, with only the per-draw offsets changing.
+		//
+		// Unconditional, including compute, so one shader cannot get a different layout from another. No shipped
+		// compute shader declares a constant buffer, and the Dispatch path binds none; one that did would fail the
+		// validation layer at bind time for supplying no offsets, which is louder than the unbound descriptor it
+		// would have got before.
+		Append(bindings, ref next, map.UniformBuffers, DescriptorType.UniformBufferDynamic, stage);
 
 		DescriptorSetLayoutCreateInfo info = new()
 		{

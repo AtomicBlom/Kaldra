@@ -454,6 +454,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// frame no longer describes it — drop it and let the plan's Undefined stand, which is what a fresh image needs.
 		foreach (var id in _transients?.Recreate(_presentTarget.Extent) ?? [])
 			_persistentState.Remove(id);
+		// Reallocating a transient destroys its image view, and descriptor sets are cached by the views they name.
+		// The DeviceWaitIdle above is what makes freeing those sets safe here.
+		_context.FlushDescriptorCache();
 		RecreateSwapchainSizedReadback();
 
 		if (_presentTarget.ImageCount != oldImageCount)

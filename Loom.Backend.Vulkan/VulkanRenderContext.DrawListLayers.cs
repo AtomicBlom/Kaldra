@@ -166,6 +166,9 @@ internal sealed unsafe partial class VulkanRenderContext
 					PImageInfo = &imageInfo,
 				};
 				_vk.UpdateDescriptorSets(_ctx.Device, 1, in write, 0, null);
+				// No dynamic offsets: a draw-list technique's layout is one combined image sampler plus a push block,
+				// so it declares no uniform buffer — the only descriptor type Loom binds dynamically. One that did
+				// would fail validation here for supplying none, which is the loud failure that should follow.
 				_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
 				listTextureId = texId;
 			}

@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
@@ -17,11 +19,11 @@ internal sealed unsafe partial class VulkanRenderContext
 	private void BindSampledInputs(VulkanTechnique baked, in ShaderBindingMap map, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<Silk.NET.Vulkan.Buffer> storageBuffers = default, ReadOnlySpan<UniformBinding> ubos = default)
 	{
 		var sampler = linear ? _linearSampler : _nearestSampler;
-		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 		var count = inputs.Length + storageBuffers.Length + ubos.Length;
 		var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
 		var bufferInfos = stackalloc DescriptorBufferInfo[storageBuffers.Length + ubos.Length];
 		var writes = stackalloc WriteDescriptorSet[count];
+		var key = new DescriptorSetKey(baked.DescriptorSetLayout, sampler.Handle);
 		var w = 0;
 		for (var i = 0; i < inputs.Length; i++)
 		{
@@ -35,12 +37,12 @@ internal sealed unsafe partial class VulkanRenderContext
 			writes[w++] = new WriteDescriptorSet
 			{
 				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
 				DstBinding = (uint)map.SampledTextures[i].Index,
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.CombinedImageSampler,
 				PImageInfo = &imageInfos[i],
 			};
+			key.Add((ulong)map.SampledTextures[i].Index, image.View.Handle);
 		}
 		// Read-only storage buffers (SSBOs), at the slots the shader gave them.
 		for (var s = 0; s < storageBuffers.Length; s++)
@@ -49,29 +51,31 @@ internal sealed unsafe partial class VulkanRenderContext
 			writes[w++] = new WriteDescriptorSet
 			{
 				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
 				DstBinding = (uint)map.StorageBuffers[s].Index,
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.StorageBuffer,
 				PBufferInfo = &bufferInfos[s],
 			};
+			key.Add((ulong)map.StorageBuffers[s].Index, storageBuffers[s].Handle);
 		}
-		// Uniform buffers, likewise at their declared slots.
+		// Uniform buffers, likewise at their declared slots — dynamic, so the descriptor names only the buffer and
+		// the window size and the byte offset is supplied at bind time.
 		for (var u = 0; u < ubos.Length; u++)
 		{
 			bufferInfos[storageBuffers.Length + u] = ubos[u].Info;
 			writes[w++] = new WriteDescriptorSet
 			{
 				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
 				DstBinding = (uint)map.UniformBuffers[u].Index,
 				DescriptorCount = 1,
-				DescriptorType = DescriptorType.UniformBuffer,
+				DescriptorType = DescriptorType.UniformBufferDynamic,
 				PBufferInfo = &bufferInfos[storageBuffers.Length + u],
 			};
+			key.Add((ulong)map.UniformBuffers[u].Index, ubos[u].Info.Buffer.Handle, ubos[u].Info.Range);
 		}
-		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
-		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+
+		var set = GetOrCreateSet(baked.DescriptorSetLayout, in key, writes, count);
+		BindSet(PipelineBindPoint.Graphics, baked.Layout, set, ubos);
 	}
 
 	// Bind a material's loaded textures (VulkanTextureStore views) into the technique's reflected sampler slots, with
@@ -93,28 +97,29 @@ internal sealed unsafe partial class VulkanRenderContext
 			SamplerAddress.MirrorClampToEdge => template.LinearFilter ? _mirrorEdgeLinearSampler : _mirrorEdgeNearestSampler,
 			_ => throw new VulkanException($"SamplerAddress '{template.Address}' is not mapped to a sampler."),
 		};
-		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 		var count = template.SampleCount + ubos.Length;
 		var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];
 		var bufferInfos = stackalloc DescriptorBufferInfo[ubos.Length];
 		var writes = stackalloc WriteDescriptorSet[count];
+		var key = new DescriptorSetKey(baked.DescriptorSetLayout, sampler.Handle);
 		for (var i = 0; i < template.SampleCount; i++)
 		{
+			var view = _textures.View(textures[i]);
 			imageInfos[i] = new DescriptorImageInfo
 			{
 				Sampler = sampler,
-				ImageView = _textures.View(textures[i]),
+				ImageView = view,
 				ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
 			};
 			writes[i] = new WriteDescriptorSet
 			{
 				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
 				DstBinding = (uint)template.Bindings.SampledTextures[i].Index,
 				DescriptorCount = 1,
 				DescriptorType = DescriptorType.CombinedImageSampler,
 				PImageInfo = &imageInfos[i],
 			};
+			key.Add((ulong)template.Bindings.SampledTextures[i].Index, view.Handle);
 		}
 		// Uniform buffers, at the slots the shader declared, in slot order.
 		for (var u = 0; u < ubos.Length; u++)
@@ -123,38 +128,151 @@ internal sealed unsafe partial class VulkanRenderContext
 			writes[template.SampleCount + u] = new WriteDescriptorSet
 			{
 				SType = StructureType.WriteDescriptorSet,
-				DstSet = set,
 				DstBinding = (uint)template.Bindings.UniformBuffers[u].Index,
 				DescriptorCount = 1,
-				DescriptorType = DescriptorType.UniformBuffer,
+				DescriptorType = DescriptorType.UniformBufferDynamic,
 				PBufferInfo = &bufferInfos[u],
 			};
+			key.Add((ulong)template.Bindings.UniformBuffers[u].Index, ubos[u].Info.Buffer.Handle, ubos[u].Info.Range);
 		}
-		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
-		_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+
+		var set = GetOrCreateSet(baked.DescriptorSetLayout, in key, writes, count);
+		BindSet(PipelineBindPoint.Graphics, baked.Layout, set, ubos);
 	}
 
-	// A present per-frame uniform buffer to bind as a technique's last descriptor — the resolved
-	// DescriptorBufferInfo plus a presence flag (default => absent). Copying Info to a local before taking its
-	// address keeps the pointer valid through vkUpdateDescriptorSets.
+	// Record the bind with this draw's dynamic uniform offsets. Vulkan wants pDynamicOffsets ordered by binding
+	// number; uniform buffers are the only dynamic type in a Loom layout and ShaderBindingMap keeps each category
+	// ascending by index, so `ubos` order already is binding order — no sort, and none to keep in step.
+	private void BindSet(PipelineBindPoint bindPoint, PipelineLayout layout, DescriptorSet set, ReadOnlySpan<UniformBinding> ubos)
+	{
+		var offsets = stackalloc uint[MaxUniformBuffers];
+		for (var i = 0; i < ubos.Length; i++)
+			offsets[i] = ubos[i].DynamicOffset;
+		_vk.CmdBindDescriptorSets(_cmd, bindPoint, layout, 0, 1, in set, (uint)ubos.Length, offsets);
+	}
+
+	/// <summary>
+	/// Reuse — or write, once — the descriptor set these writes describe. The set is keyed by the GPU objects it
+	/// names, so a hit is guaranteed to describe the same images, sampler and buffers; only the per-draw uniform
+	/// offsets, which ride <c>pDynamicOffsets</c> rather than the descriptors, differ between the draws that share
+	/// it. That is what removes the allocate-write-bind per draw that made Vulkan slower per draw than DirectX 12,
+	/// which has always re-bound a persistent SRV table.
+	/// <para>
+	/// Keying on the handles rather than on <c>(material, technique)</c> is deliberate: a Vulkan set carries the
+	/// technique's uniform buffers alongside the material's images, so the same material drawn in two passes names
+	/// different <c>.Reads</c> constants, and drawn in two frame slots names different ring buffers. Handles
+	/// subsume material, technique, pass and frame slot in one key.
+	/// </para>
+	/// <para>
+	/// <b>Invariant:</b> nothing a cached set names may be destroyed without <see cref="FlushDescriptorCache"/>.
+	/// The ring buffers cannot die at all (see <see cref="VulkanInstanceUploadBuffer"/>), and the remaining named
+	/// objects — transient image views, texture views, samplers, set layouts — die only at graph swap, resize and
+	/// shader hot-reload, all of which flush. A fourth place that destroys an image view or a buffer would rot this
+	/// cache silently, so add the flush there too.
+	/// </para>
+	/// </summary>
+	private DescriptorSet GetOrCreateSet(DescriptorSetLayout layout, in DescriptorSetKey key, WriteDescriptorSet* writes, int count)
+	{
+		if (_cachedSets.TryGetValue(key, out var cached))
+			return cached;
+
+		var set = _descriptors.AllocatePersistent(layout);
+		for (var i = 0; i < count; i++)
+			writes[i].DstSet = set;
+		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
+		_cachedSets[key] = set;
+		return set;
+	}
+
+	/// <summary>Drop every cached set and free the sets behind them. Called at the drained moments where something a
+	/// set names is about to be destroyed: graph swap, present-target resize, and shader hot-reload.</summary>
+	public void FlushDescriptorCache()
+	{
+		_cachedSets.Clear();
+		_descriptors.ResetPersistent();
+	}
+
+	// Allocation-free descriptor-set cache key: the layout and sampler handles, then the ordered (binding, resource
+	// handle, range) of every descriptor written. Full-value equality, never a hash-only collapse — two different
+	// sets colliding would bind one draw's resources to another's, which is exactly the class of bug this cache
+	// could otherwise introduce.
+	private const int MaxKeyValues = 48;
+
+	[InlineArray(MaxKeyValues)]
+	private struct KeyValues
+	{
+		private ulong _element0;
+	}
+
+	private struct DescriptorSetKey(DescriptorSetLayout layout, ulong sampler) : IEquatable<DescriptorSetKey>
+	{
+		private readonly ulong _layout = layout.Handle;
+		private readonly ulong _sampler = sampler;
+		private KeyValues _values;
+		private int _count;
+
+		public void Add(ulong binding, ulong handle) => Add(binding, handle, 0);
+
+		public void Add(ulong binding, ulong handle, ulong range)
+		{
+			if (_count + 3 > MaxKeyValues)
+				throw new VulkanException($"A descriptor set's cache key exceeds {MaxKeyValues} values.");
+			_values[_count++] = binding;
+			_values[_count++] = handle;
+			_values[_count++] = range;
+		}
+
+		public bool Equals(DescriptorSetKey other)
+		{
+			if (_layout != other._layout || _sampler != other._sampler || _count != other._count)
+				return false;
+			for (var i = 0; i < _count; i++)
+				if (_values[i] != other._values[i])
+					return false;
+			return true;
+		}
+
+		public override bool Equals(object? obj) => obj is DescriptorSetKey other && Equals(other);
+
+		public override int GetHashCode()
+		{
+			var hash = new HashCode();
+			hash.Add(_layout);
+			hash.Add(_sampler);
+			hash.Add(_count);
+			for (var i = 0; i < _count; i++)
+				hash.Add(_values[i]);
+			return hash.ToHashCode();
+		}
+	}
+
+	// A present per-frame uniform buffer to bind as one of a technique's descriptors: the buffer and the window size
+	// as a DescriptorBufferInfo (offset always 0), plus the byte offset within it that rides pDynamicOffsets.
+	// Copying Info to a local before taking its address keeps the pointer valid through vkUpdateDescriptorSets.
 	private readonly struct UniformBinding
 	{
 		public readonly DescriptorBufferInfo Info;
-		public readonly bool Present;
+		public readonly uint DynamicOffset;
 
-		public UniformBinding(Silk.NET.Vulkan.Buffer buffer, ulong offset, ulong range)
+		/// <param name="buffer">The buffer the descriptor names — a graph Constants buffer, or a block of the uniform ring.</param>
+		/// <param name="range">The window the shader reads. <see cref="Vk.WholeSize"/> requires a zero dynamic offset,
+		/// which is what a whole-buffer Constants binding passes.</param>
+		/// <param name="dynamicOffset">Byte offset within <paramref name="buffer"/>, supplied at bind time. Always a
+		/// multiple of the ring's 256-byte alignment, which satisfies <c>minUniformBufferOffsetAlignment</c> on any device.</param>
+		public UniformBinding(Silk.NET.Vulkan.Buffer buffer, ulong range, uint dynamicOffset)
 		{
-			Info = new DescriptorBufferInfo { Buffer = buffer, Offset = offset, Range = range };
-			Present = true;
+			Info = new DescriptorBufferInfo { Buffer = buffer, Offset = 0, Range = range };
+			DynamicOffset = dynamicOffset;
 		}
 	}
 
 	// Stage a per-frame uniform block (raw bytes matching the technique's cbuffer) into the uniform ring and
-	// resolve it to a bindable descriptor.
+	// resolve it to a bindable descriptor. The descriptor names the block's whole buffer; the offset is dynamic, so
+	// two draws staging different bytes of the same size share one descriptor set.
 	private UniformBinding UploadUniforms(ReadOnlySpan<byte> bytes)
 	{
 		var (buffer, offset) = _uniformUpload.Upload(_frameSlot, bytes);
-		return new UniformBinding(buffer, offset, (ulong)bytes.Length);
+		return new UniformBinding(buffer, (ulong)bytes.Length, (uint)offset);
 	}
 
 	/// <summary>
@@ -166,14 +284,18 @@ internal sealed unsafe partial class VulkanRenderContext
 	/// GPU buffer of its own and carries no frames-in-flight hazard — the bytes are copied into this frame's slice
 	/// during recording, which is also what makes <c>IEngine.Write(material, …)</c> take effect on the next draw.
 	/// </para>
+	/// <para>
+	/// <em>Every</em> slot the technique declares is filled, not just the supplied ones: with dynamic uniforms the
+	/// bind must supply exactly one offset per dynamic descriptor <em>in the layout</em>, so a short fill would be a
+	/// validation error rather than merely an unread slot. A slot with nothing to put in it gets a defined 16-byte
+	/// window of the ring.
+	/// </para>
 	/// </summary>
 	private int FillUniformSlots(Span<UniformBinding> ubos, in DrawCall call, in VulkanTechniqueTemplate template)
 	{
 		var materialSlot = call.Material is not null ? template.MaterialUniformSlot : null;
 		var drawBlock = call.Uniforms.Length > 0;
-		// Counting the slots up front (rather than appending) is what guarantees the material's slot is reached even
-		// when it sits past the constants — appending would stop short and leave the shader reading an unbound slot.
-		var total = Math.Min(_activeConstantsCount + (drawBlock ? 1 : 0) + (materialSlot.HasValue ? 1 : 0), ubos.Length);
+		var total = Math.Min(template.UniformBufferCount, ubos.Length);
 
 		var constant = 0;
 		for (var slot = 0; slot < total; slot++)
@@ -181,12 +303,14 @@ internal sealed unsafe partial class VulkanRenderContext
 			if (slot == materialSlot)
 				ubos[slot] = UploadUniforms(_materials.ParametersOf(call.Material!.Value.Id));
 			else if (constant < _activeConstantsCount)
-				ubos[slot] = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[constant++]), 0, Vk.WholeSize);
+				ubos[slot] = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[constant++]), Vk.WholeSize, 0);
 			else if (drawBlock)
 			{
 				ubos[slot] = UploadUniforms(call.Uniforms);
 				drawBlock = false;
 			}
+			else
+				ubos[slot] = _nullUniform;
 		}
 		return total;
 	}

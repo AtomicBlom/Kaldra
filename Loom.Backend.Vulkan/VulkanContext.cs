@@ -434,6 +434,18 @@ public sealed unsafe class VulkanContext : IDisposable
 				"No Vulkan 1.3 device with graphics+present queues, swapchain, and the required features was found."
 				+ DescribeRejectedDevices(devices));
 
+		// Loom binds every uniform buffer with a dynamic offset, so a pass's constant buffers are spent against
+		// maxDescriptorSetUniformBuffersDynamic — whose guaranteed minimum is 8 — rather than against
+		// maxDescriptorSetUniformBuffers, which guarantees 12. Loom.Core.Graph.GraphLimits.MaxUniformBuffersPerPass is exactly 8, so
+		// the neutral cap now sits on the floor of the relevant limit with no margin at all. Name both numbers if a
+		// device ever comes in under it, rather than letting descriptor-set creation fail somewhere further down.
+		Vk.GetPhysicalDeviceProperties(PhysicalDevice, out var chosen);
+		if (chosen.Limits.MaxDescriptorSetUniformBuffersDynamic < Loom.Core.Graph.GraphLimits.MaxUniformBuffersPerPass)
+			throw new VulkanException(
+				$"'{DeviceName}' supports only {chosen.Limits.MaxDescriptorSetUniformBuffersDynamic} dynamic uniform " +
+				$"buffers per descriptor set, but a Loom pass may bind {Loom.Core.Graph.GraphLimits.MaxUniformBuffersPerPass} " +
+				"(GraphLimits.MaxUniformBuffersPerPass). Vulkan guarantees 8, so this device is below spec.");
+
 		// The graphics family's timestamp support (GPU profiler): 0 valid bits ⇒ no timing on this queue.
 		uint queueCount = 0;
 		Vk.GetPhysicalDeviceQueueFamilyProperties(PhysicalDevice, ref queueCount, null);
