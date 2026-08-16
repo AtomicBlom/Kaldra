@@ -44,6 +44,9 @@ const OP_END = 0, OP_BEGIN_RENDER_PASS = 1, OP_END_PASS = 2, OP_SET_RENDER_PIPEL
 
 let device = null, queue = null, context = null, canvas = null;
 let canvasViewFormat = "bgra8unorm";
+// The adapter the device came from, kept so a posted capture can name the GPU that produced it: a headless
+// browser can silently fall back to a software adapter, and a parity failure is unreadable without knowing which.
+let adapterLabel = "";
 const errors = [];
 
 // ── Device / canvas ──
@@ -97,6 +100,7 @@ export async function initDevice(canvasSelector, protocolVersion) {
 
 	const info = adapter.info ?? {};
 	const adapterName = [info.vendor, info.architecture, info.description].filter(Boolean).join(" ") || "WebGPU adapter";
+	adapterLabel = adapterName;
 	return JSON.stringify({
 		adapter: adapterName,
 		format: preferred,
@@ -304,9 +308,11 @@ export function downloadCapture(fileName, png) {
 	URL.revokeObjectURL(url);
 }
 
-// POST a captured frame's PNG to the harness (fire-and-forget); the diff loop's local server saves it.
+// POST a captured frame's PNG to the harness (fire-and-forget); the diff loop's local server saves it. The
+// adapter rides along on the query string so the harness can report which GPU produced the frame it is diffing.
 export function postCapture(name, png) {
-	fetch(`/capture?name=${encodeURIComponent(name)}`, { method: "POST", body: png.slice(), headers: { "Content-Type": "image/png" } })
+	fetch(`/capture?name=${encodeURIComponent(name)}&adapter=${encodeURIComponent(adapterLabel)}`,
+		{ method: "POST", body: png.slice(), headers: { "Content-Type": "image/png" } })
 		.catch(e => errors.push(`postCapture: ${e.message}`));
 }
 

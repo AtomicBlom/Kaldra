@@ -32,4 +32,17 @@ internal static class ImageComparison
 		}
 		return new ImageDiff(width, height, maxDiff, (double)sumDiff / (pixels * 4), failed, pixels);
 	}
+
+	/// <summary>
+	/// Distinct opaque RGB values in a decoded frame. The standard guard against a vacuous pass: a real scene lands
+	/// in the thousands, while a frame that threw, cleared, or never drew collapses toward one — and two such frames
+	/// compare as identical, so a tolerance check alone would report parity on two black images.
+	/// </summary>
+	public static int DistinctColors(byte[] rgba)
+	{
+		var seen = new HashSet<int>();
+		for (var i = 0; i + 3 < rgba.Length; i += 4)
+			seen.Add(rgba[i] << 16 | rgba[i + 1] << 8 | rgba[i + 2]);
+		return seen.Count;
+	}
 }
