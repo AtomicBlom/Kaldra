@@ -42,6 +42,12 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	// buffers bound by GPU address), so several draw lists in one frame append at successive offsets rather than clobber.
 	private readonly DirectX12InstanceUploadBuffer _listVtx;
 	private readonly DirectX12InstanceUploadBuffer _listIdx;
+	// Kept geometry for draw-list streams that carry a stable identity. The rings above stay: a transient list still
+	// uses them, and so does the group-opacity composite quad, which is pushed through _listVtx mid-list.
+	private readonly DirectX12DrawListStore _listStore;
+	// Monotonic across the engine's life, unlike _slot which cycles. The draw-list store uses it to notice a stream
+	// submitted twice in one frame, which would silently serve one submission the other's geometry.
+	private long _frameIndex = -1;
 	// Renderer-private offscreen targets backing UI group-opacity layers (BeginLayer/EndLayer), below the graph seam.
 	private readonly DirectX12LayerTargets _layerTargets;
 	// Reused across calls so an opacity layer never allocates per frame.
@@ -86,6 +92,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		_storageUpload = new DirectX12InstanceUploadBuffer(ctx, frameCount, alignment: 256);
 		_listVtx = new DirectX12InstanceUploadBuffer(ctx, frameCount);
 		_listIdx = new DirectX12InstanceUploadBuffer(ctx, frameCount);
+		_listStore = new DirectX12DrawListStore(ctx);
 		_layerTargets = new DirectX12LayerTargets(ctx, frameCount);
 	}
 
@@ -120,6 +127,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		_storageUpload.BeginFrame(slot);  // and the bone-palette staging
 		_listVtx.BeginFrame(slot);        // and the draw-list geometry staging
 		_listIdx.BeginFrame(slot);
+		_frameIndex++;
 		ForgetBindings();                 // a freshly reset command list has nothing bound
 	}
 
@@ -289,6 +297,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		_storageUpload.Dispose();
 		_listVtx.Dispose();
 		_listIdx.Dispose();
+		_listStore.Dispose();
 		_layerTargets.Dispose();
 	}
 }

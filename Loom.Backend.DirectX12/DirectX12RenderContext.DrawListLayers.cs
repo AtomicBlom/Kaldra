@@ -30,12 +30,14 @@ internal sealed unsafe partial class DirectX12RenderContext
 		// The list brings its own geometry, so whatever mesh the store thought was bound no longer is.
 		_meshes.ResetBindings();
 
-		// Stage this frame's geometry into the dynamic rings (bump-allocated: several draw lists in one frame
-		// append at successive offsets rather than overwrite each other).
+		// A stream with a stable identity keeps its own buffers and re-uploads only when its revision moves; anything
+		// else goes into the dynamic rings (bump-allocated: several transient lists in one frame append at
+		// successive offsets rather than overwrite each other).
 		var vtxBytes = MemoryMarshal.AsBytes(vertices);
 		var idxBytes = MemoryMarshal.AsBytes(indices);
-		var vtxAddr = _listVtx.Upload(_slot, vtxBytes);
-		var idxAddr = _listIdx.Upload(_slot, idxBytes);
+		var (vtxAddr, idxAddr) = identity.IsStable
+			? _listStore.Resolve(identity.Stream, (int)_slot, identity.Revision, _frameIndex, vtxBytes, idxBytes)
+			: (_listVtx.Upload(_slot, vtxBytes), _listIdx.Upload(_slot, idxBytes));
 
 		var vbv = new VertexBufferView { BufferLocation = vtxAddr, SizeInBytes = (uint)vtxBytes.Length, StrideInBytes = (uint)Unsafe.SizeOf<TVertex>() };
 		var ibv = new IndexBufferView { BufferLocation = idxAddr, SizeInBytes = (uint)idxBytes.Length, Format = DxgiFormat.FormatR16Uint };

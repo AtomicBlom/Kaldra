@@ -42,6 +42,12 @@ internal sealed partial class WebGpuRenderContext
 
 		// Stage this frame's geometry into the dynamic rings (bump-allocated: several draw lists in one frame append at
 		// successive offsets rather than overwrite each other).
+		//
+		// `identity` is accepted and ignored here, so a stable stream re-uploads every frame as it always has. That is
+		// correct, only not yet optimal — the desktop backends keep a stream's buffers and skip the copy while its
+		// revision holds. Doing the same here means writing a persistent buffer through the command stream's
+		// OP_WRITE_BUFFER, whose ordering relative to an open pass encoder needs establishing, and the browser parity
+		// leg currently runs no UI-heavy demo that would show a mistake. Not worth shipping unverified.
 		var vtxOffset = _engine.ListVertexRing.Reserve(MemoryMarshal.AsBytes(vertices), MemoryMarshal.AsBytes(vertices).Length);
 		var idxOffset = _engine.ListIndexRing.Reserve(MemoryMarshal.AsBytes(indices), MemoryMarshal.AsBytes(indices).Length);
 

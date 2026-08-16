@@ -53,6 +53,12 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// offsets rather than clobber each other.
 	private readonly VulkanInstanceUploadBuffer _listVtx;
 	private readonly VulkanInstanceUploadBuffer _listIdx;
+	// Kept geometry for draw-list streams that carry a stable identity. The rings above stay: a transient list still
+	// uses them, and so does the group-opacity composite quad, which is pushed through _listVtx mid-list.
+	private readonly VulkanDrawListStore _listStore;
+	// Monotonic across the engine's life, unlike _frameSlot which cycles. The draw-list store uses it to notice a
+	// stream submitted twice in one frame, which would silently serve one submission the other's geometry.
+	private long _frameIndex = -1;
 	// Renderer-private offscreen targets backing UI group-opacity layers (BeginLayer/EndLayer), below the graph seam.
 	private readonly VulkanLayerTargets _layerTargets;
 	// Reused across calls so an opacity layer never allocates per frame.
@@ -129,6 +135,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		_storageUpload = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.StorageBufferBit, alignment: 256);
 		_listVtx = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.VertexBufferBit);
 		_listIdx = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.IndexBufferBit);
+		_listStore = new VulkanDrawListStore(ctx, allocator);
 		_layerTargets = new VulkanLayerTargets(ctx, allocator, framesInFlight);
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
@@ -173,6 +180,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		_storageUpload.BeginFrame(frameSlot);  // and the bone-palette staging
 		_listVtx.BeginFrame(frameSlot);        // and the draw-list geometry staging
 		_listIdx.BeginFrame(frameSlot);
+		_frameIndex++;
 		ForgetBindings();                      // a fresh command buffer has nothing bound
 
 		// Reserve this frame's padding window first, off the head of the freshly-rewound ring. Bound whole rather
@@ -464,6 +472,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		_storageUpload.Dispose();
 		_listVtx.Dispose();
 		_listIdx.Dispose();
+		_listStore.Dispose();
 		_layerTargets.Dispose();
 		if (_nearestSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _nearestSampler, null);

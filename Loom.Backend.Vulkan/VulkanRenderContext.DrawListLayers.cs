@@ -25,10 +25,21 @@ internal sealed unsafe partial class VulkanRenderContext
 		var baked = Bake(technique);
 		var template = _registry[technique];
 
-		// Stage this frame's geometry into the dynamic rings (bump-allocated: several draw lists in one frame
-		// append at successive offsets rather than overwrite each other).
-		var (vtxBuffer, vtxOffset) = _listVtx.Upload(_frameSlot, MemoryMarshal.AsBytes(vertices));
-		var (idxBuffer, idxOffset) = _listIdx.Upload(_frameSlot, MemoryMarshal.AsBytes(indices));
+		// A stream with a stable identity keeps its own buffers and re-uploads only when its revision moves; anything
+		// else goes into the dynamic rings (bump-allocated: several transient lists in one frame append at
+		// successive offsets rather than overwrite each other).
+		Silk.NET.Vulkan.Buffer vtxBuffer, idxBuffer;
+		ulong vtxOffset = 0, idxOffset = 0;
+		if (identity.IsStable)
+		{
+			(vtxBuffer, idxBuffer) = _listStore.Resolve(identity.Stream, _frameSlot, identity.Revision, _frameIndex,
+				MemoryMarshal.AsBytes(vertices), MemoryMarshal.AsBytes(indices));
+		}
+		else
+		{
+			(vtxBuffer, vtxOffset) = _listVtx.Upload(_frameSlot, MemoryMarshal.AsBytes(vertices));
+			(idxBuffer, idxOffset) = _listIdx.Upload(_frameSlot, MemoryMarshal.AsBytes(indices));
+		}
 
 		BindPipeline(PipelineBindPoint.Graphics, baked.Pipeline);
 		// The list brings its own geometry, so whatever mesh the store thought was bound no longer is.
