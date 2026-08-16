@@ -83,16 +83,23 @@ public interface IRenderContext
 	/// <summary>
 	/// Submit a per-frame, variable-size indexed vertex stream as a batched draw list into the current pass —
 	/// the backend-neutral verb behind overlay/UI-style rendering (a draw list is just vertices + 16-bit indices +
-	/// a list of <see cref="DrawCommand"/>s, each a clip rect + a texture + an index range). The geometry is staged
-	/// fresh each frame, so the spans may differ every call; the engine owns the upload. <paramref name="technique"/>
-	/// is a normal <c>DefineTechnique</c> name whose layout matches <typeparamref name="TVertex"/> and that declares
-	/// one sampler slot; each command binds <paramref name="textures"/>[<see cref="DrawCommand.TextureIndex"/>] into
-	/// it. <paramref name="push"/> is the shared per-list push block; the per-command <see cref="DrawCommand.Tag"/>
-	/// rewrites the slot right after it (a list-push technique, <see cref="Materials.TechniqueDescriptor.HasListPush"/>).
-	/// Several calls in one pass append rather than overwrite.
+	/// a list of <see cref="DrawCommand"/>s, each a clip rect + a texture + an index range). The engine owns the
+	/// upload. <paramref name="technique"/> is a normal <c>DefineTechnique</c> name whose layout matches
+	/// <typeparamref name="TVertex"/> and that declares one sampler slot; each command binds
+	/// <paramref name="textures"/>[<see cref="DrawCommand.TextureIndex"/>] into it. <paramref name="push"/> is the
+	/// shared per-list push block; the per-command <see cref="DrawCommand.Tag"/> rewrites the slot right after it
+	/// (a list-push technique, <see cref="Materials.TechniqueDescriptor.HasListPush"/>). Several calls in one pass
+	/// each draw, rather than one overwriting another.
+	/// <para>
+	/// <paramref name="identity"/> names the geometry stream. A stable identity lets the backend keep the uploaded
+	/// vertices and indices and skip re-staging them while the revision holds — the spans are then read only when
+	/// the revision moves. <see cref="DrawListIdentity.Transient"/> stages fresh every frame, which a producer whose
+	/// spans do not survive the call must use.
+	/// </para>
 	/// </summary>
 	void DrawList<TVertex>(
 		string technique,
+		DrawListIdentity identity,
 		ReadOnlySpan<Texture> textures,
 		ReadOnlySpan<TVertex> vertices,
 		ReadOnlySpan<ushort> indices,

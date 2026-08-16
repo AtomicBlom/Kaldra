@@ -118,7 +118,11 @@ public sealed class UIPainter
 
 		// SUIsei.Drawing.OverlayVertex has the same binary layout as Loom.Core.Geometry.OverlayVertex;
 		// TVertex is inferred from draw.Vertices.Span — the backend sees raw bytes either way.
-		ctx.DrawList(Technique, ResolveTextures(id, draw), draw.Vertices.Span, draw.Indices.Span, loomCommands, push);
+		// A UI surface is a stable geometry stream: the compositor advances Revision exactly when the composed list
+		// changed, so an untouched surface re-submits the same identity and the backend can keep what it uploaded.
+		// The same revision already gates the texture-array rebuild in ResolveTextures.
+		var identity = new DrawListIdentity(id.Value, draw.Revision);
+		ctx.DrawList(Technique, identity, ResolveTextures(id, draw), draw.Vertices.Span, draw.Indices.Span, loomCommands, push);
 	}
 
 	/// <summary>

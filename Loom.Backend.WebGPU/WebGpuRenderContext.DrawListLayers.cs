@@ -31,7 +31,7 @@ internal sealed partial class WebGpuRenderContext
 	/// renders into a fresh transparent layer at full alpha, then one KIND_IMAGE quad multiplies it by the group
 	/// alpha back into the resumed parent — so the whole subtree fades once (overlaps stay a single colour).
 	/// </summary>
-	public void DrawList<TVertex>(string technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
+	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
