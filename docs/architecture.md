@@ -69,3 +69,13 @@ Engine shaders (blit, tonemap, auto-exposure) are **embedded** in the backend as
 Backends self-register via `[ModuleInitializer]` into `Backends.Available` (an `IReadOnlyList<IRenderBackend>`). Including a backend assembly in your project is enough to make it available; which one runs is a runtime decision — the host picks a registered backend by name (`Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)`) and calls `backend.Create(surface, width, height, settings)`, handing over the window's native surface (Vulkan `IVkSurface` / DirectX 12 `HWND`).
 
 When using `Loom.Sdk` (NuGet or submodule), the `UseVulkan` / `UseDirectX12` / `UseWebGPU` MSBuild properties control which backend assemblies are referenced and therefore which `[ModuleInitializer]` calls fire; `UseSUIsei` / `UseImGui` do the same for the UI bridges.
+
+## Threading: one thread records
+
+**Everything that touches the recording path happens on one thread — the one that created the engine.** That means `Render`, `SetGraph`, and the whole `Write` family (`Write(Material, …)`, `Write(ConstantsHandle, …)`, `Write(StorageBufferHandle, …)`). This is not a lock you can take; nothing in that path is externally synchronized. A backend's command pool and queue are not synchronized objects in Vulkan or DirectX 12, and the engine's per-frame shadow buffers are plain dictionaries. A second thread does not contend — it corrupts, usually in a way that surfaces far from the call responsible.
+
+Debug builds enforce it: `EngineBase.AssertRenderThread` compares the calling thread against the one that ran the constructor and throws naming both. It is `[Conditional("DEBUG")]` because it is a contract violation to fix in development, not a cost to carry in a shipped frame loop.
+
+The deliberate exception is **asset creation**. `CreateTextureAsync`, `CreateMeshAsync` and their siblings may be called from any thread — a background image decode, a demo preloading concurrently — because they queue the GPU work rather than doing it. `ServicePendingUploads` drains that queue on the render thread. That single seam exists precisely because the rest of the surface has this affinity: without it, every background loader would need to marshal its own results.
+
+This is worth knowing before refactoring a backend toward parallel command recording. The contract is not an accident of the current implementation — the ordering it buys is load-bearing. `Write` provably runs before `Render` and outside command recording, which is what lets a growable storage buffer reallocate in place (see `EngineBase.GrowStorageBuffer`): there is no command buffer open to invalidate.

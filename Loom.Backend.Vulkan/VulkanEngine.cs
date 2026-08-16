@@ -20,7 +20,7 @@ namespace Loom.Backend.Vulkan;
 /// <em>active graph</em> is swappable (<c>SetGraph</c>). On each <c>SetGraph</c> it derives a
 /// <see cref="GraphSchedule"/>, <see cref="BarrierPlan"/>, and transient-memory plan once (the plan is
 /// frame-stable, so the per-frame cost is recording, not deriving) and prepares the graph's transients; then
-/// each <see cref="Render"/> records the plan into a command buffer — emitting <c>vkCmdPipelineBarrier2</c> from
+/// each <see cref="RenderFrame"/> records the plan into a command buffer — emitting <c>vkCmdPipelineBarrier2</c> from
 /// the derived transitions, opening a dynamic-rendering scope per pass with the derived load/store ops, invoking
 /// the pass's record callback, and presenting. The barriers and layout transitions are derived rather than
 /// written by hand.
@@ -378,7 +378,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Backend.Vulkan?");
 	}
 
-	public override void Render(FrameInputs inputs)
+	protected override void RenderFrame(FrameInputs inputs)
 	{
 		ServicePendingUploads();
 		if (Graph is null || _transients is null)

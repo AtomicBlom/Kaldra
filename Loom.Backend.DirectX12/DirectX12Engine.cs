@@ -189,7 +189,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 	public override EngineCapabilities Capabilities { get; }
 
-	public override void Render(FrameInputs inputs)
+	protected override void RenderFrame(FrameInputs inputs)
 	{
 		ServicePendingUploads();
 		if (Graph is null)

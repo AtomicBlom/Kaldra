@@ -11,7 +11,7 @@ namespace Loom.Backend.WebGPU;
 [SupportedOSPlatform("browser")]
 internal sealed partial class WebGpuEngine
 {
-	public override void Render(FrameInputs inputs)
+	protected override void RenderFrame(FrameInputs inputs)
 	{
 		DrainShaderReloads();
 		ServicePendingUploads();

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -150,9 +151,41 @@ public abstract class EngineBase : IEngine
 		return Materials.Create(technique, textures, bytes);
 	}
 
+	// The thread that constructed the engine, which the contract makes the render thread. Captured here rather than
+	// on the first Render so a Write before the first frame is checked too.
+	private readonly int _renderThreadId = Environment.CurrentManagedThreadId;
+
+	/// <summary>
+	/// Enforce the single-threaded record contract in Debug: everything that mutates engine state read during
+	/// recording — the <c>Write</c> family, <see cref="SetGraph"/>, and <see cref="Render"/> itself — happens on
+	/// one thread, the one that created the engine. Nothing in the recording path is externally synchronized (a
+	/// backend's command pool and queue are not, and the shadow dictionaries are plain <see cref="Dictionary{K,V}"/>),
+	/// so a second thread does not race a lock — it corrupts state, usually far from the call that did it.
+	/// <para>
+	/// The deliberate exception is asset creation: <c>Create*Async</c> may be called from any thread and defers the
+	/// GPU work onto a queue that <see cref="ServicePendingUploads"/> drains on this one. That is the seam, and it
+	/// exists precisely because the rest of the surface has this affinity.
+	/// </para>
+	/// <para>
+	/// Debug-only: the check is one integer compare, but it is a contract violation the caller must fix rather than
+	/// something to pay for in a shipped frame loop.
+	/// </para>
+	/// </summary>
+	[Conditional("DEBUG")]
+	protected void AssertRenderThread(string member)
+	{
+		if (Environment.CurrentManagedThreadId == _renderThreadId)
+			return;
+		throw new InvalidOperationException(
+			$"{GetType().Name}.{member} was called from thread {Environment.CurrentManagedThreadId}, but the engine " +
+			$"was created on thread {_renderThreadId} and its recording path is single-threaded. Marshal the call " +
+			"onto the render thread; for asset creation use the Create*Async overloads, which are thread-safe by design.");
+	}
+
 	/// <inheritdoc/>
 	public void Write<T>(Material material, in T parameters) where T : unmanaged
 	{
+		AssertRenderThread(nameof(Write));
 		Span<byte> bytes = stackalloc byte[Unsafe.SizeOf<T>()];
 		MemoryMarshal.Write(bytes, in parameters);
 		Materials.WriteParameters(material.Id, bytes);
@@ -207,6 +240,7 @@ public abstract class EngineBase : IEngine
 
 	public void Write<T>(ConstantsHandle handle, in T value) where T : unmanaged
 	{
+		AssertRenderThread(nameof(Write));
 		ArgumentNullException.ThrowIfNull(handle);
 		if (!_constants.TryGetValue(handle.Id, out var shadow))
 			throw new InvalidOperationException(
@@ -243,6 +277,7 @@ public abstract class EngineBase : IEngine
 
 	public void Write<T>(StorageBufferHandle handle, ReadOnlySpan<T> values) where T : unmanaged
 	{
+		AssertRenderThread(nameof(Write));
 		ArgumentNullException.ThrowIfNull(handle);
 		if (!_storage.TryGetValue(handle.Id, out var shadow))
 			throw new InvalidOperationException(
@@ -341,6 +376,7 @@ public abstract class EngineBase : IEngine
 	/// </summary>
 	public void SetGraph(RenderGraph graph)
 	{
+		AssertRenderThread(nameof(SetGraph));
 		ArgumentNullException.ThrowIfNull(graph);
 
 		// Above the bake-cache check rather than inside the derivation: an equal bake key does imply an equal verdict
@@ -425,7 +461,17 @@ public abstract class EngineBase : IEngine
 	protected abstract void RebuildGraphResources(RenderGraph authored, RenderGraph executed);
 
 	// ── The backend's own half: the per-frame record loop, resource creation, teardown. ──
-	public abstract void Render(FrameInputs inputs);
+
+	/// <inheritdoc/>
+	public void Render(FrameInputs inputs)
+	{
+		AssertRenderThread(nameof(Render));
+		RenderFrame(inputs);
+	}
+
+	/// <summary>Record and submit one frame. The backend's half of <see cref="Render"/>, which has already
+	/// established that the caller is the render thread.</summary>
+	protected abstract void RenderFrame(FrameInputs inputs);
 	public abstract void Resize(int width, int height);
 	public abstract void WaitIdle();
 	public abstract Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
