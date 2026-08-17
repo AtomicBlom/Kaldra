@@ -122,6 +122,8 @@ public sealed class GraphSchedule
 					$"Pass '{passes[i].Name}' reads {storageReads} storage buffers but a pass may read at most " +
 					$"{GraphLimits.MaxStorageBuffersPerPass}. Pack the extras into one larger buffer, or split the pass.");
 
+			RequireOneAttachmentExtent(passes[i], errors);
+
 			foreach (var (id, resource) in reads)
 			{
 				var s = state.GetValueOrDefault(id);
@@ -207,6 +209,47 @@ public sealed class GraphSchedule
 
 		return new GraphSchedule(graph, scheduled.ToImmutable());
 	}
+
+	// Every attachment of a raster pass has to resolve to one pixel extent, because a pass renders through one
+	// viewport, scissor and render area. For a graph that means one domain at one scale: equal domain and equal scale
+	// resolve to equal pixels whatever the swapchain size, which a comparison of pixel extents could not promise here
+	// (a backbuffer-relative domain has no extent until bake).
+	//
+	// Nothing checked this. Each backend instead picked a single extent out of the pass's attachments and they did not
+	// agree on which — two took the first attachment, one took the last colour attachment — so a pass mixing extents
+	// rendered at a different size per backend, and every one of those sizes is wrong for at least one of its
+	// attachments. There is no correct single answer to pick, so the declaration is what has to go.
+	private static void RequireOneAttachmentExtent(GraphPass pass, List<string> errors)
+	{
+		if (pass.Kind != PassKind.Raster)
+			return; // a compute pass has no attachments and no render area
+
+		ResourceHandle? anchor = null;
+		foreach (var access in pass.Accesses)
+		{
+			if (!IsAttachmentKind(access.Kind))
+				continue;
+			if (anchor is null)
+			{
+				anchor = access.Resource;
+				continue;
+			}
+			var other = access.Resource;
+			if (ReferenceEquals(anchor.Domain, other.Domain) && anchor.Scale == other.Scale)
+				continue;
+			errors.Add(
+				$"Pass '{pass.Name}' attaches '{anchor.Name}' ({anchor.Domain.Name} × {anchor.Scale}) and '{other.Name}' " +
+				$"({other.Domain.Name} × {other.Scale}), which resolve to different pixel extents. A pass renders " +
+				"through one viewport and render area, so its colour and depth attachments must share a domain and a " +
+				"scale. Declare them in the same domain, or split the pass.");
+			return; // one report per pass — listing every pair says nothing more
+		}
+	}
+
+	// The access kinds that make a resource an attachment of a raster pass, matching what BarrierPlan classifies as
+	// one: the colour writes, the accumulating write, and both depth uses.
+	private static bool IsAttachmentKind(AccessKind kind) =>
+		kind is AccessKind.Write or AccessKind.Blend or AccessKind.WriteDepth or AccessKind.ReadDepth;
 
 	/// <summary>
 	/// Kahn's algorithm with a program-order tiebreak: among passes whose prerequisites are all satisfied,
