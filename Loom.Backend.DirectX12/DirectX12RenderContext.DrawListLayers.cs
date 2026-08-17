@@ -1,4 +1,3 @@
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Loom.Core.Geometry;
@@ -14,13 +13,6 @@ namespace Loom.Backend.DirectX12;
 
 internal sealed unsafe partial class DirectX12RenderContext
 {
-	// UI group-opacity layer markers (UIPrimKind, kept in sync with SUIsei): zero-index commands that never reach the
-	// fragment shader — the backend turns a BeginLayer/EndLayer pair into an offscreen target + a composite. KIND_IMAGE
-	// is the shader branch the composite blit uses (sample the layer, tint by the group alpha).
-	private const uint TagBeginLayer = 5;
-	private const uint TagEndLayer = 6;
-	private const uint KindImage = 4;
-
 	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
@@ -80,7 +72,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		foreach (var c in commands)
 		{
-			if (layersSupported && c.Tag == TagBeginLayer && _layerStack.Count < DirectX12LayerTargets.MaxNesting)
+			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer && _layerStack.Count < DirectX12LayerTargets.MaxNesting)
 			{
 				// Detour into a fresh transparent offscreen target: render the faded subtree at full alpha so
 				// overlapping children blend against each other, not a faded backdrop.
@@ -96,13 +88,13 @@ internal sealed unsafe partial class DirectX12RenderContext
 				// The group's own bounds, not the whole surface. A layer costs two render-target switches and a clear,
 				// and on a tile-based GPU those are priced by area — a checkbox fading in should not clear a screen's
 				// worth of tiles. The marker carries the bounds as its ClipRect precisely so a backend can use them.
-				var bounds = LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight);
-				var clearRect = FramebufferRect(bounds, toFramebufferX, toFramebufferY, _scopeWidth, _scopeHeight);
+				var bounds = DrawListGeometry.LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight);
+				var clearRect = LayerRect(bounds, toFramebufferX, toFramebufferY, _scopeWidth, _scopeHeight);
 				_cmd.ClearRenderTargetView(rtv, layerClear, 1u, &clearRect);
 				_layerStack.Add((depth, overlay[c.VertexOffset].Color, bounds));
 				continue;
 			}
-			if (layersSupported && c.Tag == TagEndLayer)
+			if (layersSupported && c.Tag == DrawListGeometry.TagEndLayer)
 			{
 				if (_layerStack.Count == 0)
 					continue;
@@ -134,12 +126,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 				continue;
 			}
 
-			var clip = c.ClipRect;
-			var minX = MathF.Max(0, clip.X);
-			var minY = MathF.Max(0, clip.Y);
-			var maxX = MathF.Min(_scopeWidth, clip.X + clip.Width);
-			var maxY = MathF.Min(_scopeHeight, clip.Y + clip.Height);
-			if (maxX <= minX || maxY <= minY)
+			var (clipX, clipY, clipW, clipH) = DrawListGeometry.Scissor(c.ClipRect, (int)_scopeWidth, (int)_scopeHeight);
+			if (clipW <= 0 || clipH <= 0)
 				continue;
 
 			*(uint*)(block + pushLen) = c.Tag;
@@ -164,7 +152,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, listTable);
 			}
 
-			var scissor = new Box2D<int>((int)minX, (int)minY, (int)maxX, (int)maxY);
+			var scissor = new Box2D<int>(clipX, clipY, clipX + clipW, clipY + clipH);
 			_cmd.RSSetScissorRects(1, &scissor);
 			_cmd.DrawIndexedInstanced((uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
 		}
@@ -179,55 +167,20 @@ internal sealed unsafe partial class DirectX12RenderContext
 		}
 	}
 
-	// A layer's bounds in the list's own coordinate space, clamped to the surface and grown by a pixel so a rounded
-	// edge cannot clip the antialiased fringe of whatever sits against the group's boundary. Degenerate bounds fall
-	// back to the whole surface, which is what this path did before it looked at the rect at all.
-	private static (float X0, float Y0, float X1, float Y1) LayerBounds(Rect clip, float surfaceWidth, float surfaceHeight)
+	// The derived layer area as a DirectX 12 rect (corners, not extents).
+	private static Box2D<int> LayerRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, uint width, uint height)
 	{
-		const float Slop = 1f;
-		var x0 = MathF.Max(0f, clip.X - Slop);
-		var y0 = MathF.Max(0f, clip.Y - Slop);
-		var x1 = MathF.Min(surfaceWidth, clip.X + clip.Width + Slop);
-		var y1 = MathF.Min(surfaceHeight, clip.Y + clip.Height + Slop);
-		return x1 > x0 && y1 > y0 ? (x0, y0, x1, y1) : (0f, 0f, surfaceWidth, surfaceHeight);
-	}
-
-	// The same bounds as a framebuffer-pixel rect: floor the origin and ceil the far edge so the rect never covers
-	// less than the bounds it came from, then clamp to the target.
-	private static Box2D<int> FramebufferRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, uint width, uint height)
-	{
-		var x = Math.Clamp((int)MathF.Floor(bounds.X0 * scaleX), 0, (int)width);
-		var y = Math.Clamp((int)MathF.Floor(bounds.Y0 * scaleY), 0, (int)height);
-		var right = Math.Clamp((int)MathF.Ceiling(bounds.X1 * scaleX), x, (int)width);
-		var bottom = Math.Clamp((int)MathF.Ceiling(bounds.Y1 * scaleY), y, (int)height);
-		return new Box2D<int>(x, y, right, bottom);
+		var (x, y, w, h) = DrawListGeometry.LayerArea(bounds, scaleX, scaleY, (int)width, (int)height);
+		return new Box2D<int>(x, y, x + w, y + h);
 	}
 
 	// Composite a resolved layer target back into the (now-rebound) parent: a KIND_IMAGE quad over the group that
-	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once. The HDR
-	// paper-white lift is forced off here — the layer's primitives already lifted, and the lift commutes with the
-	// premultiplied alpha-over, so re-lifting would double it (the CPU rasterizer is the reference).
+	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once.
 	private void CompositeLayer(DirectX12Technique baked, ComPtr<ID3D12Resource> layer, Half4 tint, float* block, int pushLen,
 		(float X0, float Y0, float X1, float Y1) bounds, float surfaceWidth, float surfaceHeight)
 	{
-		// The quad covers the group's bounds rather than the surface. The layer target still holds its content at the
-		// content's own position — the clear rect restricted which pixels were reset, it did not move them — so the
-		// texture coordinates are the bounds as a fraction of the surface, not a fixed 0..1.
-		var custom = default(Vector4);
-		var (x0, y0, x1, y1) = bounds;
-		var u0 = x0 / surfaceWidth;
-		var v0 = y0 / surfaceHeight;
-		var u1 = x1 / surfaceWidth;
-		var v1 = y1 / surfaceHeight;
-		Span<OverlayVertex> quad =
-		[
-			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
-			new(new Vector2(x1, y0), new Vector2(u1, v0), tint, custom),
-			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
-			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
-			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
-			new(new Vector2(x0, y1), new Vector2(u0, v1), tint, custom),
-		];
+		Span<OverlayVertex> quad = stackalloc OverlayVertex[DrawListGeometry.CompositeQuadVertexCount];
+		DrawListGeometry.WriteCompositeQuad(bounds, surfaceWidth, surfaceHeight, tint, quad);
 		var quadBytes = MemoryMarshal.AsBytes(quad);
 		var quadAddr = _listVtx.Upload(_slot, quadBytes);
 		var qvbv = new VertexBufferView { BufferLocation = quadAddr, SizeInBytes = (uint)quadBytes.Length, StrideInBytes = (uint)Unsafe.SizeOf<OverlayVertex>() };
@@ -238,9 +191,9 @@ internal sealed unsafe partial class DirectX12RenderContext
 			var cblock = stackalloc float[8];
 			for (var i = 0; i < pushLen; i++)
 				cblock[i] = block[i];
-			if (pushLen > 5)
-				cblock[5] = 0f;                 // isHdr off — do not re-lift the already-lifted layer
-			*(uint*)(cblock + pushLen) = KindImage;
+			if (pushLen > DrawListGeometry.HdrPushSlot)
+				cblock[DrawListGeometry.HdrPushSlot] = 0f;
+			*(uint*)(cblock + pushLen) = DrawListGeometry.KindImage;
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, (uint)(pushLen + 1), cblock, 0);
 		}
 

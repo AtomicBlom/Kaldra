@@ -1,4 +1,3 @@
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Loom.Core.Geometry;
@@ -11,13 +10,6 @@ namespace Loom.Backend.Vulkan;
 
 internal sealed unsafe partial class VulkanRenderContext
 {
-	// UI group-opacity layer markers (UIPrimKind, kept in sync with SUIsei): a BeginLayer/EndLayer pair carries no
-	// indices and never reaches the fragment shader — the backend turns it into an offscreen render scope and a
-	// composite. KIND_IMAGE is the shader branch the composite blit uses (sample the layer, tint by group alpha).
-	private const uint TagBeginLayer = 5;
-	private const uint TagEndLayer = 6;
-	private const uint KindImage = 4;
-
 	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
@@ -93,7 +85,7 @@ internal sealed unsafe partial class VulkanRenderContext
 
 		foreach (var c in commands)
 		{
-			if (layersSupported && c.Tag == TagBeginLayer)
+			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer)
 			{
 				// Suspend the current scope, render the faded subtree into a fresh transparent offscreen target at
 				// full alpha (so overlapping children blend against each other, not a faded backdrop).
@@ -107,13 +99,13 @@ internal sealed unsafe partial class VulkanRenderContext
 				// on a tile-based GPU those are priced by area — a checkbox fading in should not clear and store a
 				// screen's worth of tiles. The marker carries the bounds as its ClipRect precisely so a backend can
 				// use them.
-				var bounds = LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight);
-				BeginColorScope(target.View, AttachmentLoadOp.Clear, FramebufferRect(bounds, toFramebufferX, toFramebufferY, layerArea));
+				var bounds = DrawListGeometry.LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight);
+				BeginColorScope(target.View, AttachmentLoadOp.Clear, LayerRect(bounds, toFramebufferX, toFramebufferY, layerArea));
 				_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
 				_layerStack.Add((target.Image, target.View, overlay[c.VertexOffset].Color, bounds));
 				continue;
 			}
-			if (layersSupported && c.Tag == TagEndLayer)
+			if (layersSupported && c.Tag == DrawListGeometry.TagEndLayer)
 			{
 				if (_layerStack.Count == 0)
 					continue;
@@ -143,12 +135,8 @@ internal sealed unsafe partial class VulkanRenderContext
 				continue;
 			}
 
-			var clip = c.ClipRect;
-			var minX = MathF.Max(0, clip.X);
-			var minY = MathF.Max(0, clip.Y);
-			var maxX = MathF.Min(layerArea.Width, clip.X + clip.Width);
-			var maxY = MathF.Min(layerArea.Height, clip.Y + clip.Height);
-			if (maxX <= minX || maxY <= minY)
+			var (clipX, clipY, clipW, clipH) = DrawListGeometry.Scissor(c.ClipRect, (int)layerArea.Width, (int)layerArea.Height);
+			if (clipW <= 0 || clipH <= 0)
 				continue;
 
 			*(uint*)(block + pushLen) = c.Tag;
@@ -184,7 +172,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				listTextureId = texId;
 			}
 
-			Rect2D scissor = new(new Offset2D((int)minX, (int)minY), new Extent2D((uint)(maxX - minX), (uint)(maxY - minY)));
+			Rect2D scissor = new(new Offset2D(clipX, clipY), new Extent2D((uint)clipW, (uint)clipH));
 			_vk.CmdSetScissor(_cmd, 0, 1, in scissor);
 
 			_vk.CmdDrawIndexed(_cmd, (uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
@@ -200,28 +188,11 @@ internal sealed unsafe partial class VulkanRenderContext
 		}
 	}
 
-	// A layer's bounds in the list's own coordinate space, clamped to the surface and grown by a pixel so a rounded
-	// edge cannot clip the antialiased fringe of whatever sits against the group's boundary. Degenerate bounds fall
-	// back to the whole surface, which is what this path did before it looked at the rect at all.
-	private static (float X0, float Y0, float X1, float Y1) LayerBounds(Rect clip, float surfaceWidth, float surfaceHeight)
+	// The derived layer area as a Vulkan render area.
+	private static Rect2D LayerRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, Extent2D area)
 	{
-		const float Slop = 1f;
-		var x0 = MathF.Max(0f, clip.X - Slop);
-		var y0 = MathF.Max(0f, clip.Y - Slop);
-		var x1 = MathF.Min(surfaceWidth, clip.X + clip.Width + Slop);
-		var y1 = MathF.Min(surfaceHeight, clip.Y + clip.Height + Slop);
-		return x1 > x0 && y1 > y0 ? (x0, y0, x1, y1) : (0f, 0f, surfaceWidth, surfaceHeight);
-	}
-
-	// The same bounds as a framebuffer-pixel render area: floor the origin and ceil the far edge so the area never
-	// covers less than the bounds it came from, then clamp to the attachment.
-	private static Rect2D FramebufferRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, Extent2D area)
-	{
-		var x = Math.Clamp((int)MathF.Floor(bounds.X0 * scaleX), 0, (int)area.Width);
-		var y = Math.Clamp((int)MathF.Floor(bounds.Y0 * scaleY), 0, (int)area.Height);
-		var right = Math.Clamp((int)MathF.Ceiling(bounds.X1 * scaleX), x, (int)area.Width);
-		var bottom = Math.Clamp((int)MathF.Ceiling(bounds.Y1 * scaleY), y, (int)area.Height);
-		return new Rect2D(new Offset2D(x, y), new Extent2D((uint)(right - x), (uint)(bottom - y)));
+		var (x, y, w, h) = DrawListGeometry.LayerArea(bounds, scaleX, scaleY, (int)area.Width, (int)area.Height);
+		return new Rect2D(new Offset2D(x, y), new Extent2D((uint)w, (uint)h));
 	}
 
 	// Begin a dynamic-rendering scope over the given colour attachment view(s) at the given render area — used to
@@ -254,31 +225,13 @@ internal sealed unsafe partial class VulkanRenderContext
 	private void BeginColorScope(ImageView view, AttachmentLoadOp load, Rect2D area) =>
 		BeginColorScope(new ReadOnlySpan<ImageView>(in view), load, area);
 
-	// Composite a resolved layer target back into the (now-resumed) parent: one full-surface KIND_IMAGE quad that
-	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once. The
-	// HDR paper-white lift is forced off here — the layer's primitives already lifted, and the lift commutes with
-	// the premultiplied alpha-over, so re-lifting would double it (the CPU rasterizer is the reference for this).
+	// Composite a resolved layer target back into the (now-resumed) parent: one KIND_IMAGE quad over the group that
+	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once.
 	private void CompositeLayer(VulkanTechnique baked, ImageView layerView, Half4 tint, Sampler sampler, float* block, int pushLen,
 		(float X0, float Y0, float X1, float Y1) bounds, float surfaceWidth, float surfaceHeight, Extent2D area)
 	{
-		// The quad covers the group's bounds rather than the surface. The layer target still holds its content at the
-		// content's own position — the render area restricted which pixels were written, it did not move them — so the
-		// texture coordinates are the bounds as a fraction of the surface, not a fixed 0..1.
-		var custom = default(Vector4);
-		var (x0, y0, x1, y1) = bounds;
-		var u0 = x0 / surfaceWidth;
-		var v0 = y0 / surfaceHeight;
-		var u1 = x1 / surfaceWidth;
-		var v1 = y1 / surfaceHeight;
-		Span<OverlayVertex> quad =
-		[
-			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
-			new(new Vector2(x1, y0), new Vector2(u1, v0), tint, custom),
-			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
-			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
-			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
-			new(new Vector2(x0, y1), new Vector2(u0, v1), tint, custom),
-		];
+		Span<OverlayVertex> quad = stackalloc OverlayVertex[DrawListGeometry.CompositeQuadVertexCount];
+		DrawListGeometry.WriteCompositeQuad(bounds, surfaceWidth, surfaceHeight, tint, quad);
 		var (quadBuffer, quadOffset) = _listVtx.Upload(_frameSlot, MemoryMarshal.AsBytes(quad));
 		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in quadBuffer, in quadOffset);
 
@@ -286,9 +239,9 @@ internal sealed unsafe partial class VulkanRenderContext
 		var cblock = stackalloc float[blockFloats];
 		for (var i = 0; i < pushLen; i++)
 			cblock[i] = block[i];
-		if (pushLen > 5)
-			cblock[5] = 0f;                    // isHdr off — do not re-lift the already-lifted layer
-		*(uint*)(cblock + pushLen) = KindImage;
+		if (pushLen > DrawListGeometry.HdrPushSlot)
+			cblock[DrawListGeometry.HdrPushSlot] = 0f;
+		*(uint*)(cblock + pushLen) = DrawListGeometry.KindImage;
 		_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, cblock);
 
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);

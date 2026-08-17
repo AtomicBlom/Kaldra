@@ -13,13 +13,6 @@ namespace Loom.Backend.WebGPU;
 [SupportedOSPlatform("browser")]
 internal sealed partial class WebGpuRenderContext
 {
-	// UI group-opacity layer markers (UIPrimKind, kept in sync with SUIsei): a BeginLayer/EndLayer pair carries no
-	// indices and never reaches the fragment shader — the backend turns it into an offscreen render scope and a
-	// composite. KindImage is the shader branch the composite blit uses (sample the layer, tint by group alpha).
-	private const uint TagBeginLayer = 5;
-	private const uint TagEndLayer = 6;
-	private const uint KindImage = 4;
-
 	// The offscreen layer stack: each entry is a suspended scope's resolved view + its premultiplied group-alpha tint.
 	private readonly List<(int View, Half4 Tint, (float X0, float Y0, float X1, float Y1) Bounds)> _layerStack = [];
 
@@ -74,7 +67,7 @@ internal sealed partial class WebGpuRenderContext
 
 		foreach (var c in commands)
 		{
-			if (layersSupported && c.Tag == TagBeginLayer)
+			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer)
 			{
 				// Suspend the current scope; render the faded subtree into a fresh transparent offscreen target at full
 				// alpha (so overlapping children blend against each other, not a faded backdrop).
@@ -84,10 +77,10 @@ internal sealed partial class WebGpuRenderContext
 				RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
 				// WebGPU render passes cover the whole attachment — there is no render area, so unlike the desktop
 				// backends the clear cannot be narrowed to the group. The composite still is.
-				_layerStack.Add((target.View, overlay[c.VertexOffset].Color, LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight)));
+				_layerStack.Add((target.View, overlay[c.VertexOffset].Color, DrawListGeometry.LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight)));
 				continue;
 			}
-			if (layersSupported && c.Tag == TagEndLayer)
+			if (layersSupported && c.Tag == DrawListGeometry.TagEndLayer)
 			{
 				if (_layerStack.Count == 0)
 					continue;
@@ -104,18 +97,14 @@ internal sealed partial class WebGpuRenderContext
 				continue;
 			}
 
-			var clip = c.ClipRect;
-			var minX = (int)MathF.Max(0, clip.X);
-			var minY = (int)MathF.Max(0, clip.Y);
-			var maxX = (int)MathF.Min(_scopeWidth, clip.X + clip.Width);
-			var maxY = (int)MathF.Min(_scopeHeight, clip.Y + clip.Height);
-			if (maxX <= minX || maxY <= minY)
+			var (clipX, clipY, clipW, clipH) = DrawListGeometry.Scissor(c.ClipRect, _scopeWidth, _scopeHeight);
+			if (clipW <= 0 || clipH <= 0)
 				continue;
 
 			var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
 			BindCommand(baked, sampler, _engine.TextureView(texId), push, c.Tag);
 
-			writer.SetScissor(minX, minY, maxX - minX, maxY - minY);
+			writer.SetScissor(clipX, clipY, clipW, clipH);
 			writer.DrawIndexed(c.IndexCount, 1, c.IndexOffset, c.VertexOffset, 0);
 		}
 
@@ -189,43 +178,13 @@ internal sealed partial class WebGpuRenderContext
 		_engine.Writer.SetBindGroup(0, bindGroup, dyn);
 	}
 
-	// Composite a resolved layer back into the (now-resumed) parent: one full-surface KIND_IMAGE quad that samples the
-	// layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once. The HDR paper-white
-	// lift is forced off here — the layer's primitives already lifted, and the lift commutes with the premultiplied
-	// alpha-over, so re-lifting would double it (the CPU rasteriser is the reference for this).
-	// A layer's bounds in the list's own coordinate space, clamped to the surface and grown by a pixel so a rounded
-	// edge cannot clip the antialiased fringe of whatever sits against the group's boundary. Degenerate bounds fall
-	// back to the whole surface, which is what this path did before it looked at the rect at all.
-	private static (float X0, float Y0, float X1, float Y1) LayerBounds(Rect clip, float surfaceWidth, float surfaceHeight)
-	{
-		const float Slop = 1f;
-		var x0 = MathF.Max(0f, clip.X - Slop);
-		var y0 = MathF.Max(0f, clip.Y - Slop);
-		var x1 = MathF.Min(surfaceWidth, clip.X + clip.Width + Slop);
-		var y1 = MathF.Min(surfaceHeight, clip.Y + clip.Height + Slop);
-		return x1 > x0 && y1 > y0 ? (x0, y0, x1, y1) : (0f, 0f, surfaceWidth, surfaceHeight);
-	}
-
+	// Composite a resolved layer back into the (now-resumed) parent: one KIND_IMAGE quad over the group that samples
+	// the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once.
 	private void CompositeLayer(WebGpuTechnique baked, int sampler, int layerView, Half4 tint, ReadOnlySpan<float> push,
 		(float X0, float Y0, float X1, float Y1) bounds, float surfaceWidth, float surfaceHeight)
 	{
-		// The quad covers the group's bounds rather than the surface. Outside them the layer is transparent, so the
-		// premultiplied over contributes nothing there and the result is identical to compositing the whole surface.
-		var custom = default(Vector4);
-		var (x0, y0, x1, y1) = bounds;
-		var u0 = x0 / surfaceWidth;
-		var v0 = y0 / surfaceHeight;
-		var u1 = x1 / surfaceWidth;
-		var v1 = y1 / surfaceHeight;
-		Span<OverlayVertex> quad =
-		[
-			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
-			new(new Vector2(x1, y0), new Vector2(u1, v0), tint, custom),
-			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
-			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
-			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
-			new(new Vector2(x0, y1), new Vector2(u0, v1), tint, custom),
-		];
+		Span<OverlayVertex> quad = stackalloc OverlayVertex[DrawListGeometry.CompositeQuadVertexCount];
+		DrawListGeometry.WriteCompositeQuad(bounds, surfaceWidth, surfaceHeight, tint, quad);
 
 		var quadOffset = _engine.ListVertexRing.Reserve(MemoryMarshal.AsBytes(quad), MemoryMarshal.AsBytes(quad).Length);
 		_engine.Writer.SetVertexBuffer(0, _engine.ListVertexRing.Buffer, quadOffset);
@@ -233,7 +192,7 @@ internal sealed partial class WebGpuRenderContext
 		// The composite push mirrors the list push but with isHdr forced off (slot 5) and the KIND_IMAGE tag.
 		var bindings = baked.Template.Bindings;
 		Span<byte> pushBytes = stackalloc byte[bindings.PushByteSize];
-		WritePushBlock(pushBytes, push, KindImage, forceSdr: true);
+		WritePushBlock(pushBytes, push, DrawListGeometry.KindImage, forceSdr: true);
 		var pushOffset = _engine.UniformRing.Reserve(pushBytes, bindings.PushByteSize);
 
 		Span<int> entries = stackalloc int[bindings.Entries.Count * 5];
@@ -250,7 +209,7 @@ internal sealed partial class WebGpuRenderContext
 	}
 
 	// Fill the push block: the shared per-list floats, then the per-command tag in the slot right after them, padded to
-	// the block size. forceSdr zeroes the isHdr slot (slot 5) for the layer composite.
+	// the block size. forceSdr zeroes the isHdr slot for the layer composite.
 	private static void WritePushBlock(Span<byte> dst, ReadOnlySpan<float> push, uint tag, bool forceSdr = false)
 	{
 		dst.Clear();
@@ -258,8 +217,8 @@ internal sealed partial class WebGpuRenderContext
 		var pushLen = Math.Min(push.Length, floats.Length - 1);
 		for (var i = 0; i < pushLen; i++)
 			floats[i] = push[i];
-		if (forceSdr && pushLen > 5)
-			floats[5] = 0f;
+		if (forceSdr && pushLen > DrawListGeometry.HdrPushSlot)
+			floats[DrawListGeometry.HdrPushSlot] = 0f;
 		MemoryMarshal.Write(dst[(pushLen * sizeof(float))..], in tag);
 	}
 }
