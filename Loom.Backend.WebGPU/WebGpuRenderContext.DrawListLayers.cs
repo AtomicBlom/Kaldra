@@ -65,10 +65,22 @@ internal sealed partial class WebGpuRenderContext
 		var surfaceWidth = layersSupported ? 2f / push[0] : _scopeWidth;
 		var surfaceHeight = layersSupported ? 2f / push[1] : _scopeHeight;
 
+		// Layer markers opened past the nesting cap. Counted so each one's EndLayer is suppressed with it: popping a
+		// real layer for a suppressed marker's EndLayer resolves it early, and everything drawn afterwards lands in a
+		// target that is already finished with.
+		var suppressedLayers = 0;
+
 		foreach (var c in commands)
 		{
 			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer)
 			{
+				if (_layerStack.Count >= DrawListGeometry.MaxLayerNesting)
+				{
+					suppressedLayers++;
+					DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, _layerStack.Count + suppressedLayers);
+					continue;
+				}
+
 				// Suspend the current scope; render the faded subtree into a fresh transparent offscreen target at full
 				// alpha (so overlapping children blend against each other, not a faded backdrop).
 				writer.EndPass();
@@ -82,6 +94,11 @@ internal sealed partial class WebGpuRenderContext
 			}
 			if (layersSupported && c.Tag == DrawListGeometry.TagEndLayer)
 			{
+				if (suppressedLayers > 0)
+				{
+					suppressedLayers--; // the matching BeginLayer never opened a layer, so this closes nothing
+					continue;
+				}
 				if (_layerStack.Count == 0)
 					continue;
 				var layer = _layerStack[^1];
@@ -121,6 +138,9 @@ internal sealed partial class WebGpuRenderContext
 
 	// Index-buffer format id understood by the shim's OP_SET_INDEX_BUFFER: 0 = uint16.
 	private const int IndexFormatUint16 = 0;
+
+	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.
+	private bool _warnedLayerNesting;
 
 	// Re-set the pipeline + list geometry after a fresh render pass (WebGPU render passes start with no bound state).
 	private void RebindList(WebGpuCommandWriter writer, int pipeline, int vtxOffset, int idxOffset)

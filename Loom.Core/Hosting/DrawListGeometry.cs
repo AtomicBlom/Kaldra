@@ -1,4 +1,5 @@
 using System.Numerics;
+using Loom.Core.Diagnostics;
 using Loom.Core.Geometry;
 using Loom.Core.Primitives;
 
@@ -47,6 +48,36 @@ public static class DrawListGeometry
 
 	/// <summary>Vertices <see cref="WriteCompositeQuad"/> writes — two triangles, no index buffer.</summary>
 	public const int CompositeQuadVertexCount = 6;
+
+	/// <summary>
+	/// How deeply group-opacity layers may nest. Each open layer needs its own pooled offscreen target for as long as
+	/// it is open, so the depth is bounded; this is the number every backend's pool is sized for, held in common so a
+	/// list that renders on one renders on all.
+	/// </summary>
+	public const int MaxLayerNesting = 8;
+
+	/// <summary>
+	/// Report a list that nests group-opacity layers past <see cref="MaxLayerNesting"/>, at most once per
+	/// <paramref name="warned"/> flag — a backend keeps one per render context, so a pathological list says so once
+	/// instead of every frame.
+	/// <para>
+	/// A warning rather than a throw, which is the opposite of how Loom usually treats an over-promised API. The
+	/// difference is where it happens: this is discovered <em>mid-command-stream</em>, with a render scope open and a
+	/// layer stack half-unwound, and throwing there abandons a command buffer in a state nothing can recover. A subtree
+	/// that renders unfaded at absurd nesting is a smaller failure than that. Derive-time over-promises and unmapped
+	/// enum values still throw; this one cannot.
+	/// </para>
+	/// </summary>
+	public static void WarnLayerNestingExceeded(ref bool warned, int depth)
+	{
+		if (warned)
+			return;
+		warned = true;
+		LoomLog.Warning(
+			$"a draw list nests group-opacity layers {depth} deep but at most {MaxLayerNesting} are supported; " +
+			"the subtrees past that render unfaded. Flatten the nested opacities — a group alpha multiplies, so one " +
+			"container carrying the product renders the same thing with one layer.");
+	}
 
 	/// <summary>
 	/// A command's scissor rectangle in target pixels, clamped to the target. Each edge is truncated independently,

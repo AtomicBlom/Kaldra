@@ -69,11 +69,22 @@ internal sealed unsafe partial class DirectX12RenderContext
 		// The texture whose SRV the bound table currently describes, and that table's handle. -1 = nothing bound yet.
 		var listTextureId = -1;
 		var listTable = default(GpuDescriptorHandle);
+		// Layer markers opened past the nesting cap. Counted so each one's EndLayer is suppressed with it: popping a
+		// real layer for a suppressed marker's EndLayer resolves it early, and everything drawn afterwards lands in a
+		// target that is already finished with.
+		var suppressedLayers = 0;
 
 		foreach (var c in commands)
 		{
-			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer && _layerStack.Count < DirectX12LayerTargets.MaxNesting)
+			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer)
 			{
+				if (_layerStack.Count >= DrawListGeometry.MaxLayerNesting)
+				{
+					suppressedLayers++;
+					DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, _layerStack.Count + suppressedLayers);
+					continue;
+				}
+
 				// Detour into a fresh transparent offscreen target: render the faded subtree at full alpha so
 				// overlapping children blend against each other, not a faded backdrop.
 				var depth = _layerStack.Count;
@@ -96,6 +107,11 @@ internal sealed unsafe partial class DirectX12RenderContext
 			}
 			if (layersSupported && c.Tag == DrawListGeometry.TagEndLayer)
 			{
+				if (suppressedLayers > 0)
+				{
+					suppressedLayers--; // the matching BeginLayer never opened a layer, so this closes nothing
+					continue;
+				}
 				if (_layerStack.Count == 0)
 					continue;
 				var (depth, tint, bounds) = _layerStack[^1];
@@ -166,6 +182,9 @@ internal sealed unsafe partial class DirectX12RenderContext
 				_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
 		}
 	}
+
+	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.
+	private bool _warnedLayerNesting;
 
 	// The derived layer area as a DirectX 12 rect (corners, not extents).
 	private static Box2D<int> LayerRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, uint width, uint height)

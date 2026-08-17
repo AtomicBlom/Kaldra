@@ -82,11 +82,22 @@ internal sealed unsafe partial class VulkanRenderContext
 
 		// The texture the currently bound descriptor set describes. -1 = nothing bound yet.
 		var listTextureId = -1;
+		// Layer markers opened past the nesting cap. Counted so each one's EndLayer is suppressed with it: popping a
+		// real layer for a suppressed marker's EndLayer resolves it early, and everything drawn afterwards lands in a
+		// target that is already finished with.
+		var suppressedLayers = 0;
 
 		foreach (var c in commands)
 		{
 			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer)
 			{
+				if (_layerStack.Count >= DrawListGeometry.MaxLayerNesting)
+				{
+					suppressedLayers++;
+					DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, _layerStack.Count + suppressedLayers);
+					continue;
+				}
+
 				// Suspend the current scope, render the faded subtree into a fresh transparent offscreen target at
 				// full alpha (so overlapping children blend against each other, not a faded backdrop).
 				_vk.CmdEndRendering(_cmd);
@@ -107,6 +118,11 @@ internal sealed unsafe partial class VulkanRenderContext
 			}
 			if (layersSupported && c.Tag == DrawListGeometry.TagEndLayer)
 			{
+				if (suppressedLayers > 0)
+				{
+					suppressedLayers--; // the matching BeginLayer never opened a layer, so this closes nothing
+					continue;
+				}
 				if (_layerStack.Count == 0)
 					continue;
 				var layer = _layerStack[^1];
@@ -187,6 +203,9 @@ internal sealed unsafe partial class VulkanRenderContext
 			BeginColorScope(((ReadOnlySpan<ImageView>)_scopeColorViews)[.._scopeColorCount], AttachmentLoadOp.Load, new Rect2D(default, layerArea));
 		}
 	}
+
+	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.
+	private bool _warnedLayerNesting;
 
 	// The derived layer area as a Vulkan render area.
 	private static Rect2D LayerRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, Extent2D area)

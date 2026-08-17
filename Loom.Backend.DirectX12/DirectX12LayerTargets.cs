@@ -1,3 +1,4 @@
+using Loom.Core.Hosting;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using DxgiFormat = Silk.NET.DXGI.Format;
@@ -17,7 +18,9 @@ namespace Loom.Backend.DirectX12;
 internal sealed unsafe class DirectX12LayerTargets : IDisposable
 {
 	// A practical ceiling on UI group nesting; the RTV heap is sized for this many targets per frame slot.
-	private const int MaxDepth = 8;
+	// Sized from the neutral cap the caller enforces, not a number of its own: the pool is indexed by nesting depth, so
+	// a pool smaller than the cap is an out-of-range write and a pool larger is memory nothing can reach.
+	private const int MaxDepth = DrawListGeometry.MaxLayerNesting;
 
 	private readonly DirectX12Context _ctx;
 	private readonly int _slots;
@@ -64,9 +67,6 @@ internal sealed unsafe class DirectX12LayerTargets : IDisposable
 		_height = height;
 		_format = format;
 	}
-
-	/// <summary>The maximum supported nesting depth (layers beyond this fold to no-ops in the caller).</summary>
-	public static int MaxNesting => MaxDepth;
 
 	/// <summary>Get (creating on first use) the layer target for <paramref name="slot"/> at nesting <paramref name="depth"/>.</summary>
 	public ref Target Acquire(uint slot, int depth)
