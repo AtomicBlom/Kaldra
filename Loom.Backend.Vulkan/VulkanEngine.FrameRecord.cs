@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Numerics;
 using Loom.Core.Diagnostics;
 using Loom.Core.Graph;
@@ -183,7 +182,7 @@ internal sealed unsafe partial class VulkanEngine
 			// Wrap each pass (its pre-barriers + its draws/dispatch) in a debug-label scope, nested under groups
 			// derived from the dotted pass name — so a RenderDoc capture reads as a "bloom" group containing
 			// "down1", "up0", … instead of a flat command list. [Conditional]: vanishes without UseNamedGPUObjects.
-			BeginPassLabels(cmd, pass);
+			BeginPassLabels(pass);
 			EmitTransitions(cmd, pass.Transitions.AsSpan());
 			// Timestamp the pass's own work (after its pre-barriers, around RecordPass) — the barriers belong to the
 			// transition, not the pass. Top/Bottom-of-pipe is the portable choice; the device coarsens as needed.
@@ -192,12 +191,12 @@ internal sealed unsafe partial class VulkanEngine
 			RecordPass(cmd, pass);
 			if (timing)
 				_vk.CmdWriteTimestamp2(cmd, PipelineStageFlags2.BottomOfPipeBit, _timingPools[_currentFrame], (uint)(2 * passIndex + 1));
-			_ctx.EndDebugLabel(cmd); // close the leaf scope opened by BeginPassLabels
+			EndPassLabel(); // close the leaf scope opened by BeginPassLabels
 			passIndex++;
 		}
 		if (timing)
 			_timingValid[_currentFrame] = true;
-		CloseTrailingLabels(cmd); // close any groups still open after the last pass
+		CloseTrailingLabels(); // close any groups still open after the last pass
 
 		RecordReadback(cmd);
 		FinishFrame(cmd, captureBuffer);
@@ -205,35 +204,19 @@ internal sealed unsafe partial class VulkanEngine
 		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
 	}
 
-	// Open this pass's debug-label scopes: close the groups it leaves behind, open the ones it enters, then open
-	// its own leaf scope (closed by the caller after the pass records). [Conditional] so the whole thing — loops
-	// and all — compiles away without UseNamedGPUObjects.
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void BeginPassLabels(CommandBuffer cmd, PassBarriers pass)
-	{
-		for (var i = 0; i < pass.LabelCloses; i++)
-			_ctx.EndDebugLabel(cmd);
-		foreach (var group in pass.LabelOpens)
-			_ctx.BeginDebugLabel(cmd, group);
-		_ctx.BeginDebugLabel(cmd, pass.LeafLabel);
-	}
+	// The label scopes annotate the command buffer this frame is recording into — the same one RecordGraph was handed.
+	protected override void BeginLabel(string name) => _ctx.BeginDebugLabel(_commandBuffers[_currentFrame], name);
 
-	// Close the debug-label groups still open after the final pass (balances BeginPassLabels' opens).
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void CloseTrailingLabels(CommandBuffer cmd)
-	{
-		for (var i = 0; i < Barriers.TrailingLabelCloses; i++)
-			_ctx.EndDebugLabel(cmd);
-	}
+	protected override void EndLabel() => _ctx.EndDebugLabel(_commandBuffers[_currentFrame]);
 
 	private void RecordPass(CommandBuffer cmd, PassBarriers pass)
 	{
 		// The app-writable parameter buffers this pass .Reads — bound to the technique's uniform slots 0..K-1.
 		Span<int> uniformIds = stackalloc int[VulkanRenderContext.MaxUniformBuffers];
-		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		var uniformCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, uniformIds);
 		// The app-writable storage buffers this pass .Reads — bound to the technique's storage-buffer slots.
 		Span<int> storageIds = stackalloc int[VulkanRenderContext.MaxStorageBuffers];
-		var storageCount = CollectStorageIds(pass.Pass, storageIds);
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
 
 		// Compute passes have no attachments and no dynamic-rendering scope — just bind + dispatch. The
 		// resource transitions (storage GENERAL, the consumer's SHADER_READ) were already emitted before this.
@@ -328,28 +311,6 @@ internal sealed unsafe partial class VulkanEngine
 		pass.Pass.Record?.Invoke(_context);
 
 		_vk.CmdEndRendering(cmd);
-	}
-
-	// Fill `ids` with the app-writable parameter buffers a pass .Reads (its ReadUniform edges, in .Reads order) —
-	// they bind to the technique's uniform slots 0..; returns the count.
-	private static int CollectUniformIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadUniform)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
-
-	// Fill `ids` with the app-writable storage buffers a pass .Reads (its ReadStorage edges, in .Reads order) —
-	// they bind to the technique's storage-buffer slots; returns the count.
-	private static int CollectStorageIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadStorage)
-				ids[n++] = access.Resource.Id;
-		return n;
 	}
 
 	// Terminal: hand the present target to the swapchain, copying it out first if a capture was requested.

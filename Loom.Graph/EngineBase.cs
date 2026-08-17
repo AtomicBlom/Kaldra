@@ -460,6 +460,57 @@ public abstract class EngineBase : IEngine
 	/// </summary>
 	protected abstract void RebuildGraphResources(RenderGraph authored, RenderGraph executed);
 
+	// ── GPU debug-label scopes: derived nesting, driven identically on every backend ──
+
+	/// <summary>
+	/// Open a pass's debug-label scopes on the command stream being recorded: close the groups the previous pass
+	/// leaves behind, open the ones this pass enters, then open the pass's own leaf scope. Paired with
+	/// <see cref="EndPassLabel"/> once the pass has recorded, and with <see cref="CloseTrailingLabels"/> after the
+	/// last pass of the frame.
+	/// <para>
+	/// The nesting is derived once from the dotted pass names (<see cref="PassBarriers.LabelOpens"/> /
+	/// <see cref="PassBarriers.LabelCloses"/>), so a capture reads as a <c>bloom</c> group containing <c>down1</c>,
+	/// <c>up0</c>, … rather than a flat command list.
+	/// </para>
+	/// <para>
+	/// <b><c>[Conditional]</c> belongs here, not on the hooks.</b> The attribute is honoured where the <em>call</em>
+	/// is compiled, so carrying it on this method makes <c>LOOM_NAMED_GPU_OBJECTS</c> as this assembly sees it the one
+	/// symbol that governs every backend — and an <c>override</c> cannot carry the attribute at all, so the hooks
+	/// could not have been the gate.
+	/// </para>
+	/// </summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	protected void BeginPassLabels(PassBarriers pass)
+	{
+		for (var i = 0; i < pass.LabelCloses; i++)
+			EndLabel();
+		foreach (var group in pass.LabelOpens)
+			BeginLabel(group);
+		BeginLabel(pass.LeafLabel);
+	}
+
+	/// <summary>Close the leaf scope <see cref="BeginPassLabels"/> opened, once the pass has finished recording.</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	protected void EndPassLabel() => EndLabel();
+
+	/// <summary>Close the label groups still open after the final pass, balancing <see cref="BeginPassLabels"/>' opens.</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	protected void CloseTrailingLabels()
+	{
+		for (var i = 0; i < Barriers.TrailingLabelCloses; i++)
+			EndLabel();
+	}
+
+	/// <summary>
+	/// Open a named scope on the command stream this frame is recording into. Called only from the label bookkeeping
+	/// above and only mid-record, which is why nothing is handed in: a backend reaches for its own current command
+	/// buffer/list. A backend whose API carries no such annotation implements this as an explicit no-op.
+	/// </summary>
+	protected abstract void BeginLabel(string name);
+
+	/// <summary>Close the most recently opened scope — see <see cref="BeginLabel"/>.</summary>
+	protected abstract void EndLabel();
+
 	// ── The backend's own half: the per-frame record loop, resource creation, teardown. ──
 
 	/// <inheritdoc/>

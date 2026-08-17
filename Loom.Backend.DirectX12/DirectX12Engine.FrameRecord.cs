@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Graph;
@@ -67,7 +66,7 @@ public sealed unsafe partial class DirectX12Engine
 				RecordRasterPass(index, pass);
 			if (timing)
 				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex + 1));
-			_ctx.EndDebugLabel(_commandList); // close the leaf scope opened by BeginPassLabels
+			EndPassLabel(); // close the leaf scope opened by BeginPassLabels
 			passIndex++;
 		}
 		CloseTrailingLabels(); // close any groups still open after the last pass
@@ -201,9 +200,9 @@ public sealed unsafe partial class DirectX12Engine
 		_commandList.RSSetScissorRects(1, &scissor);
 
 		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
-		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		var uniformCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, uniformIds);
 		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
-		var storageCount = CollectStorageIds(pass.Pass, storageIds);
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
 		_context.BeginPass(pass.Pass, new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
 
 		// Hand the context this pass's render-target handles + extent so a draw-list group-opacity layer can rebind
@@ -219,53 +218,15 @@ public sealed unsafe partial class DirectX12Engine
 	private void RecordComputePass(PassBarriers pass)
 	{
 		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
-		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		var uniformCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, uniformIds);
 		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
-		var storageCount = CollectStorageIds(pass.Pass, storageIds);
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
 		_context.BeginPass(pass.Pass, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, uniformIds[..uniformCount], storageIds[..storageCount]);
 		pass.Pass.Record?.Invoke(_context);
 	}
 
-	// Fill `ids` with the app-writable parameter buffers a pass .Reads (its ReadUniform edges, in .Reads order) —
-	// they bind to the technique's uniform CBVs b1..; returns the count.
-	private static int CollectUniformIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadUniform)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
+	// The label scopes annotate the one command list this backend records every frame into.
+	protected override void BeginLabel(string name) => _ctx.BeginDebugLabel(_commandList, name);
 
-	// Fill `ids` with the app-writable storage buffers a pass .Reads (its ReadStorage edges, in .Reads order) —
-	// they bind to the technique's read-only structured-buffer root SRVs; returns the count.
-	private static int CollectStorageIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadStorage)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
-
-	// Open this pass's debug-label scopes: close the groups it leaves behind, open the ones it enters, then open
-	// its own leaf scope (closed by the caller after the pass records). [Conditional] so the whole thing — loops
-	// and all — compiles away without UseNamedGPUObjects.
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void BeginPassLabels(PassBarriers pass)
-	{
-		for (var i = 0; i < pass.LabelCloses; i++)
-			_ctx.EndDebugLabel(_commandList);
-		foreach (var group in pass.LabelOpens)
-			_ctx.BeginDebugLabel(_commandList, group);
-		_ctx.BeginDebugLabel(_commandList, pass.LeafLabel);
-	}
-
-	// Close the debug-label groups still open after the final pass (balances BeginPassLabels' opens).
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void CloseTrailingLabels()
-	{
-		for (var i = 0; i < Barriers.TrailingLabelCloses; i++)
-			_ctx.EndDebugLabel(_commandList);
-	}
+	protected override void EndLabel() => _ctx.EndDebugLabel(_commandList);
 }

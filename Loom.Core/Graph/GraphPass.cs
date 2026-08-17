@@ -44,4 +44,28 @@ public sealed class GraphPass
 			if (access.Kind == kind)
 				yield return access.Resource;
 	}
+
+	/// <summary>
+	/// Fill <paramref name="ids"/> with the ids of the resources this pass touches under <paramref name="kind"/>, in
+	/// declaration order, and return how many were written. The allocation-free counterpart to
+	/// <see cref="ResourcesWith"/>, which is an iterator method — every backend calls this once per pass to resolve
+	/// the constants and storage buffers a pass <c>.Reads</c> onto a technique's binding slots, and the steady render
+	/// loop must not allocate.
+	/// <para>
+	/// Ids rather than handles because that is what the callers bind by, and it keeps the buffer a <c>stackalloc</c>
+	/// span of blittable ints.
+	/// </para>
+	/// </summary>
+	/// <remarks>
+	/// Sized by the caller from the matching <see cref="GraphLimits"/> budget, which schedule derivation already
+	/// rejects a pass for exceeding — so a derived plan cannot overflow <paramref name="ids"/>.
+	/// </remarks>
+	public int ResourceIdsWith(AccessKind kind, Span<int> ids)
+	{
+		var n = 0;
+		foreach (var access in Accesses)
+			if (access.Kind == kind)
+				ids[n++] = access.Resource.Id;
+		return n;
+	}
 }

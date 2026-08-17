@@ -40,7 +40,12 @@ internal sealed partial class WebGpuEngine
 			EmitBufferUpload(id, bytes);
 
 		foreach (var pass in Barriers.Passes)
+		{
+			BeginPassLabels(pass);
 			RecordPass(pass);
+			EndPassLabel();
+		}
+		CloseTrailingLabels();
 
 		// A requested capture copies the backbuffer into a map-read buffer at the tail of this frame's stream.
 		RecordCaptureIfRequested();
@@ -73,9 +78,9 @@ internal sealed partial class WebGpuEngine
 		// The app-writable parameter and storage buffers this pass .Reads — bound to the technique's uniform and
 		// storage-buffer slots at draw/dispatch time.
 		Span<int> constantsIds = stackalloc int[WebGpuRenderContext.MaxUniformBuffers];
-		var constantsCount = CollectReads(pass.Pass, AccessKind.ReadUniform, constantsIds);
+		var constantsCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, constantsIds);
 		Span<int> storageIds = stackalloc int[WebGpuRenderContext.MaxStorageBuffers];
-		var storageCount = CollectReads(pass.Pass, AccessKind.ReadStorage, storageIds);
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
 
 		// WebGPU tracks resource state itself, so the plan's transitions (pass.Transitions) are intentionally
 		// not emitted — only the attachment load/store actions survive, into the render-pass descriptor.
@@ -136,16 +141,13 @@ internal sealed partial class WebGpuEngine
 		_writer.EndPass();
 	}
 
-	// Fill `ids` with the resource ids a pass reads under `kind` (its ReadUniform / ReadStorage edges, in .Reads
-	// order); returns the count. They bind to the technique's uniform / storage-buffer slots in this order.
-	private static int CollectReads(GraphPass pass, AccessKind kind, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == kind)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
+	// Deliberately empty, not omitted: the derived label nesting is driven here exactly as on the other backends, and
+	// dropping the annotation is this backend's choice rather than a gap in the loop. Carrying it would mean new
+	// command-stream opcodes for the encoder's pushDebugGroup/popDebugGroup and a protocol-version bump; the scopes
+	// are diagnostic-only, so nothing about the frame changes without them.
+	protected override void BeginLabel(string name) { }
+
+	protected override void EndLabel() { }
 
 	private static int ToLoadOp(LoadAction load) => load switch
 	{
