@@ -13,7 +13,7 @@ namespace Loom.Backend.Vulkan;
 /// <b>Host-visible, written map→copy→unmap, and that is forced rather than chosen.</b> <c>DrawList</c> is called
 /// from inside a pass's record callback, which runs between <c>CmdBeginRendering</c> and <c>CmdEndRendering</c>, and
 /// <c>vkCmdCopyBuffer</c> is illegal inside a dynamic-rendering scope. There is also no engine-side hook before the
-/// pass walk where the producer's bytes exist — <c>RecordGraph</c> drains only the engine's own constants and
+/// pass walk where the producer's bytes exist — the shared record spine drains only the engine's own constants and
 /// storage shadows. So the staged device-local upload the mesh store uses is not available here, and the right
 /// shape is the existing ring minus the per-frame reset: same write path, kept instead of bump-allocated.
 /// </para>

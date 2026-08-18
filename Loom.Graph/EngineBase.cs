@@ -511,6 +511,109 @@ public abstract class EngineBase : IEngine
 	/// <summary>Close the most recently opened scope — see <see cref="BeginLabel"/>.</summary>
 	protected abstract void EndLabel();
 
+	// ── The per-frame record spine, shared by every backend ──
+
+	/// <summary>
+	/// Record the derived plan for one frame: flush the app-writable buffer shadows, then walk
+	/// <see cref="BarrierPlan.Passes"/> emitting each pass's transitions, debug-label scope and timestamps around its
+	/// own recording, then the readback copies and the frame's tail. A backend calls this once from
+	/// <see cref="RenderFrame"/>, with its own command buffer/list already open, and fills in the hooks below.
+	/// <para>
+	/// The value is the <em>order</em>, not the loop. Every step here has to happen in this sequence on every backend —
+	/// a pass's barriers before its timestamp because the barriers belong to the transition rather than the pass, the
+	/// readback copies before the frame's tail because the tail may transition the very targets being copied — and
+	/// three transliterations of a fixed sequence are three chances to get one of them subtly wrong. They already had:
+	/// two backends recorded readback before capture and the third recorded capture before readback, which is harmless
+	/// only for as long as those copies stay independent.
+	/// </para>
+	/// </summary>
+	protected void RecordFrame()
+	{
+		// Flush each app-writable buffer's CPU shadow into what this frame will read. Re-uploading every frame (these
+		// are tiny) is what makes the last IEngine.Write persist: a static parameter is written once and an animated one
+		// per frame, and either way what the GPU reads this frame is current.
+		foreach (var (id, bytes) in ConstantsShadows)
+			WriteConstantsShadow(id, bytes);
+		foreach (var (id, bytes) in StorageShadows)
+			WriteStorageShadow(id, bytes);
+
+		BeginFrameTimestamps();
+
+		var passIndex = 0;
+		foreach (var pass in Barriers.Passes)
+		{
+			BeginPassLabels(pass);
+			EmitTransitions(pass.Transitions.AsSpan());
+			// The timestamps bracket the pass's own work, after its pre-barriers: those barriers are the cost of the
+			// transition into this pass, not of the pass.
+			WritePassBeginTimestamp(passIndex);
+			if (pass.Pass.Kind == PassKind.Compute)
+				RecordComputePass(pass);
+			else
+				RecordRasterPass(pass);
+			WritePassEndTimestamp(passIndex);
+			EndPassLabel();
+			passIndex++;
+		}
+
+		EndFrameTimestamps();
+		CloseTrailingLabels();
+
+		// Every g.Readback target copies out before the tail, which may transition those same targets.
+		RecordReadback();
+		FinishFrame();
+	}
+
+	/// <summary>Upload one <see cref="ResourceKind.Constants"/> shadow into what this frame's passes will read.</summary>
+	protected abstract void WriteConstantsShadow(int id, ReadOnlySpan<byte> bytes);
+
+	/// <summary>Upload one <see cref="ResourceKind.Storage"/> shadow into what this frame's passes will read.</summary>
+	protected abstract void WriteStorageShadow(int id, ReadOnlySpan<byte> bytes);
+
+	/// <summary>
+	/// Emit the derived resource transitions for the pass about to record. A backend whose API tracks resource state
+	/// itself implements this as an explicit no-op — the plan's transitions are then genuinely not needed, which is
+	/// worth saying rather than leaving as a gap in the loop.
+	/// </summary>
+	protected abstract void EmitTransitions(ReadOnlySpan<ResourceTransition> transitions);
+
+	/// <summary>
+	/// Record a compute pass: no attachments and no render scope, so bind and dispatch. Its resource transitions were
+	/// emitted already.
+	/// </summary>
+	protected abstract void RecordComputePass(PassBarriers pass);
+
+	/// <summary>
+	/// Record a raster pass: open a render scope over its derived attachments, set the viewport and scissor, then run
+	/// its record callback. Left whole to the backend rather than templated further — the attachment descriptors,
+	/// formats and views are almost entirely API structs, and forcing them into one signature is what would push
+	/// graphics types into this layer.
+	/// </summary>
+	protected abstract void RecordRasterPass(PassBarriers pass);
+
+	/// <summary>Copy each <c>g.Readback</c> target into this frame slot's readback buffer; a no-op when the graph declares none.</summary>
+	protected abstract void RecordReadback();
+
+	/// <summary>
+	/// The frame's tail: the requested capture, if any, and the derived final transitions — including whatever the
+	/// present target needs to be handed to the presentation engine in. One hook rather than two because the backends
+	/// legitimately fuse them differently: one replaces the final transition with the capture copy's own barriers, the
+	/// other tracks resource state and so can run the final transitions from wherever the copy left the target.
+	/// </summary>
+	protected abstract void FinishFrame();
+
+	/// <summary>Prepare this frame's timestamp storage (e.g. reset a query pool on the device timeline). A no-op when timing is off or unsupported.</summary>
+	protected virtual void BeginFrameTimestamps() { }
+
+	/// <summary>Write the opening timestamp for pass <paramref name="passIndex"/>.</summary>
+	protected virtual void WritePassBeginTimestamp(int passIndex) { }
+
+	/// <summary>Write the closing timestamp for pass <paramref name="passIndex"/>.</summary>
+	protected virtual void WritePassEndTimestamp(int passIndex) { }
+
+	/// <summary>Finish this frame's timing (resolve the queries, mark the slot readable). A no-op when timing is off or unsupported.</summary>
+	protected virtual void EndFrameTimestamps() { }
+
 	// ── The backend's own half: the per-frame record loop, resource creation, teardown. ──
 
 	/// <inheritdoc/>
