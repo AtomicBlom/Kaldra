@@ -19,4 +19,13 @@ public static class GraphLimits
 
 	/// <summary>Storage buffers one pass may <c>.Reads</c>, bound to the technique's storage-buffer slots in declaration order.</summary>
 	public const int MaxStorageBuffersPerPass = 8;
+
+	/// <summary>
+	/// Colour attachments one raster pass may write. Eight is the portable number, not an arbitrary one: it is both
+	/// <c>D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT</c> and WebGPU's <c>maxColorAttachments</c>. Vulkan's own limit is
+	/// usually higher, so a pass declaring more used to derive and record there and fail on the other two —
+	/// <see cref="Loom.Core.Hosting.EngineCapabilities.MaxColorAttachments"/> reports whatever headroom a particular
+	/// device has above this, but the graph is held to the floor so it stays portable.
+	/// </summary>
+	public const int MaxColorAttachmentsPerPass = 8;
 }

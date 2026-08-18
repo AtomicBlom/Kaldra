@@ -141,8 +141,10 @@ public sealed unsafe partial class DirectX12Engine
 			var id = attachment.Resource.Id;
 			if (attachment.State == ResourceState.ColorAttachment)
 			{
-				if (colorCount >= 8)
-					throw new NotSupportedException("DirectX12: a pass declares more than 8 colour attachments; D3D12 caps simultaneous render targets at 8 (D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT).");
+				// Defensive: derivation already rejects a pass over the limit, and the stack arrays below are sized to
+				// it. Kept so a change to that rule cannot silently overrun them.
+				if (colorCount >= GraphLimits.MaxColorAttachmentsPerPass)
+					throw new NotSupportedException($"DirectX12: a pass declares more than {GraphLimits.MaxColorAttachmentsPerPass} colour attachments, which schedule derivation should have rejected.");
 				if (attachment.Resource.IsBackbuffer)
 				{
 					rtv[colorCount] = _presentTarget.RtvHandle(index);
@@ -179,8 +181,10 @@ public sealed unsafe partial class DirectX12Engine
 			}
 		}
 
+		// Defensive, as above: an attachment-less raster pass is rejected at derive time now, on every backend rather
+		// than only this one.
 		if (colorCount == 0 && !hasDepth)
-			throw new NotSupportedException("DirectX12: a raster pass with no colour or depth target is not supported yet.");
+			throw new NotSupportedException("DirectX12: a raster pass with no colour or depth target, which schedule derivation should have rejected.");
 
 		_commandList.OMSetRenderTargets((uint)colorCount, colorCount > 0 ? rtv : null, false, hasDepth ? &dsv : null);
 

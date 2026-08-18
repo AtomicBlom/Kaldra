@@ -318,6 +318,56 @@ public class GraphScheduleTests
 	}
 
 	[Test]
+	public void A_raster_pass_with_no_attachment_throws()
+	{
+		// DirectX 12 threw for this while recording; Vulkan and WebGPU began a 0x0 pass and drew nothing, which is
+		// indistinguishable from a pass whose draws are broken. Rejected for all three, before a frame is recorded.
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("nowhere").Samples(g.Screen.Color("src", Format.Rgba8Srgb));
+				g.Pass("view").Writes(screen);
+				g.Present(screen);
+			}));
+
+		ex.Message.ShouldContain("nowhere");
+		ex.Message.ShouldContain("g.Compute");
+	}
+
+	[Test]
+	public void Writing_more_colour_attachments_than_a_pass_can_bind_throws()
+	{
+		// Eight is the portable ceiling — D3D12's simultaneous render targets and WebGPU's maxColorAttachments — while
+		// Vulkan usually allows more, so this used to derive and record on one backend and fail on the others.
+		var over = GraphLimits.MaxColorAttachmentsPerPass + 1;
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var pass = g.Pass("fat");
+				for (var i = 0; i < over; i++)
+					pass.Writes(g.Screen.Color($"t{i}", Format.Rgba8Srgb));
+			}));
+
+		ex.Message.ShouldContain("fat");
+		ex.Message.ShouldContain(over.ToString());
+		ex.Message.ShouldContain(GraphLimits.MaxColorAttachmentsPerPass.ToString());
+	}
+
+	[Test]
+	public void Writing_exactly_the_colour_attachment_cap_is_allowed()
+	{
+		// The boundary: the cap is what the backends' attachment arrays are sized to, so exactly that many must derive.
+		Should.NotThrow(() =>
+			Schedule(g =>
+			{
+				var pass = g.Pass("wide");
+				for (var i = 0; i < GraphLimits.MaxColorAttachmentsPerPass; i++)
+					pass.Writes(g.Screen.Color($"t{i}", Format.Rgba8Srgb));
+			}));
+	}
+
+	[Test]
 	public void A_compute_pass_may_touch_resources_of_any_extent()
 	{
 		// Compute has no attachments and no render area, so the extent rule must not reach it.
