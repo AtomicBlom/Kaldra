@@ -216,7 +216,7 @@ internal sealed partial class WebGpuRenderContext
 	{
 		dst.Clear();
 		var floats = MemoryMarshal.Cast<byte, float>(dst);
-		var pushLen = Math.Min(push.Length, floats.Length - 1);
+		var pushLen = Math.Min(push.Length, DrawListGeometry.MaxListPushFloats);
 		for (var i = 0; i < pushLen; i++)
 			floats[i] = push[i];
 		if (forceSdr && pushLen > DrawListGeometry.HdrPushSlot)

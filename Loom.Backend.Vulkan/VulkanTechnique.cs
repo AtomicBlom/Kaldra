@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
+using Loom.Core.Hosting;
 using Loom.Graph;
 using Silk.NET.Vulkan;
 using Format = Silk.NET.Vulkan.Format;
@@ -146,10 +147,11 @@ public sealed unsafe class VulkanTechnique : IDisposable
 
 	/// <summary>
 	/// Size of a draw-list technique's all-stage push block (<see cref="VulkanTechniqueDescription.HasListPush"/>):
-	/// the per-list scalars plus the per-command tag slot the backend rewrites each draw. Eight 32-bit words covers
-	/// the UI block (scale, translate, paper-white, hdr flag, kind) with headroom; well within the 128-byte minimum.
+	/// the per-list scalars plus the per-command tag slot the backend rewrites each draw. Sized from the neutral push
+	/// clamp rather than a number of its own, so the block provably holds the largest push plus its tag; well within
+	/// the 128-byte guaranteed minimum.
 	/// </summary>
-	public const int ListPushSize = 8 * sizeof(float);
+	public const int ListPushSize = (DrawListGeometry.MaxListPushFloats + 1) * sizeof(float);
 
 	// Zero or one descriptor set (whether the technique binds resources), plus at most one push-constant
 	// range: a draw-list technique gets an all-stage range for its scale/translate/tag block; post/compute

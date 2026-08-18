@@ -39,9 +39,11 @@ internal sealed unsafe partial class VulkanRenderContext
 		_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
 		_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
 
-		// Use the current pass scope dimensions for the viewport; fall back to the framebuffer extent for
-		// passes that don't set a scope (e.g. direct screen passes without a domain).
-		var layerArea = _scopeArea.Width != 0 ? _scopeArea : _fbExtent;
+		// The current pass scope's extent, which is always set: a raster pass is now rejected at derive time unless it
+		// has an attachment, an attachment has a positive extent, and the engine hands the scope over before running the
+		// pass callback this is called from. The other backends read their scope extent unguarded for the same reason,
+		// and a fallback here only made the three look like they disagreed.
+		var layerArea = _scopeArea;
 		Viewport viewport = new() { X = 0, Y = 0, Width = layerArea.Width, Height = layerArea.Height, MinDepth = 0, MaxDepth = 1 };
 		_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
 
@@ -49,7 +51,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		// its tag (the draw-list contract). Pad to the layout's fixed range so the shader always reads defined memory.
 		const int blockFloats = VulkanTechnique.ListPushSize / sizeof(float);
 		var block = stackalloc float[blockFloats];
-		var pushLen = Math.Min(push.Length, blockFloats - 1);
+		var pushLen = Math.Min(push.Length, DrawListGeometry.MaxListPushFloats);
 		for (var i = 0; i < pushLen; i++)
 			block[i] = push[i];
 

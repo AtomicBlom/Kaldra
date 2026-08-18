@@ -50,6 +50,20 @@ public static class DrawListGeometry
 	public const int CompositeQuadVertexCount = 6;
 
 	/// <summary>
+	/// The most floats a draw list's shared push may carry, so that the per-command tag always lands in the slot right
+	/// after them — which is the whole draw-list push contract, and the one thing the shader indexes by.
+	/// <para>
+	/// Held in common because the backends' push blocks are <em>not</em> the same size (the desktop ones declare eight
+	/// floats, the WebGPU one sixteen) and each clamped the push to its own block instead. For every push shipped today
+	/// — six floats — that lands the tag in the same slot either way, so nothing diverges; a caller passing eight or
+	/// more would have put the tag at slot 7 on the desktop backends and slot 8 on WebGPU, and the shaders would have
+	/// read different things from the same list. One clamp makes that impossible while leaving a larger block's tail as
+	/// harmless padding.
+	/// </para>
+	/// </summary>
+	public const int MaxListPushFloats = 7;
+
+	/// <summary>
 	/// How deeply group-opacity layers may nest. Each open layer needs its own pooled offscreen target for as long as
 	/// it is open, so the depth is bounded; this is the number every backend's pool is sized for, held in common so a
 	/// list that renders on one renders on all.

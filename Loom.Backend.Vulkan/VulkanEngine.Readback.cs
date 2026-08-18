@@ -49,18 +49,6 @@ internal sealed unsafe partial class VulkanEngine
 		}
 	}
 
-	// Bytes per texel of a readback target's format — the stride StoreReadback hands the app, and the size of each
-	// per-slot staging buffer. Extend as new readback formats appear (the picking id buffer is R16F).
-	private static int BytesPerTexel(GraphFormat format) => format switch
-	{
-		GraphFormat.R16F => 2,
-		GraphFormat.Rg16F => 4,
-		GraphFormat.R32Uint => 4,
-		GraphFormat.Rgba8Unorm or GraphFormat.Rgba8Srgb => 4,
-		GraphFormat.Rgba16F => 8,
-		_ => throw new NotSupportedException($"Vulkan: readback of format {format} is not supported."),
-	};
-
 	// Read this slot's timestamps (begin/end per pass) and decode them into _timings + the frame total. Called after
 	// the slot's fence signals, so the queries are complete. Mask to the queue's valid bits before decoding; the
 	// timestamp period is nanoseconds per tick, so ns/1e6 is the milliseconds-per-tick the decoder needs.

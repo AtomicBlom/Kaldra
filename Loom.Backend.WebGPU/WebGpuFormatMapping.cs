@@ -56,16 +56,6 @@ internal static class WebGpuFormatMapping
 		_ => throw new WebGpuException($"No texel size for texture format {format}."),
 	};
 
-	/// <summary>Bytes per texel — sizes readback/capture buffer rows.</summary>
-	public static int BytesPerTexel(Format format) => format switch
-	{
-		Format.Rgba8Srgb or Format.Rgba8Unorm or Format.Bgra8Srgb or Format.Rgb10A2 or Format.R32Uint or Format.R32F or Format.Depth32F => 4,
-		Format.Rgba16F => 8,
-		Format.R16F => 2,
-		Format.Rg16F => 4,
-		_ => throw new WebGpuException($"No texel size for {format}."),
-	};
-
 	/// <summary>The format id of the canvas backbuffer given the browser's preferred format name. The canvas is
 	/// configured with the plain format and rendered through an sRGB view, matching the other backends' sRGB
 	/// swapchains so shared shaders need no encode branch.</summary>

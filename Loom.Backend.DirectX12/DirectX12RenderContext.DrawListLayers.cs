@@ -44,8 +44,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		// The shared per-list push fills the block's first slots; each command rewrites the slot right after it with
 		// its tag (the draw-list contract), then re-pushes the whole block (push count = the used slots + the tag).
-		var block = stackalloc float[8];
-		var pushLen = Math.Min(push.Length, 7);
+		var block = stackalloc float[DrawListGeometry.MaxListPushFloats + 1]; // the largest push, plus the tag slot
+		var pushLen = Math.Min(push.Length, DrawListGeometry.MaxListPushFloats);
 		for (var i = 0; i < pushLen; i++)
 			block[i] = push[i];
 
@@ -175,7 +175,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		if (baked.RootConstantParam >= 0)
 		{
-			var cblock = stackalloc float[8];
+			var cblock = stackalloc float[DrawListGeometry.MaxListPushFloats + 1];
 			for (var i = 0; i < pushLen; i++)
 				cblock[i] = block[i];
 			if (pushLen > DrawListGeometry.HdrPushSlot)

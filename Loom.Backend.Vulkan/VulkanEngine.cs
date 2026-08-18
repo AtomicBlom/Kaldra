@@ -471,7 +471,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private ReadbackBuffers CreateReadbackStaging(ResourceHandle target)
 	{
 		var (width, height) = target.Resolve((int)_presentTarget.Extent.Width, (int)_presentTarget.Extent.Height);
-		var bpt = BytesPerTexel(target.Format);
+		var bpt = target.Format.BytesPerTexel;
 		var buffers = new Buffer[MaxFramesInFlight];
 		var allocations = new Allocation[MaxFramesInFlight];
 		for (var i = 0; i < MaxFramesInFlight; i++)

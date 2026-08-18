@@ -283,6 +283,16 @@ public sealed class GraphBuilder
 	public ResourceHandle Readback(ResourceHandle resource)
 	{
 		ArgumentNullException.ThrowIfNull(resource);
+		// Depth is rejected here rather than left to a backend. The copy every backend records is colour-aspect only,
+		// so a depth target would read back whatever that aspect resolves to — and until this said so, the accidental
+		// gate was each backend's own texel-size table happening not to list Depth32F, which is not a rule anyone could
+		// have found. Render the depth you need to sample into a colour target and read that back.
+		if (resource.Kind == ResourceKind.Depth)
+		{
+			throw new ArgumentException(
+				$"'{resource.Name}' is a depth target, and readback copies the colour aspect only. Write the values you " +
+				"need into a colour target (an R32F or R16F pass output) and read that back instead.", nameof(resource));
+		}
 		if (!_readbackTargets.Contains(resource))
 			_readbackTargets.Add(resource);
 		return resource;

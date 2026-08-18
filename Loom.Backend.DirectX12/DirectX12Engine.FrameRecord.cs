@@ -37,7 +37,7 @@ public sealed unsafe partial class DirectX12Engine
 		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _presentTarget.Width, _presentTarget.Height);
 
 		// Everything the derived plan needs recording, in the order EngineBase fixes for every backend.
-		var capturing = CapturePath is not null;
+		var capturing = TakeCapturePath(CaptureSupported(), _presentTarget.Format) is not null;
 		RecordFrame();
 
 		SilkMarshal.ThrowHResult(_commandList.Close());

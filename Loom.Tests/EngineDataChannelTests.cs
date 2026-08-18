@@ -112,6 +112,73 @@ public class EngineDataChannelTests
 	}
 
 	[Test]
+	public void Every_backend_reads_back_every_format_it_can_render()
+	{
+		// The texel size a readback is packed by is a neutral fact about the format, but each backend used to carry its
+		// own table of it — and they disagreed. Vulkan listed five formats, DirectX 12 listed two and threw for the
+		// rest, so an app reading back an Rgba8 or Rgba16F target worked on one backend and failed on the other for no
+		// reason to do with the device. One table now, so this asserts the sizes rather than the tables.
+		var formats = new[]
+		{
+			(Format: Loom.Core.Graph.Format.R16F, Bytes: 2),
+			(Format: Loom.Core.Graph.Format.Rgba8Unorm, Bytes: 4),
+			(Format: Loom.Core.Graph.Format.R32Uint, Bytes: 4),
+			(Format: Loom.Core.Graph.Format.Rg16F, Bytes: 4),
+			(Format: Loom.Core.Graph.Format.Rgba16F, Bytes: 8),
+		};
+
+		var failures = new List<string>();
+		foreach (var backend in AvailableBackends())
+		{
+			foreach (var (format, bytesPerTexel) in formats)
+			{
+				ResourceHandle? target = null;
+				var graph = RenderGraph.Define(g =>
+				{
+					var screen = g.Backbuffer;
+					var readback = g.Screen.Color("probe.readback", format);
+					g.Pass("produce").Writes(readback).Draw(ctx => ctx.FullScreen("probe.opaque", Ramp));
+					g.Pass("view").Writes(screen).Draw(ctx => ctx.FullScreen("probe.opaque", Ramp));
+					target = g.Readback(readback);
+					g.Present(screen);
+				});
+
+				using var engine = Engine(backend);
+				engine.SetGraph(graph);
+				var inputs = new FrameInputs { Time = 0, DeltaSeconds = 1.0 / 60.0 };
+				for (var frame = 0; frame < 6; frame++) // readback is a frame or two old by design
+					engine.Render(inputs);
+
+				var length = engine.Read(target!).Length;
+				if (length != W * H * bytesPerTexel)
+					failures.Add($"{backend.Name}: {format} read back {length} bytes, expected {W * H * bytesPerTexel} ({bytesPerTexel}/texel).");
+			}
+		}
+
+		failures.ShouldBeEmpty("Readback format failures:\n  " + string.Join("\n  ", failures));
+	}
+
+	[Test]
+	public void Reading_back_a_depth_target_is_refused_at_declaration()
+	{
+		// Readback copies the colour aspect only, so a depth target would hand back whatever that resolves to. Until
+		// this said so the gate was accidental — each backend's texel-size table happening not to list Depth32F, which
+		// is not a rule an author could have discovered. No device needed to check it.
+		var ex = Should.Throw<ArgumentException>(() =>
+			RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				var depth = g.Screen.Depth("depth", Loom.Core.Graph.Format.Depth32F);
+				g.Pass("scene").Writes(screen).WritesDepth(depth);
+				g.Readback(depth);
+				g.Present(screen);
+			}));
+
+		ex.Message.ShouldContain("depth");
+		ex.Message.ShouldContain("colour");
+	}
+
+	[Test]
 	public void A_readback_target_round_trips_the_texels_the_frame_produced()
 	{
 		// The whole GPU→CPU edge in one assertion: the pass writes a known horizontal gradient into an R16F target,

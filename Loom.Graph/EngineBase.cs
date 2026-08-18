@@ -99,6 +99,32 @@ public abstract class EngineBase : IEngine
 	public void RequestCapture(string path) => CapturePath = path;
 
 	/// <summary>
+	/// The path this frame should capture to, or null — dropping the request, with a warning naming the format, when
+	/// the present target is one the capture path cannot decode.
+	/// <para>
+	/// PNG capture reads an 8-bit RGBA/BGRA present target. An HDR swapchain (FP16, or 10-bit packed) unpacked at four
+	/// bytes per pixel produces a plausible-looking corrupt file, which is worse than no file — so the request is
+	/// refused instead, and HDR output is verified on a display. The decision lives here so both halves of it (skip,
+	/// and say why) are the same wherever a backend asks.
+	/// </para>
+	/// </summary>
+	/// <param name="supported">Whether this backend's present format is one its capture path can decode.</param>
+	/// <param name="presentFormat">
+	/// The backend's own present-format enum, named in the message. Taken generically rather than as a string so the
+	/// name is only produced on the path that reports it — this runs every frame, and the steady loop must not allocate.
+	/// </param>
+	protected string? TakeCapturePath<TFormat>(bool supported, TFormat presentFormat) where TFormat : struct, Enum
+	{
+		if (CapturePath is null)
+			return null;
+		if (supported)
+			return CapturePath;
+		LoomLog.Warning($"capture skipped: present format {presentFormat} is not an 8-bit RGBA/BGRA format (HDR output).");
+		CapturePath = null;
+		return null;
+	}
+
+	/// <summary>
 	/// Register a technique under a logical name: bake its backend pipeline inputs, then record it for hot-reload
 	/// so a later shader change can replay it. Idempotent per name.
 	/// </summary>

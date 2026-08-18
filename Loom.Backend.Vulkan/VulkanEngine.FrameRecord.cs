@@ -53,15 +53,7 @@ internal sealed unsafe partial class VulkanEngine
 
 		_vk.ResetFences(_ctx.Device, 1, in _inFlight[_currentFrame]);
 
-		var capturePath = CapturePath;
-		// PNG capture decodes an 8-bit RGBA/BGRA present target; an HDR swapchain (FP16 / 10-bit packed) would
-		// decode to garbage, so skip it there rather than write a corrupt file (HDR is verified on-display).
-		if (capturePath is not null && !CaptureSupported())
-		{
-			LoomLog.Warning($"capture skipped: present format {_presentTarget.ImageFormat} is not an 8-bit RGBA/BGRA format (HDR output).");
-			CapturePath = null;
-			capturePath = null;
-		}
+		var capturePath = TakeCapturePath(CaptureSupported(), _presentTarget.ImageFormat);
 		var captureSize = (ulong)_presentTarget.Extent.Width * _presentTarget.Extent.Height * 4;
 		Buffer captureBuffer = default;
 		Allocation? captureAllocation = null;

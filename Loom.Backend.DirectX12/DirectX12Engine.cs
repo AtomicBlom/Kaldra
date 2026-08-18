@@ -420,7 +420,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private ReadbackBuffers CreateReadbackStaging(ResourceHandle target)
 	{
 		var (width, height) = _transients!.Extent(target.Id);
-		var bpt = BytesPerTexel(target.Format);
+		var bpt = (uint)target.Format.BytesPerTexel;
 		var rowPitch = Align(width * bpt, 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
 		var readback = new ComPtr<ID3D12Resource>[BufferCount];
 		for (uint i = 0; i < BufferCount; i++)

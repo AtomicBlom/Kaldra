@@ -42,7 +42,7 @@ internal sealed partial class WebGpuEngine
 		foreach (var target in authored.ReadbackTargets)
 		{
 			ref var tex = ref _transients!.Texture(target.Id);
-			var bpt = WebGpuFormatMapping.BytesPerTexel(tex.Format);
+			var bpt = tex.Format.BytesPerTexel;
 			_graphReadbacks.Add(new GraphReadbackTarget
 			{
 				Id = target.Id,
