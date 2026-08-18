@@ -13,9 +13,6 @@ namespace Loom.Backend.WebGPU;
 [SupportedOSPlatform("browser")]
 internal sealed partial class WebGpuRenderContext
 {
-	// The offscreen layer stack: each entry is a suspended scope's resolved view + its premultiplied group-alpha tint.
-	private readonly List<(int View, Half4 Tint, (float X0, float Y0, float X1, float Y1) Bounds)> _layerStack = [];
-
 	/// <summary>
 	/// Record a flattened draw list (the UI compositor's batched output): stage its vertex/index streams into the
 	/// per-frame list rings, then walk its commands, each a scissor + texture + index range drawn with the shared
@@ -58,80 +55,64 @@ internal sealed partial class WebGpuRenderContext
 		var overlay = layersSupported ? MemoryMarshal.Cast<TVertex, OverlayVertex>(vertices) : default;
 		if (layersSupported)
 			_engine.LayerTargets.Configure(_scopeWidth, _scopeHeight, _colorFormatIds[0]);
-		_layerStack.Clear();
 
 		// The list's own coordinate space, recovered from the push that maps it to clip. A layer's bounds arrive in
-		// surface pixels.
+		// these units; the walker scales them to target pixels.
 		var surfaceWidth = layersSupported ? 2f / push[0] : _scopeWidth;
 		var surfaceHeight = layersSupported ? 2f / push[1] : _scopeHeight;
 
-		// Layer markers opened past the nesting cap. Counted so each one's EndLayer is suppressed with it: popping a
-		// real layer for a suppressed marker's EndLayer resolves it early, and everything drawn afterwards lands in a
-		// target that is already finished with.
-		var suppressedLayers = 0;
+		// The command stream decodes to steps: the layer nesting and its cap, the scissor, and the per-layer tint and
+		// bounds are the walker's, and what remains here is the command-stream writing each step needs.
+		var walker = new DrawListWalker(commands, textures, overlay, layersSupported,
+			_scopeWidth, _scopeHeight, surfaceWidth, surfaceHeight);
 
-		foreach (var c in commands)
+		while (walker.MoveNext())
 		{
-			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer)
+			if (walker.Step == DrawListStep.BeginLayer)
 			{
-				if (_layerStack.Count >= DrawListGeometry.MaxLayerNesting)
-				{
-					suppressedLayers++;
-					DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, _layerStack.Count + suppressedLayers);
-					continue;
-				}
-
 				// Suspend the current scope; render the faded subtree into a fresh transparent offscreen target at full
 				// alpha (so overlapping children blend against each other, not a faded backdrop).
 				writer.EndPass();
-				var target = _engine.LayerTargets.Acquire(_layerStack.Count);
-				BeginColorScope([target.View], WebGpuCommandWriter.LoadClear);
+				BeginColorScope([_engine.LayerTargets.Acquire(walker.Depth).View], WebGpuCommandWriter.LoadClear);
 				RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
-				// WebGPU render passes cover the whole attachment — there is no render area, so unlike the desktop
-				// backends the clear cannot be narrowed to the group. The composite still is.
-				_layerStack.Add((target.View, overlay[c.VertexOffset].Color, DrawListGeometry.LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight)));
+				// A WebGPU render pass covers its whole attachment — there is no render area, so unlike the desktop
+				// backends the clear cannot be narrowed to the group (walker.LayerArea is ignored here). The composite
+				// still is.
 				continue;
 			}
-			if (layersSupported && c.Tag == DrawListGeometry.TagEndLayer)
-			{
-				if (suppressedLayers > 0)
-				{
-					suppressedLayers--; // the matching BeginLayer never opened a layer, so this closes nothing
-					continue;
-				}
-				if (_layerStack.Count == 0)
-					continue;
-				var layer = _layerStack[^1];
-				_layerStack.RemoveAt(_layerStack.Count - 1);
 
+			if (walker.Step == DrawListStep.EndLayer)
+			{
 				// Resolve the layer, then resume the parent scope (LoadOp.Load — keep what it already holds).
+				var closed = _engine.LayerTargets.Acquire(walker.Depth).View;
 				writer.EndPass();
-				ResumeParentScope();
+				ResumeParentScope(walker.Depth - 1);
 				RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
-				CompositeLayer(baked, sampler, layer.View, layer.Tint, push, layer.Bounds, surfaceWidth, surfaceHeight);
-				// Restore the list's geometry for the following commands (the composite bound its own quad buffer).
+				CompositeLayer(baked, sampler, closed, walker.Tint, push, walker.Bounds, surfaceWidth, surfaceHeight);
+				// Restore the list's geometry for the following commands — the composite bound its own quad buffer.
 				writer.SetVertexBuffer(0, _engine.ListVertexRing.Buffer, vtxOffset);
 				continue;
 			}
 
-			var (clipX, clipY, clipW, clipH) = DrawListGeometry.Scissor(c.ClipRect, _scopeWidth, _scopeHeight);
-			if (clipW <= 0 || clipH <= 0)
-				continue;
+			// Bound unconditionally, so walker.TextureChanged has nothing to save here: the push block carries this
+			// command's tag at a fresh dynamic offset, so the bind group has to be set either way — and the group itself
+			// is already cached by the resources it names, which is what the desktop backends' memoisation buys them.
+			BindCommand(baked, sampler, _engine.TextureView(walker.TextureId), push, walker.Tag);
 
-			var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
-			BindCommand(baked, sampler, _engine.TextureView(texId), push, c.Tag);
-
+			var (clipX, clipY, clipW, clipH) = walker.Scissor;
 			writer.SetScissor(clipX, clipY, clipW, clipH);
-			writer.DrawIndexed(c.IndexCount, 1, c.IndexOffset, c.VertexOffset, 0);
+			writer.DrawIndexed(walker.IndexCount, 1, walker.IndexOffset, walker.VertexOffset, 0);
 		}
+
+		if (walker.NestingExceeded)
+			DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, walker.DeepestNesting);
 
 		// Defensive: a well-formed list balances its markers, but never leave a layer scope open — the engine ends
 		// exactly one scope after the pass, which must be the parent (screen) scope.
-		while (_layerStack.Count > 0)
+		while (walker.TryUnwind(out var abandoned))
 		{
-			_layerStack.RemoveAt(_layerStack.Count - 1);
 			writer.EndPass();
-			ResumeParentScope();
+			ResumeParentScope(abandoned - 1);
 			RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
 		}
 	}
@@ -162,13 +143,14 @@ internal sealed partial class WebGpuRenderContext
 			writer.ColorAttachment(view, loadOp, WebGpuCommandWriter.StoreStore, Vector4.Zero);
 	}
 
-	// Resume whichever scope sits under the just-ended layer: the parent layer if nested, else the pass's own colour
-	// attachments — both reloaded (LoadOp.Load) so the composite blends onto existing contents.
-	private void ResumeParentScope()
+	// Resume whichever scope sits under the just-ended layer: the layer at <paramref name="parentDepth"/> if the ended
+	// one was nested, else (a negative depth) the pass's own colour attachments — both reloaded (LoadOp.Load) so the
+	// composite blends onto existing contents.
+	private void ResumeParentScope(int parentDepth)
 	{
-		if (_layerStack.Count > 0)
+		if (parentDepth >= 0)
 		{
-			BeginColorScope([_layerStack[^1].View], WebGpuCommandWriter.LoadLoad);
+			BeginColorScope([_engine.LayerTargets.Acquire(parentDepth).View], WebGpuCommandWriter.LoadLoad);
 			return;
 		}
 		Span<int> views = stackalloc int[_colorCount];

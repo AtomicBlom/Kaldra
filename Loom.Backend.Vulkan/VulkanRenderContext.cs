@@ -62,7 +62,6 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// Renderer-private offscreen targets backing UI group-opacity layers (BeginLayer/EndLayer), below the graph seam.
 	private readonly VulkanLayerTargets _layerTargets;
 	// Reused across calls so an opacity layer never allocates per frame.
-	private readonly List<(Image Image, ImageView View, Half4 Tint, (float X0, float Y0, float X1, float Y1) Bounds)> _layerStack = [];
 	// The current graphics pass's colour attachment views + render area, captured by the engine before the pass
 	// records, so a draw-list layer can suspend and resume the pass's dynamic-rendering scope.
 	private readonly ImageView[] _scopeColorViews = new ImageView[MaxColorFormats];

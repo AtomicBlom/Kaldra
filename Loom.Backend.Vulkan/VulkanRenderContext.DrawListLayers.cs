@@ -71,104 +71,72 @@ internal sealed unsafe partial class VulkanRenderContext
 		var overlay = layersSupported ? MemoryMarshal.Cast<TVertex, OverlayVertex>(vertices) : default;
 		if (layersSupported)
 			_layerTargets.Configure(layerArea, _colorFormats[0]);
-		_layerStack.Clear();
 
-		// The list's own coordinate space, recovered from the push that maps it to clip, and the scale from it to
-		// framebuffer pixels. A layer's bounds arrive in surface pixels; its render area is needed in framebuffer ones.
+		// The list's own coordinate space, recovered from the push that maps it to clip. A layer's bounds arrive in
+		// these units; the walker scales them to framebuffer pixels against the area below.
 		var surfaceWidth = layersSupported ? 2f / push[0] : layerArea.Width;
 		var surfaceHeight = layersSupported ? 2f / push[1] : layerArea.Height;
-		var toFramebufferX = layerArea.Width / surfaceWidth;
-		var toFramebufferY = layerArea.Height / surfaceHeight;
 
-		// The texture the currently bound descriptor set describes. -1 = nothing bound yet.
-		var listTextureId = -1;
-		// Layer markers opened past the nesting cap. Counted so each one's EndLayer is suppressed with it: popping a
-		// real layer for a suppressed marker's EndLayer resolves it early, and everything drawn afterwards lands in a
-		// target that is already finished with.
-		var suppressedLayers = 0;
+		// The command stream decodes to steps: the layer nesting and its cap, the scissor, and the texture memoisation
+		// are the walker's, and what remains here is the Vulkan recording each step needs.
+		var walker = new DrawListWalker(commands, textures, overlay, layersSupported,
+			(int)layerArea.Width, (int)layerArea.Height, surfaceWidth, surfaceHeight);
 
-		foreach (var c in commands)
+		while (walker.MoveNext())
 		{
-			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer)
+			if (walker.Step == DrawListStep.BeginLayer)
 			{
-				if (_layerStack.Count >= DrawListGeometry.MaxLayerNesting)
-				{
-					suppressedLayers++;
-					DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, _layerStack.Count + suppressedLayers);
-					continue;
-				}
-
 				// Suspend the current scope, render the faded subtree into a fresh transparent offscreen target at
 				// full alpha (so overlapping children blend against each other, not a faded backdrop).
 				_vk.CmdEndRendering(_cmd);
-				var target = _layerTargets.Acquire(_frameSlot, _layerStack.Count);
-				TransitionImage(target.Image, ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
+				var opened = _layerTargets.Acquire(_frameSlot, walker.Depth);
+				TransitionImage(opened.Image, ImageLayout.Undefined, ImageLayout.ColorAttachmentOptimal,
 					PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit,
 					PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit);
 
-				// The group's own bounds, not the whole surface. A layer costs two render-pass breaks and a clear, and
-				// on a tile-based GPU those are priced by area — a checkbox fading in should not clear and store a
-				// screen's worth of tiles. The marker carries the bounds as its ClipRect precisely so a backend can
-				// use them.
-				var bounds = DrawListGeometry.LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight);
-				BeginColorScope(target.View, AttachmentLoadOp.Clear, LayerRect(bounds, toFramebufferX, toFramebufferY, layerArea));
+				// The group's own area, not the whole surface. A layer costs two render-pass breaks and a clear, and on
+				// a tile-based GPU those are priced by area — a checkbox fading in should not clear and store a
+				// screen's worth of tiles.
+				BeginColorScope(opened.View, AttachmentLoadOp.Clear, ToRect(walker.LayerArea));
 				_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
-				_layerStack.Add((target.Image, target.View, overlay[c.VertexOffset].Color, bounds));
 				continue;
 			}
-			if (layersSupported && c.Tag == DrawListGeometry.TagEndLayer)
+
+			if (walker.Step == DrawListStep.EndLayer)
 			{
-				if (suppressedLayers > 0)
-				{
-					suppressedLayers--; // the matching BeginLayer never opened a layer, so this closes nothing
-					continue;
-				}
-				if (_layerStack.Count == 0)
-					continue;
-				var layer = _layerStack[^1];
-				_layerStack.RemoveAt(_layerStack.Count - 1);
+				var closed = _layerTargets.Acquire(_frameSlot, walker.Depth);
 
 				// Resolve the layer target, then resume the parent scope (LoadOp.Load — keep what it already holds).
 				_vk.CmdEndRendering(_cmd);
-				TransitionImage(layer.Image, ImageLayout.ColorAttachmentOptimal, ImageLayout.ShaderReadOnlyOptimal,
+				TransitionImage(closed.Image, ImageLayout.ColorAttachmentOptimal, ImageLayout.ShaderReadOnlyOptimal,
 					PipelineStageFlags2.ColorAttachmentOutputBit, AccessFlags2.ColorAttachmentWriteBit,
 					PipelineStageFlags2.FragmentShaderBit, AccessFlags2.ShaderSampledReadBit);
 				// The parent resumes over its whole area — commands after this one draw anywhere — but only the
 				// layer's own bounds are composited back into it.
-				if (_layerStack.Count > 0)
-					BeginColorScope(_layerStack[^1].View, AttachmentLoadOp.Load, new Rect2D(default, layerArea));
+				if (walker.Depth > 0)
+					BeginColorScope(_layerTargets.Acquire(_frameSlot, walker.Depth - 1).View, AttachmentLoadOp.Load, new Rect2D(default, layerArea));
 				else
 					BeginColorScope(_scopeColorViews.AsSpan(0, _scopeColorCount), AttachmentLoadOp.Load, new Rect2D(default, layerArea));
 				_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
 
-				CompositeLayer(baked, layer.View, layer.Tint, sampler, block, pushLen, layer.Bounds, surfaceWidth, surfaceHeight, layerArea);
+				CompositeLayer(baked, closed.View, walker.Tint, sampler, block, pushLen, walker.Bounds, surfaceWidth, surfaceHeight, layerArea);
 
-				// Restore the list's geometry for the following commands (the composite bound its own quad buffer),
-				// and forget the memoised texture set — the composite replaced it with the layer's own.
+				// Restore the list's geometry for the following commands — the composite bound its own quad buffer.
 				_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
 				_vk.CmdBindIndexBuffer(_cmd, idxBuffer, idxOffset, IndexType.Uint16);
-				listTextureId = -1;
 				continue;
 			}
 
-			var (clipX, clipY, clipW, clipH) = DrawListGeometry.Scissor(c.ClipRect, (int)layerArea.Width, (int)layerArea.Height);
-			if (clipW <= 0 || clipH <= 0)
-				continue;
-
-			*(uint*)(block + pushLen) = c.Tag;
+			*(uint*)(block + pushLen) = walker.Tag;
 			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, block);
 
-			var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
-			// A UI list is mostly one texture — the glyph atlas — for run after run of commands, and the set holds
-			// nothing else, so a run of same-texture commands can keep the set the first of them bound. Only a change
-			// of texture costs an allocate + update + bind.
-			if (texId != listTextureId)
+			if (walker.TextureChanged)
 			{
 				// An id offset by DebugTextureBase is an inspectable graph resource (the resource viewer): sample this
 				// frame's live transient image instead of a loaded texture-store entry.
-				var view = texId >= InspectableResource.DebugTextureBase
-					? _resources.Get(_frameSlot, texId - InspectableResource.DebugTextureBase).View
-					: _textures.View(texId);
+				var view = walker.TextureId >= InspectableResource.DebugTextureBase
+					? _resources.Get(_frameSlot, walker.TextureId - InspectableResource.DebugTextureBase).View
+					: _textures.View(walker.TextureId);
 				var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 				var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
 				var write = new WriteDescriptorSet
@@ -185,20 +153,21 @@ internal sealed unsafe partial class VulkanRenderContext
 				// so it declares no uniform buffer — the only descriptor type Loom binds dynamically. One that did
 				// would fail validation here for supplying none, which is the loud failure that should follow.
 				_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
-				listTextureId = texId;
 			}
 
-			Rect2D scissor = new(new Offset2D(clipX, clipY), new Extent2D((uint)clipW, (uint)clipH));
+			var scissor = ToRect(walker.Scissor);
 			_vk.CmdSetScissor(_cmd, 0, 1, in scissor);
 
-			_vk.CmdDrawIndexed(_cmd, (uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
+			_vk.CmdDrawIndexed(_cmd, (uint)walker.IndexCount, 1, (uint)walker.IndexOffset, walker.VertexOffset, 0);
 		}
+
+		if (walker.NestingExceeded)
+			DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, walker.DeepestNesting);
 
 		// Defensive: a well-formed list balances its markers, but never leave a layer scope open — the engine ends
 		// exactly one scope after the pass, which must be the parent (screen) scope.
-		while (_layerStack.Count > 0)
+		while (walker.TryUnwind(out _))
 		{
-			_layerStack.RemoveAt(_layerStack.Count - 1);
 			_vk.CmdEndRendering(_cmd);
 			BeginColorScope(((ReadOnlySpan<ImageView>)_scopeColorViews)[.._scopeColorCount], AttachmentLoadOp.Load, new Rect2D(default, layerArea));
 		}
@@ -207,12 +176,9 @@ internal sealed unsafe partial class VulkanRenderContext
 	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.
 	private bool _warnedLayerNesting;
 
-	// The derived layer area as a Vulkan render area.
-	private static Rect2D LayerRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, Extent2D area)
-	{
-		var (x, y, w, h) = DrawListGeometry.LayerArea(bounds, scaleX, scaleY, (int)area.Width, (int)area.Height);
-		return new Rect2D(new Offset2D(x, y), new Extent2D((uint)w, (uint)h));
-	}
+	// A decoded pixel rectangle in Vulkan's origin+extent form.
+	private static Rect2D ToRect((int X, int Y, int Width, int Height) r) =>
+		new(new Offset2D(r.X, r.Y), new Extent2D((uint)r.Width, (uint)r.Height));
 
 	// Begin a dynamic-rendering scope over the given colour attachment view(s) at the given render area — used to
 	// open a layer's offscreen target (LoadOp.Clear, sized to the group) and to resume the suspended parent scope

@@ -56,74 +56,53 @@ internal sealed unsafe partial class DirectX12RenderContext
 		var overlay = layersSupported ? MemoryMarshal.Cast<TVertex, OverlayVertex>(vertices) : default;
 		if (layersSupported)
 			_layerTargets.Configure(_scopeWidth, _scopeHeight, _colorFormats[0]);
-		_layerStack.Clear();
 		var layerClear = stackalloc float[4] { 0f, 0f, 0f, 0f }; // transparent: a layer starts empty
 
-		// The list's own coordinate space, recovered from the push that maps it to clip, and the scale from it to
-		// framebuffer pixels. A layer's bounds arrive in surface pixels; its clear rect is needed in framebuffer ones.
+		// The list's own coordinate space, recovered from the push that maps it to clip. A layer's bounds arrive in
+		// these units; the walker scales them to framebuffer pixels against the scope extent.
 		var surfaceWidth = layersSupported ? 2f / push[0] : _scopeWidth;
 		var surfaceHeight = layersSupported ? 2f / push[1] : _scopeHeight;
-		var toFramebufferX = _scopeWidth / surfaceWidth;
-		var toFramebufferY = _scopeHeight / surfaceHeight;
 
-		// The texture whose SRV the bound table currently describes, and that table's handle. -1 = nothing bound yet.
-		var listTextureId = -1;
+		// The descriptor table describing the memoised texture. The walker says when it needs rewriting; the handle has
+		// to be kept here because the ring rewinds per submission and a stale one points at another frame's descriptors.
 		var listTable = default(GpuDescriptorHandle);
-		// Layer markers opened past the nesting cap. Counted so each one's EndLayer is suppressed with it: popping a
-		// real layer for a suppressed marker's EndLayer resolves it early, and everything drawn afterwards lands in a
-		// target that is already finished with.
-		var suppressedLayers = 0;
 
-		foreach (var c in commands)
+		// The command stream decodes to steps: the layer nesting and its cap, the scissor, and the texture memoisation
+		// are the walker's, and what remains here is the DirectX 12 recording each step needs.
+		var walker = new DrawListWalker(commands, textures, overlay, layersSupported,
+			(int)_scopeWidth, (int)_scopeHeight, surfaceWidth, surfaceHeight);
+
+		while (walker.MoveNext())
 		{
-			if (layersSupported && c.Tag == DrawListGeometry.TagBeginLayer)
+			if (walker.Step == DrawListStep.BeginLayer)
 			{
-				if (_layerStack.Count >= DrawListGeometry.MaxLayerNesting)
-				{
-					suppressedLayers++;
-					DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, _layerStack.Count + suppressedLayers);
-					continue;
-				}
-
 				// Detour into a fresh transparent offscreen target: render the faded subtree at full alpha so
 				// overlapping children blend against each other, not a faded backdrop.
-				var depth = _layerStack.Count;
-				ref var target = ref _layerTargets.Acquire(_slot, depth);
-				if (target.State != ResourceStates.RenderTarget)
+				ref var opened = ref _layerTargets.Acquire(_slot, walker.Depth);
+				if (opened.State != ResourceStates.RenderTarget)
 				{
-					TransitionResource(target.Resource, target.State, ResourceStates.RenderTarget);
-					target.State = ResourceStates.RenderTarget;
+					TransitionResource(opened.Resource, opened.State, ResourceStates.RenderTarget);
+					opened.State = ResourceStates.RenderTarget;
 				}
-				var rtv = target.Rtv;
+				var rtv = opened.Rtv;
 				_cmd.OMSetRenderTargets(1, &rtv, false, (CpuDescriptorHandle*)null);
-				// The group's own bounds, not the whole surface. A layer costs two render-target switches and a clear,
-				// and on a tile-based GPU those are priced by area — a checkbox fading in should not clear a screen's
-				// worth of tiles. The marker carries the bounds as its ClipRect precisely so a backend can use them.
-				var bounds = DrawListGeometry.LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight);
-				var clearRect = LayerRect(bounds, toFramebufferX, toFramebufferY, _scopeWidth, _scopeHeight);
+				// The group's own area, not the whole surface. A layer costs two render-target switches and a clear, and
+				// on a tile-based GPU those are priced by area — a checkbox fading in should not clear a screen's worth
+				// of tiles.
+				var clearRect = ToBox(walker.LayerArea);
 				_cmd.ClearRenderTargetView(rtv, layerClear, 1u, &clearRect);
-				_layerStack.Add((depth, overlay[c.VertexOffset].Color, bounds));
 				continue;
 			}
-			if (layersSupported && c.Tag == DrawListGeometry.TagEndLayer)
-			{
-				if (suppressedLayers > 0)
-				{
-					suppressedLayers--; // the matching BeginLayer never opened a layer, so this closes nothing
-					continue;
-				}
-				if (_layerStack.Count == 0)
-					continue;
-				var (depth, tint, bounds) = _layerStack[^1];
-				_layerStack.RemoveAt(_layerStack.Count - 1);
 
+			if (walker.Step == DrawListStep.EndLayer)
+			{
 				// Resolve the layer (render-target → shader-resource) and rebind the parent's render targets.
-				ref var target = ref _layerTargets.Acquire(_slot, depth);
-				TransitionResource(target.Resource, ResourceStates.RenderTarget, ResourceStates.PixelShaderResource);
-				target.State = ResourceStates.PixelShaderResource;
-				if (_layerStack.Count > 0)
+				ref var closed = ref _layerTargets.Acquire(_slot, walker.Depth);
+				TransitionResource(closed.Resource, ResourceStates.RenderTarget, ResourceStates.PixelShaderResource);
+				closed.State = ResourceStates.PixelShaderResource;
+				if (walker.Depth > 0)
 				{
-					var parentRtv = _layerTargets.Acquire(_slot, _layerStack[^1].Depth).Rtv;
+					var parentRtv = _layerTargets.Acquire(_slot, walker.Depth - 1).Rtv;
 					_cmd.OMSetRenderTargets(1, &parentRtv, false, (CpuDescriptorHandle*)null);
 				}
 				else
@@ -132,52 +111,44 @@ internal sealed unsafe partial class DirectX12RenderContext
 						_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
 				}
 
-				CompositeLayer(baked, target.Resource, tint, block, pushLen, bounds, surfaceWidth, surfaceHeight);
+				CompositeLayer(baked, closed.Resource, walker.Tint, block, pushLen, walker.Bounds, surfaceWidth, surfaceHeight);
 
-				// Restore the list's geometry for the following commands (the composite bound its own quad buffer),
-				// and forget the memoised texture table — the composite replaced it with the layer's own.
+				// Restore the list's geometry for the following commands — the composite bound its own quad buffer.
 				_cmd.IASetVertexBuffers(0, 1, &vbv);
 				_cmd.IASetIndexBuffer(&ibv);
-				listTextureId = -1;
 				continue;
 			}
 
-			var (clipX, clipY, clipW, clipH) = DrawListGeometry.Scissor(c.ClipRect, (int)_scopeWidth, (int)_scopeHeight);
-			if (clipW <= 0 || clipH <= 0)
-				continue;
-
-			*(uint*)(block + pushLen) = c.Tag;
+			*(uint*)(block + pushLen) = walker.Tag;
 			if (baked.RootConstantParam >= 0)
 				_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, (uint)(pushLen + 1), block, 0);
 
 			// Write the bound texture's SRV (real format + full mip chain) into a fresh ring slot, then bind the table.
-			// A UI list is mostly one texture — the glyph atlas — for run after run of commands, so the descriptor is
-			// only rewritten when the texture actually changes; otherwise the table from the previous command still
-			// describes it. Reset per submission, since the ring rewinds and a stale handle would point at another
-			// frame's descriptors.
 			if (baked.TableParam >= 0)
 			{
-				var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
-				if (texId != listTextureId)
+				if (walker.TextureChanged)
 				{
 					var (cpu, gpu) = _descriptors.Allocate(1);
-					WriteListTextureSrv(texId, cpu);
-					listTextureId = texId;
+					WriteListTextureSrv(walker.TextureId, cpu);
 					listTable = gpu;
 				}
 				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, listTable);
 			}
 
-			var scissor = new Box2D<int>(clipX, clipY, clipX + clipW, clipY + clipH);
+			var scissor = ToBox(walker.Scissor);
 			_cmd.RSSetScissorRects(1, &scissor);
-			_cmd.DrawIndexedInstanced((uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
+			_cmd.DrawIndexedInstanced((uint)walker.IndexCount, 1, (uint)walker.IndexOffset, walker.VertexOffset, 0);
 		}
+
+		if (walker.NestingExceeded)
+			DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, walker.DeepestNesting);
 
 		// Defensive: a well-formed list balances its markers, but never leave a layer's target bound — rebind the
 		// captured pass scope so the engine's following passes (and present) write the screen, not an orphaned layer.
-		if (_layerStack.Count > 0)
+		// One rebind covers any depth: unlike a Vulkan rendering scope, a render-target binding does not nest.
+		if (walker.OpenLayers > 0)
 		{
-			_layerStack.Clear();
+			while (walker.TryUnwind(out _)) { }
 			fixed (CpuDescriptorHandle* pRtv = _scopeRtvs)
 				_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
 		}
@@ -186,12 +157,9 @@ internal sealed unsafe partial class DirectX12RenderContext
 	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.
 	private bool _warnedLayerNesting;
 
-	// The derived layer area as a DirectX 12 rect (corners, not extents).
-	private static Box2D<int> LayerRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, uint width, uint height)
-	{
-		var (x, y, w, h) = DrawListGeometry.LayerArea(bounds, scaleX, scaleY, (int)width, (int)height);
-		return new Box2D<int>(x, y, x + w, y + h);
-	}
+	// A decoded pixel rectangle in DirectX 12's corner form.
+	private static Box2D<int> ToBox((int X, int Y, int Width, int Height) r) =>
+		new(r.X, r.Y, r.X + r.Width, r.Y + r.Height);
 
 	// Composite a resolved layer target back into the (now-rebound) parent: a KIND_IMAGE quad over the group that
 	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once.
