@@ -28,11 +28,13 @@
     <LoomSlangVersion Condition="'$(LoomSlangVersion)' == ''">0.5.1</LoomSlangVersion>
   </PropertyGroup>
 
-  <!-- slangc, to compile this app's own shaders. Source mode rides the repo's central package management
-       (version-less); packaged mode pins the version so an external consumer needs no Slang reference of its own. -->
+  <!-- slangc, to compile this app's own shaders. A project under central package management (the Loom repo's own
+       apps) takes the version from its Directory.Packages.props; any other consumer — packaged, or a game that has
+       Loom as a submodule but manages its own package versions — gets the pinned version, so it needs no Slang
+       reference of its own. -->
   <ItemGroup>
-    <PackageReference Condition="'$(_LoomFromSource)' == 'true'" Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
-    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Slang.Sdk" Version="$(LoomSlangVersion)" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Condition="'$(ManagePackageVersionsCentrally)' == 'true'" Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Condition="'$(ManagePackageVersionsCentrally)' != 'true'" Include="Slang.Sdk" Version="$(LoomSlangVersion)" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 
   <!-- Backends by RID/flags: ProjectReference in the repo, versioned PackageReference when packaged. -->
