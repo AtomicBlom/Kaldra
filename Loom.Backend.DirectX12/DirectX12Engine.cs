@@ -237,6 +237,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			SilkMarshal.ThrowHResult(_fence.SetEventOnCompletion(_fenceValue, (void*)_fenceEvent));
 			WaitForSingleObject(_fenceEvent, 0xFFFFFFFF);
 		}
+
+		_meshes.CollectReleased(_fenceValue);
 	}
 
 	public override void Dispose()
@@ -478,6 +480,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	}
 
 	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
+
+	// Every frame that may draw the mesh has been submitted, and signals at most the current fence value. Mesh buffers
+	// live in an upload heap, so there is no pending copy into them to wait for.
+	public override void ReleaseMesh(Mesh mesh) => _meshes.Release(mesh.Id, _fenceValue);
 
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
 

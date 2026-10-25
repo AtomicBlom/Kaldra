@@ -236,6 +236,8 @@ internal sealed partial class WebGpuEngine : EngineBase
 
 	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
+	public override void ReleaseMesh(Mesh mesh) => _meshes.Release(mesh.Id);
+
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
 
 	public override void Dispose()

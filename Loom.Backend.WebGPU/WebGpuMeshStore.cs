@@ -22,6 +22,7 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 		public int IndexBuffer;
 		public int IndexCount;
 		public int VertexCount; // skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
+		public bool Released;   // the id's slot after IEngine.ReleaseMesh: no buffers, and Slot refuses it
 	}
 
 	private readonly List<StoredMesh> _meshes = [];
@@ -29,14 +30,20 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 	/// <summary>
 	/// Resolve a <see cref="Mesh.Id"/> to its slot in the store. Ids are 1-based so <c>default(Mesh)</c> (id 0) is
 	/// never a live handle: drawing an unassigned <see cref="Mesh"/> field fails here instead of silently rendering
-	/// whichever mesh was uploaded first.
+	/// whichever mesh was uploaded first. A released mesh keeps its slot, emptied, so its stale handle fails here too.
 	/// </summary>
-	private int Slot(int meshId) =>
-		meshId >= 1 && meshId <= _meshes.Count
-			? meshId - 1
-			: throw new WebGpuException(
+	private int Slot(int meshId)
+	{
+		if (meshId < 1 || meshId > _meshes.Count)
+		{
+			throw new WebGpuException(
 				$"Mesh id {meshId} was not created by this engine ({(meshId == 0 ? "0 is default(Mesh), an unassigned handle" : $"only ids 1..{_meshes.Count} exist")}). " +
 				"Meshes come from IEngine.CreateMesh / CreateMesh<T> / CreateSkinnedMesh.");
+		}
+		if (_meshes[meshId - 1].Released)
+			throw new WebGpuException($"Mesh id {meshId} was released by IEngine.ReleaseMesh; its handle can no longer be drawn or released.");
+		return meshId - 1;
+	}
 
 	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
 		Create(MemoryMarshal.AsBytes(vertices), Marshal.SizeOf<Vertex>(), indices);
@@ -60,6 +67,19 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 	public int BindPoseBuffer(int meshId) => _meshes[Slot(meshId)].VertexBuffer;
 
 	public int VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;
+
+	/// <summary>
+	/// Release a mesh: its id stops resolving and its buffers are destroyed at once. WebGPU defines <c>destroy()</c> on a
+	/// buffer that submitted work still reads as taking effect once that work completes, so unlike the native backends
+	/// nothing here has to wait for frames in flight.
+	/// </summary>
+	public void Release(int meshId)
+	{
+		var slot = Slot(meshId);
+		handles.Release(WebGpuHandleAllocator.Buffers, _meshes[slot].VertexBuffer);
+		handles.Release(WebGpuHandleAllocator.Buffers, _meshes[slot].IndexBuffer);
+		_meshes[slot] = new StoredMesh { Released = true };
+	}
 
 	/// <summary>Record a plain indexed draw of a mesh, or of <paramref name="range"/> within it, into the frame's command stream.</summary>
 	public void Draw(WebGpuCommandWriter writer, int meshId, in DrawCall.IndexRange range = default)
@@ -142,6 +162,8 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 	{
 		foreach (var mesh in _meshes)
 		{
+			if (mesh.Released)
+				continue;
 			handles.Release(WebGpuHandleAllocator.Buffers, mesh.VertexBuffer);
 			handles.Release(WebGpuHandleAllocator.Buffers, mesh.IndexBuffer);
 		}

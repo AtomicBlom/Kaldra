@@ -29,10 +29,14 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		public IndexBufferView IndexView;
 		public uint IndexCount;
 		public uint VertexCount; // skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
+		public bool Released;    // the id's slot after IEngine.ReleaseMesh: no buffers, and Slot refuses it
 	}
 
 	private readonly DirectX12Context _ctx;
 	private readonly List<StoredMesh> _meshes = [];
+	// Released meshes whose buffers a frame in flight may still read, each with the fence value signalled after the
+	// last frame that can.
+	private readonly List<(StoredMesh Mesh, ulong LastReadingFence)> _releasing = [];
 
 	// Mesh ids are 1-based, so 0 is a value no mesh can have — "the command list's vertex/index bindings are not this
 	// store's doing".
@@ -47,14 +51,20 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	/// <summary>
 	/// Resolve a <see cref="Mesh.Id"/> to its slot in the store. Ids are 1-based so <c>default(Mesh)</c> (id 0) is
 	/// never a live handle: drawing an unassigned <see cref="Mesh"/> field fails here instead of silently rendering
-	/// whichever mesh was uploaded first.
+	/// whichever mesh was uploaded first. A released mesh keeps its slot, emptied, so its stale handle fails here too.
 	/// </summary>
-	private int Slot(int meshId) =>
-		meshId >= 1 && meshId <= _meshes.Count
-			? meshId - 1
-			: throw new InvalidOperationException(
+	private int Slot(int meshId)
+	{
+		if (meshId < 1 || meshId > _meshes.Count)
+		{
+			throw new InvalidOperationException(
 				$"DirectX12: mesh id {meshId} was not created by this engine ({(meshId == 0 ? "0 is default(Mesh), an unassigned handle" : $"only ids 1..{_meshes.Count} exist")}). " +
 				"Meshes come from IEngine.CreateMesh / CreateMesh<T> / CreateSkinnedMesh.");
+		}
+		if (_meshes[meshId - 1].Released)
+			throw new InvalidOperationException($"DirectX12: mesh id {meshId} was released by IEngine.ReleaseMesh; its handle can no longer be drawn or released.");
+		return meshId - 1;
+	}
 
 	/// <summary>Upload canonical <see cref="Vertex"/> geometry (the <see cref="VertexLayout.MeshStandard"/> layout) and return a handle.</summary>
 	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
@@ -115,6 +125,39 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 
 	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count.</summary>
 	public uint VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;
+
+	/// <summary>
+	/// Release a mesh: its id stops resolving at once, and its buffers wait until the frame fence reaches
+	/// <paramref name="lastReadingFence"/>, the value signalled after the last frame that may still draw it.
+	/// </summary>
+	public void Release(int meshId, ulong lastReadingFence)
+	{
+		var slot = Slot(meshId);
+		_releasing.Add((_meshes[slot], lastReadingFence));
+		_meshes[slot] = new StoredMesh { Released = true };
+		if (_bound == meshId)
+			_bound = NothingBound;
+	}
+
+	/// <summary>Free the buffers of every released mesh whose last reading frame the fence has passed (<paramref name="completedFence"/>).</summary>
+	public void CollectReleased(ulong completedFence)
+	{
+		for (var i = _releasing.Count - 1; i >= 0; i--)
+		{
+			if (_releasing[i].LastReadingFence > completedFence)
+				continue;
+			Destroy(_releasing[i].Mesh);
+			_releasing.RemoveAt(i);
+		}
+	}
+
+	private static void Destroy(StoredMesh mesh)
+	{
+		if (mesh.VertexBuffer.Handle is not null)
+			mesh.VertexBuffer.Dispose();
+		if (mesh.IndexBuffer.Handle is not null)
+			mesh.IndexBuffer.Dispose();
+	}
 
 	/// <summary>
 	/// Draw a mesh's index buffer with its per-vertex stream sourced from <paramref name="vertexView"/> instead of
@@ -277,13 +320,11 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	public void Dispose()
 	{
 		foreach (var mesh in _meshes)
-		{
-			if (mesh.VertexBuffer.Handle is not null)
-				mesh.VertexBuffer.Dispose();
-			if (mesh.IndexBuffer.Handle is not null)
-				mesh.IndexBuffer.Dispose();
-		}
+			Destroy(mesh);
 		_meshes.Clear();
+		foreach (var (mesh, _) in _releasing)
+			Destroy(mesh);
+		_releasing.Clear();
 		if (_indirectSignature.Handle is not null)
 			_indirectSignature.Dispose();
 	}

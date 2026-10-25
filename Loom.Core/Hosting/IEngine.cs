@@ -67,6 +67,16 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	Task<Mesh> CreateSkinnedMeshAsync(SkinnedVertex[] vertices, uint[] indices);
 
 	/// <summary>
+	/// Free a mesh's GPU geometry — the counterpart of <see cref="CreateMesh(ReadOnlySpan{Vertex}, ReadOnlySpan{uint})"/>
+	/// for an app whose geometry does not live as long as the engine (a level, a generated world, a streamed chunk). The
+	/// handle is dead from this call: drawing it, or releasing it again, throws rather than drawing whatever happens to
+	/// occupy the memory. The buffers themselves are freed once every frame that may still read them has finished on the
+	/// GPU, so a mesh can be released the frame after its last draw without waiting for the GPU first. Ids are not
+	/// reused, so a stale handle always fails loudly.
+	/// </summary>
+	void ReleaseMesh(Mesh mesh);
+
+	/// <summary>
 	/// Upload a texture (and its mip chain) once and get a stable <see cref="Texture"/> handle to bundle into a
 	/// <see cref="Material"/>. Takes neutral <see cref="TextureData"/> — no graphics-API type crosses the
 	/// boundary; the backend's texture store decodes nothing and just uploads the levels. Call after creation,

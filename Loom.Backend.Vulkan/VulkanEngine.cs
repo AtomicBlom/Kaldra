@@ -54,6 +54,11 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private readonly VulkanPipelineCache _pipelineCache;
 	private readonly VulkanUploadBatch _uploads;
 	private readonly VulkanMeshStore _meshes;
+	// Frames numbered from 1 as they are submitted: the newest submitted, the one each in-flight slot last carried,
+	// and the newest known complete. A released mesh is freed once the last frame that could read it completes.
+	private ulong _submittedFrames;
+	private readonly ulong[] _slotFrame = new ulong[MaxFramesInFlight];
+	private ulong _completedFrame;
 	private readonly VulkanTextureStore _textures;
 	private readonly VulkanDescriptorAllocator _descriptors;
 	private readonly VulkanRenderContext _context;
@@ -288,6 +293,10 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
+	// The next frame is the last that can read the mesh: it is the one the upload batch filling a just-created mesh
+	// is submitted ahead of.
+	public override void ReleaseMesh(Mesh mesh) => _meshes.Release(mesh.Id, _submittedFrames + 1);
+
 	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
 
 	// Tear down the previous graph's transients/readback/timing pools before the base binds a new graph; the device
@@ -352,7 +361,12 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_framebufferResized = true;
 	}
 
-	public override void WaitIdle() => _vk.DeviceWaitIdle(_ctx.Device);
+	public override void WaitIdle()
+	{
+		_vk.DeviceWaitIdle(_ctx.Device);
+		_completedFrame = _submittedFrames;
+		_meshes.CollectReleased(_completedFrame);
+	}
 
 	// Resolve a logical shader name (TechniqueDescriptor.Shader) + asset extension (".spv" or its ".json"
 	// reflection sidecar) to bytes. Engine shaders are embedded in this assembly; app shaders are loose

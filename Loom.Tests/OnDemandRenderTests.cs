@@ -131,6 +131,9 @@ public class OnDemandRenderTests
 		public Task<Mesh> CreateMeshAsync(Vertex[] vertices, uint[] indices) => throw new NotSupportedException();
 		public Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged => throw new NotSupportedException();
 		public Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => throw new NotSupportedException();
+
+		public void ReleaseMesh(Mesh mesh) => throw new NotSupportedException();
+
 		public Task<Mesh> CreateSkinnedMeshAsync(SkinnedVertex[] vertices, uint[] indices) => throw new NotSupportedException();
 		public Texture CreateTexture(TextureData data) => throw new NotSupportedException();
 		public Task<Texture> CreateTextureAsync(TextureData data) => throw new NotSupportedException();

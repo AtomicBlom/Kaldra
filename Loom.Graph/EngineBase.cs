@@ -657,6 +657,9 @@ public abstract class EngineBase : IEngine
 	public abstract Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
 	public abstract Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged;
 	public abstract Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices);
+
+	public abstract void ReleaseMesh(Mesh mesh);
+
 	public abstract Texture CreateTexture(TextureData data);
 
 	/// <inheritdoc/>
