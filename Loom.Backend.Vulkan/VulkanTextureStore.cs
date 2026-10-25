@@ -1,3 +1,4 @@
+using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Silk.NET.Vulkan;
 using VMASharp;
@@ -11,7 +12,8 @@ namespace Loom.Backend.Vulkan;
 /// app builds textures up front through the engine and gets back an opaque <see cref="Texture"/> handle; a
 /// material draw resolves the handle to its image view and binds it as a combined image sampler. Mip levels
 /// arrive pre-built on the CPU in <see cref="TextureData"/>, so the store just uploads each level — no GPU
-/// blit/mip-gen, and byte-identical mips across backends. Images are long-lived; freed only on teardown.
+/// blit/mip-gen, and byte-identical mips across backends. Images are freed on teardown or, when the app releases one,
+/// once no frame in flight can read it.
 /// </summary>
 internal sealed unsafe class VulkanTextureStore : IDisposable
 {
@@ -20,6 +22,7 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 		public Image Image;
 		public Allocation Allocation;
 		public ImageView View;
+		public bool Released; // the id's slot after IEngine.ReleaseTexture: no image, and Slot refuses it
 	}
 
 	private readonly VulkanContext _ctx;
@@ -27,6 +30,9 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly VulkanUploadBatch _uploads;
 	private readonly List<StoredTexture> _textures = [];
+	// Released textures whose images a frame in flight (or a pending upload) may still read, each with the last frame
+	// that can.
+	private readonly List<(StoredTexture Texture, ulong LastReadingFrame)> _releasing = [];
 
 	public VulkanTextureStore(VulkanContext ctx, VulkanMemoryAllocator allocator, VulkanUploadBatch uploads)
 	{
@@ -36,9 +42,37 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 		_uploads = uploads;
 	}
 
+	/// <summary>
+	/// Resolve a <see cref="Texture.Id"/> to its slot in the store. Ids are 1-based so <c>default(Texture)</c> (id 0) is
+	/// never a live handle: sampling an unassigned <see cref="Texture"/> field fails here instead of silently binding
+	/// whichever texture was uploaded first. A released texture keeps its slot, emptied, so its stale handle fails here
+	/// too.
+	/// </summary>
+	private int Slot(int textureId)
+	{
+		if (textureId < 1 || textureId > _textures.Count)
+		{
+			throw new VulkanException(
+				$"Texture id {textureId} was not created by this engine ({(textureId == 0 ? "0 is default(Texture), an unassigned handle" : $"only ids 1..{_textures.Count} exist")}). " +
+				"Textures come from IEngine.CreateTexture / CreateTextureAsync.");
+		}
+		if (_textures[textureId - 1].Released)
+			throw new VulkanException($"Texture id {textureId} was released by IEngine.ReleaseTexture; its handle can no longer be sampled or released.");
+		return textureId - 1;
+	}
+
 	/// <summary>Upload a texture + its mip chain and return a handle a material can bundle.</summary>
 	public Texture Create(TextureData data)
 	{
+		// Ids are never reused, and from DebugTextureBase up they name graph resources instead; refuse before allocating.
+		if (_textures.Count + 1 >= InspectableResource.DebugTextureBase)
+		{
+			throw new VulkanException(
+				$"This engine has minted {_textures.Count} texture ids, the most it can: ids are never reused, so that a released " +
+				$"texture's stale handle fails rather than naming its successor, and ids from {InspectableResource.DebugTextureBase} " +
+				"up name graph resources for the resource viewer.");
+		}
+
 		var format = data.Format switch
 		{
 			TextureFormat.Rgba8Srgb => VkFormat.R8G8B8A8Srgb,
@@ -85,13 +119,48 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 
 		UploadLevels(image, data);
 
-		var id = _textures.Count;
 		_textures.Add(new StoredTexture { Image = image, Allocation = allocation, View = view });
-		return new Texture(id, data.Width, data.Height);
+		return new Texture(_textures.Count, data.Width, data.Height);
 	}
 
 	/// <summary>The sampled image view a material binding points at.</summary>
-	public ImageView View(int textureId) => _textures[textureId].View;
+	public ImageView View(int textureId) => _textures[Slot(textureId)].View;
+
+	/// <summary>
+	/// Release a texture: its id stops resolving at once, and its image waits until frame
+	/// <paramref name="lastReadingFrame"/> has completed — a frame already submitted may still sample it, and the upload
+	/// batch that fills it rides ahead of the next frame, so the caller names that next frame. Returns the view, which
+	/// lives until then, so the caller can evict whatever is keyed by its handle before the driver can reuse it.
+	/// </summary>
+	public ImageView Release(int textureId, ulong lastReadingFrame)
+	{
+		var slot = Slot(textureId);
+		var texture = _textures[slot];
+		_releasing.Add((texture, lastReadingFrame));
+		_textures[slot] = new StoredTexture { Released = true };
+		return texture.View;
+	}
+
+	/// <summary>Destroy the image of every released texture whose last reading frame is <paramref name="completedFrame"/> or earlier.</summary>
+	public void CollectReleased(ulong completedFrame)
+	{
+		for (var i = _releasing.Count - 1; i >= 0; i--)
+		{
+			if (_releasing[i].LastReadingFrame > completedFrame)
+				continue;
+			Destroy(_releasing[i].Texture);
+			_releasing.RemoveAt(i);
+		}
+	}
+
+	private void Destroy(in StoredTexture texture)
+	{
+		if (texture.View.Handle != 0)
+			_vk.DestroyImageView(_ctx.Device, texture.View, null);
+		if (texture.Image.Handle != 0)
+			_vk.DestroyImage(_ctx.Device, texture.Image, null);
+		texture.Allocation.Dispose();
+	}
 
 	// Stage every level (tightly packed, concatenated) in one host-visible buffer, transition the whole
 	// mip/layer range Undefined→TransferDst, copy each level, then transition the whole range to ShaderReadOnly.
@@ -190,12 +259,12 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 	{
 		foreach (var texture in _textures)
 		{
-			if (texture.View.Handle != 0)
-				_vk.DestroyImageView(_ctx.Device, texture.View, null);
-			if (texture.Image.Handle != 0)
-				_vk.DestroyImage(_ctx.Device, texture.Image, null);
-			texture.Allocation.Dispose();
+			if (!texture.Released)
+				Destroy(texture);
 		}
 		_textures.Clear();
+		foreach (var (texture, _) in _releasing)
+			Destroy(texture);
+		_releasing.Clear();
 	}
 }

@@ -29,7 +29,7 @@ namespace Loom.Graph;
 /// on a <em>rule</em> rather than on an API call, the rule moves here instead of the code moving anywhere.
 /// </para>
 /// </summary>
-public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques)
+public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques, DrawListStreams streams)
 {
 	private GraphPass? _pass;
 
@@ -117,6 +117,24 @@ public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques)
 			call.Technique,
 			$"the draw on technique '{call.Technique}' binds mesh geometry but its Mesh is null. Set Mesh, or use a " +
 			"procedural draw (VertexCount plus an instance source).");
+
+	/// <summary>
+	/// Validate a draw list's identity: a stable one must name a stream <see cref="IEngine.AllocateDrawListStream"/>
+	/// minted. <strong>Always checked</strong> — it is one comparison, and what it prevents is silent: a backend keeps
+	/// a stable stream's geometry and skips the upload while the revision holds, so two producers sharing a number at
+	/// matching revisions would draw each other's geometry without any error.
+	/// </summary>
+	public void DrawList(string technique, in DrawListIdentity identity)
+	{
+		if (!identity.IsStable || streams.IsMinted(identity.Stream))
+			return;
+		throw new InvalidDrawCallException(
+			PassName,
+			technique,
+			$"a draw list on technique '{technique}' names stable stream {identity.Stream}, which this engine's " +
+			"AllocateDrawListStream did not mint. Allocate a stream per stable list from IEngine.AllocateDrawListStream, " +
+			"or pass DrawListIdentity.Transient for a list that is rebuilt every frame.");
+	}
 
 	/// <summary>
 	/// Validate that a push has somewhere to go and fits it. <strong>Always checked</strong>, because the alternative

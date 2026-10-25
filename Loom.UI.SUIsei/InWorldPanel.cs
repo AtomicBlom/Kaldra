@@ -18,7 +18,7 @@ namespace Loom.UI.SUIsei;
 /// <list type="number">
 /// <item>Queue screen-space pointer events with <see cref="QueueScreenPointer"/> (alongside the main uiHost).</item>
 /// <item>Call <see cref="Tick"/> with the current camera matrices — projects hits onto the panel and drives layout.</item>
-/// <item>Call <see cref="Render"/> to composite the visual tree.</item>
+/// <item>Call <see cref="Render"/> to composite the visual tree and prepare it for drawing, before the engine renders.</item>
 /// <item>Submit the composited draw list from a render-graph pass via <see cref="Draw"/>.</item>
 /// </list>
 /// </remarks>
@@ -131,8 +131,16 @@ public sealed class InWorldPanel
 		_host.Tick(deltaSeconds, time, new Vector2(_pixelWidth, _pixelHeight));
 	}
 
-	/// <summary>Composite the panel's visual tree to a draw list. Call once per frame after <see cref="Tick"/>.</summary>
-	public void Render() => _host.Render();
+	/// <summary>
+	/// Composite the panel's visual tree to a draw list and prepare it for <see cref="Draw"/> (uploading any image it
+	/// newly references — see <see cref="UIPainter.Prepare"/>). Call once per frame after <see cref="Tick"/> and before
+	/// <see cref="IEngine.Render"/>, never from a pass.
+	/// </summary>
+	public void Render()
+	{
+		_host.Render();
+		_painter.Prepare();
+	}
 
 	/// <summary>
 	/// Submit the composited draw list through a render-graph pass. Call from a pass that <c>.Writes</c> the panel

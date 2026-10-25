@@ -19,7 +19,9 @@ public sealed unsafe partial class DirectX12Engine
 
 		var index = _presentTarget.CurrentIndex;
 		WaitForFrame(index);
-		_meshes.CollectReleased(_fence.GetCompletedValue());
+		var completed = _fence.GetCompletedValue();
+		_meshes.CollectReleased(completed);
+		_textures.CollectReleased(completed);
 
 		// This slot's GPU work (a couple frames back) is now done, so its readback buffers are safe to map — repack
 		// the copies they hold and hand them to StoreReadback for IEngine.Read (a few frames stale; invisible for hover).

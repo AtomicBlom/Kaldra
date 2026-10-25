@@ -38,9 +38,11 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	// Compute pipelines have no attachment formats, so they key on the technique name alone.
 	private readonly Dictionary<string, WebGpuTechnique> _computeBaked = [];
 	// Per-(technique, bound resources) bind groups. Transients are stable per graph, so a fullscreen/draw's inputs
-	// don't change frame to frame — the group is created once and reused. Cleared on graph swap (the view handles it
-	// references are recycled) and hot-reload.
-	private readonly Dictionary<BindGroupKey, int> _bindGroups = [];
+	// don't change frame to frame — the group is created once and reused. Cleared on graph swap and hot-reload, and
+	// evicted entry by entry when the app releases a texture or mesh one names: every handle it names is recycled.
+	private readonly BindingCache<int> _bindGroups = new();
+	// Scratch for the groups one eviction removes, kept so a release allocates nothing once it has grown.
+	private readonly List<int> _evictedGroups = [];
 
 	// The current pass's attachment formats (set by the engine before the pass's Record runs) — the formats a
 	// technique bakes its pipeline against.

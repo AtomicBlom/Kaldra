@@ -68,6 +68,13 @@ internal sealed class WebGpuMeshStore(WebGpuHandleAllocator handles) : IDisposab
 
 	public int VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;
 
+	/// <summary>A mesh's vertex and index buffer handles — for evicting what names them before <see cref="Release"/> recycles them.</summary>
+	public (int Vertex, int Index) Buffers(int meshId)
+	{
+		var mesh = _meshes[Slot(meshId)];
+		return (mesh.VertexBuffer, mesh.IndexBuffer);
+	}
+
 	/// <summary>
 	/// Release a mesh: its id stops resolving and its buffers are destroyed at once. WebGPU defines <c>destroy()</c> on a
 	/// buffer that submitted work still reads as taking effect once that work completes, so unlike the native backends

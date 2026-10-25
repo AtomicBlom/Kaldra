@@ -1,5 +1,5 @@
 Loom 0.1.0-preview.1 — render-graph engine for .NET
-Generated: 2026-08-07
+Generated: 2026-10-25
 Source: https://github.com/AtomicBlom/Loom
 
 # Loom Architecture
@@ -74,6 +74,53 @@ Backends self-register via `[ModuleInitializer]` into `Backends.Available` (an `
 
 When using `Loom.Sdk` (NuGet or submodule), the `UseVulkan` / `UseDirectX12` / `UseWebGPU` MSBuild properties control which backend assemblies are referenced and therefore which `[ModuleInitializer]` calls fire; `UseSUIsei` / `UseImGui` do the same for the UI bridges.
 
+## Threading: one thread records
+
+**Everything that touches the recording path happens on one thread — the one that created the engine.** That means `Render`, `SetGraph`, and the whole `Write` family (`Write(Material, …)`, `Write(ConstantsHandle, …)`, `Write(StorageBufferHandle, …)`). This is not a lock you can take; nothing in that path is externally synchronized. A backend's command pool and queue are not synchronized objects in Vulkan or DirectX 12, and the engine's per-frame shadow buffers are plain dictionaries. A second thread does not contend — it corrupts, usually in a way that surfaces far from the call responsible.
+
+Debug builds enforce it: `EngineBase.AssertRenderThread` compares the calling thread against the one that ran the constructor and throws naming both. It is `[Conditional("DEBUG")]` because it is a contract violation to fix in development, not a cost to carry in a shipped frame loop.
+
+The deliberate exception is **asset creation**. `CreateTextureAsync`, `CreateMeshAsync` and their siblings may be called from any thread — a background image decode, a demo preloading concurrently — because they queue the GPU work rather than doing it. `ServicePendingUploads` drains that queue on the render thread. That single seam exists precisely because the rest of the surface has this affinity: without it, every background loader would need to marshal its own results.
+
+Creation and release also have a *when*: between frames. Every create and release verb throws when the render thread calls it from inside a pass callback — an upload made while a frame records is submitted only ahead of the next frame, so the frame being recorded would sample memory its contents have not reached, and a release could free what that frame already draws with. A background thread queuing an upload through a `*Async` creator while a frame records is exactly what that seam is for, and is let through.
+
+This is worth knowing before refactoring a backend toward parallel command recording. The contract is not an accident of the current implementation — the ordering it buys is load-bearing. `Write` provably runs before `Render` and outside command recording, which is what lets a growable storage buffer reallocate in place (see `EngineBase.GrowStorageBuffer`): there is no command buffer open to invalidate.
+
+## What a new backend has to write
+
+Most of a backend is not API code. The per-frame sequence, the derived plan's interpretation, and the draw-list state machine are the same everywhere, so they live once — in `EngineBase` and in `Loom.Core.Hosting` — and a backend inherits them.
+
+`EngineBase.RecordFrame` owns the frame's shape: flush the app-writable buffer shadows, then per pass its debug-label scope, its derived transitions, its timestamps and its own recording, then close the trailing labels, copy the readback targets, and finish the frame. The order is the point. Each step has to happen in that sequence on every backend — a pass's barriers before its opening timestamp, because those barriers are the cost of the transition rather than of the pass; the readback copies before the frame's tail, because the tail may transition the very targets being copied — and a transliterated sequence is a sequence that can drift. It had: two backends recorded readback then capture and the third recorded capture then readback.
+
+So a new backend implements hooks, not a loop:
+
+| Hook | What it does |
+|---|---|
+| `WriteConstantsShadow` / `WriteStorageShadow` | Upload one app-writable buffer's bytes for this frame |
+| `EmitTransitions` | Translate the derived `ResourceTransition`s (an API that tracks state itself overrides this as an explicit no-op) |
+| `RecordComputePass` / `RecordRasterPass` | Open a scope over the pass's derived attachments and run its callback |
+| `RecordReadback` | Copy each `g.Readback` target into this slot's buffer |
+| `FinishFrame` | The capture, if requested, and the derived final transitions |
+| `BeginLabel` / `EndLabel` | Open and close a named scope for a capture tool (or empty, deliberately) |
+| `BeginFrameTimestamps` / `WritePassBeginTimestamp` / `WritePassEndTimestamp` / `EndFrameTimestamps` | Per-pass GPU timing (virtual — a backend with no timer implements none) |
+
+`RecordRasterPass` stays whole to the backend rather than being templated further. Its attachment descriptors, formats and views are almost entirely API structs, and forcing them into one signature is exactly what would push graphics types into `Loom.Graph`. What it inherits instead is the loop around it, the label bookkeeping, the transition emission, the timing index arithmetic, and `GraphPass.ResourceIdsWith` for the buffers a pass reads.
+
+Draw lists are handled the same way. `DrawListWalker` decodes a submission's `DrawCommand` stream into steps — `Draw`, `BeginLayer`, `EndLayer` — and owns the group-opacity nesting, the nesting cap and its symmetric suppression, the scissor, the fully-clipped skip, and the per-command texture memoisation. `DrawListGeometry` answers the geometry: a layer's bounds, its target-pixel area, the composite quad, and the marker tag values the producer encodes. A backend's `DrawList` is then a `while (walker.MoveNext())` over three cases, each one just the API calls that step needs. A layer's identity is its **depth** — every backend's layer pool is indexed by depth already, so none of them keeps a stack of its own.
+
+Resources split the same way. `EngineBase` owns the public create and release verbs and their neutral rules — refused while a pass records, and a texture a `Material` holds cannot be released — and a backend implements the GPU half:
+
+| Hook | What it does |
+|---|---|
+| `UploadMesh` / `UploadSkinnedMesh` / `UploadTexture` | Upload and mint a handle. Ids start at 1 and are never reused, so `default` and stale handles fail loudly |
+| `RetireMesh` / `RetireTexture` | Kill the handle at once; free the memory once no frame in flight — and no pending upload — can read it, on whatever schedule the API needs (a frame number, a fence value, or nothing: WebGPU's `destroy()` waits for submitted work itself) |
+
+A backend that caches binding objects keyed by the handles of what they name — Vulkan's descriptor sets, WebGPU's bind groups — keys them with `BindingKey` in a `BindingCache`, whose invariant is that nothing an entry names is destroyed while the entry is cached. A whole generation dies at a drained moment (graph swap, resize, shader reload) and the cache is cleared; a single object dies at a retire, which evicts the entries naming it before its handle can be reused. That matters most where handles are recycled at once, as WebGPU's table indices are.
+
+What is deliberately *not* shared is `*RenderContext.Verbs.cs`. Those files are ~90% descriptor-set, root-signature and bind-group construction; the only neutral part is a small geometry-source switch, which is not worth an abstraction. Policy differences between backends' record paths belong in `RecordValidator`, which exists for exactly that and is already one implementation.
+
+The neutral floors a backend can rely on rather than re-check are in `GraphLimits` — uniform and storage reads per pass, colour attachments per pass — and derivation rejects a graph that exceeds them before any frame is recorded. `EngineCapabilities` reports the headroom a particular device has above those floors.
+
 ---
 
 # Loom API Vocabulary
@@ -97,7 +144,7 @@ A graph is built once with `RenderGraph.Define(g => { … })` and set on the eng
 | `g.Buffer("name", byteSize)` | The same as an opaque block of `byteSize` bytes. Declares no element contract, so neither draw-path guard applies — prefer one of the two above. |
 | `g.Constants<T>("name")` | An app-written uniform/constant block of `sizeof(T)` bytes → `ConstantsHandle`. Fill with `engine.Write`. |
 | `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. |
-| `g.Persistent("name", format, size=1)` | A cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. |
+| `g.Persistent("name", format, size=1)` | A screen-sized cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. A window resize reallocates it at the new extent, so its contents are lost (there is no resample) — use `domain.Persistent` on a fixed-size domain for history that must outlive a resize. |
 
 ### Pass access declarations (`PassBuilder`, all chainable)
 
@@ -111,6 +158,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `.WritesDepth(DepthHandle)` / `.ReadsDepth(DepthHandle)` | Depth write / depth test without write. |
 | `.ReadWrites(params IStorageHandle[])` | Read-modify-write storage images or buffers (compute UAV). |
 | `.ReadsVertex(BufferHandle)` | Bind a buffer as a vertex / instance stream (a compute pass filled it). |
+| `.ReadsIndirect(BufferHandle)` | Bind a buffer as draw arguments — the counts the command processor reads instead of the CPU supplying them. |
 | `.Reads(IUniformHandle)` | Read a `g.Constants` block as the technique's uniform input. |
 | `.Reads(IStorageBufferHandle)` | Read a `g.Storage` SSBO read-only (an overload of `.Reads`). |
 | `.Queue(Queue)` | Assign the pass to a queue (see `Queue` below). |
@@ -129,7 +177,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `domain.Color("name", format, clearValue?=null, noClear?=false)` | A colour target in this domain → `ColorHandle`. `noClear: true` skips the clear (only when the first pass covers every pixel). |
 | `domain.Color("name", format, scale, …)` | A colour target at a fraction of the domain's resolution (mip chains, bloom pyramid). |
 | `domain.Depth("name", format, clearDepth = 1f, noClear = false)` | A depth target in this domain → `DepthHandle`. `clearDepth: 0f` is the reversed-Z far plane; `noClear` skips the clear (only correct when the first depth-writing pass covers every pixel). |
-| `domain.Persistent("name", format)` | A cross-frame target sized to this domain (use a tiny domain for a scalar history). |
+| `domain.Persistent("name", format)` | A cross-frame target sized to this domain (use a tiny domain for a scalar history). On a fixed-size domain its contents survive a window resize; on a backbuffer-relative one it is reallocated like any other screen-sized target. |
 | `g.BackbufferClear` / `g.BackbufferNoClear` | Set the backbuffer's first-write clear colour / skip the clear — before the first `g.Backbuffer` access. |
 
 So a target is declared `g.Screen.Color("hdr", Format.Rgba16F)` or `g.Screen.Depth("depth", Format.Depth32F)`.
@@ -226,11 +274,15 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 |---|---|
 | `BackendName` / `DeviceName` | The backend name (e.g. `"Vulkan"`) and a human-readable GPU name. |
 | `DefineTechnique(name, TechniqueDescriptor)` | Register a technique under a logical name passes reference. Idempotent per name. |
-| `CreateMesh(ReadOnlySpan<Vertex>, ReadOnlySpan<uint> indices)` | Upload geometry in the canonical `MeshStandard` layout → `Mesh`. |
+| `CreateMesh(ReadOnlySpan<Vertex>, ReadOnlySpan<uint> indices)` | Upload geometry in the canonical `MeshStandard` layout → `Mesh`. Between frames only: throws inside a pass. |
 | `CreateMesh<T>(ReadOnlySpan<T>, VertexLayout, ReadOnlySpan<uint>)` | Upload geometry with an explicit layout (`sizeof(T) == layout.Stride`). |
 | `CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex>, ReadOnlySpan<uint>)` | Upload a skinned bind-pose mesh (readable by the compute pre-skin) → `Mesh`. |
-| `CreateTexture(TextureData)` | Upload an image + mip chain → `Texture`. |
-| `CreateMaterial(params ReadOnlySpan<Texture>)` | Bundle textures (in the shader's binding order) → `Material`. |
+| `ReleaseMesh(Mesh)` | Kill a mesh's handle at once; its buffers are freed once no frame in flight can read them. Between frames only. |
+| `CreateTexture(TextureData)` | Upload an image + mip chain → `Texture`. Between frames only: an upload made inside a pass would miss the frame that samples it, so it throws there. |
+| `CreateTextureAsync(TextureData)` | Queue an upload from any thread; completes when `ServicePendingUploads` (called by `Render`) drains it. |
+| `ReleaseTexture(Texture)` | Kill a texture's handle at once; its image is destroyed once no frame in flight can read it. Throws for a texture a `Material` holds, and inside a pass. |
+| `CreateMaterial(params ReadOnlySpan<Texture>)` | Bundle textures (in the shader's binding order) → `Material`. A material holds its textures for the engine's lifetime. |
+| `AllocateDrawListStream()` | Mint an engine-unique stream id for a stable `DrawListIdentity`, so draw-list producers never share kept geometry. |
 | `SetGraph(RenderGraph)` | Make a graph active — derive its schedule/barriers/aliasing, reusing device + pipeline cache. Safe to call again to swap graphs. |
 | `Write<T>(ConstantsHandle, in T)` | Write a value into a `g.Constants` buffer (reaches the reading pass on the next frame). |
 | `Write<T>(StorageBufferHandle, ReadOnlySpan<T>)` | Write an array into a `g.Storage` buffer (the span counterpart). |
@@ -254,7 +306,7 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 | `Dispatch(technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)` | Dispatch a compute technique over a workgroup grid. |
 | `Draw(in DrawCall call)` | Submit one raster draw (the unified draw verb — see `DrawCall`). |
 | `DispatchSkin(technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)` | Compute pre-skin a bind pose by a bone palette into `output` (a `.ReadWrites` buffer). |
-| `DrawList<TVertex>(technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push)` | Submit a per-frame batched indexed draw list (the overlay/UI path). |
+| `DrawList<TVertex>(technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push)` | Submit a batched indexed draw list (the overlay/UI path). `identity` is `DrawListIdentity.Transient` for a list rebuilt every frame, or a minted stream + revision for one whose geometry the backend may keep. |
 | `ResolveInspectable(int resourceId)` | Resolve an inspectable resource id to a `Texture?` bindable in a draw list this frame. |
 
 ### `FrameInputs`
@@ -337,25 +389,28 @@ Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projec
 | `SkinnedVertices` (`BufferHandle?`) | A pre-skinned vertex buffer override (the mesh still supplies its indices); must be a `.ReadsVertex` buffer. |
 | `VertexCount` (`int`) | Vertices per instance for procedural draws (when `Mesh` is null). |
 | `Instances` (`InstanceSource`) | Per-instance data — empty (default) = single draw. |
+| `Indices` (`IndexRange`) | Which sub-range of the mesh to draw; empty (default) = the whole mesh. |
 | `Material` (`Material?`) | Material whose textures fill the technique's sampler slots; `null` for untextured techniques. |
 | `Uniforms` / `.SetUniforms<T>(ref T)` / `.SetUniforms<T>(ReadOnlySpan<T>)` | The per-draw uniform block (raw bytes matching the shader's cbuffer); set it from a typed value or span. |
 | `Sampled` (`ReadOnlySpan<ResourceHandle>`) | Graph resources bound as sampled inputs (each declared via `.Samples`). |
 | `DrawCall.From<T>(ReadOnlySpan<T>)` | Build an `InstanceSource` from a CPU instance span (uploaded per frame). |
 | `DrawCall.Gpu(BufferHandle, count)` | Build an `InstanceSource` from a GPU-resident buffer a compute pass filled. |
+| `DrawCall.Indirect(BufferHandle, byteOffset)` | Build an `InstanceSource` whose counts come from a buffer (declared `.ReadsIndirect`); `Indices` is ignored — the range comes from the buffer. |
+| `DrawCall.Range(firstIndex, indexCount, baseVertex)` | Build an `IndexRange`, so one mesh can hold several primitives. |
 
-`InstanceSource` (a nested `ref struct`) exposes `IsEmpty` and `Count`; construct it only via `DrawCall.From` / `DrawCall.Gpu`. Skinning is `ctx.DispatchSkin(...)` (a compute pre-skin into a `.ReadsVertex` buffer) followed by an ordinary `ctx.Draw` of that buffer.
+`InstanceSource` (a nested `ref struct`) exposes `IsEmpty` and `Count`; construct it only via `DrawCall.From` / `DrawCall.Gpu` / `DrawCall.Indirect`. An indirect draw has no CPU-known `Count` — it reports zero, because only the GPU knows. Skinning is `ctx.DispatchSkin(...)` (a compute pre-skin into a `.ReadsVertex` buffer) followed by an ordinary `ctx.Draw` of that buffer.
 
 ## Geometry & materials
 
 | Type (`namespace`) | Role |
 |---|---|
-| `Mesh` (`Loom.Core.Geometry`) | An opaque handle to uploaded geometry from `IEngine.CreateMesh` / `CreateSkinnedMesh`. Survives graph swaps. |
+| `Mesh` (`Loom.Core.Geometry`) | An opaque handle to uploaded geometry from `IEngine.CreateMesh` / `CreateSkinnedMesh`. Survives graph swaps; dies at `IEngine.ReleaseMesh`. |
 | `Vertex` (`Loom.Core.Geometry`) | The canonical interleaved vertex — `record struct (Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Tangent)`, 48 bytes. |
 | `SkinnedVertex` (`Loom.Core.Animation`) | The skinned bind-pose vertex — `Vertex` fields plus four bone indices (`Joint0..3`) + `Vector4 Weights`, 80 bytes. |
 | `OverlayVertex` (`Loom.Core.Geometry`) | The 2D overlay vertex (position, uv, premultiplied RGBA16F colour, custom) used by draw lists. |
 | `VertexLayout` (`Loom.Core.Geometry`) | A backend-neutral per-stream attribute layout. Built-ins: `MeshStandard`, `MeshSkinned`, `Overlay`, `Transform` (the standard per-instance 4×4 matrix stream). |
 | `Material` (`Loom.Core.Materials`) | An opaque `record struct (int Id)` — an ordered `Texture` bundle from `IEngine.CreateMaterial` that fills a technique's reflected sampler slots. |
-| `Texture` (`Loom.Core.Materials`) | An opaque handle to an uploaded texture from `IEngine.CreateTexture`. |
+| `Texture` (`Loom.Core.Materials`) | An opaque handle to an uploaded texture from `IEngine.CreateTexture`. Survives graph swaps; dies at `IEngine.ReleaseTexture`. Ids start at 1, so `default(Texture)` names nothing and is refused. |
 | `TextureData` (`Loom.Core.Materials`) | A neutral image description (pixel data + mip chain). Built via `FromRgba8`, `FromRgba16F`, `FromCubeFaces`; carries `Format` (`TextureFormat`), `Width`, `Height`, `Levels`, `IsCube`. |
 | `TextureFormat` (`Loom.Core.Materials`) | Source-image encoding (distinct from `Format`): `Rgba8Srgb`, `Rgba8Unorm`, `Rgba16F`. |
 
@@ -379,6 +434,7 @@ The cross-backend verb behind overlay/UI-style rendering (game UI via SUIsei, Im
 | Type | Role |
 |---|---|
 | `DrawCommand` | One run within a list — `record struct (Rect ClipRect, int TextureIndex, int IndexOffset, int IndexCount, int VertexOffset, uint Tag)`. `Tag` is the per-command value a list-push technique reads. |
+| `DrawListIdentity` | `record struct (int Stream, uint Revision)` — which kept geometry stream a list is and which revision of it. `Transient` (revision 0) keeps nothing; a stable stream comes from `IEngine.AllocateDrawListStream()` and is refused otherwise, because two producers sharing one would draw each other's geometry. |
 
 ---
 
@@ -478,7 +534,7 @@ A backend mapping switch throws on a value it doesn't map rather than guessing. 
 
 Not pillars, but engine guarantees worth knowing when working on the backends or the schedule:
 
-- **Structural changes are cheap and cached.** `RenderGraph` is immutable and hashable. `IEngine.SetGraph` with a structurally identical graph (same hash) is a no-op — the baked schedule is reused. A genuinely new graph rebakes, but the device and pipeline cache persist across swaps, so the new graph is warm from its first frame. It is therefore safe to call `RenderGraph.Define` every frame if the structure depends on runtime state: only structural changes (different passes, resources, or domains) trigger a rebake, while per-frame data travels via `FrameInputs` and `ctx`.
+- **Structural changes are cheap and cached.** `RenderGraph` is immutable and hashable, and `RenderGraph.Hash()` covers everything the Execute layer derives from — resources (including their clear attributes), passes, access edges, the present and readback targets — so equal hashes mean equal derived plans and equal GPU resource needs. `IEngine.SetGraph` with a structurally identical graph therefore skips the whole GPU half: no drain, no reallocation, and no loss of what those resources hold (`Persistent` history, written parameter buffers, pending readback). It still re-derives the schedule/barriers, because the plan carries *this* graph's `.Draw`/`.Dispatch` callbacks and reusing the previous graph's would silently render whatever the old closures captured; deriving is pure CPU work over immutable data, so it costs a fraction of the rebuild it replaces. A genuinely new graph rebakes, but the device and pipeline cache persist across swaps, so the new graph is warm from its first frame. It is therefore safe to call `RenderGraph.Define` every frame if the structure depends on runtime state: only structural changes (different passes, resources, or domains) trigger a rebake, while per-frame data travels via `FrameInputs` and `ctx`.
 - **Vulkan baseline.** The Vulkan backend requires dynamic rendering, synchronization2, and timeline semaphores; barriers use `vkCmdPipelineBarrier2`, and there are no renderpass or framebuffer objects. A device without these features is rejected at engine creation (per *Fail loud* above).
 
 ---
@@ -611,9 +667,9 @@ This renders a mesh into an offscreen HDR buffer, then tone-maps that buffer to 
 
 ### 1. Define shaders
 
-Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
+Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings, nor hand-order them. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
 
-Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that `LOOM_BINDING(n)` counts **every** descriptor while `register(bN)` counts **only constant buffers and starts at `b1`** (`b0` is reserved on DirectX 12), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
+Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that `LOOM_BINDING(n)` numbers **every** descriptor (uniquely, in any order) while `register(bN)` counts **only constant buffers and starts at `b1`** (`b0` is reserved on DirectX 12), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
 
 `Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer the pass `.Reads`, and a per-draw model matrix from the per-draw uniform block:
 
@@ -623,7 +679,7 @@ Every shader starts by including the platform module, which owns the places the 
 struct ViewProj { float4x4 viewProj; }   // filled from the app via engine.Write(viewProj, …)
 struct PerDraw  { float4x4 model; }      // staged by DrawCall.SetUniforms(ref block)
 
-// No samplers precede them, so these own descriptors 0 and 1 — and registers b1/b2, since b0 is reserved.
+// Descriptors 0 and 1 because that is what they are numbered — and registers b1/b2, since b0 is reserved.
 // Uniform slots fill in a defined order: the pass's .Reads constants first, then the per-draw block.
 LOOM_BINDING(0) ConstantBuffer<ViewProj> view : register(b1);
 LOOM_BINDING(1) ConstantBuffer<PerDraw>  draw : register(b2);
@@ -691,7 +747,9 @@ engine.DefineTechnique("tonemap", new TechniqueDescriptor("tonemap"));
 
 ### 3. Define the render graph
 
-A graph is built once with `RenderGraph.Define` (it is immutable and cached by hash) and set on the engine with `SetGraph`. You declare each pass's reads and writes — never the order or the barriers — and `g.Present` names the target shown on screen. Per-frame view data rides a neutral `Constants` channel the scene pass reads; the engine names no camera.
+A graph is built once with `RenderGraph.Define` and set on the engine with `SetGraph`. You declare each pass's reads and writes — never the order or the barriers — and `g.Present` names the target shown on screen. Per-frame view data rides a neutral `Constants` channel the scene pass reads; the engine names no camera.
+
+The graph is immutable and cached by hash, so re-setting a structurally identical one is cheap: the engine reuses the GPU resources it already built (and everything they hold — cross-frame `Persistent` history, your written parameter buffers) and only re-derives the plan. You can rebuild and set the graph whenever the structure *might* have changed rather than tracking that by hand; only a real structural change pays for a rebuild.
 
 ```csharp
 using System.Numerics;

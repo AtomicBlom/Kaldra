@@ -29,6 +29,7 @@ blend/depth state around its draws, one `RenderScene` calling them in order.
 | `GL_LINES`, `GL_TRIANGLE_STRIP`, `GL_TRIANGLE_FAN`      | Triangle lists only                                                                                                                           |
 | `glBufferData` every frame                              | CPU instances (`DrawCall.From`), uploaded by the engine each frame without allocating                                                          |
 | `glDeleteBuffers`                                       | `Engine.ReleaseMesh(mesh)`                                                                                                                     |
+| `glDeleteTextures`                                      | `Engine.ReleaseTexture(texture)` — not for a texture a material holds                                                                          |
 | An FBO in a hidden window, read back with `glReadPixels` | An engine on `Surface.Offscreen(w, h)`, and `Engine.RequestCapture(path)`                                                                     |
 
 The rest of this guide goes through those rows, then the two things a port gets wrong without any error: **colour**
@@ -403,7 +404,8 @@ var host = new UIHost();
 var view = host.CreateRoot(UILayer.Default, interactive: false);
 view.Root.Content = canvas;   // a Canvas of TextBlocks, placed with Canvas.SetLeft / SetTop
 var painter = UIPainter.Create(Engine, host, FontAtlas.Default);
-// each frame: host.Tick(dt, time, SurfaceSize); host.Render();  — and in the pass: painter.Draw(ctx, view.Surface)
+// each frame, in BeforeRender: host.Tick(dt, time, SurfaceSize); host.Render(); painter.Prepare();
+// and in the pass: painter.Draw(ctx, view.Surface)
 ```
 
 Text is wider than the icons a GL HUD used in its place. Around a small chart, anchor each label by its corner or

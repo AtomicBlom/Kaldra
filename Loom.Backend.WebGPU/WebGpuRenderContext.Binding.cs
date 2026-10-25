@@ -1,6 +1,7 @@
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+
+using Loom.Graph;
 
 namespace Loom.Backend.WebGPU;
 
@@ -139,69 +140,66 @@ internal sealed partial class WebGpuRenderContext
 		entries[e++] = size;
 	}
 
-	// Reuse or create the bind group for a set of entries. Keyed by the layout plus each entry's (binding, handle):
-	// entry offsets are always 0 and sizes are deterministic per technique, so the bound handles fully identify the
-	// group — and since the buffers/views/samplers are stable per graph, the steady state creates no bind groups.
+	// Reuse or create the bind group for a set of entries. Keyed by the layout, the sampler and each entry's binding,
+	// kind and handle: entry offsets are always 0 and sizes are deterministic per technique, so the bound handles fully
+	// identify the group — and since the buffers/views/samplers are stable per graph, the steady state creates no bind
+	// groups. The sampler rides the key's header rather than an entry per texture, because every sampled entry of a group
+	// pairs with its technique's one sampler; a group that paired two different ones would need them as entries, so it
+	// is refused rather than keyed by the first.
 	private int GetOrCreateBindGroup(int layout, Span<int> entries)
 	{
-		var key = new BindGroupKey(layout);
+		var sampler = -1;
 		for (var i = 0; i < entries.Length; i += 5)
 		{
-			key.Add(entries[i]);     // binding
-			key.Add(entries[i + 2]); // resource handle
+			if (entries[i + 1] != EntrySampler)
+				continue;
+			if (sampler >= 0 && entries[i + 2] != sampler)
+				throw new WebGpuException("A bind group pairs its textures with two different samplers; its cache key holds one.");
+			sampler = entries[i + 2];
+		}
+
+		var key = new BindingKey(BindingHandle(layout), sampler >= 0 ? BindingHandle(sampler) : 0);
+		for (var i = 0; i < entries.Length; i += 5)
+		{
+			switch (entries[i + 1])
+			{
+				case EntryView:
+					key.Add(entries[i], BoundObject.View, BindingHandle(entries[i + 2]));
+					break;
+				case EntryBuffer:
+					key.Add(entries[i], BoundObject.Buffer, BindingHandle(entries[i + 2]));
+					break;
+				case EntrySampler:
+					break;
+				default:
+					throw new WebGpuException($"Bind group entry kind {entries[i + 1]} is not mapped to a cache key.");
+			}
 		}
 		if (_bindGroups.TryGetValue(key, out var cached))
 			return cached;
 
 		var handle = _engine.Handles.Allocate(WebGpuHandleAllocator.BindGroups);
 		WebGpuInterop.CreateBindGroup(handle, layout, entries);
-		_bindGroups[key] = handle;
+		_bindGroups.Add(key, handle);
 		return handle;
 	}
 
-	// Allocation-free bind-group cache key: the layout handle plus the ordered (binding, handle) ints. Full-value
-	// equality — a hash-only collapse could alias a group onto the wrong resources after handle recycling.
-	private const int MaxBindGroupInts = 64;
-
-	[InlineArray(MaxBindGroupInts)]
-	private struct IntBuffer
+	/// <summary>
+	/// Release every cached bind group that names the <paramref name="kind"/> object <paramref name="handle"/>, which the
+	/// app is releasing. Called before the object's handle goes back to the allocator: the next object created of that
+	/// kind is given the same number, and a group still keyed by it would bind the destroyed object in its place — the
+	/// view of a released UI image drawn where its replacement belongs. Dropping a group the last frame bound is safe,
+	/// because that frame's commands were encoded and submitted before this call could be made.
+	/// </summary>
+	public void EvictBindGroups(BoundObject kind, int handle)
 	{
-		private int _element0;
+		_bindGroups.Evict(kind, BindingHandle(handle), _evictedGroups);
+		foreach (var group in _evictedGroups)
+			_engine.Handles.Release(WebGpuHandleAllocator.BindGroups, group);
+		_evictedGroups.Clear();
 	}
 
-	private struct BindGroupKey(int layout) : IEquatable<BindGroupKey>
-	{
-		private readonly int _layout = layout;
-		private IntBuffer _values;
-		private int _count;
-
-		public void Add(int value)
-		{
-			if (_count >= MaxBindGroupInts)
-				throw new WebGpuException($"A bind group's key exceeds {MaxBindGroupInts} ints.");
-			_values[_count++] = value;
-		}
-
-		public bool Equals(BindGroupKey other)
-		{
-			if (_layout != other._layout || _count != other._count)
-				return false;
-			for (var i = 0; i < _count; i++)
-				if (_values[i] != other._values[i])
-					return false;
-			return true;
-		}
-
-		public override bool Equals(object? obj) => obj is BindGroupKey other && Equals(other);
-
-		public override int GetHashCode()
-		{
-			var hash = new HashCode();
-			hash.Add(_layout);
-			hash.Add(_count);
-			for (var i = 0; i < _count; i++)
-				hash.Add(_values[i]);
-			return hash.ToHashCode();
-		}
-	}
+	// A table handle as a cache-key value. Handles are non-negative table indices, so widening through uint keeps every
+	// one distinct.
+	private static ulong BindingHandle(int handle) => (uint)handle;
 }

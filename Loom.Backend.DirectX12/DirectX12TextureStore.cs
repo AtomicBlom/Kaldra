@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
@@ -13,7 +14,8 @@ namespace Loom.Backend.DirectX12;
 /// <c>PixelShaderResource</c>. Mip levels arrive pre-built on the CPU in <see cref="TextureData"/>, so the
 /// store just lays each level into the staging buffer at the footprint <c>GetCopyableFootprints</c> reports.
 /// The copies are recorded into the shared <see cref="DirectX12UploadBatch"/>, which executes them ahead of the
-/// frame that samples them rather than blocking on each one.
+/// frame that samples them rather than blocking on each one. A texture lives until teardown or, when the app releases
+/// it, until the frame fence passes the last frame that can read it.
 /// </summary>
 internal sealed unsafe class DirectX12TextureStore : IDisposable
 {
@@ -23,10 +25,14 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		public DxgiFormat Format;
 		public uint MipLevels;
 		public bool IsCube;
+		public bool Released; // the id's slot after IEngine.ReleaseTexture: no resource, and Slot refuses it
 	}
 
 	private readonly DirectX12Context _ctx;
 	private readonly List<StoredTexture> _textures = [];
+	// Released textures whose resources a frame in flight (or a pending upload) may still read, each with the frame-fence
+	// value signalled after the last work that can.
+	private readonly List<(StoredTexture Texture, ulong LastReadingFence)> _releasing = [];
 
 	private readonly DirectX12UploadBatch _uploads;
 
@@ -36,9 +42,37 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		_uploads = uploads;
 	}
 
+	/// <summary>
+	/// Resolve a <see cref="Texture.Id"/> to its slot in the store. Ids are 1-based so <c>default(Texture)</c> (id 0) is
+	/// never a live handle: sampling an unassigned <see cref="Texture"/> field fails here instead of silently binding
+	/// whichever texture was uploaded first. A released texture keeps its slot, emptied, so its stale handle fails here
+	/// too.
+	/// </summary>
+	private int Slot(int textureId)
+	{
+		if (textureId < 1 || textureId > _textures.Count)
+		{
+			throw new InvalidOperationException(
+				$"DirectX12: texture id {textureId} was not created by this engine ({(textureId == 0 ? "0 is default(Texture), an unassigned handle" : $"only ids 1..{_textures.Count} exist")}). " +
+				"Textures come from IEngine.CreateTexture / CreateTextureAsync.");
+		}
+		if (_textures[textureId - 1].Released)
+			throw new InvalidOperationException($"DirectX12: texture id {textureId} was released by IEngine.ReleaseTexture; its handle can no longer be sampled or released.");
+		return textureId - 1;
+	}
+
 	/// <summary>Upload a texture + its mip chain and return a handle a material can bundle.</summary>
 	public Texture Create(TextureData data)
 	{
+		// Ids are never reused, and from DebugTextureBase up they name graph resources instead; refuse before allocating.
+		if (_textures.Count + 1 >= InspectableResource.DebugTextureBase)
+		{
+			throw new InvalidOperationException(
+				$"DirectX12: this engine has minted {_textures.Count} texture ids, the most it can: ids are never reused, so that a " +
+				$"released texture's stale handle fails rather than naming its successor, and ids from {InspectableResource.DebugTextureBase} " +
+				"up name graph resources for the resource viewer.");
+		}
+
 		var format = data.Format switch
 		{
 			TextureFormat.Rgba8Srgb => DxgiFormat.FormatR8G8B8A8UnormSrgb,
@@ -132,22 +166,51 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		cmd.ResourceBarrier(1, &barrier);
 		_uploads.Retire(staging);
 
-		var id = _textures.Count;
 		_textures.Add(new StoredTexture { Resource = texture, Format = format, MipLevels = mipsPerFace, IsCube = data.IsCube });
-		return new Texture(id, data.Width, data.Height);
+		return new Texture(_textures.Count, data.Width, data.Height);
 	}
 
 	/// <summary>The texture resource a material binding creates an SRV over.</summary>
-	public ComPtr<ID3D12Resource> Resource(int textureId) => _textures[textureId].Resource;
+	public ComPtr<ID3D12Resource> Resource(int textureId) => _textures[Slot(textureId)].Resource;
 
 	/// <summary>The DXGI format an SRV over this texture uses.</summary>
-	public DxgiFormat SrvFormat(int textureId) => _textures[textureId].Format;
+	public DxgiFormat SrvFormat(int textureId) => _textures[Slot(textureId)].Format;
 
 	/// <summary>The texture's mip-level count (so the SRV exposes the whole chain, not just mip 0).</summary>
-	public uint MipLevels(int textureId) => _textures[textureId].MipLevels;
+	public uint MipLevels(int textureId) => _textures[Slot(textureId)].MipLevels;
 
 	/// <summary>True when the texture is a cube map (six array slices), so the SRV is created as a <c>TextureCube</c>.</summary>
-	public bool IsCube(int textureId) => _textures[textureId].IsCube;
+	public bool IsCube(int textureId) => _textures[Slot(textureId)].IsCube;
+
+	/// <summary>
+	/// Release a texture: its id stops resolving at once, and its resource waits until the frame fence reaches
+	/// <paramref name="lastReadingFence"/>, the value signalled after the last frame — and the last upload batch — that
+	/// may still read it.
+	/// </summary>
+	public void Release(int textureId, ulong lastReadingFence)
+	{
+		var slot = Slot(textureId);
+		_releasing.Add((_textures[slot], lastReadingFence));
+		_textures[slot] = new StoredTexture { Released = true };
+	}
+
+	/// <summary>Free the resource of every released texture whose last reading fence the frame fence has passed (<paramref name="completedFence"/>).</summary>
+	public void CollectReleased(ulong completedFence)
+	{
+		for (var i = _releasing.Count - 1; i >= 0; i--)
+		{
+			if (_releasing[i].LastReadingFence > completedFence)
+				continue;
+			Destroy(_releasing[i].Texture);
+			_releasing.RemoveAt(i);
+		}
+	}
+
+	private static void Destroy(StoredTexture texture)
+	{
+		if (texture.Resource.Handle is not null)
+			texture.Resource.Dispose();
+	}
 
 	private ComPtr<ID3D12Resource> CreateUploadBuffer(ulong size)
 	{
@@ -174,8 +237,10 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 	public void Dispose()
 	{
 		foreach (var texture in _textures)
-			if (texture.Resource.Handle is not null)
-				texture.Resource.Dispose();
+			Destroy(texture);
 		_textures.Clear();
+		foreach (var (texture, _) in _releasing)
+			Destroy(texture);
+		_releasing.Clear();
 	}
 }

@@ -12,6 +12,7 @@ internal sealed unsafe partial class VulkanRenderContext
 {
 	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{
+		_validate.DrawList(technique, identity);
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
 		var baked = Bake(technique);

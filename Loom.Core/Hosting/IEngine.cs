@@ -37,7 +37,8 @@ public interface IEngine : IEngineClipSpace, IDisposable
 
 	/// <summary>
 	/// Upload geometry once and get a stable <see cref="Mesh"/> handle that passes draw via <c>ctx.Draw</c>.
-	/// Call after creation, before the first <see cref="Render"/>; the handle lives for the engine's lifetime
+	/// Call between frames — after creation, or before any <see cref="Render"/> — never from a pass callback, where it
+	/// throws (see <see cref="CreateTexture"/>). The handle lives until <see cref="ReleaseMesh"/> or the engine's end
 	/// (it survives graph swaps). Uses the canonical <see cref="VertexLayout.MeshStandard"/> layout.
 	/// </summary>
 	Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
@@ -72,15 +73,22 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// handle is dead from this call: drawing it, or releasing it again, throws rather than drawing whatever happens to
 	/// occupy the memory. The buffers themselves are freed once every frame that may still read them has finished on the
 	/// GPU, so a mesh can be released the frame after its last draw without waiting for the GPU first. Ids are not
-	/// reused, so a stale handle always fails loudly.
+	/// reused, so a stale handle always fails loudly. Call it between frames: from inside a pass callback it throws,
+	/// because the frame being recorded may already have drawn the mesh.
 	/// </summary>
 	void ReleaseMesh(Mesh mesh);
 
 	/// <summary>
 	/// Upload a texture (and its mip chain) once and get a stable <see cref="Texture"/> handle to bundle into a
-	/// <see cref="Material"/>. Takes neutral <see cref="TextureData"/> — no graphics-API type crosses the
-	/// boundary; the backend's texture store decodes nothing and just uploads the levels. Call after creation,
-	/// before the first <see cref="Render"/>; the handle lives for the engine's lifetime (survives graph swaps).
+	/// <see cref="Material"/> or sample from a draw list. Takes neutral <see cref="TextureData"/> — no graphics-API
+	/// type crosses the boundary; the backend's texture store decodes nothing and just uploads the levels. The handle
+	/// lives until <see cref="ReleaseTexture"/> or the engine's end (it survives graph swaps).
+	/// <para>
+	/// Call it between frames, never from a pass callback, where it throws. An upload is submitted ahead of the next
+	/// frame, so a texture created while a frame is recording would be sampled by that frame before its pixels arrive.
+	/// A producer that discovers what it needs while drawing — a UI painter meeting a new image — resolves it in a step
+	/// of its own before <see cref="Render"/>.
+	/// </para>
 	/// </summary>
 	Texture CreateTexture(TextureData data);
 
@@ -92,9 +100,26 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// <see cref="ServicePendingUploads"/>; this only decouples requesting an upload from performing it. Use for
 	/// bytes fetched/decoded off the calling thread; keep using <see cref="CreateTexture"/> directly for
 	/// already-in-memory data (e.g. a procedurally generated texture) created from code that's already on the one
-	/// thread driving <see cref="ServicePendingUploads"/> (e.g. a demo's synchronous <c>Build</c>).
+	/// thread driving <see cref="ServicePendingUploads"/> (e.g. a demo's synchronous <c>Build</c>). Like
+	/// <see cref="CreateTexture"/>, it throws when called from a pass callback on the render thread; another thread
+	/// may queue an upload while a frame records.
 	/// </summary>
 	Task<Texture> CreateTextureAsync(TextureData data);
+
+	/// <summary>
+	/// Free a texture's GPU image — the counterpart of <see cref="CreateTexture"/> for a texture that does not live as
+	/// long as the engine (an image replaced when its source changes, a level's art). The handle is dead from this call:
+	/// a draw list that samples it, a material built from it afterwards, or releasing it again throws rather than
+	/// sampling whatever happens to occupy the memory. The image is destroyed once every frame that may still read it
+	/// has finished on the GPU, so a texture can be released the frame after its last draw without waiting for the GPU
+	/// first. Ids are not reused, so a stale handle always fails loudly.
+	/// <para>
+	/// A texture bundled into a <see cref="Material"/> cannot be released: a material keeps its textures for as long as
+	/// it lives, which is the engine's lifetime, so releasing one of them throws and names the material. Call it between
+	/// frames: from inside a pass callback it throws, because the frame being recorded may already sample it.
+	/// </para>
+	/// </summary>
+	void ReleaseTexture(Texture texture);
 
 	/// <summary>
 	/// Run every GPU creation call queued by a <c>*Async</c> method (<see cref="CreateMeshAsync"/>,
@@ -169,6 +194,16 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// technique is not defined.
 	/// </summary>
 	MaterialLayout MaterialLayoutOf(string technique);
+
+	/// <summary>
+	/// Mint a draw-list stream id, unique on this engine, for a producer that submits a stable
+	/// <see cref="DrawListIdentity"/> — one whose geometry a backend keeps across frames. Each producer allocates its
+	/// own, so no two can submit the same stream: two UI hosts that each number their surfaces from zero would otherwise
+	/// both claim stream 0, and either fail as one stream submitted twice in a frame or, drawn on alternate frames at
+	/// matching revisions, show each other's geometry. A stable identity whose stream was not minted here is refused by
+	/// <see cref="IRenderContext.DrawList{TVertex}"/>. Safe to call from any thread.
+	/// </summary>
+	int AllocateDrawListStream();
 
 	/// <summary>
 	/// Make <paramref name="graph"/> the active graph: derive its schedule, barriers, and transient-memory plan

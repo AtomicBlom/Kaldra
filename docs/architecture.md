@@ -78,6 +78,8 @@ Debug builds enforce it: `EngineBase.AssertRenderThread` compares the calling th
 
 The deliberate exception is **asset creation**. `CreateTextureAsync`, `CreateMeshAsync` and their siblings may be called from any thread — a background image decode, a demo preloading concurrently — because they queue the GPU work rather than doing it. `ServicePendingUploads` drains that queue on the render thread. That single seam exists precisely because the rest of the surface has this affinity: without it, every background loader would need to marshal its own results.
 
+Creation and release also have a *when*: between frames. Every create and release verb throws when the render thread calls it from inside a pass callback — an upload made while a frame records is submitted only ahead of the next frame, so the frame being recorded would sample memory its contents have not reached, and a release could free what that frame already draws with. A background thread queuing an upload through a `*Async` creator while a frame records is exactly what that seam is for, and is let through.
+
 This is worth knowing before refactoring a backend toward parallel command recording. The contract is not an accident of the current implementation — the ordering it buys is load-bearing. `Write` provably runs before `Render` and outside command recording, which is what lets a growable storage buffer reallocate in place (see `EngineBase.GrowStorageBuffer`): there is no command buffer open to invalidate.
 
 ## What a new backend has to write
@@ -101,6 +103,15 @@ So a new backend implements hooks, not a loop:
 `RecordRasterPass` stays whole to the backend rather than being templated further. Its attachment descriptors, formats and views are almost entirely API structs, and forcing them into one signature is exactly what would push graphics types into `Loom.Graph`. What it inherits instead is the loop around it, the label bookkeeping, the transition emission, the timing index arithmetic, and `GraphPass.ResourceIdsWith` for the buffers a pass reads.
 
 Draw lists are handled the same way. `DrawListWalker` decodes a submission's `DrawCommand` stream into steps — `Draw`, `BeginLayer`, `EndLayer` — and owns the group-opacity nesting, the nesting cap and its symmetric suppression, the scissor, the fully-clipped skip, and the per-command texture memoisation. `DrawListGeometry` answers the geometry: a layer's bounds, its target-pixel area, the composite quad, and the marker tag values the producer encodes. A backend's `DrawList` is then a `while (walker.MoveNext())` over three cases, each one just the API calls that step needs. A layer's identity is its **depth** — every backend's layer pool is indexed by depth already, so none of them keeps a stack of its own.
+
+Resources split the same way. `EngineBase` owns the public create and release verbs and their neutral rules — refused while a pass records, and a texture a `Material` holds cannot be released — and a backend implements the GPU half:
+
+| Hook | What it does |
+|---|---|
+| `UploadMesh` / `UploadSkinnedMesh` / `UploadTexture` | Upload and mint a handle. Ids start at 1 and are never reused, so `default` and stale handles fail loudly |
+| `RetireMesh` / `RetireTexture` | Kill the handle at once; free the memory once no frame in flight — and no pending upload — can read it, on whatever schedule the API needs (a frame number, a fence value, or nothing: WebGPU's `destroy()` waits for submitted work itself) |
+
+A backend that caches binding objects keyed by the handles of what they name — Vulkan's descriptor sets, WebGPU's bind groups — keys them with `BindingKey` in a `BindingCache`, whose invariant is that nothing an entry names is destroyed while the entry is cached. A whole generation dies at a drained moment (graph swap, resize, shader reload) and the cache is cleared; a single object dies at a retire, which evicts the entries naming it before its handle can be reused. That matters most where handles are recycled at once, as WebGPU's table indices are.
 
 What is deliberately *not* shared is `*RenderContext.Verbs.cs`. Those files are ~90% descriptor-set, root-signature and bind-group construction; the only neutral part is a small geometry-source switch, which is not worth an abstraction. Policy differences between backends' record paths belong in `RecordValidator`, which exists for exactly that and is already one implementation.
 

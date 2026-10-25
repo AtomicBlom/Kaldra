@@ -25,9 +25,9 @@ public class RecordValidationTests
 		return graph.Passes.Single(p => p.Name == name);
 	}
 
-	private static RecordValidator ValidatorOn(GraphPass pass, TechniqueRegistry? techniques = null, bool enabled = true)
+	private static RecordValidator ValidatorOn(GraphPass pass, TechniqueRegistry? techniques = null, bool enabled = true, DrawListStreams? streams = null)
 	{
-		var validator = new RecordValidator(enabled, techniques ?? new TechniqueRegistry());
+		var validator = new RecordValidator(enabled, techniques ?? new TechniqueRegistry(), streams ?? new DrawListStreams());
 		validator.BeginPass(pass);
 		return validator;
 	}
@@ -53,6 +53,30 @@ public class RecordValidationTests
 		var registry = new TechniqueRegistry();
 		registry.Register(name, descriptor, shape);
 		return registry;
+	}
+
+	[Test]
+	public void A_stable_draw_list_must_name_a_stream_the_engine_minted()
+	{
+		// A backend keeps one set of buffers per stable stream and skips the upload while the revision holds, so two
+		// producers that picked the same number — every UI host numbers its surfaces from zero — would draw each other's
+		// geometry without a word. Only minted ids are accepted, which is what makes the numbers unique.
+		var streams = new DrawListStreams();
+		var validator = ValidatorOn(PassOf(g => g.Pass("p").Writes(g.Domain("world", 64, 64).Color("out", Format.Rgba8Srgb))), enabled: false, streams: streams);
+
+		var unminted = Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", new DrawListIdentity(Stream: 1, Revision: 4)));
+		unminted.Message.ShouldContain("AllocateDrawListStream");
+		Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", new DrawListIdentity(Stream: 0, Revision: 4)));
+
+		var first = streams.Allocate();
+		var second = streams.Allocate();
+		second.ShouldNotBe(first);
+		validator.DrawList("ui", new DrawListIdentity(first, Revision: 4));
+		validator.DrawList("ui", new DrawListIdentity(second, Revision: 9));
+
+		// A transient list keeps nothing, so it names no stream at all.
+		validator.DrawList("ui", DrawListIdentity.Transient);
+		validator.DrawList("ui", new DrawListIdentity(Stream: 12345, Revision: 0));
 	}
 
 	[Test]

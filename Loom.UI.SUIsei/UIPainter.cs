@@ -18,8 +18,9 @@ namespace Loom.UI.SUIsei;
 /// Renders composited UI draw lists through the public engine API — the bridge between the headless
 /// <see cref="UIHost"/> and the render graph, with no backend knowledge. Create it once after the engine exists
 /// (it registers the <c>ui</c> technique and uploads the white texel + optional glyph atlas through the public API),
-/// keep it for the engine's lifetime, and call <see cref="Draw"/> from a pass that blends the target. A painter is a
-/// stable handle bundle, so a pass closure may capture it.
+/// keep it for the engine's lifetime, and each frame call <see cref="Prepare"/> after <see cref="UIHost.Render"/> and
+/// <see cref="Draw"/> from a pass that blends the target. A painter is a stable handle bundle, so a pass closure may
+/// capture it.
 /// </summary>
 public sealed class UIPainter
 {
@@ -31,26 +32,30 @@ public sealed class UIPainter
 	private readonly IEngine _engine;
 	private readonly Texture _white;
 	// The base UI textures a command selects by index: the 1×1 white texel (fills/borders) at 0, the optional MTSDF
-	// glyph atlas at 1. Reused directly for image-free lists (no per-frame allocation); a list that references images
-	// gets a wider array resolved in ResolveTextures.
+	// glyph atlas at 1. Shared by every image-free list (no per-frame allocation); a list that references images gets a
+	// wider array of its own.
 	private readonly Texture[] _baseTextures;
 	// Images uploaded once and cached by their stable ImageSource.TextureIndex (≥ 2).
 	private readonly Dictionary<int, Texture> _imageTextures = [];
-	// The resolved texture array per draw list, rebuilt only when that list's Revision moves. Per list rather than
-	// one shared array because a painter can serve several surfaces, whose revisions advance independently.
-	private readonly Dictionary<DrawListId, ResolvedTextures> _resolved = [];
+	// What Prepare resolved for each surface, kept across frames. Per surface because a painter can serve several, whose
+	// revisions advance independently.
+	private readonly Dictionary<DrawListId, PreparedSurface> _surfaces = [];
 
 	/// <summary>
-	/// One draw list's texture array, kept across frames. A UI that references any image used to allocate a fresh
-	/// <c>Texture[]</c> on every single frame — a per-frame-always allocation the hot-path pillar does not allow, and
-	/// one that grew with every <c>ImageSource</c> the process had ever constructed, because the array is indexed by a
-	/// globally monotonic <c>TextureIndex</c>.
+	/// One surface's drawing state, kept across frames: the draw-list stream its geometry is kept under, and the texture
+	/// array its commands index — rebuilt only when the surface's list changes, so a UI that references images allocates
+	/// nothing on a frame where it did not change.
 	/// </summary>
-	private sealed class ResolvedTextures
+	private sealed class PreparedSurface(int stream)
 	{
+		// Minted once by IEngine.AllocateDrawListStream, so no other producer on the engine can share it.
+		public int Stream { get; } = stream;
 		public Texture[] Textures = [];
 		public int Count;
-		public uint Revision = uint.MaxValue; // no real revision, so the first frame always builds
+		public uint Revision = uint.MaxValue; // no real revision, so the first Prepare always builds
+											  // Set by Prepare, consumed by Draw: a frame that skipped Prepare is caught at its first Draw rather than only
+											  // once its UI happens to change.
+		public bool Armed;
 	}
 
 	private UIPainter(IEngine engine, UIHost host, Texture white, Texture? font)
@@ -85,8 +90,35 @@ public sealed class UIPainter
 	}
 
 	/// <summary>
-	/// Submit the draw list registered under <paramref name="id"/> in this frame's composited output.
-	/// A no-op when the frame carries no list for that id or it is empty. Call from a pass that blends the target.
+	/// Make this frame's composited lists drawable: upload the images they reference, mint a draw-list stream for each
+	/// surface seen for the first time, and rebuild a surface's texture array when its list changed. Call once per
+	/// frame, after <see cref="UIHost.Render"/> and before <see cref="IEngine.Render"/>.
+	/// <para>
+	/// It is a step of its own because images cannot be uploaded where they are discovered. <see cref="Draw"/> runs in
+	/// a pass callback, while the frame's commands are recorded, and an upload made there is submitted only ahead of
+	/// the next frame — so a new image's first frame would sample a texture its pixels had not reached, which is why
+	/// the engine refuses to create one there. A frame whose lists did not change allocates nothing here.
+	/// </para>
+	/// </summary>
+	public void Prepare()
+	{
+		var lists = _host.DrawLists;
+		for (var i = 0; i < lists.Count; i++)
+		{
+			var (id, draw) = lists[i];
+			if (!_surfaces.TryGetValue(id, out var surface))
+				_surfaces[id] = surface = new PreparedSurface(_engine.AllocateDrawListStream());
+			if (surface.Revision != draw.Revision)
+				ResolveTextures(surface, draw);
+			surface.Armed = true;
+		}
+	}
+
+	/// <summary>
+	/// Submit the draw list registered under <paramref name="id"/> in this frame's composited output, binding the
+	/// textures <see cref="Prepare"/> resolved for it. A no-op when the frame carries no list for that id or it is
+	/// empty. Call from a pass that blends the target. Throws when the list was not prepared this frame — when
+	/// <see cref="Prepare"/> was skipped, ran before the host last rendered, or this surface was already drawn since.
 	/// </summary>
 	public void Draw(IRenderContext ctx, DrawListId id)
 	{
@@ -100,7 +132,19 @@ public sealed class UIPainter
 			break;
 		}
 
-		if (draw is null || draw.Commands.IsEmpty)
+		if (draw is null)
+			return;
+
+		if (!_surfaces.TryGetValue(id, out var surface) || !surface.Armed || surface.Revision != draw.Revision)
+		{
+			throw new InvalidOperationException(
+				$"UIPainter.Draw: surface {id.Value}'s draw list was not prepared for this frame. Call UIPainter.Prepare() once " +
+				"per frame, after UIHost.Render() and before IEngine.Render: it uploads the images the list references, which " +
+				"cannot be uploaded from the pass that draws them. A surface is prepared for one Draw per frame.");
+		}
+		surface.Armed = false;
+
+		if (draw.Commands.IsEmpty)
 			return;
 
 		// SUIsei.Drawing.DrawCommand and Loom.Core.Hosting.DrawCommand are structurally identical (same fields,
@@ -119,30 +163,31 @@ public sealed class UIPainter
 		// SUIsei.Drawing.OverlayVertex has the same binary layout as Loom.Core.Geometry.OverlayVertex;
 		// TVertex is inferred from draw.Vertices.Span — the backend sees raw bytes either way.
 		// A UI surface is a stable geometry stream: the compositor advances Revision exactly when the composed list
-		// changed, so an untouched surface re-submits the same identity and the backend can keep what it uploaded.
-		// The same revision already gates the texture-array rebuild in ResolveTextures.
-		var identity = new DrawListIdentity(id.Value, draw.Revision);
-		ctx.DrawList(Technique, identity, ResolveTextures(id, draw), draw.Vertices.Span, draw.Indices.Span, loomCommands, push);
+		// changed, so an untouched surface re-submits the same identity and the backend can keep what it uploaded. The
+		// stream is the surface's own engine-minted one, not its SUIsei surface id: every host numbers its surfaces from
+		// zero, so two hosts' ids collide.
+		var identity = new DrawListIdentity(surface.Stream, draw.Revision);
+		ctx.DrawList(Technique, identity, surface.Textures.AsSpan(0, surface.Count), draw.Vertices.Span, draw.Indices.Span, loomCommands, push);
 	}
 
 	/// <summary>
-	/// The texture array a frame binds, indexed by command <c>TextureIndex</c>. The image-free fast path reuses the
-	/// shared base array (white + optional glyph atlas); a list that references images gets a wider array with each
+	/// Build the texture array a surface's commands index by <c>TextureIndex</c>. An image-free list shares the base
+	/// array (white + optional glyph atlas); a list that references images gets a wider array of its own, with each
 	/// image uploaded once (cached by index) and any gap filled with the white texel.
 	/// <para>
-	/// Built only when the list's <c>Revision</c> moves — the token the compositor advances exactly when the list
-	/// changed. A steady frame reuses the array it built, so a UI with images costs no allocation per frame.
+	/// Runs only when the list's <c>Revision</c> moves — the token the compositor advances exactly when the list
+	/// changed — so a steady frame reuses what it built and a UI with images costs no allocation per frame.
 	/// </para>
 	/// </summary>
-	private ReadOnlySpan<Texture> ResolveTextures(DrawListId id, DrawListData draw)
+	private void ResolveTextures(PreparedSurface surface, DrawListData draw)
 	{
+		surface.Revision = draw.Revision;
 		if (draw.Images.Count == 0)
-			return _baseTextures;
-
-		if (!_resolved.TryGetValue(id, out var cached))
-			_resolved[id] = cached = new ResolvedTextures();
-		if (cached.Revision == draw.Revision)
-			return cached.Textures.AsSpan(0, cached.Count);
+		{
+			surface.Textures = _baseTextures;
+			surface.Count = _baseTextures.Length;
+			return;
+		}
 
 		var max = _baseTextures.Length - 1;
 		foreach (var image in draw.Images)
@@ -151,11 +196,12 @@ public sealed class UIPainter
 				max = image.TextureIndex;
 		}
 
+		// The base array is shared by every image-free surface, so a surface gains an array of its own before writing.
 		var count = max + 1;
-		if (cached.Textures.Length < count)
-			cached.Textures = new Texture[Math.Max(count, cached.Textures.Length + (cached.Textures.Length / 2))];
+		if (surface.Textures == _baseTextures || surface.Textures.Length < count)
+			surface.Textures = new Texture[Math.Max(count, surface.Textures.Length + (surface.Textures.Length / 2))];
 
-		var textures = cached.Textures;
+		var textures = surface.Textures;
 		for (var i = 0; i < count; i++)
 			textures[i] = i < _baseTextures.Length ? _baseTextures[i] : _white;
 
@@ -170,8 +216,6 @@ public sealed class UIPainter
 			textures[image.TextureIndex] = texture;
 		}
 
-		cached.Count = count;
-		cached.Revision = draw.Revision;
-		return textures.AsSpan(0, count);
+		surface.Count = count;
 	}
 }

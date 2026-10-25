@@ -127,15 +127,18 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// <summary>
 	/// Release a mesh: its id stops resolving at once, and its buffers wait until frame
 	/// <paramref name="lastReadingFrame"/> has completed — a frame already submitted may still draw it, and the upload
-	/// batch that fills it rides ahead of the next frame, so the caller names that next frame.
+	/// batch that fills it rides ahead of the next frame, so the caller names that next frame. Returns the buffers, which
+	/// live until then, so the caller can evict whatever is keyed by their handles before the driver can reuse them.
 	/// </summary>
-	public void Release(int meshId, ulong lastReadingFrame)
+	public (Buffer Vertex, Buffer Index) Release(int meshId, ulong lastReadingFrame)
 	{
 		var slot = Slot(meshId);
-		_releasing.Add((_meshes[slot], lastReadingFrame));
+		var mesh = _meshes[slot];
+		_releasing.Add((mesh, lastReadingFrame));
 		_meshes[slot] = new StoredMesh { Released = true };
 		if (_bound == meshId)
 			_bound = NothingBound;
+		return (mesh.VertexBuffer, mesh.IndexBuffer);
 	}
 
 	/// <summary>Free the buffers of every released mesh whose last reading frame is <paramref name="completedFrame"/> or earlier.</summary>

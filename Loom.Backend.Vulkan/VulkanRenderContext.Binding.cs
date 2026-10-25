@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
@@ -23,7 +21,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
 		var bufferInfos = stackalloc DescriptorBufferInfo[storageBuffers.Length + ubos.Length];
 		var writes = stackalloc WriteDescriptorSet[count];
-		var key = new DescriptorSetKey(baked.DescriptorSetLayout, sampler.Handle);
+		var key = new BindingKey(baked.DescriptorSetLayout.Handle, sampler.Handle);
 		var w = 0;
 		for (var i = 0; i < inputs.Length; i++)
 		{
@@ -42,7 +40,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				DescriptorType = DescriptorType.CombinedImageSampler,
 				PImageInfo = &imageInfos[i],
 			};
-			key.Add((ulong)map.SampledTextures[i].Index, image.View.Handle);
+			key.Add(map.SampledTextures[i].Index, BoundObject.View, image.View.Handle);
 		}
 		// Read-only storage buffers (SSBOs), at the slots the shader gave them.
 		for (var s = 0; s < storageBuffers.Length; s++)
@@ -56,7 +54,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				DescriptorType = DescriptorType.StorageBuffer,
 				PBufferInfo = &bufferInfos[s],
 			};
-			key.Add((ulong)map.StorageBuffers[s].Index, storageBuffers[s].Handle);
+			key.Add(map.StorageBuffers[s].Index, BoundObject.Buffer, storageBuffers[s].Handle);
 		}
 		// Uniform buffers, likewise at their declared slots — dynamic, so the descriptor names only the buffer and
 		// the window size and the byte offset is supplied at bind time.
@@ -71,7 +69,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				DescriptorType = DescriptorType.UniformBufferDynamic,
 				PBufferInfo = &bufferInfos[storageBuffers.Length + u],
 			};
-			key.Add((ulong)map.UniformBuffers[u].Index, ubos[u].Info.Buffer.Handle, ubos[u].Info.Range);
+			key.Add(map.UniformBuffers[u].Index, BoundObject.Buffer, ubos[u].Info.Buffer.Handle, ubos[u].Info.Range);
 		}
 
 		var set = GetOrCreateSet(baked.DescriptorSetLayout, in key, writes, count);
@@ -101,7 +99,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		var imageInfos = stackalloc DescriptorImageInfo[template.SampleCount];
 		var bufferInfos = stackalloc DescriptorBufferInfo[ubos.Length];
 		var writes = stackalloc WriteDescriptorSet[count];
-		var key = new DescriptorSetKey(baked.DescriptorSetLayout, sampler.Handle);
+		var key = new BindingKey(baked.DescriptorSetLayout.Handle, sampler.Handle);
 		for (var i = 0; i < template.SampleCount; i++)
 		{
 			var view = _textures.View(textures[i]);
@@ -119,7 +117,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				DescriptorType = DescriptorType.CombinedImageSampler,
 				PImageInfo = &imageInfos[i],
 			};
-			key.Add((ulong)template.Bindings.SampledTextures[i].Index, view.Handle);
+			key.Add(template.Bindings.SampledTextures[i].Index, BoundObject.View, view.Handle);
 		}
 		// Uniform buffers, at the slots the shader declared, in slot order.
 		for (var u = 0; u < ubos.Length; u++)
@@ -133,7 +131,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				DescriptorType = DescriptorType.UniformBufferDynamic,
 				PBufferInfo = &bufferInfos[u],
 			};
-			key.Add((ulong)template.Bindings.UniformBuffers[u].Index, ubos[u].Info.Buffer.Handle, ubos[u].Info.Range);
+			key.Add(template.Bindings.UniformBuffers[u].Index, BoundObject.Buffer, ubos[u].Info.Buffer.Handle, ubos[u].Info.Range);
 		}
 
 		var set = GetOrCreateSet(baked.DescriptorSetLayout, in key, writes, count);
@@ -164,24 +162,25 @@ internal sealed unsafe partial class VulkanRenderContext
 	/// subsume material, technique, pass and frame slot in one key.
 	/// </para>
 	/// <para>
-	/// <b>Invariant:</b> nothing a cached set names may be destroyed without <see cref="FlushDescriptorCache"/>.
-	/// The ring buffers cannot die at all (see <see cref="VulkanInstanceUploadBuffer"/>), and the remaining named
-	/// objects — transient image views, texture views, samplers, set layouts — die only at graph swap, resize and
-	/// shader hot-reload, all of which flush. A fourth place that destroys an image view or a buffer would rot this
-	/// cache silently, so add the flush there too.
+	/// <b>Invariant:</b> nothing a cached set names may be destroyed while the set is cached (see
+	/// <see cref="BindingCache{TValue}"/>). The ring buffers cannot die at all (see
+	/// <see cref="VulkanInstanceUploadBuffer"/>). Transient image views, samplers and set layouts die only at graph swap,
+	/// resize and shader hot-reload, all of which call <see cref="FlushDescriptorCache"/>. Texture views and mesh
+	/// buffers die one at a time when the app releases them, which calls <see cref="EvictBindings"/>. A further place
+	/// that destroys an image view or a buffer would rot this cache silently, so it needs one of the two as well.
 	/// </para>
 	/// </summary>
-	private DescriptorSet GetOrCreateSet(DescriptorSetLayout layout, in DescriptorSetKey key, WriteDescriptorSet* writes, int count)
+	private DescriptorSet GetOrCreateSet(DescriptorSetLayout layout, in BindingKey key, WriteDescriptorSet* writes, int count)
 	{
 		if (_cachedSets.TryGetValue(key, out var cached))
-			return cached;
+			return cached.Set;
 
-		var set = _descriptors.AllocatePersistent(layout);
+		var persistent = _descriptors.AllocatePersistent(layout);
 		for (var i = 0; i < count; i++)
-			writes[i].DstSet = set;
+			writes[i].DstSet = persistent.Set;
 		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
-		_cachedSets[key] = set;
-		return set;
+		_cachedSets.Add(key, persistent);
+		return persistent.Set;
 	}
 
 	/// <summary>Drop every cached set and free the sets behind them. Called at the drained moments where something a
@@ -192,58 +191,23 @@ internal sealed unsafe partial class VulkanRenderContext
 		_descriptors.ResetPersistent();
 	}
 
-	// Allocation-free descriptor-set cache key: the layout and sampler handles, then the ordered (binding, resource
-	// handle, range) of every descriptor written. Full-value equality, never a hash-only collapse — two different
-	// sets colliding would bind one draw's resources to another's, which is exactly the class of bug this cache
-	// could otherwise introduce.
-	private const int MaxKeyValues = 48;
-
-	[InlineArray(MaxKeyValues)]
-	private struct KeyValues
+	/// <summary>
+	/// Drop every cached set naming the <paramref name="kind"/> object <paramref name="handle"/>, which the app has just
+	/// released, and free each one after frame <paramref name="lastReadingFrame"/> — the frame the released object itself
+	/// waits for, since a frame in flight may still bind the set. Called before the object is destroyed, while the
+	/// handle is still its own: once the driver reuses it, a key still naming it would match the next object to get it.
+	/// <para>
+	/// Usually there is nothing to drop. A material holds its textures for its whole life, and the draw-list and skinning
+	/// paths write per-frame sets, so a released object reaches this cache only through a path that caches what it
+	/// binds without pinning it — but such a path is one edit away, and this is what keeps it correct.
+	/// </para>
+	/// </summary>
+	public void EvictBindings(BoundObject kind, ulong handle, ulong lastReadingFrame)
 	{
-		private ulong _element0;
-	}
-
-	private struct DescriptorSetKey(DescriptorSetLayout layout, ulong sampler) : IEquatable<DescriptorSetKey>
-	{
-		private readonly ulong _layout = layout.Handle;
-		private readonly ulong _sampler = sampler;
-		private KeyValues _values;
-		private int _count;
-
-		public void Add(ulong binding, ulong handle) => Add(binding, handle, 0);
-
-		public void Add(ulong binding, ulong handle, ulong range)
-		{
-			if (_count + 3 > MaxKeyValues)
-				throw new VulkanException($"A descriptor set's cache key exceeds {MaxKeyValues} values.");
-			_values[_count++] = binding;
-			_values[_count++] = handle;
-			_values[_count++] = range;
-		}
-
-		public bool Equals(DescriptorSetKey other)
-		{
-			if (_layout != other._layout || _sampler != other._sampler || _count != other._count)
-				return false;
-			for (var i = 0; i < _count; i++)
-				if (_values[i] != other._values[i])
-					return false;
-			return true;
-		}
-
-		public override bool Equals(object? obj) => obj is DescriptorSetKey other && Equals(other);
-
-		public override int GetHashCode()
-		{
-			var hash = new HashCode();
-			hash.Add(_layout);
-			hash.Add(_sampler);
-			hash.Add(_count);
-			for (var i = 0; i < _count; i++)
-				hash.Add(_values[i]);
-			return hash.ToHashCode();
-		}
+		_cachedSets.Evict(kind, handle, _evictedSets);
+		foreach (var set in _evictedSets)
+			_descriptors.RetirePersistent(set, lastReadingFrame);
+		_evictedSets.Clear();
 	}
 
 	// A present per-frame uniform buffer to bind as one of a technique's descriptors: the buffer and the window size

@@ -23,7 +23,7 @@ You declare *what* each render pass reads and writes; Loom derives ordering, bar
 
 **Post & HDR** — bloom pyramid (Karis-averaged downsample, tent upsample); auto-exposure (cross-frame `Persistent` + compute) + tonemap; HDR (scRGB) display output; JFA world-space outlines + GPU→CPU cursor picking.
 
-**Assets & materials** — image decode (StbImageSharp) with gamma-correct CPU-generated mips, including cube and `Rgba16F` HDR sources; glTF loading (SharpGLTF) that walks the node graph, bakes world transforms, and imports skins + animation clips; a `Material` multi-texture binding abstraction that fills a technique's reflected sampler slots.
+**Assets & materials** — image decode (StbImageSharp) with gamma-correct CPU-generated mips, including cube and `Rgba16F` HDR sources; glTF loading (SharpGLTF) that walks the node graph, bakes world transforms, and imports skins + animation clips; a `Material` multi-texture binding abstraction that fills a technique's reflected sampler slots. Meshes and textures can be released when the app is done with them: the handle dies at once and the GPU memory is freed once no frame in flight can read it.
 
 **Geometry & instancing** — explicit packed vertex layouts (`MeshStandard`/`MeshSkinned`/`Overlay`/`Transform`); CPU-uploaded **and** GPU-compute-filled instancing; an optional `Scene` draw-list with CPU frustum culling.
 
@@ -142,6 +142,37 @@ Shaders are authored in **Slang** and compiled offline by the Loom shader SDK to
 `.Indices = DrawCall.Range(firstIndex, indexCount, baseVertex)` draws one sub-range of a mesh, so a model's primitives can share a single vertex and index buffer instead of becoming a mesh each. The default is the whole mesh.
 
 `.Instances = DrawCall.Indirect(buffer, offset)` takes the counts from a buffer instead of the CPU — the pass declares it `.ReadsIndirect`, and the engine derives the compute→draw hand-off exactly as it does for a compute-filled instance stream. (Count buffers, multi-draw, and GPU culling are not built; this is the verb they would need.)
+
+### Create and release resources between frames
+
+`engine.CreateMesh` / `CreateTexture` upload once and hand back a stable handle; `engine.ReleaseMesh` / `ReleaseTexture` give it back. A release kills the handle at once — drawing, sampling or releasing it again throws and says it was released — and frees the GPU memory once every frame that may still read it has finished, so you can release a texture the frame after its last draw without waiting for the GPU. Ids are never reused, so a stale handle always fails loudly instead of naming whatever came next.
+
+```csharp
+// between frames: swap the image a pass samples (the pass reads _image live, as graph closures do)
+var previous = _image;
+_image = engine.CreateTexture(TextureData.FromRgba8(w, h, pixels, TextureFormat.Rgba8Srgb));
+engine.ReleaseTexture(previous); // safe while frames that sampled it are still in flight
+```
+
+Two rules keep this honest:
+- **Create and release between frames, never inside a pass.** A pass callback runs while the frame's commands are recorded; an upload made there only reaches the GPU ahead of the *next* frame, and a release could free what this frame already draws with. Both throw when called from a pass on the render thread (the `*Async` creators stay callable from other threads at any time). A producer that discovers what it needs while drawing resolves it in a step of its own before `engine.Render` — see `UIPainter.Prepare` below.
+- **A texture a `Material` holds cannot be released.** A material keeps its textures for as long as it lives — the engine's lifetime — so `ReleaseTexture` throws and names the material. Sample a texture you mean to replace through a draw list.
+
+### Draw a game UI
+
+`Loom.UI.SUIsei`'s `UIPainter` draws a SUIsei host's composited surfaces through `ctx.DrawList`. Each frame, composite the host, then `Prepare` the painter — it uploads any image the UI newly shows, before the frame that samples it — and draw from a pass:
+
+```csharp
+var ui = UIPainter.Create(engine, host, FontAtlas.Default);
+g.Pass("hud").Blends(screen).Draw(ctx => ui.Draw(ctx, UISurface.Hud));
+
+// each frame, before engine.Render:
+host.Tick(dt, time, size);
+host.Render();
+ui.Prepare();
+```
+
+Several hosts can draw in one frame (a HUD plus an in-world panel): each painter keeps its surfaces' geometry under draw-list streams it mints with `engine.AllocateDrawListStream()`, so their surface ids, which every host numbers from zero, never collide. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
 
 ### Build & run
 
