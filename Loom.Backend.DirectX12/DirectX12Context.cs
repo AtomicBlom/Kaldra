@@ -1,10 +1,12 @@
 using System.Diagnostics;
 using System.Text;
 using Loom.Core.Diagnostics;
+using Loom.Core.Hosting;
 using Silk.NET.Core.Contexts;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
+using D3D12Feature = Silk.NET.Direct3D12.Feature;
 
 namespace Loom.Backend.DirectX12;
 
@@ -37,6 +39,21 @@ internal sealed unsafe class DirectX12Context : IDisposable
 
 	/// <summary>Human-readable adapter name for HUDs/logs (the neutral <c>IEngine.DeviceName</c>).</summary>
 	public string DeviceName { get; }
+
+	/// <summary>Sample counts this device can render colour <em>and</em> depth at — the intersection, because a
+	/// domain sizes both.</summary>
+	public SampleCounts SampleCounts { get; private set; } = SampleCounts.X1;
+
+	/// <summary>Whether a 32-bit float texture can be sampled (rather than only loaded) on this device.</summary>
+	public bool Float32Filterable { get; private set; }
+
+	/// <summary>The most colour targets one pass may write. Fixed by the API rather than probed
+	/// (<c>D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT</c>).</summary>
+	public const int MaxColorAttachments = 8;
+
+	/// <summary>The alignment a constant-buffer view's offset must satisfy. Fixed by the API rather than probed
+	/// (<c>D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT</c>).</summary>
+	public const int ConstantBufferOffsetAlignment = 256;
 
 	private ComPtr<ID3D12Debug> _debug;
 
@@ -106,7 +123,10 @@ internal sealed unsafe class DirectX12Context : IDisposable
 		};
 		SilkMarshal.ThrowHResult(Device.CreateCommandQueue(&queueDesc, out GraphicsQueue));
 
+		ProbeCapabilities();
+
 		RtvDescriptorSize = Device.GetDescriptorHandleIncrementSize(DescriptorHeapType.Rtv);
+
 		if (usingSoftwareAdapter)
 		{
 			DeviceName = "WARP (software)";
@@ -114,6 +134,34 @@ internal sealed unsafe class DirectX12Context : IDisposable
 		}
 		else
 			DeviceName = ReadDefaultAdapterName();
+	}
+
+	/// <summary>
+	/// Probe the device limits the neutral capability record reports. A failed <c>CheckFeatureSupport</c> is read as
+	/// "not supported" rather than propagated: an odd adapter (WARP, a translation layer) declining to answer should
+	/// narrow what the engine advertises, not stop it coming up.
+	/// </summary>
+	private void ProbeCapabilities()
+	{
+		// A domain sizes its colour and depth targets together, so a count is only offered when both accept it.
+		var counts = SampleCounts.X1;
+		for (var count = 2u; count <= 16u; count <<= 1)
+		{
+			if (SupportsSampleCount(Format.FormatR8G8B8A8Unorm, count) && SupportsSampleCount(Format.FormatD32Float, count))
+				counts |= (SampleCounts)count;
+		}
+		SampleCounts = counts;
+
+		var floatSupport = new FeatureDataFormatSupport { Format = Format.FormatR32G32B32A32Float };
+		Float32Filterable = Device.CheckFeatureSupport(D3D12Feature.FormatSupport, ref floatSupport, (uint)sizeof(FeatureDataFormatSupport)) >= 0
+			&& (floatSupport.Support1 & FormatSupport1.ShaderSample) != 0;
+	}
+
+	private bool SupportsSampleCount(Format format, uint sampleCount)
+	{
+		var levels = new FeatureDataMultisampleQualityLevels { Format = format, SampleCount = sampleCount };
+		return Device.CheckFeatureSupport(D3D12Feature.MultisampleQualityLevels, ref levels, (uint)sizeof(FeatureDataMultisampleQualityLevels)) >= 0
+			&& levels.NumQualityLevels > 0;
 	}
 
 	/// <summary>Read adapter 0's description (the default adapter on a single-GPU machine) for the device name.</summary>

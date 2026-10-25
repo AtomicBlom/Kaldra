@@ -79,7 +79,7 @@ public class HostedApplicationSmokeTests
 				var (w, h, rgba) = PngReader.Read(capturePath);
 				if (w != Width || h != Height)
 					failures.Add($"{backend.Name}: captured {w}x{h}, expected {Width}x{Height}.");
-				if (DistinctColors(rgba) <= 1)
+				if (ImageComparison.DistinctColors(rgba) <= 1)
 					failures.Add($"{backend.Name}: capture has <= 1 distinct colour — looks like an empty/flat frame.");
 			}
 			finally
@@ -89,15 +89,6 @@ public class HostedApplicationSmokeTests
 		}
 
 		failures.ShouldBeEmpty("Hosted application smoke failures:\n  " + string.Join("\n  ", failures));
-	}
-
-	// Distinct opaque RGB values in a captured frame — a flat/empty frame collapses to one.
-	private static int DistinctColors(byte[] rgba)
-	{
-		var seen = new HashSet<int>();
-		for (var i = 0; i + 3 < rgba.Length; i += 4)
-			seen.Add(rgba[i] << 16 | rgba[i + 1] << 8 | rgba[i + 2]);
-		return seen.Count;
 	}
 
 	// A minimal application with the shape HelloTriangle takes: one fullscreen pass onto the backbuffer, no mesh,

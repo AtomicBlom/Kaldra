@@ -20,7 +20,7 @@ namespace Loom.Backend.Vulkan;
 /// <em>active graph</em> is swappable (<c>SetGraph</c>). On each <c>SetGraph</c> it derives a
 /// <see cref="GraphSchedule"/>, <see cref="BarrierPlan"/>, and transient-memory plan once (the plan is
 /// frame-stable, so the per-frame cost is recording, not deriving) and prepares the graph's transients; then
-/// each <see cref="Render"/> records the plan into a command buffer — emitting <c>vkCmdPipelineBarrier2</c> from
+/// each <see cref="RenderFrame"/> records the plan into a command buffer — emitting <c>vkCmdPipelineBarrier2</c> from
 /// the derived transitions, opening a dynamic-rendering scope per pass with the derived load/store ops, invoking
 /// the pass's record callback, and presenting. The barriers and layout transitions are derived rather than
 /// written by hand.
@@ -117,8 +117,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	public override string BackendName => "Vulkan";
 	public override string DeviceName => _ctx.DeviceName;
 
-	// 0 valid bits ⇒ the graphics queue can't timestamp, so the profiler stays permanently unavailable.
-	protected override bool CanEnableGpuTiming => _timestampValidBits != 0;
+	public override EngineCapabilities Capabilities { get; }
 
 	// The real swapchain, for the two calls only it (not VulkanOffscreenTarget) supports — vkAcquireNextImageKHR
 	// and vkQueuePresentKHR. Only ever accessed when !_offscreen, where _presentTarget is guaranteed to be one.
@@ -153,6 +152,17 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_timestampValidBits = _ctx.GraphicsTimestampValidBits;
 		if (_timestampValidBits == 0)
 			LoomLog.Warning("GPU timing unavailable: the graphics queue reports 0 timestamp valid bits.");
+
+		Capabilities = new EngineCapabilities
+		{
+			GpuTiming = _timestampValidBits != 0,
+			// Queue.AsyncCompute derives no cross-queue synchronisation yet and the backend owns one queue.
+			AsyncCompute = false,
+			SampleCounts = MapSampleCounts(_ctx.FramebufferSampleCounts),
+			MaxColorAttachments = (int)_ctx.MaxColorAttachments,
+			MinUniformBufferOffsetAlignment = (int)_ctx.MinUniformBufferOffsetAlignment,
+			Float32Filterable = _ctx.Float32Filterable,
+		};
 		_windowExtent = new Extent2D((uint)width, (uint)height);
 		_presentTarget = offscreen
 			? new VulkanOffscreenTarget(_ctx, _windowExtent, MaxFramesInFlight)
@@ -186,6 +196,18 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		}
 	}
 
+	// Vulkan's sample-count flag values are the counts themselves, and so are the neutral enum's, so this filters
+	// rather than translates. Counts above 16 have no neutral spelling and are dropped: the graph's own ceiling is
+	// 16, so reporting 32x would advertise something a domain cannot ask for.
+	private static SampleCounts MapSampleCounts(SampleCountFlags flags)
+	{
+		var counts = SampleCounts.None;
+		for (var count = 1; count <= 16; count <<= 1)
+			if (((uint)flags & (uint)count) != 0)
+				counts |= (SampleCounts)count;
+		return counts;
+	}
+
 	// Background-thread watcher callback: map the changed artifact (e.g. "gbuffer.spv") back to its shader name and,
 	// if a technique uses it, queue it for the render thread to reload. No GPU work here.
 	private void OnShaderArtifactChanged(string leaf)
@@ -201,7 +223,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// The descriptor-binding counts come from the shader's reflection, not the app: the author states
 		// only the pipeline intent (geometry/blend/filter/compute), and Slang's reflection says how many things
 		// the shader binds.
-		var reflection = ShaderReflection.FromBytes(ResolveShaderAsset(descriptor.Shader, ".json"));
+		var reflection = ShaderReflection.FromBytes(ResolveShaderAsset(descriptor.Shader, ".json"), ShaderBindingTarget.SpirV);
 		// Resolve the per-vertex layout: an explicit one, else the canonical pos/normal/uv when the technique
 		// reads geometry, else none (a fullscreen/compute technique). A non-null Instance marks it instanced
 		// (a second per-instance stream at binding 1).
@@ -223,18 +245,15 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			spirv,
 			vertexEntry,
 			fragmentEntry,
-			reflection.SampleCount,
+			ShaderBindingMap.From(reflection),
 			descriptor.HasVertexInput,
 			descriptor.Blend,
 			descriptor.LinearFilter,
 			descriptor.HasFragmentPush,
 			descriptor.IsCompute,
-			reflection.StorageImageCount,
-			reflection.StorageBufferCount,
 			descriptor.Address,
 			layout,
 			descriptor.Instance,
-			reflection.UniformBufferCount,
 			descriptor.HasListPush,
 			descriptor.Cull,
 			descriptor.DepthTest,
@@ -359,7 +378,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Backend.Vulkan?");
 	}
 
-	public override void Render(FrameInputs inputs)
+	protected override void RenderFrame(FrameInputs inputs)
 	{
 		ServicePendingUploads();
 		if (Graph is null || _transients is null)
@@ -435,6 +454,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// frame no longer describes it — drop it and let the plan's Undefined stand, which is what a fresh image needs.
 		foreach (var id in _transients?.Recreate(_presentTarget.Extent) ?? [])
 			_persistentState.Remove(id);
+		// Reallocating a transient destroys its image view, and descriptor sets are cached by the views they name.
+		// The DeviceWaitIdle above is what makes freeing those sets safe here.
+		_context.FlushDescriptorCache();
 		RecreateSwapchainSizedReadback();
 
 		if (_presentTarget.ImageCount != oldImageCount)
@@ -449,7 +471,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private ReadbackBuffers CreateReadbackStaging(ResourceHandle target)
 	{
 		var (width, height) = target.Resolve((int)_presentTarget.Extent.Width, (int)_presentTarget.Extent.Height);
-		var bpt = BytesPerTexel(target.Format);
+		var bpt = target.Format.BytesPerTexel;
 		var buffers = new Buffer[MaxFramesInFlight];
 		var allocations = new Allocation[MaxFramesInFlight];
 		for (var i = 0; i < MaxFramesInFlight; i++)

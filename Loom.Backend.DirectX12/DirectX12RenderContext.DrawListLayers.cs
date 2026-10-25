@@ -1,4 +1,3 @@
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Loom.Core.Geometry;
@@ -14,14 +13,7 @@ namespace Loom.Backend.DirectX12;
 
 internal sealed unsafe partial class DirectX12RenderContext
 {
-	// UI group-opacity layer markers (UIPrimKind, kept in sync with SUIsei): zero-index commands that never reach the
-	// fragment shader — the backend turns a BeginLayer/EndLayer pair into an offscreen target + a composite. KIND_IMAGE
-	// is the shader branch the composite blit uses (sample the layer, tint by the group alpha).
-	private const uint TagBeginLayer = 5;
-	private const uint TagEndLayer = 6;
-	private const uint KindImage = 4;
-
-	public void DrawList<TVertex>(string technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
+	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
@@ -30,12 +22,14 @@ internal sealed unsafe partial class DirectX12RenderContext
 		// The list brings its own geometry, so whatever mesh the store thought was bound no longer is.
 		_meshes.ResetBindings();
 
-		// Stage this frame's geometry into the dynamic rings (bump-allocated: several draw lists in one frame
-		// append at successive offsets rather than overwrite each other).
+		// A stream with a stable identity keeps its own buffers and re-uploads only when its revision moves; anything
+		// else goes into the dynamic rings (bump-allocated: several transient lists in one frame append at
+		// successive offsets rather than overwrite each other).
 		var vtxBytes = MemoryMarshal.AsBytes(vertices);
 		var idxBytes = MemoryMarshal.AsBytes(indices);
-		var vtxAddr = _listVtx.Upload(_slot, vtxBytes);
-		var idxAddr = _listIdx.Upload(_slot, idxBytes);
+		var (vtxAddr, idxAddr) = identity.IsStable
+			? _listStore.Resolve(identity.Stream, (int)_slot, identity.Revision, _frameIndex, vtxBytes, idxBytes)
+			: (_listVtx.Upload(_slot, vtxBytes), _listIdx.Upload(_slot, idxBytes));
 
 		var vbv = new VertexBufferView { BufferLocation = vtxAddr, SizeInBytes = (uint)vtxBytes.Length, StrideInBytes = (uint)Unsafe.SizeOf<TVertex>() };
 		var ibv = new IndexBufferView { BufferLocation = idxAddr, SizeInBytes = (uint)idxBytes.Length, Format = DxgiFormat.FormatR16Uint };
@@ -50,8 +44,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		// The shared per-list push fills the block's first slots; each command rewrites the slot right after it with
 		// its tag (the draw-list contract), then re-pushes the whole block (push count = the used slots + the tag).
-		var block = stackalloc float[8];
-		var pushLen = Math.Min(push.Length, 7);
+		var block = stackalloc float[DrawListGeometry.MaxListPushFloats + 1]; // the largest push, plus the tag slot
+		var pushLen = Math.Min(push.Length, DrawListGeometry.MaxListPushFloats);
 		for (var i = 0; i < pushLen; i++)
 			block[i] = push[i];
 
@@ -62,58 +56,53 @@ internal sealed unsafe partial class DirectX12RenderContext
 		var overlay = layersSupported ? MemoryMarshal.Cast<TVertex, OverlayVertex>(vertices) : default;
 		if (layersSupported)
 			_layerTargets.Configure(_scopeWidth, _scopeHeight, _colorFormats[0]);
-		_layerStack.Clear();
 		var layerClear = stackalloc float[4] { 0f, 0f, 0f, 0f }; // transparent: a layer starts empty
 
-		// The list's own coordinate space, recovered from the push that maps it to clip, and the scale from it to
-		// framebuffer pixels. A layer's bounds arrive in surface pixels; its clear rect is needed in framebuffer ones.
+		// The list's own coordinate space, recovered from the push that maps it to clip. A layer's bounds arrive in
+		// these units; the walker scales them to framebuffer pixels against the scope extent.
 		var surfaceWidth = layersSupported ? 2f / push[0] : _scopeWidth;
 		var surfaceHeight = layersSupported ? 2f / push[1] : _scopeHeight;
-		var toFramebufferX = _scopeWidth / surfaceWidth;
-		var toFramebufferY = _scopeHeight / surfaceHeight;
 
-		// The texture whose SRV the bound table currently describes, and that table's handle. -1 = nothing bound yet.
-		var listTextureId = -1;
+		// The descriptor table describing the memoised texture. The walker says when it needs rewriting; the handle has
+		// to be kept here because the ring rewinds per submission and a stale one points at another frame's descriptors.
 		var listTable = default(GpuDescriptorHandle);
 
-		foreach (var c in commands)
+		// The command stream decodes to steps: the layer nesting and its cap, the scissor, and the texture memoisation
+		// are the walker's, and what remains here is the DirectX 12 recording each step needs.
+		var walker = new DrawListWalker(commands, textures, overlay, layersSupported,
+			(int)_scopeWidth, (int)_scopeHeight, surfaceWidth, surfaceHeight);
+
+		while (walker.MoveNext())
 		{
-			if (layersSupported && c.Tag == TagBeginLayer && _layerStack.Count < DirectX12LayerTargets.MaxNesting)
+			if (walker.Step == DrawListStep.BeginLayer)
 			{
 				// Detour into a fresh transparent offscreen target: render the faded subtree at full alpha so
 				// overlapping children blend against each other, not a faded backdrop.
-				var depth = _layerStack.Count;
-				ref var target = ref _layerTargets.Acquire(_slot, depth);
-				if (target.State != ResourceStates.RenderTarget)
+				ref var opened = ref _layerTargets.Acquire(_slot, walker.Depth);
+				if (opened.State != ResourceStates.RenderTarget)
 				{
-					TransitionResource(target.Resource, target.State, ResourceStates.RenderTarget);
-					target.State = ResourceStates.RenderTarget;
+					TransitionResource(opened.Resource, opened.State, ResourceStates.RenderTarget);
+					opened.State = ResourceStates.RenderTarget;
 				}
-				var rtv = target.Rtv;
+				var rtv = opened.Rtv;
 				_cmd.OMSetRenderTargets(1, &rtv, false, (CpuDescriptorHandle*)null);
-				// The group's own bounds, not the whole surface. A layer costs two render-target switches and a clear,
-				// and on a tile-based GPU those are priced by area — a checkbox fading in should not clear a screen's
-				// worth of tiles. The marker carries the bounds as its ClipRect precisely so a backend can use them.
-				var bounds = LayerBounds(c.ClipRect, surfaceWidth, surfaceHeight);
-				var clearRect = FramebufferRect(bounds, toFramebufferX, toFramebufferY, _scopeWidth, _scopeHeight);
+				// The group's own area, not the whole surface. A layer costs two render-target switches and a clear, and
+				// on a tile-based GPU those are priced by area — a checkbox fading in should not clear a screen's worth
+				// of tiles.
+				var clearRect = ToBox(walker.LayerArea);
 				_cmd.ClearRenderTargetView(rtv, layerClear, 1u, &clearRect);
-				_layerStack.Add((depth, overlay[c.VertexOffset].Color, bounds));
 				continue;
 			}
-			if (layersSupported && c.Tag == TagEndLayer)
-			{
-				if (_layerStack.Count == 0)
-					continue;
-				var (depth, tint, bounds) = _layerStack[^1];
-				_layerStack.RemoveAt(_layerStack.Count - 1);
 
+			if (walker.Step == DrawListStep.EndLayer)
+			{
 				// Resolve the layer (render-target → shader-resource) and rebind the parent's render targets.
-				ref var target = ref _layerTargets.Acquire(_slot, depth);
-				TransitionResource(target.Resource, ResourceStates.RenderTarget, ResourceStates.PixelShaderResource);
-				target.State = ResourceStates.PixelShaderResource;
-				if (_layerStack.Count > 0)
+				ref var closed = ref _layerTargets.Acquire(_slot, walker.Depth);
+				TransitionResource(closed.Resource, ResourceStates.RenderTarget, ResourceStates.PixelShaderResource);
+				closed.State = ResourceStates.PixelShaderResource;
+				if (walker.Depth > 0)
 				{
-					var parentRtv = _layerTargets.Acquire(_slot, _layerStack[^1].Depth).Rtv;
+					var parentRtv = _layerTargets.Acquire(_slot, walker.Depth - 1).Rtv;
 					_cmd.OMSetRenderTargets(1, &parentRtv, false, (CpuDescriptorHandle*)null);
 				}
 				else
@@ -122,110 +111,63 @@ internal sealed unsafe partial class DirectX12RenderContext
 						_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
 				}
 
-				CompositeLayer(baked, target.Resource, tint, block, pushLen, bounds, surfaceWidth, surfaceHeight);
+				CompositeLayer(baked, closed.Resource, walker.Tint, block, pushLen, walker.Bounds, surfaceWidth, surfaceHeight);
 
-				// Restore the list's geometry for the following commands (the composite bound its own quad buffer),
-				// and forget the memoised texture table — the composite replaced it with the layer's own.
+				// Restore the list's geometry for the following commands — the composite bound its own quad buffer.
 				_cmd.IASetVertexBuffers(0, 1, &vbv);
 				_cmd.IASetIndexBuffer(&ibv);
-				listTextureId = -1;
 				continue;
 			}
 
-			var clip = c.ClipRect;
-			var minX = MathF.Max(0, clip.X);
-			var minY = MathF.Max(0, clip.Y);
-			var maxX = MathF.Min(_scopeWidth, clip.X + clip.Width);
-			var maxY = MathF.Min(_scopeHeight, clip.Y + clip.Height);
-			if (maxX <= minX || maxY <= minY)
-				continue;
-
-			*(uint*)(block + pushLen) = c.Tag;
+			*(uint*)(block + pushLen) = walker.Tag;
 			if (baked.RootConstantParam >= 0)
 				_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, (uint)(pushLen + 1), block, 0);
 
 			// Write the bound texture's SRV (real format + full mip chain) into a fresh ring slot, then bind the table.
-			// A UI list is mostly one texture — the glyph atlas — for run after run of commands, so the descriptor is
-			// only rewritten when the texture actually changes; otherwise the table from the previous command still
-			// describes it. Reset per submission, since the ring rewinds and a stale handle would point at another
-			// frame's descriptors.
 			if (baked.TableParam >= 0)
 			{
-				var texId = textures[Math.Clamp(c.TextureIndex, 0, textures.Length - 1)].Id;
-				if (texId != listTextureId)
+				if (walker.TextureChanged)
 				{
 					var (cpu, gpu) = _descriptors.Allocate(1);
-					WriteListTextureSrv(texId, cpu);
-					listTextureId = texId;
+					WriteListTextureSrv(walker.TextureId, cpu);
 					listTable = gpu;
 				}
 				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, listTable);
 			}
 
-			var scissor = new Box2D<int>((int)minX, (int)minY, (int)maxX, (int)maxY);
+			var scissor = ToBox(walker.Scissor);
 			_cmd.RSSetScissorRects(1, &scissor);
-			_cmd.DrawIndexedInstanced((uint)c.IndexCount, 1, (uint)c.IndexOffset, c.VertexOffset, 0);
+			_cmd.DrawIndexedInstanced((uint)walker.IndexCount, 1, (uint)walker.IndexOffset, walker.VertexOffset, 0);
 		}
+
+		if (walker.NestingExceeded)
+			DrawListGeometry.WarnLayerNestingExceeded(ref _warnedLayerNesting, walker.DeepestNesting);
 
 		// Defensive: a well-formed list balances its markers, but never leave a layer's target bound — rebind the
 		// captured pass scope so the engine's following passes (and present) write the screen, not an orphaned layer.
-		if (_layerStack.Count > 0)
+		// One rebind covers any depth: unlike a Vulkan rendering scope, a render-target binding does not nest.
+		if (walker.OpenLayers > 0)
 		{
-			_layerStack.Clear();
+			while (walker.TryUnwind(out _)) { }
 			fixed (CpuDescriptorHandle* pRtv = _scopeRtvs)
 				_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
 		}
 	}
 
-	// A layer's bounds in the list's own coordinate space, clamped to the surface and grown by a pixel so a rounded
-	// edge cannot clip the antialiased fringe of whatever sits against the group's boundary. Degenerate bounds fall
-	// back to the whole surface, which is what this path did before it looked at the rect at all.
-	private static (float X0, float Y0, float X1, float Y1) LayerBounds(Rect clip, float surfaceWidth, float surfaceHeight)
-	{
-		const float Slop = 1f;
-		var x0 = MathF.Max(0f, clip.X - Slop);
-		var y0 = MathF.Max(0f, clip.Y - Slop);
-		var x1 = MathF.Min(surfaceWidth, clip.X + clip.Width + Slop);
-		var y1 = MathF.Min(surfaceHeight, clip.Y + clip.Height + Slop);
-		return x1 > x0 && y1 > y0 ? (x0, y0, x1, y1) : (0f, 0f, surfaceWidth, surfaceHeight);
-	}
+	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.
+	private bool _warnedLayerNesting;
 
-	// The same bounds as a framebuffer-pixel rect: floor the origin and ceil the far edge so the rect never covers
-	// less than the bounds it came from, then clamp to the target.
-	private static Box2D<int> FramebufferRect((float X0, float Y0, float X1, float Y1) bounds, float scaleX, float scaleY, uint width, uint height)
-	{
-		var x = Math.Clamp((int)MathF.Floor(bounds.X0 * scaleX), 0, (int)width);
-		var y = Math.Clamp((int)MathF.Floor(bounds.Y0 * scaleY), 0, (int)height);
-		var right = Math.Clamp((int)MathF.Ceiling(bounds.X1 * scaleX), x, (int)width);
-		var bottom = Math.Clamp((int)MathF.Ceiling(bounds.Y1 * scaleY), y, (int)height);
-		return new Box2D<int>(x, y, right, bottom);
-	}
+	// A decoded pixel rectangle in DirectX 12's corner form.
+	private static Box2D<int> ToBox((int X, int Y, int Width, int Height) r) =>
+		new(r.X, r.Y, r.X + r.Width, r.Y + r.Height);
 
 	// Composite a resolved layer target back into the (now-rebound) parent: a KIND_IMAGE quad over the group that
-	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once. The HDR
-	// paper-white lift is forced off here — the layer's primitives already lifted, and the lift commutes with the
-	// premultiplied alpha-over, so re-lifting would double it (the CPU rasterizer is the reference).
+	// samples the layer and multiplies by the premultiplied group-alpha tint, so the whole subtree fades once.
 	private void CompositeLayer(DirectX12Technique baked, ComPtr<ID3D12Resource> layer, Half4 tint, float* block, int pushLen,
 		(float X0, float Y0, float X1, float Y1) bounds, float surfaceWidth, float surfaceHeight)
 	{
-		// The quad covers the group's bounds rather than the surface. The layer target still holds its content at the
-		// content's own position — the clear rect restricted which pixels were reset, it did not move them — so the
-		// texture coordinates are the bounds as a fraction of the surface, not a fixed 0..1.
-		var custom = default(Vector4);
-		var (x0, y0, x1, y1) = bounds;
-		var u0 = x0 / surfaceWidth;
-		var v0 = y0 / surfaceHeight;
-		var u1 = x1 / surfaceWidth;
-		var v1 = y1 / surfaceHeight;
-		Span<OverlayVertex> quad =
-		[
-			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
-			new(new Vector2(x1, y0), new Vector2(u1, v0), tint, custom),
-			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
-			new(new Vector2(x0, y0), new Vector2(u0, v0), tint, custom),
-			new(new Vector2(x1, y1), new Vector2(u1, v1), tint, custom),
-			new(new Vector2(x0, y1), new Vector2(u0, v1), tint, custom),
-		];
+		Span<OverlayVertex> quad = stackalloc OverlayVertex[DrawListGeometry.CompositeQuadVertexCount];
+		DrawListGeometry.WriteCompositeQuad(bounds, surfaceWidth, surfaceHeight, tint, quad);
 		var quadBytes = MemoryMarshal.AsBytes(quad);
 		var quadAddr = _listVtx.Upload(_slot, quadBytes);
 		var qvbv = new VertexBufferView { BufferLocation = quadAddr, SizeInBytes = (uint)quadBytes.Length, StrideInBytes = (uint)Unsafe.SizeOf<OverlayVertex>() };
@@ -233,12 +175,12 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 		if (baked.RootConstantParam >= 0)
 		{
-			var cblock = stackalloc float[8];
+			var cblock = stackalloc float[DrawListGeometry.MaxListPushFloats + 1];
 			for (var i = 0; i < pushLen; i++)
 				cblock[i] = block[i];
-			if (pushLen > 5)
-				cblock[5] = 0f;                 // isHdr off — do not re-lift the already-lifted layer
-			*(uint*)(cblock + pushLen) = KindImage;
+			if (pushLen > DrawListGeometry.HdrPushSlot)
+				cblock[DrawListGeometry.HdrPushSlot] = 0f;
+			*(uint*)(cblock + pushLen) = DrawListGeometry.KindImage;
 			_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, (uint)(pushLen + 1), cblock, 0);
 		}
 

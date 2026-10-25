@@ -102,6 +102,113 @@ public class OffscreenEngineTests
 	}
 
 	[Test]
+	public void Every_backend_reports_capabilities_a_real_device_must_have()
+	{
+		// A backend that forgot to probe would report an all-default record, and the graph check would then reject
+		// graphs the device can actually run. Asserting the floor every real GPU clears is what catches that — the
+		// exact values are the device's business, but "at least single-sampled" and "a power-of-two alignment" are
+		// not negotiable on any adapter that can bring an engine up at all.
+		_ = new VulkanEngineSettings();
+		_ = new DirectX12EngineSettings();
+
+		if (Backends.Available.Count == 0)
+			throw new TUnit.Core.Exceptions.SkipTestException("No GPU backend is available on this box (Backends.Available is empty).");
+
+		var failures = new List<string>();
+
+		foreach (var backend in Backends.Available)
+		{
+			using var engine = backend.Create(Surface.Offscreen(Width, Height), Width, Height, new EngineSettings());
+			var caps = engine.Capabilities;
+
+			if ((caps.SampleCounts & SampleCounts.X1) == 0)
+				failures.Add($"{backend.Name}: does not report single-sampled support.");
+			if (caps.MaxColorAttachments < 4)
+				failures.Add($"{backend.Name}: reports only {caps.MaxColorAttachments} colour attachments.");
+			var alignment = caps.MinUniformBufferOffsetAlignment;
+			if (alignment <= 0 || (alignment & (alignment - 1)) != 0)
+				failures.Add($"{backend.Name}: uniform offset alignment {alignment} is not a positive power of two.");
+
+			// No backend derives cross-queue scheduling yet, so a backend claiming otherwise would open a gate with
+			// nothing behind it — the graph check would accept a Queue.AsyncCompute pass the engine cannot honour.
+			if (caps.AsyncCompute)
+				failures.Add($"{backend.Name}: claims async compute, which no backend implements yet.");
+
+			// The capability and the property must agree, since the property is the one an app reads.
+			engine.GpuTimingEnabled = true;
+			if (engine.GpuTimingEnabled != caps.GpuTiming)
+				failures.Add($"{backend.Name}: GpuTimingEnabled settled at {engine.GpuTimingEnabled} but Capabilities.GpuTiming is {caps.GpuTiming}.");
+			engine.GpuTimingEnabled = false;
+		}
+
+		failures.ShouldBeEmpty("Capability reporting failures:\n  " + string.Join("\n  ", failures));
+	}
+
+	[Test]
+	public void Per_pass_GPU_timings_come_back_for_every_pass_of_the_graph()
+	{
+		// The timestamp writes are hooks on the shared record spine now, so a backend can implement them wrongly — or
+		// stop implementing them — without any picture changing. Nothing asserted they produce anything: one test
+		// reported the total for information and another only checked the enable flag settles.
+		//
+		// A frame's timestamps are readable once that slot's fence signals, which is a couple of frames later, so this
+		// renders enough frames for the first slot to come back around.
+		_ = new VulkanEngineSettings();
+		_ = new DirectX12EngineSettings();
+
+		if (Backends.Available.Count == 0)
+			throw new TUnit.Core.Exceptions.SkipTestException("No GPU backend is available on this box (Backends.Available is empty).");
+
+		var failures = new List<string>();
+
+		foreach (var backend in Backends.Available)
+		{
+			using var engine = backend.Create(Surface.Offscreen(Width, Height), Width, Height, new EngineSettings());
+			engine.GpuTimingEnabled = true;
+			if (!engine.GpuTimingEnabled)
+				continue; // this device cannot time its queue; Capabilities.GpuTiming says so and the test above pins that
+
+			engine.DefineTechnique("probe", new TechniqueDescriptor("probe", HasFragmentPush: true));
+
+			var graph = RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				var scratch = g.Screen.Color("scratch", Format.Rgba8Unorm);
+				g.Pass("first").Writes(scratch).Draw(ctx => ctx.FullScreen("probe", [0.4f, 0.1f, 0.6f, 1f]));
+				g.Pass("second").Samples(scratch).Writes(screen).Draw(ctx => ctx.FullScreen("probe", [0.2f, 0.7f, 0.3f, 1f]));
+				g.Present(screen);
+			});
+			engine.SetGraph(graph);
+
+			var inputs = new FrameInputs { Time = 0, DeltaSeconds = 1.0 / 60.0 };
+			for (var frame = 0; frame < 6; frame++)
+				engine.Render(inputs);
+
+			var timings = engine.LastFrameTimings;
+			if (timings.Count != 2)
+			{
+				failures.Add($"{backend.Name}: {timings.Count} pass timings for a 2-pass graph — the per-pass timestamps are not being written or not decoded.");
+				continue;
+			}
+			// Named, so a mis-indexed timestamp pair (which is easy to write and invisible in a picture) shows up as the
+			// wrong pass rather than as a plausible number.
+			if (timings[0].Name != "first" || timings[1].Name != "second")
+				failures.Add($"{backend.Name}: timings name '{timings[0].Name}'/'{timings[1].Name}', not 'first'/'second'.");
+			foreach (var t in timings)
+				if (t.GpuMilliseconds < 0)
+					failures.Add($"{backend.Name}: pass '{t.Name}' reports {t.GpuMilliseconds} ms.");
+			// Zero is legitimate on a coarse timer, but the total must at least be the sum's order of magnitude rather
+			// than the untouched default.
+			if (engine.LastFrameGpuMilliseconds < 0)
+				failures.Add($"{backend.Name}: frame total is {engine.LastFrameGpuMilliseconds} ms.");
+
+			engine.GpuTimingEnabled = false;
+		}
+
+		failures.ShouldBeEmpty("GPU timing failures:\n  " + string.Join("\n  ", failures));
+	}
+
+	[Test]
 	public void Every_backend_reports_the_same_authoring_mistakes_the_same_way()
 	{
 		// The point of the neutral exception family: an app catches one type with one message whichever backend is

@@ -145,6 +145,17 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		if (_ctx.GraphicsQueue.GetTimestampFrequency(ref frequency) >= 0)
 			_timestampFrequency = frequency;
 
+		Capabilities = new EngineCapabilities
+		{
+			GpuTiming = _timestampFrequency != 0,
+			// Queue.AsyncCompute derives no cross-queue synchronisation yet and the backend owns one queue.
+			AsyncCompute = false,
+			SampleCounts = _ctx.SampleCounts,
+			MaxColorAttachments = DirectX12Context.MaxColorAttachments,
+			MinUniformBufferOffsetAlignment = DirectX12Context.ConstantBufferOffsetAlignment,
+			Float32Filterable = _ctx.Float32Filterable,
+		};
+
 		LoomLog.Info($"DirectX12 backend up on {_ctx.DeviceName} ({BufferCount} buffers, {(settings.VSync ? "vsync" : "no-vsync")}).");
 
 		// Shader hot-reload, opt-in. Watch the loose DXIL/reflection artifacts; an external process rewrites
@@ -176,10 +187,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	public override string BackendName => "DirectX12";
 	public override string DeviceName => _ctx.DeviceName;
 
-	// 0 timestamp frequency ⇒ the queue can't timestamp, so the profiler stays permanently unavailable.
-	protected override bool CanEnableGpuTiming => _timestampFrequency != 0;
+	public override EngineCapabilities Capabilities { get; }
 
-	public override void Render(FrameInputs inputs)
+	protected override void RenderFrame(FrameInputs inputs)
 	{
 		ServicePendingUploads();
 		if (Graph is null)
@@ -410,7 +420,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	private ReadbackBuffers CreateReadbackStaging(ResourceHandle target)
 	{
 		var (width, height) = _transients!.Extent(target.Id);
-		var bpt = BytesPerTexel(target.Format);
+		var bpt = (uint)target.Format.BytesPerTexel;
 		var rowPitch = Align(width * bpt, 256); // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
 		var readback = new ComPtr<ID3D12Resource>[BufferCount];
 		for (uint i = 0; i < BufferCount; i++)

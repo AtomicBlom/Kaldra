@@ -17,8 +17,16 @@ namespace Loom.Graph;
 /// <para>
 /// <strong>Hot path.</strong> This runs per draw. Every scan is a manual <c>for</c> over
 /// <see cref="GraphPass.Accesses"/>: no LINQ, no lambdas, and in particular never
-/// <see cref="GraphPass.ResourcesWith"/>, which is an iterator method and allocates. The steady render loop must not
-/// allocate managed memory.
+/// <see cref="GraphPass.ResourcesWith"/>, which is an iterator method and allocates (its allocation-free counterpart
+/// is <see cref="GraphPass.ResourceIdsWith"/>, which collects ids rather than searching for one). The steady render
+/// loop must not allocate managed memory.
+/// </para>
+/// <para>
+/// <strong>This is where a backend's record-path policy belongs.</strong> The verb implementations themselves
+/// (<c>*RenderContext.Verbs.cs</c>) are deliberately left per backend and unshared: they are nearly all
+/// descriptor-set, root-signature and bind-group construction, and the only neutral part is a small geometry-source
+/// switch — an abstraction over that would carry more indirection than it removes. So when the three verb paths differ
+/// on a <em>rule</em> rather than on an API call, the rule moves here instead of the code moving anywhere.
 /// </para>
 /// </summary>
 public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques)

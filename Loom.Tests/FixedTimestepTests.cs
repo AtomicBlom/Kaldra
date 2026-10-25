@@ -108,6 +108,7 @@ public class FixedTimestepTests
 	{
 		public string BackendName => "noop";
 		public string DeviceName => "noop";
+		public EngineCapabilities Capabilities { get; } = TestCapabilities.Permissive;
 		public Matrix4x4 ClipSpaceCorrection => Matrix4x4.Identity;
 		public bool GpuTimingEnabled { get; set; }
 		public bool ResourceInspectionEnabled { get; set; }

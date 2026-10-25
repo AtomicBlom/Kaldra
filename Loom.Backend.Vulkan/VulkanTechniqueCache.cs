@@ -1,6 +1,8 @@
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using Loom.Core.Geometry;
+using Loom.Graph;
 using Silk.NET.Vulkan;
 
 namespace Loom.Backend.Vulkan;
@@ -44,15 +46,17 @@ public sealed class VulkanTechniqueCache(VulkanContext ctx, PipelineCache pipeli
 		hash.AppendData(BitConverter.GetBytes(description.ColorFormats.Length));
 		foreach (var format in description.ColorFormats)
 			hash.AppendData(BitConverter.GetBytes((int)format));
-		hash.AppendData(BitConverter.GetBytes(description.SampleCount));
+		// The whole descriptor layout, not just its per-category totals: a binding's slot and span are now part of
+		// what the layout *is*, so two shapes that happened to share counts would otherwise collide on one cached
+		// pipeline. This also closes a pre-existing hole — the uniform-buffer count was never hashed at all, and was
+		// only masked by the SPIR-V bytes differing between any two real shaders.
+		AppendBindings(hash, description.Bindings);
 		hash.AppendData(BitConverter.GetBytes(description.HasVertexInput));
 		hash.AppendData(BitConverter.GetBytes((int)description.DepthFormat));
 		hash.AppendData(BitConverter.GetBytes((int)description.Blend));
 		hash.AppendData(BitConverter.GetBytes(description.DepthWrite));
 		hash.AppendData(BitConverter.GetBytes(description.HasFragmentPush));
 		hash.AppendData(BitConverter.GetBytes(description.IsCompute));
-		hash.AppendData(BitConverter.GetBytes(description.StorageCount));
-		hash.AppendData(BitConverter.GetBytes(description.StorageBufferCount));
 		hash.AppendData(BitConverter.GetBytes(description.HasListPush));
 		hash.AppendData(BitConverter.GetBytes((int)description.Cull));
 		hash.AppendData(BitConverter.GetBytes((int)description.DepthTest));
@@ -64,6 +68,28 @@ public sealed class VulkanTechniqueCache(VulkanContext ctx, PipelineCache pipeli
 		AppendLayout(hash, description.Layout);
 		AppendLayout(hash, description.Instance);
 		return Convert.ToHexString(hash.GetHashAndReset());
+	}
+
+	// Fold the descriptor layout into the content hash: every binding's slot, kind and span, in category order.
+	private static void AppendBindings(IncrementalHash hash, in ShaderBindingMap map)
+	{
+		Append(hash, map.SampledTextures);
+		Append(hash, map.StorageImages);
+		Append(hash, map.StorageBuffers);
+		Append(hash, map.UniformBuffers);
+
+		static void Append(IncrementalHash hash, ImmutableArray<ShaderBinding> category)
+		{
+			hash.AppendData(BitConverter.GetBytes(category.IsDefault ? 0 : category.Length));
+			if (category.IsDefault)
+				return;
+			foreach (var binding in category)
+			{
+				hash.AppendData(BitConverter.GetBytes(binding.Index));
+				hash.AppendData(BitConverter.GetBytes((int)binding.Kind));
+				hash.AppendData(BitConverter.GetBytes(binding.SlotCount));
+			}
+		}
 	}
 
 	// Fold a vertex layout into the content hash so two techniques sharing a shader but differing in layout

@@ -39,7 +39,7 @@ public class ShaderReflectionMaterialTests
 	[Test]
 	public void A_shader_with_no_material_block_reports_no_slot()
 	{
-		var reflection = ShaderReflection.FromBytes(Sidecar(("view", 0, "constantBuffer", 64), ("draw", 1, "constantBuffer", 80)));
+		var reflection = ShaderReflection.FromBytes(Sidecar(("view", 0, "constantBuffer", 64), ("draw", 1, "constantBuffer", 80)), ShaderBindingTarget.SpirV);
 
 		reflection.UniformBufferCount.ShouldBe(2);
 		reflection.HasMaterialParameters.ShouldBeFalse();
@@ -66,7 +66,7 @@ public class ShaderReflectionMaterialTests
 			("normalTex", 1, "resource", 0),
 			("view", 2, "constantBuffer", 64),
 			("draw", 3, "constantBuffer", 80),
-			("loomMaterial", 4, "constantBuffer", 48)));
+			("loomMaterial", 4, "constantBuffer", 48)), ShaderBindingTarget.SpirV);
 
 		reflection.SampleCount.ShouldBe(2);
 		reflection.UniformBufferCount.ShouldBe(3);
@@ -81,7 +81,7 @@ public class ShaderReflectionMaterialTests
 		var reflection = ShaderReflection.FromBytes(Sidecar(
 			("loomMaterial", 4, "constantBuffer", 48),
 			("draw", 3, "constantBuffer", 80),
-			("view", 2, "constantBuffer", 64)));
+			("view", 2, "constantBuffer", 64)), ShaderBindingTarget.SpirV);
 
 		reflection.MaterialUniformSlot.ShouldBe(2);
 	}
@@ -92,7 +92,7 @@ public class ShaderReflectionMaterialTests
 		// Convention is to declare it last, but nothing depends on that — the slot is whatever reflection reports.
 		var reflection = ShaderReflection.FromBytes(Sidecar(
 			("loomMaterial", 0, "constantBuffer", 32),
-			("view", 1, "constantBuffer", 64)));
+			("view", 1, "constantBuffer", 64)), ShaderBindingTarget.SpirV);
 
 		reflection.MaterialUniformSlot.ShouldBe(0);
 		reflection.MaterialParameterBytes.ShouldBe(32);
@@ -103,7 +103,7 @@ public class ShaderReflectionMaterialTests
 	{
 		// Slang reports the cbuffer-aligned size on elementVarLayout: a 68-byte struct occupies 80. Staging the
 		// unpadded number would short the upload and leave the shader reading past the end of the ring slice.
-		var real = ShaderReflection.FromBytes(Sidecar(("loomMaterial", 0, "constantBuffer", 80)));
+		var real = ShaderReflection.FromBytes(Sidecar(("loomMaterial", 0, "constantBuffer", 80)), ShaderBindingTarget.SpirV);
 
 		real.MaterialParameterBytes.ShouldBe(80);
 	}
@@ -117,7 +117,7 @@ public class ShaderReflectionMaterialTests
 		if (!File.Exists(path))
 			throw new TUnit.Core.Exceptions.SkipTestException($"reflection sidecar not found at {path}.");
 
-		var reflection = ShaderReflection.FromBytes(File.ReadAllBytes(path));
+		var reflection = ShaderReflection.FromBytes(File.ReadAllBytes(path), ShaderBindingTarget.SpirV);
 
 		reflection.UniformBufferCount.ShouldBe(2); // view + draw — names are being read, so the parse is live
 		reflection.HasMaterialParameters.ShouldBeFalse();
@@ -133,7 +133,7 @@ public class ShaderReflectionMaterialTests
 		if (!File.Exists(path))
 			throw new TUnit.Core.Exceptions.SkipTestException($"reflection sidecar not found at {path}.");
 
-		var reflection = ShaderReflection.FromBytes(File.ReadAllBytes(path));
+		var reflection = ShaderReflection.FromBytes(File.ReadAllBytes(path), ShaderBindingTarget.SpirV);
 
 		reflection.SampleCount.ShouldBe(1);
 		reflection.UniformBufferCount.ShouldBe(3);
@@ -148,7 +148,7 @@ public class ShaderReflectionMaterialTests
 		// sidecar lists them out of order — the same ordering the material slot ordinal uses.
 		var reflection = ShaderReflection.FromBytes(Sidecar(
 			("draw", 5, "constantBuffer", 80),
-			("view", 2, "constantBuffer", 64)));
+			("view", 2, "constantBuffer", 64)), ShaderBindingTarget.SpirV);
 
 		reflection.UniformSlotBytes(0).ShouldBe(64); // view, the lower binding
 		reflection.UniformSlotBytes(1).ShouldBe(80); // draw
@@ -162,7 +162,7 @@ public class ShaderReflectionMaterialTests
 		ShaderReflection.Empty.UniformSlotBytes(0).ShouldBe(0);
 		default(ShaderReflection).UniformSlotBytes(3).ShouldBe(0);
 
-		var reflection = ShaderReflection.FromBytes(Sidecar(("view", 0, "constantBuffer", 64)));
+		var reflection = ShaderReflection.FromBytes(Sidecar(("view", 0, "constantBuffer", 64)), ShaderBindingTarget.SpirV);
 		reflection.UniformSlotBytes(1).ShouldBe(0);
 		reflection.UniformSlotBytes(-1).ShouldBe(0);
 	}
@@ -179,7 +179,7 @@ public class ShaderReflectionMaterialTests
 			if (!File.Exists(path))
 				throw new TUnit.Core.Exceptions.SkipTestException($"reflection sidecar not found at {path}.");
 
-			var reflection = ShaderReflection.FromBytes(File.ReadAllBytes(path));
+			var reflection = ShaderReflection.FromBytes(File.ReadAllBytes(path), ShaderBindingTarget.SpirV);
 
 			reflection.UniformSlotBytes(slot)
 				.ShouldBeGreaterThanOrEqualTo(floats * sizeof(float), $"{shader} slot {slot} must hold the {floats} floats the demo pushes.");

@@ -33,10 +33,18 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	private readonly VulkanTextureStore _textures;
 	private readonly MaterialStore _materials;
 	private readonly VulkanInstanceUploadBuffer _instanceUpload;
-	// Per-frame host-visible ring for the uniform seam (CSM matrices, lighting params, wind) — the same
-	// retire-not-free ring as the instance stream, but created UniformBufferBit and aligned to 256 (≥ any
-	// device's minUniformBufferOffsetAlignment). Bound as the last descriptor of a technique that reflects a UBO.
+	// Per-frame host-visible ring for the uniform seam (CSM matrices, lighting params, wind) — the same chained-block
+	// ring as the instance stream, but created UniformBufferBit and aligned to 256 (≥ any device's
+	// minUniformBufferOffsetAlignment, and so also a legal dynamic offset). Bound at the technique's reflected
+	// uniform slots, with the offset within it supplied per draw rather than baked into the descriptor.
 	private readonly VulkanInstanceUploadBuffer _uniformUpload;
+	// Descriptor sets, keyed by the GPU objects they name and reused across draws and frames. See GetOrCreateSet for
+	// what makes a hit safe and for the invariant that governs when this must be flushed.
+	private readonly Dictionary<DescriptorSetKey, DescriptorSet> _cachedSets = [];
+	// A defined 16-byte window for a uniform slot a draw has nothing to put in. Staged once per frame, not per draw:
+	// the bind must supply an offset for every dynamic descriptor the layout declares, and ten thousand draws each
+	// reserving their own padding block would burn megabytes of ring on bytes no shader reads.
+	private UniformBinding _nullUniform;
 	// Per-frame host-visible ring for the bone palette the compute pre-skin pass reads as a structured
 	// buffer — StorageBufferBit, 256-aligned (≥ minStorageBufferOffsetAlignment).
 	private readonly VulkanInstanceUploadBuffer _storageUpload;
@@ -45,10 +53,15 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// offsets rather than clobber each other.
 	private readonly VulkanInstanceUploadBuffer _listVtx;
 	private readonly VulkanInstanceUploadBuffer _listIdx;
+	// Kept geometry for draw-list streams that carry a stable identity. The rings above stay: a transient list still
+	// uses them, and so does the group-opacity composite quad, which is pushed through _listVtx mid-list.
+	private readonly VulkanDrawListStore _listStore;
+	// Monotonic across the engine's life, unlike _frameSlot which cycles. The draw-list store uses it to notice a
+	// stream submitted twice in one frame, which would silently serve one submission the other's geometry.
+	private long _frameIndex = -1;
 	// Renderer-private offscreen targets backing UI group-opacity layers (BeginLayer/EndLayer), below the graph seam.
 	private readonly VulkanLayerTargets _layerTargets;
 	// Reused across calls so an opacity layer never allocates per frame.
-	private readonly List<(Image Image, ImageView View, Half4 Tint, (float X0, float Y0, float X1, float Y1) Bounds)> _layerStack = [];
 	// The current graphics pass's colour attachment views + render area, captured by the engine before the pass
 	// records, so a draw-list layer can suspend and resume the pass's dynamic-rendering scope.
 	private readonly ImageView[] _scopeColorViews = new ImageView[MaxColorFormats];
@@ -121,6 +134,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		_storageUpload = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.StorageBufferBit, alignment: 256);
 		_listVtx = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.VertexBufferBit);
 		_listIdx = new VulkanInstanceUploadBuffer(ctx, allocator, framesInFlight, BufferUsageFlags.IndexBufferBit);
+		_listStore = new VulkanDrawListStore(ctx, allocator);
 		_layerTargets = new VulkanLayerTargets(ctx, allocator, framesInFlight);
 		_nearestSampler = CreateSampler(Filter.Nearest);
 		_linearSampler = CreateSampler(Filter.Linear);
@@ -135,11 +149,21 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	}
 
 	/// <summary>Bind the context to the active graph's transients — called by the engine on each <c>SetGraph</c>.</summary>
-	public void SetTransients(VulkanTransientResources resources) => _resources = resources;
+	public void SetTransients(VulkanTransientResources resources)
+	{
+		// The outgoing graph's image views are about to be destroyed, and cached sets name them.
+		FlushDescriptorCache();
+		_resources = resources;
+	}
 
 	/// <summary>Drop the per-(name,formats) baked-pipeline cache so the next draw re-bakes (shader hot-reload).
 	/// The VulkanTechnique objects are owned by the VulkanTechniqueCache; the engine resets that separately after draining.</summary>
-	public void ClearBaked() => _baked.Clear();
+	public void ClearBaked()
+	{
+		_baked.Clear();
+		// The technique cache is about to dispose the stale set layouts, which cached sets were allocated against.
+		FlushDescriptorCache();
+	}
 
 	/// <summary>Bind the context to this frame's command buffer, frame slot, timing, and HDR-output state before any pass records.</summary>
 	public void BeginFrame(CommandBuffer cmd, double deltaTime, double time, int frameSlot, Extent2D fbExtent, bool hdrOutput)
@@ -155,7 +179,17 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		_storageUpload.BeginFrame(frameSlot);  // and the bone-palette staging
 		_listVtx.BeginFrame(frameSlot);        // and the draw-list geometry staging
 		_listIdx.BeginFrame(frameSlot);
+		_frameIndex++;
 		ForgetBindings();                      // a fresh command buffer has nothing bound
+
+		// Reserve this frame's padding window first, off the head of the freshly-rewound ring. Bound whole rather
+		// than as a 16-byte window: the slot is unfilled precisely because the pass declared a uniform buffer nothing
+		// supplied, and a shader that reads it anyway should read legal memory at whatever offset it reaches, not
+		// run off the end of a token binding. WholeSize is why the dynamic offset must be 0.
+		Span<byte> empty = stackalloc byte[16];
+		empty.Clear();
+		var (padding, _) = _uniformUpload.Upload(frameSlot, empty);
+		_nullUniform = new UniformBinding(padding, Vk.WholeSize, 0);
 	}
 
 	// The parameter buffers (ResourceKind.Constants) the current pass .Reads, in order. The engine resolves them
@@ -257,7 +291,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		Span<UniformBinding> ubos = stackalloc UniformBinding[MaxUniformBuffers];
 		var uboCount = 0;
 		for (var j = 0; j < _activeConstantsCount && uboCount < MaxUniformBuffers; j++)
-			ubos[uboCount++] = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[j]), 0, Vk.WholeSize);
+			ubos[uboCount++] = new UniformBinding(_resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[j]), Vk.WholeSize, 0);
 		if (push.Length > 0)
 		{
 			var pushBytes = push.Length * sizeof(float);
@@ -281,6 +315,13 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			}
 		}
 
+		// Pad out to every uniform slot the technique declares. The bind supplies one dynamic offset per dynamic
+		// descriptor in the layout, so stopping at the slots this pass happened to fill would be short by exactly the
+		// difference — a validation error, not a quietly unread slot. (See FillUniformSlots, which does the same.)
+		var declaredUniforms = Math.Min(template.UniformBufferCount, MaxUniformBuffers);
+		while (uboCount < declaredUniforms)
+			ubos[uboCount++] = _nullUniform;
+
 		// The app-writable storage buffers the pass .Reads bind after the sampled inputs, before the uniform slots.
 		Span<Silk.NET.Vulkan.Buffer> storageBuffers = stackalloc Silk.NET.Vulkan.Buffer[MaxStorageBuffers];
 		var storageCount = 0;
@@ -288,7 +329,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			storageBuffers[storageCount++] = _resources.GetStorageBuffer(_frameSlot, _activeStorageIds[j]);
 
 		if (inputs.Length > 0 || storageCount > 0 || uboCount > 0)
-			BindSampledInputs(baked, inputs, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount]);
+			BindSampledInputs(baked, template.Bindings, inputs, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount]);
 
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
@@ -323,10 +364,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		// is a one-time warmup allocation per unique pipeline, not per-frame churn.
 		var baked = _techniques.GetOrBake(new VulkanTechniqueDescription(
 			template.Spirv, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
-			template.SampleCount, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
-			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute, StorageCount: template.StorageCount,
-			StorageBufferCount: template.StorageBufferCount,
-			Layout: template.Layout, Instance: template.Instance, UniformBufferCount: template.UniformBufferCount,
+			template.Bindings, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
+			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute,
+			Layout: template.Layout, Instance: template.Instance,
 			HasListPush: template.HasListPush, Cull: template.Cull,
 			DepthTest: template.DepthTest, Bias: template.Bias), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
@@ -431,6 +471,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		_storageUpload.Dispose();
 		_listVtx.Dispose();
 		_listIdx.Dispose();
+		_listStore.Dispose();
 		_layerTargets.Dispose();
 		if (_nearestSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _nearestSampler, null);

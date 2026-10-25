@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -39,6 +40,12 @@ public abstract class EngineBase : IEngine
 	public abstract string DeviceName { get; }
 
 	/// <summary>
+	/// What the device this engine runs on can do, probed once during backend creation. <see cref="SetGraph"/>
+	/// validates the graph against it, so a backend that under-reports here rejects graphs it could have run.
+	/// </summary>
+	public abstract EngineCapabilities Capabilities { get; }
+
+	/// <summary>
 	/// The engine family's clip-space convention: negate clip-space Y. Both current backends adopt it (Vulkan's
 	/// native +Y-down NDC; DirectX12 pairs it with a negative-height viewport), so the shared shaders need no
 	/// per-backend branch. A backend with a different convention overrides this; the app composes it into its
@@ -48,16 +55,13 @@ public abstract class EngineBase : IEngine
 
 	/// <summary>
 	/// Enable per-pass GPU timestamp collection. Enabling is refused when the device/queue can't time
-	/// (<see cref="CanEnableGpuTiming"/> is false), so <see cref="LastFrameTimings"/> then stays empty.
+	/// (<see cref="EngineCapabilities.GpuTiming"/> is false), so <see cref="LastFrameTimings"/> then stays empty.
 	/// </summary>
 	public bool GpuTimingEnabled
 	{
 		get => _gpuTimingEnabled;
-		set => _gpuTimingEnabled = value && CanEnableGpuTiming;
+		set => _gpuTimingEnabled = value && Capabilities.GpuTiming;
 	}
-
-	/// <summary>Whether the device/queue can collect timestamps at all; gates <see cref="GpuTimingEnabled"/>.</summary>
-	protected abstract bool CanEnableGpuTiming { get; }
 
 	/// <summary>Per-pass GPU timings from the most recently completed frame (empty when timing is disabled).</summary>
 	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
@@ -93,6 +97,32 @@ public abstract class EngineBase : IEngine
 
 	/// <summary>Capture the next presented frame to a PNG at <paramref name="path"/>.</summary>
 	public void RequestCapture(string path) => CapturePath = path;
+
+	/// <summary>
+	/// The path this frame should capture to, or null — dropping the request, with a warning naming the format, when
+	/// the present target is one the capture path cannot decode.
+	/// <para>
+	/// PNG capture reads an 8-bit RGBA/BGRA present target. An HDR swapchain (FP16, or 10-bit packed) unpacked at four
+	/// bytes per pixel produces a plausible-looking corrupt file, which is worse than no file — so the request is
+	/// refused instead, and HDR output is verified on a display. The decision lives here so both halves of it (skip,
+	/// and say why) are the same wherever a backend asks.
+	/// </para>
+	/// </summary>
+	/// <param name="supported">Whether this backend's present format is one its capture path can decode.</param>
+	/// <param name="presentFormat">
+	/// The backend's own present-format enum, named in the message. Taken generically rather than as a string so the
+	/// name is only produced on the path that reports it — this runs every frame, and the steady loop must not allocate.
+	/// </param>
+	protected string? TakeCapturePath<TFormat>(bool supported, TFormat presentFormat) where TFormat : struct, Enum
+	{
+		if (CapturePath is null)
+			return null;
+		if (supported)
+			return CapturePath;
+		LoomLog.Warning($"capture skipped: present format {presentFormat} is not an 8-bit RGBA/BGRA format (HDR output).");
+		CapturePath = null;
+		return null;
+	}
 
 	/// <summary>
 	/// Register a technique under a logical name: bake its backend pipeline inputs, then record it for hot-reload
@@ -147,9 +177,41 @@ public abstract class EngineBase : IEngine
 		return Materials.Create(technique, textures, bytes);
 	}
 
+	// The thread that constructed the engine, which the contract makes the render thread. Captured here rather than
+	// on the first Render so a Write before the first frame is checked too.
+	private readonly int _renderThreadId = Environment.CurrentManagedThreadId;
+
+	/// <summary>
+	/// Enforce the single-threaded record contract in Debug: everything that mutates engine state read during
+	/// recording — the <c>Write</c> family, <see cref="SetGraph"/>, and <see cref="Render"/> itself — happens on
+	/// one thread, the one that created the engine. Nothing in the recording path is externally synchronized (a
+	/// backend's command pool and queue are not, and the shadow dictionaries are plain <see cref="Dictionary{K,V}"/>),
+	/// so a second thread does not race a lock — it corrupts state, usually far from the call that did it.
+	/// <para>
+	/// The deliberate exception is asset creation: <c>Create*Async</c> may be called from any thread and defers the
+	/// GPU work onto a queue that <see cref="ServicePendingUploads"/> drains on this one. That is the seam, and it
+	/// exists precisely because the rest of the surface has this affinity.
+	/// </para>
+	/// <para>
+	/// Debug-only: the check is one integer compare, but it is a contract violation the caller must fix rather than
+	/// something to pay for in a shipped frame loop.
+	/// </para>
+	/// </summary>
+	[Conditional("DEBUG")]
+	protected void AssertRenderThread(string member)
+	{
+		if (Environment.CurrentManagedThreadId == _renderThreadId)
+			return;
+		throw new InvalidOperationException(
+			$"{GetType().Name}.{member} was called from thread {Environment.CurrentManagedThreadId}, but the engine " +
+			$"was created on thread {_renderThreadId} and its recording path is single-threaded. Marshal the call " +
+			"onto the render thread; for asset creation use the Create*Async overloads, which are thread-safe by design.");
+	}
+
 	/// <inheritdoc/>
 	public void Write<T>(Material material, in T parameters) where T : unmanaged
 	{
+		AssertRenderThread(nameof(Write));
 		Span<byte> bytes = stackalloc byte[Unsafe.SizeOf<T>()];
 		MemoryMarshal.Write(bytes, in parameters);
 		Materials.WriteParameters(material.Id, bytes);
@@ -204,6 +266,7 @@ public abstract class EngineBase : IEngine
 
 	public void Write<T>(ConstantsHandle handle, in T value) where T : unmanaged
 	{
+		AssertRenderThread(nameof(Write));
 		ArgumentNullException.ThrowIfNull(handle);
 		if (!_constants.TryGetValue(handle.Id, out var shadow))
 			throw new InvalidOperationException(
@@ -240,6 +303,7 @@ public abstract class EngineBase : IEngine
 
 	public void Write<T>(StorageBufferHandle handle, ReadOnlySpan<T> values) where T : unmanaged
 	{
+		AssertRenderThread(nameof(Write));
 		ArgumentNullException.ThrowIfNull(handle);
 		if (!_storage.TryGetValue(handle.Id, out var shadow))
 			throw new InvalidOperationException(
@@ -338,7 +402,15 @@ public abstract class EngineBase : IEngine
 	/// </summary>
 	public void SetGraph(RenderGraph graph)
 	{
+		AssertRenderThread(nameof(SetGraph));
 		ArgumentNullException.ThrowIfNull(graph);
+
+		// Above the bake-cache check rather than inside the derivation: an equal bake key does imply an equal verdict
+		// today (the hash covers both the sample count and the queue), but resting a correctness guarantee on the hash
+		// continuing to cover them is a worse trade than a handful of integer comparisons on a path that already
+		// re-derives the whole plan.
+		GraphCapabilities.Validate(graph, Capabilities);
+
 		var key = BakeKey(graph);
 
 		if (Graph is not null && key == _activeBakeKey)
@@ -414,8 +486,172 @@ public abstract class EngineBase : IEngine
 	/// </summary>
 	protected abstract void RebuildGraphResources(RenderGraph authored, RenderGraph executed);
 
+	// ── GPU debug-label scopes: derived nesting, driven identically on every backend ──
+
+	/// <summary>
+	/// Open a pass's debug-label scopes on the command stream being recorded: close the groups the previous pass
+	/// leaves behind, open the ones this pass enters, then open the pass's own leaf scope. Paired with
+	/// <see cref="EndPassLabel"/> once the pass has recorded, and with <see cref="CloseTrailingLabels"/> after the
+	/// last pass of the frame.
+	/// <para>
+	/// The nesting is derived once from the dotted pass names (<see cref="PassBarriers.LabelOpens"/> /
+	/// <see cref="PassBarriers.LabelCloses"/>), so a capture reads as a <c>bloom</c> group containing <c>down1</c>,
+	/// <c>up0</c>, … rather than a flat command list.
+	/// </para>
+	/// <para>
+	/// <b><c>[Conditional]</c> belongs here, not on the hooks.</b> The attribute is honoured where the <em>call</em>
+	/// is compiled, so carrying it on this method makes <c>LOOM_NAMED_GPU_OBJECTS</c> as this assembly sees it the one
+	/// symbol that governs every backend — and an <c>override</c> cannot carry the attribute at all, so the hooks
+	/// could not have been the gate.
+	/// </para>
+	/// </summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	protected void BeginPassLabels(PassBarriers pass)
+	{
+		for (var i = 0; i < pass.LabelCloses; i++)
+			EndLabel();
+		foreach (var group in pass.LabelOpens)
+			BeginLabel(group);
+		BeginLabel(pass.LeafLabel);
+	}
+
+	/// <summary>Close the leaf scope <see cref="BeginPassLabels"/> opened, once the pass has finished recording.</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	protected void EndPassLabel() => EndLabel();
+
+	/// <summary>Close the label groups still open after the final pass, balancing <see cref="BeginPassLabels"/>' opens.</summary>
+	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
+	protected void CloseTrailingLabels()
+	{
+		for (var i = 0; i < Barriers.TrailingLabelCloses; i++)
+			EndLabel();
+	}
+
+	/// <summary>
+	/// Open a named scope on the command stream this frame is recording into. Called only from the label bookkeeping
+	/// above and only mid-record, which is why nothing is handed in: a backend reaches for its own current command
+	/// buffer/list. A backend whose API carries no such annotation implements this as an explicit no-op.
+	/// </summary>
+	protected abstract void BeginLabel(string name);
+
+	/// <summary>Close the most recently opened scope — see <see cref="BeginLabel"/>.</summary>
+	protected abstract void EndLabel();
+
+	// ── The per-frame record spine, shared by every backend ──
+
+	/// <summary>
+	/// Record the derived plan for one frame: flush the app-writable buffer shadows, then walk
+	/// <see cref="BarrierPlan.Passes"/> emitting each pass's transitions, debug-label scope and timestamps around its
+	/// own recording, then the readback copies and the frame's tail. A backend calls this once from
+	/// <see cref="RenderFrame"/>, with its own command buffer/list already open, and fills in the hooks below.
+	/// <para>
+	/// The value is the <em>order</em>, not the loop. Every step here has to happen in this sequence on every backend —
+	/// a pass's barriers before its timestamp because the barriers belong to the transition rather than the pass, the
+	/// readback copies before the frame's tail because the tail may transition the very targets being copied — and
+	/// three transliterations of a fixed sequence are three chances to get one of them subtly wrong. They already had:
+	/// two backends recorded readback before capture and the third recorded capture before readback, which is harmless
+	/// only for as long as those copies stay independent.
+	/// </para>
+	/// </summary>
+	protected void RecordFrame()
+	{
+		// Flush each app-writable buffer's CPU shadow into what this frame will read. Re-uploading every frame (these
+		// are tiny) is what makes the last IEngine.Write persist: a static parameter is written once and an animated one
+		// per frame, and either way what the GPU reads this frame is current.
+		foreach (var (id, bytes) in ConstantsShadows)
+			WriteConstantsShadow(id, bytes);
+		foreach (var (id, bytes) in StorageShadows)
+			WriteStorageShadow(id, bytes);
+
+		BeginFrameTimestamps();
+
+		var passIndex = 0;
+		foreach (var pass in Barriers.Passes)
+		{
+			BeginPassLabels(pass);
+			EmitTransitions(pass.Transitions.AsSpan());
+			// The timestamps bracket the pass's own work, after its pre-barriers: those barriers are the cost of the
+			// transition into this pass, not of the pass.
+			WritePassBeginTimestamp(passIndex);
+			if (pass.Pass.Kind == PassKind.Compute)
+				RecordComputePass(pass);
+			else
+				RecordRasterPass(pass);
+			WritePassEndTimestamp(passIndex);
+			EndPassLabel();
+			passIndex++;
+		}
+
+		EndFrameTimestamps();
+		CloseTrailingLabels();
+
+		// Every g.Readback target copies out before the tail, which may transition those same targets.
+		RecordReadback();
+		FinishFrame();
+	}
+
+	/// <summary>Upload one <see cref="ResourceKind.Constants"/> shadow into what this frame's passes will read.</summary>
+	protected abstract void WriteConstantsShadow(int id, ReadOnlySpan<byte> bytes);
+
+	/// <summary>Upload one <see cref="ResourceKind.Storage"/> shadow into what this frame's passes will read.</summary>
+	protected abstract void WriteStorageShadow(int id, ReadOnlySpan<byte> bytes);
+
+	/// <summary>
+	/// Emit the derived resource transitions for the pass about to record. A backend whose API tracks resource state
+	/// itself implements this as an explicit no-op — the plan's transitions are then genuinely not needed, which is
+	/// worth saying rather than leaving as a gap in the loop.
+	/// </summary>
+	protected abstract void EmitTransitions(ReadOnlySpan<ResourceTransition> transitions);
+
+	/// <summary>
+	/// Record a compute pass: no attachments and no render scope, so bind and dispatch. Its resource transitions were
+	/// emitted already.
+	/// </summary>
+	protected abstract void RecordComputePass(PassBarriers pass);
+
+	/// <summary>
+	/// Record a raster pass: open a render scope over its derived attachments, set the viewport and scissor, then run
+	/// its record callback. Left whole to the backend rather than templated further — the attachment descriptors,
+	/// formats and views are almost entirely API structs, and forcing them into one signature is what would push
+	/// graphics types into this layer.
+	/// </summary>
+	protected abstract void RecordRasterPass(PassBarriers pass);
+
+	/// <summary>Copy each <c>g.Readback</c> target into this frame slot's readback buffer; a no-op when the graph declares none.</summary>
+	protected abstract void RecordReadback();
+
+	/// <summary>
+	/// The frame's tail: the requested capture, if any, and the derived final transitions — including whatever the
+	/// present target needs to be handed to the presentation engine in. One hook rather than two because the backends
+	/// legitimately fuse them differently: one replaces the final transition with the capture copy's own barriers, the
+	/// other tracks resource state and so can run the final transitions from wherever the copy left the target.
+	/// </summary>
+	protected abstract void FinishFrame();
+
+	/// <summary>Prepare this frame's timestamp storage (e.g. reset a query pool on the device timeline). A no-op when timing is off or unsupported.</summary>
+	protected virtual void BeginFrameTimestamps() { }
+
+	/// <summary>Write the opening timestamp for pass <paramref name="passIndex"/>.</summary>
+	protected virtual void WritePassBeginTimestamp(int passIndex) { }
+
+	/// <summary>Write the closing timestamp for pass <paramref name="passIndex"/>.</summary>
+	protected virtual void WritePassEndTimestamp(int passIndex) { }
+
+	/// <summary>Finish this frame's timing (resolve the queries, mark the slot readable). A no-op when timing is off or unsupported.</summary>
+	protected virtual void EndFrameTimestamps() { }
+
 	// ── The backend's own half: the per-frame record loop, resource creation, teardown. ──
-	public abstract void Render(FrameInputs inputs);
+
+	/// <inheritdoc/>
+	public void Render(FrameInputs inputs)
+	{
+		AssertRenderThread(nameof(Render));
+		RenderFrame(inputs);
+	}
+
+	/// <summary>Record and submit one frame. The backend's half of <see cref="Render"/>, which has already
+	/// established that the caller is the render thread.</summary>
+	protected abstract void RenderFrame(FrameInputs inputs);
 	public abstract void Resize(int width, int height);
 	public abstract void WaitIdle();
 	public abstract Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);

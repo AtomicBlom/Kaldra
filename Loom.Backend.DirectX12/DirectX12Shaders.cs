@@ -87,6 +87,9 @@ internal static class DirectX12Shaders
 			}
 			json = File.ReadAllBytes(path);
 		}
-		return ShaderReflection.FromBytes(json);
+		// The SPIR-V-target sidecar: the DXIL passes emit no reflection of their own, so this backend reads the same
+		// one Vulkan does. Its indices size the root signature's tables; the b/t/u register numbers come from the
+		// shader's own `register(...)` annotations, which is a separate numbering DXIL honours directly.
+		return ShaderReflection.FromBytes(json, ShaderBindingTarget.SpirV);
 	}
 }

@@ -10,6 +10,14 @@ namespace Loom.Backend.DirectX12;
 
 public sealed unsafe partial class DirectX12Engine
 {
+	// Whether the capture path can decode this present format. It always can today — the swapchain is created 8-bit SDR
+	// and HDR colour-space negotiation is a later slice — but the copy below unpacks at a fixed four bytes per pixel, so
+	// the moment that changes an unguarded capture writes a plausible-looking corrupt PNG rather than failing. This is
+	// the one place that has to notice.
+	private bool CaptureSupported() =>
+		_presentTarget.Format is DxgiFormat.FormatR8G8B8A8Unorm or DxgiFormat.FormatB8G8R8A8Unorm
+			or DxgiFormat.FormatR8G8B8A8UnormSrgb or DxgiFormat.FormatB8G8R8A8UnormSrgb;
+
 	/// <summary>Record the copy of <paramref name="backbuffer"/> (already in COPY_SOURCE) into the readback buffer; returns the row pitch.</summary>
 	private uint CopyBackbufferToReadback(ComPtr<ID3D12Resource> backbuffer)
 	{
@@ -185,12 +193,6 @@ public sealed unsafe partial class DirectX12Engine
 		return buffer;
 	}
 
-	private static uint BytesPerTexel(Format format) => format switch
-	{
-		Format.R16F => 2,
-		Format.R32Uint => 4,
-		_ => throw new NotSupportedException($"DirectX12: readback of format {format} is not supported (the id buffer is R16F)."),
-	};
 
 	private static uint Align(uint value, uint alignment) => (value + alignment - 1) & ~(alignment - 1);
 }

@@ -59,6 +59,20 @@ public sealed unsafe class VulkanContext : IDisposable
 	/// timing is unavailable). Used to mask query results and gate the profiler.</summary>
 	public uint GraphicsTimestampValidBits { get; private set; }
 
+	/// <summary>Sample counts the chosen device supports for colour <em>and</em> depth attachments both — the
+	/// intersection of the two framebuffer limits, because a domain sizes both.</summary>
+	public SampleCountFlags FramebufferSampleCounts { get; private set; }
+
+	/// <summary>The device's <c>maxColorAttachments</c> limit — the most colour targets one pass may write.</summary>
+	public uint MaxColorAttachments { get; private set; }
+
+	/// <summary>The device's <c>minUniformBufferOffsetAlignment</c> — the stride a uniform ring's allocations must
+	/// round up to for a descriptor offset or a dynamic offset to be legal.</summary>
+	public ulong MinUniformBufferOffsetAlignment { get; private set; }
+
+	/// <summary>Whether a 32-bit float image can be sampled with a linear filter on this device.</summary>
+	public bool Float32Filterable { get; private set; }
+
 	/// <summary>
 	/// True if <c>VK_EXT_swapchain_colorspace</c> was enabled at instance creation — without it the surface
 	/// only reports the SDR sRGB colour space, so HDR swapchain colour spaces are unavailable. The
@@ -399,6 +413,11 @@ public sealed unsafe class VulkanContext : IDisposable
 				PresentFamily = present;
 				DeviceName = SilkMarshal.PtrToString((nint)props.DeviceName) ?? "<unknown>";
 				TimestampPeriod = props.Limits.TimestampPeriod;
+				// A domain sizes its colour and depth targets together, so the sample counts it may ask for are the
+				// ones both support.
+				FramebufferSampleCounts = props.Limits.FramebufferColorSampleCounts & props.Limits.FramebufferDepthSampleCounts;
+				MaxColorAttachments = props.Limits.MaxColorAttachments;
+				MinUniformBufferOffsetAlignment = props.Limits.MinUniformBufferOffsetAlignment;
 				chosenIsDiscrete = discrete;
 				found = true;
 			}
@@ -412,7 +431,20 @@ public sealed unsafe class VulkanContext : IDisposable
 
 		if (!found)
 			throw new VulkanException(
-				"No Vulkan 1.3 device with graphics+present queues, swapchain, and the required features was found.");
+				"No Vulkan 1.3 device with graphics+present queues, swapchain, and the required features was found."
+				+ DescribeRejectedDevices(devices));
+
+		// Loom binds every uniform buffer with a dynamic offset, so a pass's constant buffers are spent against
+		// maxDescriptorSetUniformBuffersDynamic — whose guaranteed minimum is 8 — rather than against
+		// maxDescriptorSetUniformBuffers, which guarantees 12. Loom.Core.Graph.GraphLimits.MaxUniformBuffersPerPass is exactly 8, so
+		// the neutral cap now sits on the floor of the relevant limit with no margin at all. Name both numbers if a
+		// device ever comes in under it, rather than letting descriptor-set creation fail somewhere further down.
+		Vk.GetPhysicalDeviceProperties(PhysicalDevice, out var chosen);
+		if (chosen.Limits.MaxDescriptorSetUniformBuffersDynamic < Loom.Core.Graph.GraphLimits.MaxUniformBuffersPerPass)
+			throw new VulkanException(
+				$"'{DeviceName}' supports only {chosen.Limits.MaxDescriptorSetUniformBuffersDynamic} dynamic uniform " +
+				$"buffers per descriptor set, but a Loom pass may bind {Loom.Core.Graph.GraphLimits.MaxUniformBuffersPerPass} " +
+				"(GraphLimits.MaxUniformBuffersPerPass). Vulkan guarantees 8, so this device is below spec.");
 
 		// The graphics family's timestamp support (GPU profiler): 0 valid bits ⇒ no timing on this queue.
 		uint queueCount = 0;
@@ -421,6 +453,11 @@ public sealed unsafe class VulkanContext : IDisposable
 		fixed (QueueFamilyProperties* pQueueFamilies = queueFamilies)
 			Vk.GetPhysicalDeviceQueueFamilyProperties(PhysicalDevice, ref queueCount, pQueueFamilies);
 		GraphicsTimestampValidBits = GraphicsFamily < queueCount ? queueFamilies[GraphicsFamily].TimestampValidBits : 0;
+
+		// Linear filtering of a 32-bit float image is optional in Vulkan and absent on some tiled GPUs, which is why
+		// R32F targets carry a "sample it nearest" caveat rather than being assumed filterable.
+		Vk.GetPhysicalDeviceFormatProperties(PhysicalDevice, Format.R32G32B32A32Sfloat, out var float32Properties);
+		Float32Filterable = float32Properties.OptimalTilingFeatures.HasFlag(FormatFeatureFlags.SampledImageFilterLinearBit);
 	}
 
 	private bool IsSuitable(PhysicalDevice device, out uint graphicsFamily, out uint presentFamily) =>
@@ -493,7 +530,43 @@ public sealed unsafe class VulkanContext : IDisposable
 		return true;
 	}
 
-	private bool SupportsRequiredFeatures(PhysicalDevice device)
+	// Why each candidate was turned down, appended to the no-suitable-device throw. Built only on the failure path,
+	// so the cost of naming things falls entirely on the run that is about to end anyway.
+	private string DescribeRejectedDevices(PhysicalDevice[] devices)
+	{
+		if (devices.Length == 0)
+			return " No Vulkan devices were reported at all — check that a driver is installed.";
+
+		var lines = new StringBuilder();
+		foreach (var device in devices)
+		{
+			Vk.GetPhysicalDeviceProperties(device, out var props);
+			var name = SilkMarshal.PtrToString((nint)props.DeviceName) ?? "<unknown>";
+
+			string reason;
+			if (!FindQueueFamilies(device, out _, out _))
+				reason = "no queue family supports both graphics and presentation";
+			else if (!SupportsRequiredExtensions(device))
+				reason = $"missing device extension(s): {string.Join(", ", RequiredDeviceExtensions)}";
+			else
+			{
+				var missing = MissingRequiredFeatures(device);
+				reason = missing.Count > 0 ? $"missing feature(s): {string.Join(", ", missing)}" : "unknown";
+			}
+
+			lines.Append(Environment.NewLine).Append("  ").Append(name).Append(" — ").Append(reason);
+		}
+		return Environment.NewLine + "Rejected:" + lines;
+	}
+
+	private bool SupportsRequiredFeatures(PhysicalDevice device) => MissingRequiredFeatures(device).Count == 0;
+
+	/// <summary>
+	/// The names of the required device features <paramref name="device"/> does not advertise, empty when it has all
+	/// of them. Named rather than folded into one boolean so a box with no suitable device is told <em>which</em>
+	/// feature is missing — the difference between "update your driver" and an afternoon of guessing.
+	/// </summary>
+	private List<string> MissingRequiredFeatures(PhysicalDevice device)
 	{
 		PhysicalDeviceVulkan11Features f11 = new() { SType = StructureType.PhysicalDeviceVulkan11Features };
 		PhysicalDeviceVulkan12Features f12 = new()
@@ -513,9 +586,14 @@ public sealed unsafe class VulkanContext : IDisposable
 		};
 
 		Vk.GetPhysicalDeviceFeatures2(device, &features);
-		return f13.DynamicRendering && f13.Synchronization2
-			&& f12.TimelineSemaphore && f12.SamplerMirrorClampToEdge
-			&& f11.ShaderDrawParameters;
+
+		var missing = new List<string>();
+		if (!f13.DynamicRendering) missing.Add("dynamicRendering");
+		if (!f13.Synchronization2) missing.Add("synchronization2");
+		if (!f12.TimelineSemaphore) missing.Add("timelineSemaphore");
+		if (!f12.SamplerMirrorClampToEdge) missing.Add("samplerMirrorClampToEdge");
+		if (!f11.ShaderDrawParameters) missing.Add("shaderDrawParameters");
+		return missing;
 	}
 
 	private void CreateLogicalDevice()

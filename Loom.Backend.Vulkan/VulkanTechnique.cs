@@ -1,5 +1,8 @@
+using System.Collections.Immutable;
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
+using Loom.Core.Hosting;
+using Loom.Graph;
 using Silk.NET.Vulkan;
 using Format = Silk.NET.Vulkan.Format;
 using VertexInputRate = Silk.NET.Vulkan.VertexInputRate;
@@ -49,7 +52,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 			var descriptorStage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit;
 			var scalarPushStage = description.IsCompute ? ShaderStageFlags.ComputeBit : ShaderStageFlags.FragmentBit;
 			DescriptorSetLayout = description.SampleCount + description.StorageCount + description.StorageBufferCount + description.UniformBufferCount > 0
-				? CreateSetLayout(description.SampleCount, description.StorageCount, description.StorageBufferCount, description.UniformBufferCount, descriptorStage)
+				? CreateSetLayout(description.Bindings, descriptorStage)
 				: default;
 			Layout = CreatePipelineLayout(DescriptorSetLayout, description.HasFragmentPush, scalarPushStage, description.HasListPush);
 			Pipeline = description.IsCompute
@@ -78,27 +81,35 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		}
 	}
 
-	// Set 0, in binding order: <paramref name="sampleCount"/> combined image samplers (the .Samples inputs),
-	// then <paramref name="storageImages"/> storage images (a compute's .ReadWrites of an image), then
-	// <paramref name="storageBuffers"/> storage buffers (a compute's .ReadWrites of a buffer — GPU particles),
-	// then <paramref name="uniformBuffers"/> uniform buffers (the per-frame uniform seam, fed from the
-	// uniform ring), visible to the given stage. The shader reflection derives these counts; the
-	// shaders declare the matching [[vk::binding(n,0)]] in the same category order.
-	private DescriptorSetLayout CreateSetLayout(int sampleCount, int storageImages, int storageBuffers, int uniformBuffers, ShaderStageFlags stage)
+	// Set 0, one entry per descriptor the shader declares, at the slot the shader declared it at and with the
+	// descriptor type its reflected shape implies. The layout is therefore whatever the shader asked for: slots need
+	// not be contiguous, and need not be grouped by category. (They previously did have to be both — the layout was
+	// rebuilt from per-category counts at sequential slots, so a shader numbering a constant buffer before a sampler
+	// bound its resources to the wrong descriptors with nothing to report it.)
+	private DescriptorSetLayout CreateSetLayout(in ShaderBindingMap map, ShaderStageFlags stage)
 	{
-		var total = sampleCount + storageImages + storageBuffers + uniformBuffers;
+		// A WGSL reflection numbers the same shader differently — and splits a combined sampler across two slots —
+		// so binding a Vulkan layout from one would look plausible and be wrong everywhere.
+		if (map.Target != ShaderBindingTarget.SpirV)
+			throw new VulkanException(
+				$"Descriptor layouts must be built from SPIR-V reflection, but this technique's bindings are {map.Target}.");
+
+		var total = map.SampledTextures.Length + map.StorageImages.Length + map.StorageBuffers.Length + map.UniformBuffers.Length;
 		var bindings = stackalloc DescriptorSetLayoutBinding[total];
-		for (var i = 0; i < total; i++)
-			bindings[i] = new DescriptorSetLayoutBinding
-			{
-				Binding = (uint)i,
-				DescriptorType = i < sampleCount ? DescriptorType.CombinedImageSampler
-					: i < sampleCount + storageImages ? DescriptorType.StorageImage
-					: i < sampleCount + storageImages + storageBuffers ? DescriptorType.StorageBuffer
-					: DescriptorType.UniformBuffer,
-				DescriptorCount = 1,
-				StageFlags = stage,
-			};
+		var next = 0;
+		Append(bindings, ref next, map.SampledTextures, DescriptorType.CombinedImageSampler, stage);
+		Append(bindings, ref next, map.StorageImages, DescriptorType.StorageImage, stage);
+		Append(bindings, ref next, map.StorageBuffers, DescriptorType.StorageBuffer, stage);
+		// Uniform buffers are dynamic: the descriptor names the buffer and the window size, and the byte offset
+		// within it rides pDynamicOffsets at bind time. That is what lets a material's set — its images, its
+		// sampler, its buffers — be written once and cached, with only the per-draw offsets changing.
+		//
+		// Unconditional, including compute, so one shader cannot get a different layout from another. No shipped
+		// compute shader declares a constant buffer, and the Dispatch path binds none; one that did would fail the
+		// validation layer at bind time for supplying no offsets, which is louder than the unbound descriptor it
+		// would have got before.
+		Append(bindings, ref next, map.UniformBuffers, DescriptorType.UniformBufferDynamic, stage);
+
 		DescriptorSetLayoutCreateInfo info = new()
 		{
 			SType = StructureType.DescriptorSetLayoutCreateInfo,
@@ -107,6 +118,24 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		};
 		_vk.CreateDescriptorSetLayout(_device, in info, null, out var layout).Check("vkCreateDescriptorSetLayout");
 		return layout;
+	}
+
+	private static void Append(
+		DescriptorSetLayoutBinding* bindings,
+		ref int next,
+		ImmutableArray<ShaderBinding> category,
+		DescriptorType type,
+		ShaderStageFlags stage)
+	{
+		foreach (var binding in category)
+			bindings[next++] = new DescriptorSetLayoutBinding
+			{
+				Binding = (uint)binding.Index,
+				DescriptorType = type,
+				// An arrayed binding occupies several consecutive slots; a plain one reports 1.
+				DescriptorCount = (uint)binding.SlotCount,
+				StageFlags = stage,
+			};
 	}
 
 	/// <summary>
@@ -118,10 +147,11 @@ public sealed unsafe class VulkanTechnique : IDisposable
 
 	/// <summary>
 	/// Size of a draw-list technique's all-stage push block (<see cref="VulkanTechniqueDescription.HasListPush"/>):
-	/// the per-list scalars plus the per-command tag slot the backend rewrites each draw. Eight 32-bit words covers
-	/// the UI block (scale, translate, paper-white, hdr flag, kind) with headroom; well within the 128-byte minimum.
+	/// the per-list scalars plus the per-command tag slot the backend rewrites each draw. Sized from the neutral push
+	/// clamp rather than a number of its own, so the block provably holds the largest push plus its tag; well within
+	/// the 128-byte guaranteed minimum.
 	/// </summary>
-	public const int ListPushSize = 8 * sizeof(float);
+	public const int ListPushSize = (DrawListGeometry.MaxListPushFloats + 1) * sizeof(float);
 
 	// Zero or one descriptor set (whether the technique binds resources), plus at most one push-constant
 	// range: a draw-list technique gets an all-stage range for its scale/translate/tag block; post/compute

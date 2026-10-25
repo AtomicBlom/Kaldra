@@ -42,6 +42,10 @@ public sealed class ImGuiPainter
 	// Per-frame scratch, grown on demand so a steady-state frame allocates nothing (no GC in the render loop).
 	// The backend copies each DrawList submission into its own ring synchronously, so the painter may
 	// refill these between submissions in one frame (UI, then thumbnails, then lines).
+	//
+	// That refilling is exactly why every submission here is DrawListIdentity.Transient: these spans do not survive
+	// the call, and ImGui rebuilds its geometry from scratch every frame anyway, so there is no revision to hold a
+	// kept buffer against. Naming a stable stream would promise the backend bytes that are already gone.
 	private ImGuiVertex[] _verts = [];
 	private ushort[] _indices = [];
 	private DrawCommand[] _commands = [];
@@ -173,7 +177,7 @@ public sealed class ImGuiPainter
 		var sy = 2f / displaySize.Y;
 		ReadOnlySpan<float> push = [sx, sy, -1f - clipOff.X * sx, -1f - clipOff.Y * sy];
 		ReadOnlySpan<Texture> textures = [_font];
-		ctx.DrawList(Technique, textures, _verts.AsSpan(0, vtxBase), _indices.AsSpan(0, idxBase), _commands.AsSpan(0, cmd), push);
+		ctx.DrawList(Technique, DrawListIdentity.Transient, textures, _verts.AsSpan(0, vtxBase), _indices.AsSpan(0, idxBase), _commands.AsSpan(0, cmd), push);
 	}
 
 	private void DrawThumbnails(IRenderContext ctx, Vector2 displaySize)
@@ -203,7 +207,7 @@ public sealed class ImGuiPainter
 		}
 
 		ReadOnlySpan<float> push = [2f / displaySize.X, 2f / displaySize.Y, -1f, -1f];
-		ctx.DrawList(Technique, _thumbTextures.AsSpan(0, count), _verts.AsSpan(0, count * 4), _indices.AsSpan(0, count * 6), _commands.AsSpan(0, count), push);
+		ctx.DrawList(Technique, DrawListIdentity.Transient, _thumbTextures.AsSpan(0, count), _verts.AsSpan(0, count * 4), _indices.AsSpan(0, count * 6), _commands.AsSpan(0, count), push);
 	}
 
 	private void DrawLines(IRenderContext ctx, Vector2 displaySize)
@@ -234,7 +238,7 @@ public sealed class ImGuiPainter
 		_commands[0] = new DrawCommand(new Rect(0, 0, displaySize.X, displaySize.Y), 0, 0, _lineCount * 6, 0, 0);
 		ReadOnlySpan<float> push = [2f / displaySize.X, 2f / displaySize.Y, -1f, -1f];
 		ReadOnlySpan<Texture> textures = [_font];
-		ctx.DrawList(Technique, textures, _verts.AsSpan(0, _lineCount * 4), _indices.AsSpan(0, _lineCount * 6), _commands.AsSpan(0, 1), push);
+		ctx.DrawList(Technique, DrawListIdentity.Transient, textures, _verts.AsSpan(0, _lineCount * 4), _indices.AsSpan(0, _lineCount * 6), _commands.AsSpan(0, 1), push);
 	}
 
 	// Write quad i (4 verts) at pixel rect (x,y,w,h) spanning uv0..uv1, plus its two triangles.

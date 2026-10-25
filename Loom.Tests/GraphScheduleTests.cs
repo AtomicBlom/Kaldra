@@ -268,6 +268,119 @@ public class GraphScheduleTests
 	}
 
 	[Test]
+	public void Attaching_targets_of_different_extents_to_one_pass_throws()
+	{
+		// A pass renders through one viewport and render area, and the backends disagreed about which attachment
+		// supplied it — two read the first, one the last colour target. Every choice is wrong for some attachment, so
+		// there is nothing to converge on: reject the declaration instead, once, before a frame is recorded.
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var hud = g.Domain("hud", 1280, 720);
+				g.Pass("mrt").Writes(world.Color("a", Format.Rgba8Srgb), hud.Color("b", Format.Rgba8Srgb));
+			}));
+
+		ex.Message.ShouldContain("mrt");
+		ex.Message.ShouldContain("world");
+		ex.Message.ShouldContain("hud");
+	}
+
+	[Test]
+	public void Attaching_targets_at_different_scales_within_one_domain_throws()
+	{
+		// The same hazard without two domains: a mip-chain scale makes a sibling target a different size.
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				g.Pass("mrt").Writes(world.Color("full", Format.Rgba8Srgb), world.Color("half", Format.Rgba8Srgb, 0.5f));
+			}));
+
+		ex.Message.ShouldContain("half");
+	}
+
+	[Test]
+	public void Multiple_attachments_of_one_extent_are_allowed()
+	{
+		// The boundary that matters: real MRT — several colour targets plus depth, all one domain at one scale — must
+		// still derive. g.Screen is the backbuffer's own domain, so mixing the backbuffer with screen-sized siblings is
+		// one extent too, and that pattern is common enough that rejecting it would be a regression.
+		Should.NotThrow(() =>
+			Schedule(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("gbuffer")
+					.Writes(screen, g.Screen.Color("normal", Format.Rgba16F), g.Screen.Color("position", Format.Rgba16F))
+					.WritesDepth(g.Screen.Depth("depth", Format.Depth32F));
+				g.Present(screen);
+			}));
+	}
+
+	[Test]
+	public void A_raster_pass_with_no_attachment_throws()
+	{
+		// DirectX 12 threw for this while recording; Vulkan and WebGPU began a 0x0 pass and drew nothing, which is
+		// indistinguishable from a pass whose draws are broken. Rejected for all three, before a frame is recorded.
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("nowhere").Samples(g.Screen.Color("src", Format.Rgba8Srgb));
+				g.Pass("view").Writes(screen);
+				g.Present(screen);
+			}));
+
+		ex.Message.ShouldContain("nowhere");
+		ex.Message.ShouldContain("g.Compute");
+	}
+
+	[Test]
+	public void Writing_more_colour_attachments_than_a_pass_can_bind_throws()
+	{
+		// Eight is the portable ceiling — D3D12's simultaneous render targets and WebGPU's maxColorAttachments — while
+		// Vulkan usually allows more, so this used to derive and record on one backend and fail on the others.
+		var over = GraphLimits.MaxColorAttachmentsPerPass + 1;
+		var ex = Should.Throw<GraphValidationException>(() =>
+			Schedule(g =>
+			{
+				var pass = g.Pass("fat");
+				for (var i = 0; i < over; i++)
+					pass.Writes(g.Screen.Color($"t{i}", Format.Rgba8Srgb));
+			}));
+
+		ex.Message.ShouldContain("fat");
+		ex.Message.ShouldContain(over.ToString());
+		ex.Message.ShouldContain(GraphLimits.MaxColorAttachmentsPerPass.ToString());
+	}
+
+	[Test]
+	public void Writing_exactly_the_colour_attachment_cap_is_allowed()
+	{
+		// The boundary: the cap is what the backends' attachment arrays are sized to, so exactly that many must derive.
+		Should.NotThrow(() =>
+			Schedule(g =>
+			{
+				var pass = g.Pass("wide");
+				for (var i = 0; i < GraphLimits.MaxColorAttachmentsPerPass; i++)
+					pass.Writes(g.Screen.Color($"t{i}", Format.Rgba8Srgb));
+			}));
+	}
+
+	[Test]
+	public void A_compute_pass_may_touch_resources_of_any_extent()
+	{
+		// Compute has no attachments and no render area, so the extent rule must not reach it.
+		Should.NotThrow(() =>
+			Schedule(g =>
+			{
+				var world = g.Domain("world", 320, 180);
+				var hud = g.Domain("hud", 1280, 720);
+				g.Compute("mix").ReadWrites(world.Color("a", Format.Rgba16F), hud.Color("b", Format.Rgba16F));
+			}));
+	}
+
+	[Test]
 	public void Async_compute_is_rejected_until_multi_queue_lands()
 	{
 		// Queue.AsyncCompute is reserved but not yet derived or backed — declaring it must fail loud rather than

@@ -11,7 +11,7 @@ namespace Loom.Backend.WebGPU;
 [SupportedOSPlatform("browser")]
 internal sealed partial class WebGpuEngine
 {
-	public override void Render(FrameInputs inputs)
+	protected override void RenderFrame(FrameInputs inputs)
 	{
 		DrainShaderReloads();
 		ServicePendingUploads();
@@ -30,22 +30,9 @@ internal sealed partial class WebGpuEngine
 		_listIndexRing.BeginFrame();
 		_context.BeginFrame(inputs.DeltaSeconds, inputs.Time);
 
-		// Flush each app-writable buffer's CPU shadow into the frame's upload arena. These become queue-level
-		// WriteBuffer ops, which the replayer applies before every pass — so the last IEngine.Write persists and
-		// the buffer the GPU reads this frame is current (the write is ordered before this frame's submit, and
-		// after the previous frame's reads, by WebGPU's queue ordering).
-		foreach (var (id, bytes) in ConstantsShadows)
-			EmitBufferUpload(id, bytes);
-		foreach (var (id, bytes) in StorageShadows)
-			EmitBufferUpload(id, bytes);
-
-		foreach (var pass in Barriers.Passes)
-			RecordPass(pass);
-
-		// A requested capture copies the backbuffer into a map-read buffer at the tail of this frame's stream.
-		RecordCaptureIfRequested();
-		// Every g.Readback target (e.g. the picking id buffer) copies into its own map-read buffer the same way.
-		RecordGraphReadbacks();
+		// Everything the derived plan needs recording, in the order EngineBase fixes for every backend — which is also
+		// what moved this backend's readback copies ahead of its capture copy, matching the other two.
+		RecordFrame();
 
 		var commands = _writer.Finish();
 		WebGpuInterop.SubmitFrame(commands, _arena.Used);
@@ -59,6 +46,24 @@ internal sealed partial class WebGpuEngine
 			LoomLog.Error($"[webgpu] {errors}");
 	}
 
+	// The shadows become queue-level WriteBuffer ops, which the replayer applies before every pass — so the last
+	// IEngine.Write persists and what the GPU reads this frame is current (the write is ordered before this frame's
+	// submit, and after the previous frame's reads, by WebGPU's queue ordering).
+	protected override void WriteConstantsShadow(int id, ReadOnlySpan<byte> bytes) => EmitBufferUpload(id, bytes);
+
+	protected override void WriteStorageShadow(int id, ReadOnlySpan<byte> bytes) => EmitBufferUpload(id, bytes);
+
+	// Deliberately empty, not omitted: WebGPU tracks resource state itself, so the plan's transitions genuinely have
+	// nothing to translate into here. Only the attachment load/store actions survive, into the render-pass descriptor.
+	protected override void EmitTransitions(ReadOnlySpan<ResourceTransition> transitions) { }
+
+	// Every g.Readback target (e.g. the picking id buffer) copies into its own map-read buffer.
+	protected override void RecordReadback() => RecordGraphReadbacks();
+
+	// A requested capture copies the backbuffer into a map-read buffer at the tail of this frame's stream. No final
+	// transitions to emit — WebGPU tracks resource state itself, and the canvas is presented by the browser.
+	protected override void FinishFrame() => RecordCaptureIfRequested();
+
 	private void EmitBufferUpload(int id, ReadOnlySpan<byte> bytes)
 	{
 		var buffer = _transients!.BufferHandle(id);
@@ -68,26 +73,30 @@ internal sealed partial class WebGpuEngine
 		_writer.WriteBufferFromArena(buffer, dstOffset: 0, offset, bytes.Length);
 	}
 
-	private void RecordPass(PassBarriers pass)
+	protected override void RecordComputePass(PassBarriers pass)
 	{
 		// The app-writable parameter and storage buffers this pass .Reads — bound to the technique's uniform and
-		// storage-buffer slots at draw/dispatch time.
+		// storage-buffer slots at dispatch time.
 		Span<int> constantsIds = stackalloc int[WebGpuRenderContext.MaxUniformBuffers];
-		var constantsCount = CollectReads(pass.Pass, AccessKind.ReadUniform, constantsIds);
+		var constantsCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, constantsIds);
 		Span<int> storageIds = stackalloc int[WebGpuRenderContext.MaxStorageBuffers];
-		var storageCount = CollectReads(pass.Pass, AccessKind.ReadStorage, storageIds);
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
 
-		// WebGPU tracks resource state itself, so the plan's transitions (pass.Transitions) are intentionally
-		// not emitted — only the attachment load/store actions survive, into the render-pass descriptor.
-		if (pass.Pass.Kind == PassKind.Compute)
-		{
-			_writer.BeginComputePass();
-			// No colour/depth targets; keeps the bake key stable and supplies the pass's read buffers.
-			_context.BeginPass(pass.Pass, [], -1, false, [], 0, 0, constantsIds[..constantsCount], storageIds[..storageCount]);
-			pass.Pass.Record?.Invoke(_context);
-			_writer.EndPass();
-			return;
-		}
+		_writer.BeginComputePass();
+		// No colour/depth targets; keeps the bake key stable and supplies the pass's read buffers.
+		_context.BeginPass(pass.Pass, [], -1, false, [], 0, 0, constantsIds[..constantsCount], storageIds[..storageCount]);
+		pass.Pass.Record?.Invoke(_context);
+		_writer.EndPass();
+	}
+
+	protected override void RecordRasterPass(PassBarriers pass)
+	{
+		// The app-writable parameter and storage buffers this pass .Reads — bound to the technique's uniform and
+		// storage-buffer slots at draw time.
+		Span<int> constantsIds = stackalloc int[WebGpuRenderContext.MaxUniformBuffers];
+		var constantsCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, constantsIds);
+		Span<int> storageIds = stackalloc int[WebGpuRenderContext.MaxStorageBuffers];
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
 
 		var attachments = pass.Attachments;
 		var colorCount = 0;
@@ -136,16 +145,13 @@ internal sealed partial class WebGpuEngine
 		_writer.EndPass();
 	}
 
-	// Fill `ids` with the resource ids a pass reads under `kind` (its ReadUniform / ReadStorage edges, in .Reads
-	// order); returns the count. They bind to the technique's uniform / storage-buffer slots in this order.
-	private static int CollectReads(GraphPass pass, AccessKind kind, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == kind)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
+	// Deliberately empty, not omitted: the derived label nesting is driven here exactly as on the other backends, and
+	// dropping the annotation is this backend's choice rather than a gap in the loop. Carrying it would mean new
+	// command-stream opcodes for the encoder's pushDebugGroup/popDebugGroup and a protocol-version bump; the scopes
+	// are diagnostic-only, so nothing about the frame changes without them.
+	protected override void BeginLabel(string name) { }
+
+	protected override void EndLabel() { }
 
 	private static int ToLoadOp(LoadAction load) => load switch
 	{

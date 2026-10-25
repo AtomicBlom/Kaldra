@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Graph;
@@ -13,7 +12,7 @@ public sealed unsafe partial class DirectX12Engine
 {
 	// Graph-driven path: consume the neutral BarrierPlan derived in SetGraph. Per pass, emit its barriers, bind
 	// its derived render target(s), run its record callback; then the final present transition. The DirectX12 mirror
-	// of VulkanEngine's per-frame RecordGraph.
+	// of VulkanEngine's per-frame command-buffer recording.
 	private void RenderGraphFrame(FrameInputs inputs)
 	{
 		DrainShaderReloads(); // pick up any hot-reloaded shaders before recording this frame
@@ -37,70 +36,9 @@ public sealed unsafe partial class DirectX12Engine
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
 		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _presentTarget.Width, _presentTarget.Height);
 
-		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it (write-on-change:
-		// the last IEngine.Write persists, re-uploaded each frame so the slot the GPU reads is always current).
-		foreach (var (id, bytes) in ConstantsShadows)
-			_transients!.WriteConstants(index, id, bytes);
-		// Same for the app-writable storage buffers (IEngine.Write span).
-		foreach (var (id, bytes) in StorageShadows)
-			_transients!.WriteStorage(index, id, bytes);
-
-		// GPU timing: bracket each pass's own work (after its pre-barriers) with a begin/end timestamp into this
-		// slot's sub-range of the heap. Timestamp queries use EndQuery only (no BeginQuery).
-		var timing = GpuTimingEnabled && _timingHeap.Handle is not null;
-		var timingBase = (uint)(2 * _timingPassCount) * index;
-		var passIndex = 0;
-
-		foreach (var pass in Barriers.Passes)
-		{
-			// Wrap each pass in a debug-label scope, nested under groups derived from its dotted name, so a PIX
-			// capture reads as a "bloom" group containing "down1", … instead of a flat list. [Conditional]:
-			// vanishes without UseNamedGPUObjects.
-			BeginPassLabels(pass);
-			EmitGraphTransitions(index, pass.Transitions.AsSpan());
-
-			if (timing)
-				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex));
-			if (pass.Pass.Kind == PassKind.Compute)
-				RecordComputePass(pass);
-			else
-				RecordRasterPass(index, pass);
-			if (timing)
-				_commandList.EndQuery(_timingHeap, QueryType.Timestamp, timingBase + (uint)(2 * passIndex + 1));
-			_ctx.EndDebugLabel(_commandList); // close the leaf scope opened by BeginPassLabels
-			passIndex++;
-		}
-		CloseTrailingLabels(); // close any groups still open after the last pass
-
-		// GPU→CPU readback: copy each readback target into its slot's buffer (no-op if the graph declares none).
-		RecordReadback(index);
-
-		// Resolve this slot's timestamps into its readback buffer (read back after the slot's next fence).
-		if (timing)
-		{
-			_commandList.ResolveQueryData(_timingHeap, QueryType.Timestamp, timingBase, (uint)(2 * _timingPassCount), _timingReadback[index], 0);
-			_timingValid[index] = true;
-		}
-
-		// Optional capture: copy the present target before the final present transition (which then runs from
-		// COPY_SOURCE, since EmitGraphTransition tracks the real state).
-		var capturing = CapturePath is not null;
-		uint rowPitch = 0;
-		if (capturing)
-		{
-			var backbuffer = _presentTarget.BackBuffer(index);
-			if (_backbufferState[index] != ResourceStates.CopySource)
-			{
-				// Queued and flushed on the spot: the copy below reads the backbuffer immediately, so this one cannot
-				// wait to be batched with the final transitions that follow it.
-				QueueTransition(backbuffer, _backbufferState[index], ResourceStates.CopySource);
-				FlushTransitions();
-				_backbufferState[index] = ResourceStates.CopySource;
-			}
-			rowPitch = CopyBackbufferToReadback(backbuffer);
-		}
-
-		EmitGraphTransitions(index, Barriers.FinalTransitions.AsSpan());
+		// Everything the derived plan needs recording, in the order EngineBase fixes for every backend.
+		var capturing = TakeCapturePath(CaptureSupported(), _presentTarget.Format) is not null;
+		RecordFrame();
 
 		SilkMarshal.ThrowHResult(_commandList.Close());
 		var list = (ID3D12CommandList*)_commandList.Handle;
@@ -115,9 +53,80 @@ public sealed unsafe partial class DirectX12Engine
 		if (capturing)
 		{
 			WaitForFrame(index);
-			WriteCapture(CapturePath!, rowPitch);
+			WriteCapture(CapturePath!, _captureRowPitch);
 			CapturePath = null;
 		}
+	}
+
+	// The slot this frame is recording into. Read by the hooks rather than threaded through them: the shared record
+	// spine deals in neutral terms, and the presentation index cannot advance mid-record (Present runs after Close).
+	private uint RecordingIndex => _presentTarget.CurrentIndex;
+
+	// Row pitch of the capture copy, kept for the WriteCapture that runs after the frame's fence signals.
+	private uint _captureRowPitch;
+
+	// Whether this frame can collect timestamps at all — the heap only exists on a queue that reports a frequency.
+	private bool TimingActive => GpuTimingEnabled && _timingHeap.Handle is not null;
+
+	// Each slot owns a sub-range of the one timestamp heap.
+	private uint TimingBase => (uint)(2 * _timingPassCount) * RecordingIndex;
+
+	protected override void WriteConstantsShadow(int id, ReadOnlySpan<byte> bytes) =>
+		_transients!.WriteConstants(RecordingIndex, id, bytes);
+
+	protected override void WriteStorageShadow(int id, ReadOnlySpan<byte> bytes) =>
+		_transients!.WriteStorage(RecordingIndex, id, bytes);
+
+	protected override void EmitTransitions(ReadOnlySpan<ResourceTransition> transitions) =>
+		EmitGraphTransitions(RecordingIndex, transitions);
+
+	protected override void RecordRasterPass(PassBarriers pass) => RecordRasterPass(RecordingIndex, pass);
+
+	protected override void RecordReadback() => RecordReadback(RecordingIndex);
+
+	// Timestamp queries use EndQuery only — there is no BeginQuery for them.
+	protected override void WritePassBeginTimestamp(int passIndex)
+	{
+		if (TimingActive)
+			_commandList.EndQuery(_timingHeap, QueryType.Timestamp, TimingBase + (uint)(2 * passIndex));
+	}
+
+	protected override void WritePassEndTimestamp(int passIndex)
+	{
+		if (TimingActive)
+			_commandList.EndQuery(_timingHeap, QueryType.Timestamp, TimingBase + (uint)(2 * passIndex + 1));
+	}
+
+	// Resolve this slot's timestamps into its readback buffer, to be read after the slot's next fence.
+	protected override void EndFrameTimestamps()
+	{
+		if (!TimingActive)
+			return;
+		var index = RecordingIndex;
+		_commandList.ResolveQueryData(_timingHeap, QueryType.Timestamp, TimingBase, (uint)(2 * _timingPassCount), _timingReadback[index], 0);
+		_timingValid[index] = true;
+	}
+
+	// Copy the present target out before the final transitions, which then run from COPY_SOURCE because
+	// EmitGraphTransitions tracks the real state — so unlike Vulkan the capture does not have to replace them.
+	protected override void FinishFrame()
+	{
+		var index = RecordingIndex;
+		if (CapturePath is not null)
+		{
+			var backbuffer = _presentTarget.BackBuffer(index);
+			if (_backbufferState[index] != ResourceStates.CopySource)
+			{
+				// Queued and flushed on the spot: the copy below reads the backbuffer immediately, so this one cannot
+				// wait to be batched with the final transitions that follow it.
+				QueueTransition(backbuffer, _backbufferState[index], ResourceStates.CopySource);
+				FlushTransitions();
+				_backbufferState[index] = ResourceStates.CopySource;
+			}
+			_captureRowPitch = CopyBackbufferToReadback(backbuffer);
+		}
+
+		EmitGraphTransitions(index, Barriers.FinalTransitions.AsSpan());
 	}
 
 	// Bind a raster pass's colour + depth target(s) from its derived AttachmentActions, apply load actions, then
@@ -125,8 +134,8 @@ public sealed unsafe partial class DirectX12Engine
 	// pass's pipelines (via BeginPass). Targets may be the backbuffer (swapchain RTV) or graph transients.
 	private void RecordRasterPass(uint index, PassBarriers pass)
 	{
-		var rtv = stackalloc CpuDescriptorHandle[8];
-		var formats = stackalloc DxgiFormat[8];
+		var rtv = stackalloc CpuDescriptorHandle[GraphLimits.MaxColorAttachmentsPerPass];
+		var formats = stackalloc DxgiFormat[GraphLimits.MaxColorAttachmentsPerPass];
 		var colorCount = 0;
 		uint width = 0, height = 0;
 
@@ -142,20 +151,25 @@ public sealed unsafe partial class DirectX12Engine
 			var id = attachment.Resource.Id;
 			if (attachment.State == ResourceState.ColorAttachment)
 			{
-				if (colorCount >= 8)
-					throw new NotSupportedException("DirectX12: a pass declares more than 8 colour attachments; D3D12 caps simultaneous render targets at 8 (D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT).");
+				// Defensive: derivation already rejects a pass over the limit, and the stack arrays below are sized to
+				// it. Kept so a change to that rule cannot silently overrun them.
+				if (colorCount >= GraphLimits.MaxColorAttachmentsPerPass)
+					throw new NotSupportedException($"DirectX12: a pass declares more than {GraphLimits.MaxColorAttachmentsPerPass} colour attachments, which schedule derivation should have rejected.");
 				if (attachment.Resource.IsBackbuffer)
 				{
 					rtv[colorCount] = _presentTarget.RtvHandle(index);
 					formats[colorCount] = _presentTarget.RenderTargetFormat; // the sRGB RTV format — the PSO must match the actual view
-					width = _presentTarget.Width;
-					height = _presentTarget.Height;
+					if (width == 0)
+						(width, height) = (_presentTarget.Width, _presentTarget.Height);
 				}
 				else
 				{
 					rtv[colorCount] = _transients!.View(index, id);
 					formats[colorCount] = _transients.Format(index, id);
-					(width, height) = _transients.Extent(id);
+					// The first attachment supplies the extent, as on the other backends. Derivation now guarantees they
+					// all agree, so this only matters for reading the same as they do rather than for the result.
+					if (width == 0)
+						(width, height) = _transients.Extent(id);
 				}
 				if (attachment.Load == LoadAction.Clear && attachment.ClearValue is { } clearColor)
 				{
@@ -180,8 +194,10 @@ public sealed unsafe partial class DirectX12Engine
 			}
 		}
 
+		// Defensive, as above: an attachment-less raster pass is rejected at derive time now, on every backend rather
+		// than only this one.
 		if (colorCount == 0 && !hasDepth)
-			throw new NotSupportedException("DirectX12: a raster pass with no colour or depth target is not supported yet.");
+			throw new NotSupportedException("DirectX12: a raster pass with no colour or depth target, which schedule derivation should have rejected.");
 
 		_commandList.OMSetRenderTargets((uint)colorCount, colorCount > 0 ? rtv : null, false, hasDepth ? &dsv : null);
 
@@ -201,9 +217,9 @@ public sealed unsafe partial class DirectX12Engine
 		_commandList.RSSetScissorRects(1, &scissor);
 
 		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
-		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		var uniformCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, uniformIds);
 		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
-		var storageCount = CollectStorageIds(pass.Pass, storageIds);
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
 		_context.BeginPass(pass.Pass, new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
 
 		// Hand the context this pass's render-target handles + extent so a draw-list group-opacity layer can rebind
@@ -216,56 +232,18 @@ public sealed unsafe partial class DirectX12Engine
 	// A compute pass has no render targets and no render-target binding — its resource transitions (the storage
 	// buffer → UNORDERED_ACCESS) were emitted before this; just record the dispatch. Empty attachments keep the
 	// context's pass state stable (the DirectX12 mirror of VulkanEngine's compute branch in RecordPass).
-	private void RecordComputePass(PassBarriers pass)
+	protected override void RecordComputePass(PassBarriers pass)
 	{
 		Span<int> uniformIds = stackalloc int[DirectX12RenderContext.MaxUniformBuffers];
-		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		var uniformCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, uniformIds);
 		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
-		var storageCount = CollectStorageIds(pass.Pass, storageIds);
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
 		_context.BeginPass(pass.Pass, ReadOnlySpan<DxgiFormat>.Empty, DxgiFormat.FormatUnknown, false, uniformIds[..uniformCount], storageIds[..storageCount]);
 		pass.Pass.Record?.Invoke(_context);
 	}
 
-	// Fill `ids` with the app-writable parameter buffers a pass .Reads (its ReadUniform edges, in .Reads order) —
-	// they bind to the technique's uniform CBVs b1..; returns the count.
-	private static int CollectUniformIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadUniform)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
+	// The label scopes annotate the one command list this backend records every frame into.
+	protected override void BeginLabel(string name) => _ctx.BeginDebugLabel(_commandList, name);
 
-	// Fill `ids` with the app-writable storage buffers a pass .Reads (its ReadStorage edges, in .Reads order) —
-	// they bind to the technique's read-only structured-buffer root SRVs; returns the count.
-	private static int CollectStorageIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadStorage)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
-
-	// Open this pass's debug-label scopes: close the groups it leaves behind, open the ones it enters, then open
-	// its own leaf scope (closed by the caller after the pass records). [Conditional] so the whole thing — loops
-	// and all — compiles away without UseNamedGPUObjects.
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void BeginPassLabels(PassBarriers pass)
-	{
-		for (var i = 0; i < pass.LabelCloses; i++)
-			_ctx.EndDebugLabel(_commandList);
-		foreach (var group in pass.LabelOpens)
-			_ctx.BeginDebugLabel(_commandList, group);
-		_ctx.BeginDebugLabel(_commandList, pass.LeafLabel);
-	}
-
-	// Close the debug-label groups still open after the final pass (balances BeginPassLabels' opens).
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void CloseTrailingLabels()
-	{
-		for (var i = 0; i < Barriers.TrailingLabelCloses; i++)
-			_ctx.EndDebugLabel(_commandList);
-	}
+	protected override void EndLabel() => _ctx.EndDebugLabel(_commandList);
 }

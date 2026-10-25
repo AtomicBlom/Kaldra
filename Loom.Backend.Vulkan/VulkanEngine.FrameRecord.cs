@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Numerics;
 using Loom.Core.Diagnostics;
 using Loom.Core.Graph;
@@ -54,15 +53,7 @@ internal sealed unsafe partial class VulkanEngine
 
 		_vk.ResetFences(_ctx.Device, 1, in _inFlight[_currentFrame]);
 
-		var capturePath = CapturePath;
-		// PNG capture decodes an 8-bit RGBA/BGRA present target; an HDR swapchain (FP16 / 10-bit packed) would
-		// decode to garbage, so skip it there rather than write a corrupt file (HDR is verified on-display).
-		if (capturePath is not null && !CaptureSupported())
-		{
-			LoomLog.Warning($"capture skipped: present format {_presentTarget.ImageFormat} is not an 8-bit RGBA/BGRA format (HDR output).");
-			CapturePath = null;
-			capturePath = null;
-		}
+		var capturePath = TakeCapturePath(CaptureSupported(), _presentTarget.ImageFormat);
 		var captureSize = (ulong)_presentTarget.Extent.Width * _presentTarget.Extent.Height * 4;
 		Buffer captureBuffer = default;
 		Allocation? captureAllocation = null;
@@ -75,7 +66,7 @@ internal sealed unsafe partial class VulkanEngine
 
 		var cmd = _commandBuffers[_currentFrame];
 		_vk.ResetCommandBuffer(cmd, 0);
-		RecordGraph(cmd, captureBuffer, deltaSeconds);
+		RecordCommandBuffer(cmd, captureBuffer, deltaSeconds);
 
 		SemaphoreSubmitInfo waitInfo = new()
 		{
@@ -155,94 +146,99 @@ internal sealed unsafe partial class VulkanEngine
 		_currentFrame = (_currentFrame + 1) % MaxFramesInFlight;
 	}
 
-	private void RecordGraph(CommandBuffer cmd, Buffer captureBuffer, double deltaTime)
+	// Open the command buffer, hand the context this frame's state, then let EngineBase's shared spine record the
+	// derived plan through the hooks below.
+	private void RecordCommandBuffer(CommandBuffer cmd, Buffer captureBuffer, double deltaTime)
 	{
 		CommandBufferBeginInfo beginInfo = new() { SType = StructureType.CommandBufferBeginInfo };
 		_vk.BeginCommandBuffer(cmd, in beginInfo).Check("vkBeginCommandBuffer");
 
 		_context.BeginFrame(cmd, deltaTime, _frameTime, _currentFrame, _presentTarget.Extent, _presentTarget.HdrActive);
+		_captureBuffer = captureBuffer;
 
-		// Flush each parameter buffer's CPU shadow into this slot's copy before any pass reads it. Re-uploading
-		// every frame (cheap — these are tiny) means the last IEngine.Write persists across frames, so a static
-		// param is written once and an animated one is written per frame; either way the slot the GPU reads is current.
-		foreach (var (id, bytes) in ConstantsShadows)
-			_transients!.WriteConstants(_currentFrame, id, bytes);
-		// Same for the app-writable storage buffers (IEngine.Write span).
-		foreach (var (id, bytes) in StorageShadows)
-			_transients!.WriteStorage(_currentFrame, id, bytes);
-
-		// GPU timing: reset this slot's pool on the device timeline, then bracket each pass's own work with a
-		// begin/end timestamp. The reset is inside the command buffer (no hostQueryReset feature needed).
-		var timing = GpuTimingEnabled && _timingPools.Length > 0;
-		if (timing)
-			_vk.CmdResetQueryPool(cmd, _timingPools[_currentFrame], 0, (uint)(2 * _timingPassCount));
-
-		var passIndex = 0;
-		foreach (var pass in Barriers.Passes)
-		{
-			// Wrap each pass (its pre-barriers + its draws/dispatch) in a debug-label scope, nested under groups
-			// derived from the dotted pass name — so a RenderDoc capture reads as a "bloom" group containing
-			// "down1", "up0", … instead of a flat command list. [Conditional]: vanishes without UseNamedGPUObjects.
-			BeginPassLabels(cmd, pass);
-			EmitTransitions(cmd, pass.Transitions.AsSpan());
-			// Timestamp the pass's own work (after its pre-barriers, around RecordPass) — the barriers belong to the
-			// transition, not the pass. Top/Bottom-of-pipe is the portable choice; the device coarsens as needed.
-			if (timing)
-				_vk.CmdWriteTimestamp2(cmd, PipelineStageFlags2.TopOfPipeBit, _timingPools[_currentFrame], (uint)(2 * passIndex));
-			RecordPass(cmd, pass);
-			if (timing)
-				_vk.CmdWriteTimestamp2(cmd, PipelineStageFlags2.BottomOfPipeBit, _timingPools[_currentFrame], (uint)(2 * passIndex + 1));
-			_ctx.EndDebugLabel(cmd); // close the leaf scope opened by BeginPassLabels
-			passIndex++;
-		}
-		if (timing)
-			_timingValid[_currentFrame] = true;
-		CloseTrailingLabels(cmd); // close any groups still open after the last pass
-
-		RecordReadback(cmd);
-		FinishFrame(cmd, captureBuffer);
+		RecordFrame();
 
 		_vk.EndCommandBuffer(cmd).Check("vkEndCommandBuffer");
 	}
 
-	// Open this pass's debug-label scopes: close the groups it leaves behind, open the ones it enters, then open
-	// its own leaf scope (closed by the caller after the pass records). [Conditional] so the whole thing — loops
-	// and all — compiles away without UseNamedGPUObjects.
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void BeginPassLabels(CommandBuffer cmd, PassBarriers pass)
+	// The command buffer this frame is recording into — the one DrawFrame reset and handed to RecordCommandBuffer, which
+	// is always this slot's. Read by the hooks rather than threaded through them, because the shared spine deals in
+	// neutral terms and cannot carry a VkCommandBuffer.
+	private CommandBuffer RecordingCommandBuffer => _commandBuffers[_currentFrame];
+
+	// The staging buffer a requested capture copies the present target into, or a null handle. Held for FinishFrame.
+	private Buffer _captureBuffer;
+
+	// Whether this frame can collect timestamps at all: the pools only exist when the device reports valid timestamp
+	// bits and the graph has passes to time.
+	private bool TimingActive => GpuTimingEnabled && _timingPools.Length > 0;
+
+	protected override void WriteConstantsShadow(int id, ReadOnlySpan<byte> bytes) =>
+		_transients!.WriteConstants(_currentFrame, id, bytes);
+
+	protected override void WriteStorageShadow(int id, ReadOnlySpan<byte> bytes) =>
+		_transients!.WriteStorage(_currentFrame, id, bytes);
+
+	protected override void EmitTransitions(ReadOnlySpan<ResourceTransition> transitions) =>
+		EmitTransitions(RecordingCommandBuffer, transitions);
+
+	protected override void RecordReadback() => RecordReadback(RecordingCommandBuffer);
+
+	protected override void FinishFrame() => FinishFrame(RecordingCommandBuffer, _captureBuffer);
+
+	// The reset is inside the command buffer, on the device timeline, so no hostQueryReset feature is needed.
+	protected override void BeginFrameTimestamps()
 	{
-		for (var i = 0; i < pass.LabelCloses; i++)
-			_ctx.EndDebugLabel(cmd);
-		foreach (var group in pass.LabelOpens)
-			_ctx.BeginDebugLabel(cmd, group);
-		_ctx.BeginDebugLabel(cmd, pass.LeafLabel);
+		if (TimingActive)
+			_vk.CmdResetQueryPool(RecordingCommandBuffer, _timingPools[_currentFrame], 0, (uint)(2 * _timingPassCount));
 	}
 
-	// Close the debug-label groups still open after the final pass (balances BeginPassLabels' opens).
-	[Conditional("LOOM_NAMED_GPU_OBJECTS")]
-	private void CloseTrailingLabels(CommandBuffer cmd)
+	// Top/Bottom-of-pipe is the portable choice for bracketing a pass; the device coarsens as needed.
+	protected override void WritePassBeginTimestamp(int passIndex)
 	{
-		for (var i = 0; i < Barriers.TrailingLabelCloses; i++)
-			_ctx.EndDebugLabel(cmd);
+		if (TimingActive)
+			_vk.CmdWriteTimestamp2(RecordingCommandBuffer, PipelineStageFlags2.TopOfPipeBit, _timingPools[_currentFrame], (uint)(2 * passIndex));
 	}
 
-	private void RecordPass(CommandBuffer cmd, PassBarriers pass)
+	protected override void WritePassEndTimestamp(int passIndex)
 	{
+		if (TimingActive)
+			_vk.CmdWriteTimestamp2(RecordingCommandBuffer, PipelineStageFlags2.BottomOfPipeBit, _timingPools[_currentFrame], (uint)(2 * passIndex + 1));
+	}
+
+	protected override void EndFrameTimestamps()
+	{
+		if (TimingActive)
+			_timingValid[_currentFrame] = true;
+	}
+
+	// The label scopes annotate the command buffer this frame is recording into — the same one RecordCommandBuffer was handed.
+	protected override void BeginLabel(string name) => _ctx.BeginDebugLabel(_commandBuffers[_currentFrame], name);
+
+	protected override void EndLabel() => _ctx.EndDebugLabel(_commandBuffers[_currentFrame]);
+
+	// No attachments and no dynamic-rendering scope — just bind and dispatch. The resource transitions (storage
+	// GENERAL, the consumer's SHADER_READ) were emitted before this.
+	protected override void RecordComputePass(PassBarriers pass)
+	{
+		Span<int> uniformIds = stackalloc int[VulkanRenderContext.MaxUniformBuffers];
+		var uniformCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, uniformIds);
+		Span<int> storageIds = stackalloc int[VulkanRenderContext.MaxStorageBuffers];
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
+		_context.BeginPass(pass.Pass, [], default, false, uniformIds[..uniformCount], storageIds[..storageCount]); // no colour/depth targets; keeps the bake key stable
+		pass.Pass.Record?.Invoke(_context);
+	}
+
+	protected override void RecordRasterPass(PassBarriers pass)
+	{
+		var cmd = RecordingCommandBuffer;
+
 		// The app-writable parameter buffers this pass .Reads — bound to the technique's uniform slots 0..K-1.
 		Span<int> uniformIds = stackalloc int[VulkanRenderContext.MaxUniformBuffers];
-		var uniformCount = CollectUniformIds(pass.Pass, uniformIds);
+		var uniformCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, uniformIds);
 		// The app-writable storage buffers this pass .Reads — bound to the technique's storage-buffer slots.
 		Span<int> storageIds = stackalloc int[VulkanRenderContext.MaxStorageBuffers];
-		var storageCount = CollectStorageIds(pass.Pass, storageIds);
-
-		// Compute passes have no attachments and no dynamic-rendering scope — just bind + dispatch. The
-		// resource transitions (storage GENERAL, the consumer's SHADER_READ) were already emitted before this.
-		if (pass.Pass.Kind == PassKind.Compute)
-		{
-			_context.BeginPass(pass.Pass, [], default, false, uniformIds[..uniformCount], storageIds[..storageCount]); // no colour/depth targets; keeps the bake key stable
-			pass.Pass.Record?.Invoke(_context);
-			return;
-		}
+		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
 
 		var attachments = pass.Attachments;
 		var color = stackalloc RenderingAttachmentInfo[attachments.Length];
@@ -328,28 +324,6 @@ internal sealed unsafe partial class VulkanEngine
 		pass.Pass.Record?.Invoke(_context);
 
 		_vk.CmdEndRendering(cmd);
-	}
-
-	// Fill `ids` with the app-writable parameter buffers a pass .Reads (its ReadUniform edges, in .Reads order) —
-	// they bind to the technique's uniform slots 0..; returns the count.
-	private static int CollectUniformIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadUniform)
-				ids[n++] = access.Resource.Id;
-		return n;
-	}
-
-	// Fill `ids` with the app-writable storage buffers a pass .Reads (its ReadStorage edges, in .Reads order) —
-	// they bind to the technique's storage-buffer slots; returns the count.
-	private static int CollectStorageIds(GraphPass pass, Span<int> ids)
-	{
-		var n = 0;
-		foreach (var access in pass.Accesses)
-			if (access.Kind == AccessKind.ReadStorage)
-				ids[n++] = access.Resource.Id;
-		return n;
 	}
 
 	// Terminal: hand the present target to the swapchain, copying it out first if a capture was requested.

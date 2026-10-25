@@ -34,6 +34,30 @@ pwsh Scripts/Verification/diff.ps1 -A vk.png -B dx12.png -Out diff.png
 Cross-backend parity bar (`Loom.Tests/ImageComparison.cs`): within **4/255
 per channel** and **< 0.5%** of pixels over threshold.
 
+## web-capture.ps1
+
+Capture Loom.Web demo frames in a headless browser — the browser half of the WebGPU parity leg. Serves a
+published `Loom.Web` from a local `HttpListener`, drives the browser at `?capture=<name>&post`, and saves
+the PNG the page POSTs back at frame 60. Unlike the other three this is not an image *inspector*: it
+produces the PNGs the others (or `WebGpuParityTests`) then compare.
+
+```powershell
+dotnet publish Loom.Web -c Release -o pub
+pwsh Scripts/Verification/web-capture.ps1 -PublishDir pub -Names pixelart,bloom -OutDir web-shots
+# CAPTURED: pixelart -> web-shots\pixelart.png (113602 bytes)
+# CAPTURED: bloom -> web-shots\bloom.png (74413 bytes)
+# ADAPTER: qualcomm adreno-7xx
+# SUMMARY: captured 2/2 demo(s).
+```
+
+`ADAPTER:` names the GPU the browser actually used — check it first when a parity result looks wrong,
+because a headless browser can quietly fall back to a software adapter. Exit codes are machine-readable so
+a test can tell "this box can't run the leg" from "the leg failed": **0** captured, **2** no browser,
+**3** no publish directory, **4** something timed out.
+
+The whole leg (publish + compare against Vulkan) is `pwsh tools/web-parity.ps1`; see
+[`docs/webgpu-parity.md`](../../docs/webgpu-parity.md).
+
 ## coverage.ps1
 
 Where did content land? Reports the non-black bounding box and an NxN grid distribution. `colorcount`

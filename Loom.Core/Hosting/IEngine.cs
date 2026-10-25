@@ -22,6 +22,13 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	string DeviceName { get; }
 
 	/// <summary>
+	/// What the device behind this engine can do. Immutable for the engine's lifetime, and consulted by
+	/// <see cref="SetGraph"/>, which rejects a graph needing something absent rather than degrading silently — so a
+	/// host may either ask first and declare accordingly, or declare and let the throw name the problem.
+	/// </summary>
+	EngineCapabilities Capabilities { get; }
+
+	/// <summary>
 	/// Register a technique under a logical <paramref name="name"/> the pass closures reference
 	/// (<c>ctx.FullScreen(name, …)</c>). Idempotent per name. Call before the graph draws with it; the backend
 	/// resolves the shader bytecode and bakes pipelines lazily, cached for the engine's lifetime.
@@ -208,8 +215,9 @@ public interface IEngine : IEngineClipSpace, IDisposable
 
 	/// <summary>
 	/// Enable per-pass GPU timestamp collection. Off by default; cheap to toggle live (an
-	/// ImGui HUD checkbox) — no graph rebuild. A backend that cannot time (e.g. a queue with no timestamp support)
-	/// keeps this false. When off, <see cref="LastFrameTimings"/> stays empty and the per-frame cost is nil.
+	/// ImGui HUD checkbox) — no graph rebuild. A device that cannot time keeps this false however it is set; ask
+	/// <see cref="EngineCapabilities.GpuTiming"/> rather than writing <c>true</c> and reading the value back. When
+	/// off, <see cref="LastFrameTimings"/> stays empty and the per-frame cost is nil.
 	/// </summary>
 	bool GpuTimingEnabled { get; set; }
 
