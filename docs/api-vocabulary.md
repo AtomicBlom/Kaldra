@@ -149,11 +149,15 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 |---|---|
 | `BackendName` / `DeviceName` | The backend name (e.g. `"Vulkan"`) and a human-readable GPU name. |
 | `DefineTechnique(name, TechniqueDescriptor)` | Register a technique under a logical name passes reference. Idempotent per name. |
-| `CreateMesh(ReadOnlySpan<Vertex>, ReadOnlySpan<uint> indices)` | Upload geometry in the canonical `MeshStandard` layout → `Mesh`. |
+| `CreateMesh(ReadOnlySpan<Vertex>, ReadOnlySpan<uint> indices)` | Upload geometry in the canonical `MeshStandard` layout → `Mesh`. Between frames only: throws inside a pass. |
 | `CreateMesh<T>(ReadOnlySpan<T>, VertexLayout, ReadOnlySpan<uint>)` | Upload geometry with an explicit layout (`sizeof(T) == layout.Stride`). |
 | `CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex>, ReadOnlySpan<uint>)` | Upload a skinned bind-pose mesh (readable by the compute pre-skin) → `Mesh`. |
-| `CreateTexture(TextureData)` | Upload an image + mip chain → `Texture`. |
-| `CreateMaterial(params ReadOnlySpan<Texture>)` | Bundle textures (in the shader's binding order) → `Material`. |
+| `ReleaseMesh(Mesh)` | Kill a mesh's handle at once; its buffers are freed once no frame in flight can read them. Between frames only. |
+| `CreateTexture(TextureData)` | Upload an image + mip chain → `Texture`. Between frames only: an upload made inside a pass would miss the frame that samples it, so it throws there. |
+| `CreateTextureAsync(TextureData)` | Queue an upload from any thread; completes when `ServicePendingUploads` (called by `Render`) drains it. |
+| `ReleaseTexture(Texture)` | Kill a texture's handle at once; its image is destroyed once no frame in flight can read it. Throws for a texture a `Material` holds, and inside a pass. |
+| `CreateMaterial(params ReadOnlySpan<Texture>)` | Bundle textures (in the shader's binding order) → `Material`. A material holds its textures for the engine's lifetime. |
+| `AllocateDrawListStream()` | Mint an engine-unique stream id for a stable `DrawListIdentity`, so draw-list producers never share kept geometry. |
 | `SetGraph(RenderGraph)` | Make a graph active — derive its schedule/barriers/aliasing, reusing device + pipeline cache. Safe to call again to swap graphs. |
 | `Write<T>(ConstantsHandle, in T)` | Write a value into a `g.Constants` buffer (reaches the reading pass on the next frame). |
 | `Write<T>(StorageBufferHandle, ReadOnlySpan<T>)` | Write an array into a `g.Storage` buffer (the span counterpart). |
@@ -177,7 +181,7 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 | `Dispatch(technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)` | Dispatch a compute technique over a workgroup grid. |
 | `Draw(in DrawCall call)` | Submit one raster draw (the unified draw verb — see `DrawCall`). |
 | `DispatchSkin(technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)` | Compute pre-skin a bind pose by a bone palette into `output` (a `.ReadWrites` buffer). |
-| `DrawList<TVertex>(technique, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push)` | Submit a per-frame batched indexed draw list (the overlay/UI path). |
+| `DrawList<TVertex>(technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push)` | Submit a batched indexed draw list (the overlay/UI path). `identity` is `DrawListIdentity.Transient` for a list rebuilt every frame, or a minted stream + revision for one whose geometry the backend may keep. |
 | `ResolveInspectable(int resourceId)` | Resolve an inspectable resource id to a `Texture?` bindable in a draw list this frame. |
 
 ### `FrameInputs`
@@ -275,13 +279,13 @@ Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projec
 
 | Type (`namespace`) | Role |
 |---|---|
-| `Mesh` (`Loom.Core.Geometry`) | An opaque handle to uploaded geometry from `IEngine.CreateMesh` / `CreateSkinnedMesh`. Survives graph swaps. |
+| `Mesh` (`Loom.Core.Geometry`) | An opaque handle to uploaded geometry from `IEngine.CreateMesh` / `CreateSkinnedMesh`. Survives graph swaps; dies at `IEngine.ReleaseMesh`. |
 | `Vertex` (`Loom.Core.Geometry`) | The canonical interleaved vertex — `record struct (Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Tangent)`, 48 bytes. |
 | `SkinnedVertex` (`Loom.Core.Animation`) | The skinned bind-pose vertex — `Vertex` fields plus four bone indices (`Joint0..3`) + `Vector4 Weights`, 80 bytes. |
 | `OverlayVertex` (`Loom.Core.Geometry`) | The 2D overlay vertex (position, uv, premultiplied RGBA16F colour, custom) used by draw lists. |
 | `VertexLayout` (`Loom.Core.Geometry`) | A backend-neutral per-stream attribute layout. Built-ins: `MeshStandard`, `MeshSkinned`, `Overlay`, `Transform` (the standard per-instance 4×4 matrix stream). |
 | `Material` (`Loom.Core.Materials`) | An opaque `record struct (int Id)` — an ordered `Texture` bundle from `IEngine.CreateMaterial` that fills a technique's reflected sampler slots. |
-| `Texture` (`Loom.Core.Materials`) | An opaque handle to an uploaded texture from `IEngine.CreateTexture`. |
+| `Texture` (`Loom.Core.Materials`) | An opaque handle to an uploaded texture from `IEngine.CreateTexture`. Survives graph swaps; dies at `IEngine.ReleaseTexture`. Ids start at 1, so `default(Texture)` names nothing and is refused. |
 | `TextureData` (`Loom.Core.Materials`) | A neutral image description (pixel data + mip chain). Built via `FromRgba8`, `FromRgba16F`, `FromCubeFaces`; carries `Format` (`TextureFormat`), `Width`, `Height`, `Levels`, `IsCube`. |
 | `TextureFormat` (`Loom.Core.Materials`) | Source-image encoding (distinct from `Format`): `Rgba8Srgb`, `Rgba8Unorm`, `Rgba16F`. |
 
@@ -305,3 +309,4 @@ The cross-backend verb behind overlay/UI-style rendering (game UI via SUIsei, Im
 | Type | Role |
 |---|---|
 | `DrawCommand` | One run within a list — `record struct (Rect ClipRect, int TextureIndex, int IndexOffset, int IndexCount, int VertexOffset, uint Tag)`. `Tag` is the per-command value a list-push technique reads. |
+| `DrawListIdentity` | `record struct (int Stream, uint Revision)` — which kept geometry stream a list is and which revision of it. `Transient` (revision 0) keeps nothing; a stable stream comes from `IEngine.AllocateDrawListStream()` and is refused otherwise, because two producers sharing one would draw each other's geometry. |

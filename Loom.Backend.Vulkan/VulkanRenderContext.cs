@@ -39,8 +39,10 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// uniform slots, with the offset within it supplied per draw rather than baked into the descriptor.
 	private readonly VulkanInstanceUploadBuffer _uniformUpload;
 	// Descriptor sets, keyed by the GPU objects they name and reused across draws and frames. See GetOrCreateSet for
-	// what makes a hit safe and for the invariant that governs when this must be flushed.
-	private readonly Dictionary<DescriptorSetKey, DescriptorSet> _cachedSets = [];
+	// what makes a hit safe, and BindingCache for the invariant that governs flushing and eviction.
+	private readonly BindingCache<VulkanDescriptorAllocator.PersistentSet> _cachedSets = new();
+	// Scratch for the sets one eviction removes, kept so a release allocates nothing once it has grown.
+	private readonly List<VulkanDescriptorAllocator.PersistentSet> _evictedSets = [];
 	// A defined 16-byte window for a uniform slot a draw has nothing to put in. Staged once per frame, not per draw:
 	// the bind must supply an offset for every dynamic descriptor the layout declares, and ten thousand draws each
 	// reserving their own padding block would burn megabytes of ring on bytes no shader reads.

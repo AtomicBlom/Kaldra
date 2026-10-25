@@ -1,0 +1,196 @@
+using System.Numerics;
+
+using Loom.Backend.DirectX12;
+using Loom.Backend.Vulkan;
+using Loom.Core.Graph;
+using Loom.Core.Hosting;
+using Loom.UI.SUIsei;
+using SUIsei;
+using SUIsei.Controls;
+using SUIsei.Drawing;
+
+namespace Loom.Tests;
+
+/// <summary>
+/// The UI painter's frame contract, end to end on each backend. Its <see cref="UIPainter.Prepare"/> step exists because
+/// <see cref="UIPainter.Draw"/> runs inside a pass, where an image cannot be uploaded in time for the frame drawing it;
+/// and it keeps each surface's geometry under an engine-minted draw-list stream, because every <see cref="UIHost"/>
+/// numbers its surfaces from zero. These pin the three ways that goes wrong: an image missing from its first frame, a
+/// frame that skipped <see cref="UIPainter.Prepare"/> drawing anyway, and two hosts in one frame colliding on stream 0.
+/// GPU-gated — SKIPPED when no backend is available.
+/// </summary>
+[NotInParallel] // one GPU engine at a time
+public class UIPainterTests
+{
+	private const int W = 64, H = 64;
+	private static readonly FrameInputs Inputs = new() { Time = 0, DeltaSeconds = 1.0 / 60.0 };
+
+	[Test]
+	public void Two_hosts_draw_in_one_frame()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			// A HUD and an in-world panel are two hosts, and each numbers its first surface 0. Kept geometry is per stream,
+			// so if both submitted stream 0 the second would be refused as one stream submitted twice in a frame — or, on
+			// a backend that let it through, draw over the first one's buffers.
+			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+			var left = new Hosted(engine, HorizontalAlignment.Left, HdrColor.FromRgb(255, 0, 0));
+			var right = new Hosted(engine, HorizontalAlignment.Right, HdrColor.FromRgb(0, 0, 255));
+			left.Surface.ShouldBe(right.Surface, "the test needs the two hosts' surface ids to collide, as every host's first surface does");
+			engine.SetGraph(RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("ui").Writes(screen).Draw(ctx =>
+				{
+					left.Painter.Draw(ctx, left.Surface);
+					right.Painter.Draw(ctx, right.Surface);
+				});
+				g.Present(screen);
+			}));
+
+			var (width, rgba) = Capture(engine, frames: 4, frame =>
+			{
+				left.Compose();
+				right.Compose();
+			});
+
+			Pixel(rgba, width, W / 4, H / 2).ShouldBe(Colour.Red, $"{backend.Name}: the left host's half should be red.");
+			Pixel(rgba, width, W * 3 / 4, H / 2).ShouldBe(Colour.Blue, $"{backend.Name}: the right host's half should be blue.");
+		}
+	}
+
+	[Test]
+	public void Drawing_a_frame_that_skipped_Prepare_throws()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+			var hosted = new Hosted(engine, HorizontalAlignment.Stretch, HdrColor.FromRgb(0, 255, 0));
+			engine.SetGraph(RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("ui").Writes(screen).Draw(ctx => hosted.Painter.Draw(ctx, hosted.Surface));
+				g.Present(screen);
+			}));
+
+			hosted.Compose();
+			engine.Render(Inputs);
+
+			// The UI has not changed, so nothing would go wrong this frame — which is exactly why the omission must be
+			// caught now: otherwise it surfaces only on the frame the UI first shows a new image.
+			hosted.Host.Tick(1.0 / 60.0, 0f, new Vector2(W, H));
+			hosted.Host.Render();
+			var thrown = Should.Throw<Exception>(() => engine.Render(Inputs));
+			thrown.ToString().ShouldContain("UIPainter.Prepare", customMessage: $"{backend.Name}: drawing an unprepared frame should name the missing step.");
+		}
+	}
+
+	[Test]
+	public void An_image_draws_on_its_first_frame()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			// The image's texture is created by Prepare, before the frame records, so its upload is submitted ahead of the
+			// very frame that samples it. Created from inside the pass instead, the first frame would sample an image its
+			// pixels had not reached.
+			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+			var host = new UIHost();
+			var view = host.CreateRoot(UILayer.Default);
+			var red = Enumerable.Repeat<byte[]>([255, 0, 0, 255], 16).SelectMany(texel => texel).ToArray();
+			view.Root.Content = new Image { Source = ImageSource.FromRgba8(4, 4, red), Stretch = Stretch.Fill, Width = W, Height = H };
+			var painter = UIPainter.Create(engine, host);
+			engine.SetGraph(RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("ui").Writes(screen).Draw(ctx => painter.Draw(ctx, view.Surface));
+				g.Present(screen);
+			}));
+
+			var (width, rgba) = Capture(engine, frames: 1, _ =>
+			{
+				host.Tick(1.0 / 60.0, 0f, new Vector2(W, H));
+				host.Render();
+				painter.Prepare();
+			});
+
+			Pixel(rgba, width, W / 2, H / 2).ShouldBe(Colour.Red, $"{backend.Name}: the image should be drawn on the first frame that shows it.");
+		}
+	}
+
+	private enum Colour { Red, Green, Blue, Other }
+
+	// Which primary a pixel is, with room for the UI's colour conversion; anything mixed or dark is Other.
+	private static Colour Pixel(byte[] rgba, int width, int x, int y)
+	{
+		var i = ((y * width) + x) * 4;
+		var (r, g, b) = (rgba[i], rgba[i + 1], rgba[i + 2]);
+		return (r > 200, g > 200, b > 200, r < 50, g < 50, b < 50) switch
+		{
+			(true, false, false, _, true, true) => Colour.Red,
+			(false, true, false, true, _, true) => Colour.Green,
+			(false, false, true, true, true, _) => Colour.Blue,
+			_ => Colour.Other,
+		};
+	}
+
+	// Render frames, composing the UI before each, and capture the last.
+	private static (int Width, byte[] Rgba) Capture(IEngine engine, int frames, Action<int> beforeFrame)
+	{
+		var path = Path.Combine(Path.GetTempPath(), $"loom-ui-painter-{Guid.NewGuid():N}.png");
+		try
+		{
+			for (var frame = 1; frame <= frames; frame++)
+			{
+				beforeFrame(frame);
+				if (frame == frames)
+					engine.RequestCapture(path);
+				engine.Render(Inputs);
+			}
+			var (width, _, rgba) = PngReader.Read(path);
+			return (width, rgba);
+		}
+		finally
+		{
+			if (File.Exists(path))
+				File.Delete(path);
+		}
+	}
+
+	private static List<IRenderBackend> AvailableBackends()
+	{
+		_ = new VulkanEngineSettings();
+		_ = new DirectX12EngineSettings();
+		if (Backends.Available.Count == 0)
+			throw new TUnit.Core.Exceptions.SkipTestException("No GPU backend is available on this box (Backends.Available is empty).");
+		return [.. Backends.Available];
+	}
+
+	// One host with one surface: a full-height fill on one side (or across the whole surface), and its own painter.
+	private sealed class Hosted
+	{
+		public UIHost Host { get; } = new();
+		public UIPainter Painter { get; }
+		public DrawListId Surface { get; }
+
+		public Hosted(IEngine engine, HorizontalAlignment side, HdrColor colour)
+		{
+			var view = Host.CreateRoot(UILayer.Default);
+			view.Root.Content = new Border
+			{
+				HorizontalAlignment = side,
+				Width = side == HorizontalAlignment.Stretch ? W : W / 2,
+				Height = H,
+				Background = colour,
+			};
+			Surface = view.Surface;
+			Painter = UIPainter.Create(engine, Host);
+		}
+
+		public void Compose()
+		{
+			Host.Tick(1.0 / 60.0, 0f, new Vector2(W, H));
+			Host.Render();
+			Painter.Prepare();
+		}
+	}
+}

@@ -35,14 +35,21 @@ var graph = RenderGraph.Define(g =>
 engine.SetGraph(graph);
 ```
 
-Each frame, before `engine.Render(...)`, advance the host headlessly:
+Each frame, before `engine.Render(...)`, advance the host headlessly and prepare the painter:
 
 ```csharp
 host.Tick(deltaSeconds, time, framebufferSize);   // drain input → hit-test → route → lay out
 host.Render();                                     // composite each view → host.DrawLists
+ui.Prepare();                                      // upload newly referenced images; resolve each surface's textures
 ```
 
-`ui.Draw(ctx, view.Surface)` then submits that surface's composited list; it is a no-op when the frame carries no list for that id or the list is empty.
+`ui.Draw(ctx, view.Surface)` then submits that surface's composited list, binding what `Prepare` resolved; it is a no-op when the frame carries no list for that id or the list is empty.
+
+**Why `Prepare` is a separate step.** `Draw` runs inside a pass callback, while the engine is recording the frame. A texture created there would be uploaded only ahead of the *next* frame, so the first frame to show a new image would sample nothing — the engine therefore refuses to create a texture inside a pass. `Prepare` does the uploads between frames instead, and only when a surface's list has changed, so a steady UI costs no allocation. `Draw` throws if `Prepare` did not run for the frame it is drawing (or ran before the host last rendered), naming the missing step, rather than drawing a frame that is only right while the UI happens not to change.
+
+**Several hosts in one frame.** Every `UIHost` numbers its surfaces from zero, so a HUD and an `InWorldPanel` both have a surface 0. The painter does not use those ids for the geometry the backend keeps between frames: it mints a draw-list stream per surface from `engine.AllocateDrawListStream()`, unique on the engine, so any number of hosts and painters can draw in the same frame.
+
+`InWorldPanel` drives its own host and painter: its `Render()` composites and prepares in one call, so call it each frame before `engine.Render(...)` and draw it with `panel.Draw(ctx)`.
 
 ## Dependencies
 

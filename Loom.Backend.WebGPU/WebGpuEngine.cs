@@ -224,9 +224,9 @@ internal sealed partial class WebGpuEngine : EngineBase
 	// without an explicit wait.
 	public override void WaitIdle() { }
 
-	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+	protected override Mesh UploadMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
-	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
+	protected override Mesh UploadMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
 	{
 		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
 		if (stride != layout.Stride)
@@ -234,11 +234,27 @@ internal sealed partial class WebGpuEngine : EngineBase
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
-	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
+	protected override Mesh UploadSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
-	public override void ReleaseMesh(Mesh mesh) => _meshes.Release(mesh.Id);
+	// The buffers' handles go back to the allocator on release and are handed to the next buffers created, so the bind
+	// groups naming them go first — the skinning dispatch caches one naming a mesh's bind-pose buffer.
+	protected override void RetireMesh(Mesh mesh)
+	{
+		var (vertex, index) = _meshes.Buffers(mesh.Id);
+		_context.EvictBindGroups(BoundObject.Buffer, vertex);
+		_context.EvictBindGroups(BoundObject.Buffer, index);
+		_meshes.Release(mesh.Id);
+	}
 
-	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
+	protected override Texture UploadTexture(TextureData data) => _textures.Create(data);
+
+	// The view's handle goes back to the allocator on release and is handed to the next view created, so the bind groups
+	// naming it go first — a draw list caches one per texture it samples.
+	protected override void RetireTexture(Texture texture)
+	{
+		_context.EvictBindGroups(BoundObject.View, _textures.View(texture.Id));
+		_textures.Release(texture.Id);
+	}
 
 	public override void Dispose()
 	{

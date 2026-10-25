@@ -281,9 +281,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_techniques.Reset();   // dispose the stale VkPipelines; next Bake rebuilds from the new templates
 	}
 
-	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+	protected override Mesh UploadMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
-	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
+	protected override Mesh UploadMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
 	{
 		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
 		if (stride != layout.Stride)
@@ -291,13 +291,38 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
-	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
+	protected override Mesh UploadSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
 	// The next frame is the last that can read the mesh: it is the one the upload batch filling a just-created mesh
-	// is submitted ahead of.
-	public override void ReleaseMesh(Mesh mesh) => _meshes.Release(mesh.Id, _submittedFrames + 1);
+	// is submitted ahead of. Cached sets naming its buffers go now, while the handles are still the mesh's own.
+	protected override void RetireMesh(Mesh mesh)
+	{
+		var lastReadingFrame = _submittedFrames + 1;
+		var (vertex, index) = _meshes.Release(mesh.Id, lastReadingFrame);
+		_context.EvictBindings(BoundObject.Buffer, vertex.Handle, lastReadingFrame);
+		_context.EvictBindings(BoundObject.Buffer, index.Handle, lastReadingFrame);
+	}
 
-	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
+	protected override Texture UploadTexture(TextureData data) => _textures.Create(data);
+
+	// The same schedule as a mesh: the next frame is the last that can read the texture, because the upload batch
+	// filling a just-created one is submitted ahead of it. Cached sets naming its view go now, while the handle is
+	// still the view's own.
+	protected override void RetireTexture(Texture texture)
+	{
+		var lastReadingFrame = _submittedFrames + 1;
+		var view = _textures.Release(texture.Id, lastReadingFrame);
+		_context.EvictBindings(BoundObject.View, view.Handle, lastReadingFrame);
+	}
+
+	// Free what was released once the frames that could read it are done: meshes, textures, and the cached sets their
+	// release evicted.
+	private void CollectReleased()
+	{
+		_meshes.CollectReleased(_completedFrame);
+		_textures.CollectReleased(_completedFrame);
+		_descriptors.CollectRetired(_completedFrame);
+	}
 
 	// Tear down the previous graph's transients/readback/timing pools before the base binds a new graph; the device
 	// and caches survive. The base has already drained the GPU when a prior graph existed.
@@ -365,7 +390,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	{
 		_vk.DeviceWaitIdle(_ctx.Device);
 		_completedFrame = _submittedFrames;
-		_meshes.CollectReleased(_completedFrame);
+		CollectReleased();
 	}
 
 	// Resolve a logical shader name (TechniqueDescriptor.Shader) + asset extension (".spv" or its ".json"

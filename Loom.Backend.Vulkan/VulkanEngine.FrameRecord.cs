@@ -21,9 +21,9 @@ internal sealed unsafe partial class VulkanEngine
 		_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
 
 		// Frames finish in submission order, so the frame this slot last carried being done means every earlier one
-		// is too: free the released meshes nothing can still read.
+		// is too: free the released meshes and textures nothing can still read.
 		_completedFrame = Math.Max(_completedFrame, _slotFrame[_currentFrame]);
-		_meshes.CollectReleased(_completedFrame);
+		CollectReleased();
 
 		// The fence just signalled, so this slot's readback buffers hold the copies from when it last ran (~2
 		// frames ago). Hand them to StoreReadback before this frame overwrites them — that's the readback

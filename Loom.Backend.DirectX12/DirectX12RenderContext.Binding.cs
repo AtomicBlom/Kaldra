@@ -28,8 +28,9 @@ internal sealed unsafe partial class DirectX12RenderContext
 		var key = (material.Id, baked.InputCount);
 		if (!_materialTables.TryGetValue(key, out var index))
 		{
-			// Safe to keep for the engine's lifetime because the resources behind these views are: a texture is created
-			// and never destroyed or replaced, so a written view can never come to describe something else.
+			// Safe to keep for the engine's lifetime because the resources behind these views are: a material lives as long
+			// as the engine and IEngine.ReleaseTexture refuses any texture a material holds, so a written view can never
+			// come to describe something else.
 			var textures = _materials.TexturesOf(material.Id);
 			index = _descriptors.AllocatePersistent((uint)baked.InputCount);
 			for (var i = 0u; i < baked.InputCount; i++)

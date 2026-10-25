@@ -89,7 +89,7 @@ public abstract class EngineBase : IEngine
 	{
 		ArgumentNullException.ThrowIfNull(settings);
 		Settings = settings;
-		Validation = new RecordValidator(settings.ValidateRecording, Techniques);
+		Validation = new RecordValidator(settings.ValidateRecording, Techniques, _drawListStreams);
 		_defineTechniqueDelegate = DefineTechnique;
 		_waitIdleDelegate = WaitIdle;
 		_resetPipelineCachesDelegate = ResetPipelineCaches;
@@ -566,20 +566,30 @@ public abstract class EngineBase : IEngine
 		BeginFrameTimestamps();
 
 		var passIndex = 0;
-		foreach (var pass in Barriers.Passes)
+		try
 		{
-			BeginPassLabels(pass);
-			EmitTransitions(pass.Transitions.AsSpan());
-			// The timestamps bracket the pass's own work, after its pre-barriers: those barriers are the cost of the
-			// transition into this pass, not of the pass.
-			WritePassBeginTimestamp(passIndex);
-			if (pass.Pass.Kind == PassKind.Compute)
-				RecordComputePass(pass);
-			else
-				RecordRasterPass(pass);
-			WritePassEndTimestamp(passIndex);
-			EndPassLabel();
-			passIndex++;
+			foreach (var pass in Barriers.Passes)
+			{
+				BeginPassLabels(pass);
+				EmitTransitions(pass.Transitions.AsSpan());
+				// The timestamps bracket the pass's own work, after its pre-barriers: those barriers are the cost of the
+				// transition into this pass, not of the pass.
+				WritePassBeginTimestamp(passIndex);
+				_recordingPass = pass.Pass.Name;
+				if (pass.Pass.Kind == PassKind.Compute)
+					RecordComputePass(pass);
+				else
+					RecordRasterPass(pass);
+				_recordingPass = null;
+				WritePassEndTimestamp(passIndex);
+				EndPassLabel();
+				passIndex++;
+			}
+		}
+		finally
+		{
+			// A pass that throws abandons the frame, not the engine: the caller may catch, release and render again.
+			_recordingPass = null;
 		}
 
 		EndFrameTimestamps();
@@ -654,13 +664,109 @@ public abstract class EngineBase : IEngine
 	protected abstract void RenderFrame(FrameInputs inputs);
 	public abstract void Resize(int width, int height);
 	public abstract void WaitIdle();
-	public abstract Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
-	public abstract Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged;
-	public abstract Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices);
 
-	public abstract void ReleaseMesh(Mesh mesh);
+	// ── Resource creation and release: the neutral rules here, the GPU work in the backend's hook below each ──
 
-	public abstract Texture CreateTexture(TextureData data);
+	/// <inheritdoc/>
+	public Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices)
+	{
+		ThrowIfRecording(nameof(CreateMesh));
+		return UploadMesh(vertices, indices);
+	}
+
+	/// <inheritdoc/>
+	public Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged
+	{
+		ThrowIfRecording(nameof(CreateMesh));
+		return UploadMesh(vertices, layout, indices);
+	}
+
+	/// <inheritdoc/>
+	public Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices)
+	{
+		ThrowIfRecording(nameof(CreateSkinnedMesh));
+		return UploadSkinnedMesh(vertices, indices);
+	}
+
+	/// <inheritdoc/>
+	public void ReleaseMesh(Mesh mesh)
+	{
+		AssertRenderThread(nameof(ReleaseMesh));
+		ThrowIfRecording(nameof(ReleaseMesh));
+		RetireMesh(mesh);
+	}
+
+	/// <inheritdoc/>
+	public Texture CreateTexture(TextureData data)
+	{
+		ThrowIfRecording(nameof(CreateTexture));
+		return UploadTexture(data);
+	}
+
+	/// <inheritdoc/>
+	public void ReleaseTexture(Texture texture)
+	{
+		AssertRenderThread(nameof(ReleaseTexture));
+		ThrowIfRecording(nameof(ReleaseTexture));
+		Materials.ThrowIfHeld(texture);
+		RetireTexture(texture);
+	}
+
+	/// <summary>Upload canonical-layout geometry and mint its handle — the backend half of <see cref="CreateMesh(ReadOnlySpan{Vertex}, ReadOnlySpan{uint})"/>.</summary>
+	protected abstract Mesh UploadMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
+
+	/// <summary>Upload geometry in an explicit layout — the backend half of <see cref="CreateMesh{T}"/>.</summary>
+	protected abstract Mesh UploadMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged;
+
+	/// <summary>Upload a skinned mesh's bind pose — the backend half of <see cref="CreateSkinnedMesh"/>.</summary>
+	protected abstract Mesh UploadSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices);
+
+	/// <summary>Upload a texture and its mips and mint its handle — the backend half of <see cref="CreateTexture"/>.</summary>
+	protected abstract Texture UploadTexture(TextureData data);
+
+	/// <summary>
+	/// Kill a mesh's handle at once and free its buffers once no frame in flight can read them — the backend half of
+	/// <see cref="ReleaseMesh"/>. Called between frames, so nothing being recorded names the mesh. Every cached binding
+	/// object that names one of its buffers is evicted before the buffer's handle can be reused.
+	/// </summary>
+	protected abstract void RetireMesh(Mesh mesh);
+
+	/// <summary>
+	/// Kill a texture's handle at once and destroy its image once no frame in flight, and no pending upload, can read it
+	/// — the backend half of <see cref="ReleaseTexture"/>. Called between frames, after the check that no material holds
+	/// it. Every cached binding object that names its view is evicted before the view's handle can be reused.
+	/// </summary>
+	protected abstract void RetireTexture(Texture texture);
+
+	// The pass whose callback is running, or null between passes and between frames. Set by RecordFrame; read by
+	// ThrowIfRecording on the render thread only, so it needs no synchronisation.
+	private string? _recordingPass;
+
+	/// <summary>
+	/// Refuse a resource creation or release made from inside a pass callback. Recording is where the frame's commands
+	/// are being written: an upload made there is submitted only ahead of the <em>next</em> frame, so this frame would
+	/// sample memory its contents have not reached, and a release could free what this frame's commands already name.
+	/// Neither shows as an error on its own — the first is one frame of garbage, the second a fault a frame or two later
+	/// — so the call is refused where it is made. Only the render thread is checked: a background decode may queue an
+	/// upload through a <c>*Async</c> creation while a frame records, which is exactly what those are for.
+	/// </summary>
+	private void ThrowIfRecording(string member)
+	{
+		if (_recordingPass is null || Environment.CurrentManagedThreadId != _renderThreadId)
+			return;
+		throw new InvalidOperationException(
+			$"IEngine.{member} was called while pass '{_recordingPass}' was recording. A pass callback runs while the " +
+			"frame's commands are written: an upload made there is submitted only ahead of the next frame, so this frame " +
+			"would sample it before its contents arrive, and a release could free what this frame already draws with. " +
+			"Create and release resources between frames, before IEngine.Render; a producer that discovers what it needs " +
+			"while drawing resolves it in a step of its own before Render.");
+	}
+
+	// Mints and checks the stream ids stable draw lists are kept under; shared with the record validator.
+	private readonly DrawListStreams _drawListStreams = new();
+
+	/// <inheritdoc/>
+	public int AllocateDrawListStream() => _drawListStreams.Allocate();
 
 	/// <inheritdoc/>
 	public Material CreateMaterial(params ReadOnlySpan<Texture> textures) => Materials.Create(textures);
@@ -688,16 +794,28 @@ public abstract class EngineBase : IEngine
 	}
 
 	/// <summary>Async counterpart to <see cref="CreateMesh(ReadOnlySpan{Vertex}, ReadOnlySpan{uint})"/> — see the class-level remarks above.</summary>
-	public Task<Mesh> CreateMeshAsync(Vertex[] vertices, uint[] indices) => EnqueueGpuWork(() => CreateMesh(vertices, indices));
+	public Task<Mesh> CreateMeshAsync(Vertex[] vertices, uint[] indices)
+	{
+		ThrowIfRecording(nameof(CreateMeshAsync));
+		return EnqueueGpuWork(() => CreateMesh(vertices, indices));
+	}
 
 	/// <summary>Async counterpart to <see cref="CreateSkinnedMesh"/> — see the class-level remarks above.</summary>
-	public Task<Mesh> CreateSkinnedMeshAsync(SkinnedVertex[] vertices, uint[] indices) => EnqueueGpuWork(() => CreateSkinnedMesh(vertices, indices));
+	public Task<Mesh> CreateSkinnedMeshAsync(SkinnedVertex[] vertices, uint[] indices)
+	{
+		ThrowIfRecording(nameof(CreateSkinnedMeshAsync));
+		return EnqueueGpuWork(() => CreateSkinnedMesh(vertices, indices));
+	}
 
 	/// <summary>
 	/// Queue a texture upload and return a <see cref="Task{Texture}"/> that completes once <see cref="ServicePendingUploads"/>
 	/// drains it — safe to call from any thread (e.g. a background decode). See the class-level remarks above.
 	/// </summary>
-	public Task<Texture> CreateTextureAsync(TextureData data) => EnqueueGpuWork(() => CreateTexture(data));
+	public Task<Texture> CreateTextureAsync(TextureData data)
+	{
+		ThrowIfRecording(nameof(CreateTextureAsync));
+		return EnqueueGpuWork(() => CreateTexture(data));
+	}
 
 	/// <summary>Async counterpart to <see cref="CreateMaterial(ReadOnlySpan{Texture})"/> — see the class-level remarks above.</summary>
 	public Task<Material> CreateMaterialAsync(params Texture[] textures) => EnqueueGpuWork(() => CreateMaterial(textures));

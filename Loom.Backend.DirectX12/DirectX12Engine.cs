@@ -230,6 +230,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 	public override void WaitIdle()
 	{
+		// Execute any recorded uploads first, so the fence below covers them: idle means everything recorded has run, and
+		// a texture released while its upload was still pending is freed against this signal.
+		_uploads.Flush();
 		_fenceValue++;
 		SilkMarshal.ThrowHResult(_ctx.GraphicsQueue.Signal(_fence, _fenceValue));
 		if (_fence.GetCompletedValue() < _fenceValue)
@@ -239,6 +242,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		}
 
 		_meshes.CollectReleased(_fenceValue);
+		_textures.CollectReleased(_fenceValue);
 	}
 
 	public override void Dispose()
@@ -469,9 +473,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		}
 	}
 
-	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+	protected override Mesh UploadMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
-	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
+	protected override Mesh UploadMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
 	{
 		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
 		if (stride != layout.Stride)
@@ -479,13 +483,20 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
-	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
+	protected override Mesh UploadSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
 	// Every frame that may draw the mesh has been submitted, and signals at most the current fence value. Mesh buffers
 	// live in an upload heap, so there is no pending copy into them to wait for.
-	public override void ReleaseMesh(Mesh mesh) => _meshes.Release(mesh.Id, _fenceValue);
+	protected override void RetireMesh(Mesh mesh) => _meshes.Release(mesh.Id, _fenceValue);
 
-	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
+	protected override Texture UploadTexture(TextureData data) => _textures.Create(data);
+
+	// Unlike a mesh, a texture may still have a copy pending: its upload is recorded into a batch that executes ahead of
+	// the next frame. So it waits for the next value the frame fence signals — after the next frame, which follows the
+	// flushed batch on this queue, or after WaitIdle, which flushes the batch before signalling. Nothing else is keyed by
+	// it: a material's SRV table can only name a texture no release can reach (a material holds its textures), and a
+	// draw list writes its SRVs into this frame's ring slot, which outlives the texture by exactly the frames that read it.
+	protected override void RetireTexture(Texture texture) => _textures.Release(texture.Id, _fenceValue + 1);
 
 	[DllImport("kernel32", SetLastError = true)]
 	private static extern nint CreateEventW(nint lpEventAttributes, int bManualReset, int bInitialState, nint lpName);
