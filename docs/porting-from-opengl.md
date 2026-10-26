@@ -403,7 +403,7 @@ labels on a `Canvas` of `TextBlock`s in a few lines:
 var host = new UIHost();
 var view = host.CreateRoot(UILayer.Default, interactive: false);
 view.Root.Content = canvas;   // a Canvas of TextBlocks, placed with Canvas.SetLeft / SetTop
-var painter = UIPainter.Create(Engine, host, FontAtlas.Default);
+var painter = UIPainter.Create(Engine, host);
 // each frame, in BeforeRender: host.Tick(dt, time, SurfaceSize); host.Render(); painter.Prepare();
 // and in the pass: painter.Draw(ctx, view.Surface)
 ```

@@ -37,7 +37,7 @@ You declare *what* each render pass reads and writes; Loom derives ordering, bar
 
 **Draw throughput** — 10,000 *discrete* draws (own model matrix, own material — not one instanced call) render on both backends with **zero managed allocations per frame**. Materials keep their descriptor tables rather than rewriting them per draw, redundant pipeline/geometry re-binds are elided, each pass's barriers go in one submission, resource uploads batch into the frame instead of draining the GPU per resource, and compiled pipelines persist between runs. The `Draw Scale` demo is the workload; `DrawScaleTests` is the headless gate and prints µs/draw — reported, never asserted, since it moves with machine and driver.
 
-**Game UI** — [`SUIsei`](external/SUIsei), a standalone WinUI-3-compatible, NativeAOT-clean XAML UI runtime, rendered through Loom's neutral draw-list path (the same one ImGui uses).
+**Game UI** — [`SUIsei`](external/SUIsei), a standalone WinUI-3-compatible, NativeAOT-clean XAML UI runtime, rendered through Loom's neutral draw-list path (the same one ImGui uses). The UI demos are held to the same golden-image and cross-backend parity tests as the rest of the gallery, with a check that their UI actually reaches the frame, and the vertex and command structs SUIsei hands Loom without a copy are guarded field by field.
 
 ## How to use it
 
@@ -160,10 +160,10 @@ Two rules keep this honest:
 
 ### Draw a game UI
 
-`Loom.UI.SUIsei`'s `UIPainter` draws a SUIsei host's composited surfaces through `ctx.DrawList`. Each frame, composite the host, then `Prepare` the painter — it uploads any image the UI newly shows, before the frame that samples it — and draw from a pass:
+`Loom.UI.SUIsei`'s `UIPainter` draws a SUIsei host's composited surfaces through `ctx.DrawList`. Each frame, composite the host, then `Prepare` the painter — it uploads any image or glyph-atlas page the UI newly shows, before the frame that samples it, shares it between surfaces, and releases what the UI stopped showing — and draw from a pass:
 
 ```csharp
-var ui = UIPainter.Create(engine, host, FontAtlas.Default);
+var ui = UIPainter.Create(engine, host);
 g.Pass("hud").Blends(screen).Draw(ctx => ui.Draw(ctx, UISurface.Hud));
 
 // each frame, before engine.Render:
