@@ -214,9 +214,10 @@ public sealed unsafe class VulkanContext : IDisposable
 
 		// VK_EXT_swapchain_colorspace lets the surface report HDR colour spaces (scRGB, HDR10) so the swapchain
 		// can negotiate one when EngineSettings.HdrOutput is set. Opt-in only if the loader has it;
-		// absence is fine — the swapchain falls back to SDR sRGB.
+		// absence is fine — the swapchain falls back to SDR sRGB. It requires VK_KHR_surface, so an offscreen
+		// context, which has no surface or swapchain, never enables it.
 		const string swapchainColorspace = "VK_EXT_swapchain_colorspace";
-		if (AvailableInstanceExtensions().Contains(swapchainColorspace))
+		if (!_offscreen && AvailableInstanceExtensions().Contains(swapchainColorspace))
 		{
 			extensions = [.. extensions, swapchainColorspace];
 			HdrColorSpaceAvailable = true;
