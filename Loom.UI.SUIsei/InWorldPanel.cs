@@ -62,12 +62,11 @@ public sealed class InWorldPanel
 		int pixelHeight,
 		Matrix4x4 worldTransform,
 		bool billboard = false,
-		float layoutScale = 1f,
-		FontAtlas? fontAtlas = null)
+		float layoutScale = 1f)
 	{
 		var host = new UIHost();
 		var view = host.CreateRoot(new UILayer(0, layoutScale), interactive: true);
-		var painter = UIPainter.Create(engine, host, fontAtlas);
+		var painter = UIPainter.Create(engine, host);
 		var ndcYSign = engine.ClipSpaceCorrection.M22 < 0f ? 1f : -1f;
 		return new InWorldPanel(host, view, painter, pixelWidth, pixelHeight, worldTransform, billboard, ndcYSign);
 	}

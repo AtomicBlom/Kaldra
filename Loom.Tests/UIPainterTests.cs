@@ -117,6 +117,182 @@ public class UIPainterTests
 		}
 	}
 
+	[Test]
+	public void A_steady_UI_frame_allocates_nothing_in_the_painter()
+	{
+		const int WarmupFrames = 20, MeasuredFrames = 30;
+		foreach (var backend in AvailableBackends())
+		{
+			// Text, a fill and an image, so every slot kind the painter resolves is on screen. Once the UI stops changing,
+			// Prepare finds every surface at the revision it already resolved, and Draw re-submits the kept stream, so the
+			// painter's whole frame — and the engine's draw of it — must allocate nothing.
+			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+			var host = new UIHost();
+			var view = host.CreateRoot(UILayer.Default);
+			var red = Enumerable.Repeat<byte[]>([255, 0, 0, 255], 16).SelectMany(texel => texel).ToArray();
+			var panel = new StackPanel { Background = HdrColor.FromRgb(0, 0, 255) };
+			panel.Children.Add(new TextBlock { Text = "Steady", FontSize = 14f });
+			panel.Children.Add(new Image { Source = ImageSource.FromRgba8(4, 4, red), Stretch = Stretch.Fill, Width = 16, Height = 16 });
+			view.Root.Content = panel;
+			var painter = UIPainter.Create(engine, host);
+			engine.SetGraph(RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("ui").Writes(screen).Draw((painter, view.Surface), static (ctx, ui) => ui.painter.Draw(ctx, ui.Surface));
+				g.Present(screen);
+			}));
+
+			for (var frame = 0; frame < WarmupFrames; frame++)
+			{
+				host.Tick(1.0 / 60.0, 0f, new Vector2(W, H));
+				host.Render();
+				painter.Prepare();
+				engine.Render(Inputs);
+			}
+
+			var before = GC.GetAllocatedBytesForCurrentThread();
+			for (var frame = 0; frame < MeasuredFrames; frame++)
+			{
+				painter.Prepare();
+				engine.Render(Inputs);
+			}
+			var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+			allocated.ShouldBe(0L, $"{backend.Name}: the painter's steady frame allocated {allocated} bytes over {MeasuredFrames} frames.");
+		}
+	}
+
+	[Test]
+	public void An_image_two_surfaces_show_uploads_once_and_is_released_when_neither_does()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+			var host = new UIHost();
+			var first = host.CreateRoot(UILayer.Default);
+			var second = host.CreateRoot(UILayer.Default);
+			var image = ImageSource.FromRgba8(4, 4, Solid(255, 0, 0));
+			first.Root.Content = ImageElement(image);
+			second.Root.Content = ImageElement(image);
+			var painter = UIPainter.Create(engine, host);
+			engine.SetGraph(TwoSurfaceGraph(painter, first.Surface, second.Surface));
+
+			// Both surfaces name the image: it is uploaded once, and both bind that one texture. White is the only
+			// other source either table names.
+			Frames(engine, host, painter, 3);
+			var shared = painter.ResidentTexture(image).ShouldNotBeNull($"{backend.Name}: the image should be uploaded.");
+			painter.ResidentSourceCount.ShouldBe(2, $"{backend.Name}: white and the one image, uploaded once between them.");
+			painter.SlotTextures(first.Surface).ToArray().ShouldContain(shared);
+			painter.SlotTextures(second.Surface).ToArray().ShouldContain(shared);
+
+			// One surface stops showing it: the other still does, so it stays.
+			first.Root.Content = Fill(HdrColor.FromRgb(0, 255, 0));
+			Frames(engine, host, painter, 2);
+			painter.ResidentTexture(image).ShouldBe(shared, $"{backend.Name}: a source one surface still shows must not be released.");
+
+			// Neither does: it is released — its handle is dead at once — and the frames already in flight that sampled
+			// it finish safely, because the engine destroys it only after them.
+			second.Root.Content = Fill(HdrColor.FromRgb(0, 0, 255));
+			Frames(engine, host, painter, 4);
+			painter.ResidentTexture(image).ShouldBeNull($"{backend.Name}: a source no surface shows should be released.");
+			var refused = Should.Throw<Exception>(() => engine.ReleaseTexture(shared));
+			refused.Message.ShouldContain("released", customMessage: $"{backend.Name}: the painter should have released the image's texture.");
+		}
+	}
+
+	[Test]
+	public void A_removed_surface_gives_up_its_textures()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+			var host = new UIHost();
+			var kept = host.CreateRoot(UILayer.Default);
+			var removed = host.CreateRoot(UILayer.Default);
+			var image = ImageSource.FromRgba8(4, 4, Solid(255, 0, 0));
+			kept.Root.Content = Fill(HdrColor.FromRgb(0, 255, 0));
+			removed.Root.Content = ImageElement(image);
+			var painter = UIPainter.Create(engine, host);
+			engine.SetGraph(TwoSurfaceGraph(painter, kept.Surface, removed.Surface));
+
+			Frames(engine, host, painter, 2);
+			painter.ResidentTexture(image).ShouldNotBeNull();
+
+			// The root goes, and with it the only surface naming the image: the host stops listing it, so nothing would
+			// otherwise ever let its textures go.
+			host.RemoveRoot(removed);
+			Frames(engine, host, painter, 2);
+			painter.ResidentTexture(image).ShouldBeNull($"{backend.Name}: a removed surface's sources should be released.");
+		}
+	}
+
+	[Test]
+	public void The_glyph_atlas_arrives_through_a_slot()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			// The painter is given no font: text samples whichever atlas page the compositor laid it out against, named in
+			// the list's own slot table like any other source.
+			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+			var host = new UIHost();
+			var view = host.CreateRoot(UILayer.Default);
+			view.Root.Content = new TextBlock { Text = "Slots", FontSize = 16f };
+			var painter = UIPainter.Create(engine, host);
+			engine.SetGraph(RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("ui").Writes(screen).Draw(ctx => painter.Draw(ctx, view.Surface));
+				g.Present(screen);
+			}));
+
+			Frames(engine, host, painter, 2);
+			var slots = host.DrawLists[0].Data.TextureSlots;
+			var page = slots.Single(source => source is AtlasImage);
+			var slot = IndexOf(slots, page);
+			var texture = painter.ResidentTexture(page).ShouldNotBeNull($"{backend.Name}: the atlas page should be uploaded.");
+			painter.SlotTextures(view.Surface)[slot].ShouldBe(texture, $"{backend.Name}: the atlas page's slot should bind its texture.");
+		}
+	}
+
+	private static int IndexOf(IReadOnlyList<TextureSource> slots, TextureSource source)
+	{
+		for (var i = 0; i < slots.Count; i++)
+		{
+			if (ReferenceEquals(slots[i], source))
+				return i;
+		}
+		return -1;
+	}
+
+	private static byte[] Solid(byte r, byte g, byte b) => [.. Enumerable.Repeat<byte[]>([r, g, b, 255], 16).SelectMany(texel => texel)];
+
+	private static Image ImageElement(ImageSource source) => new() { Source = source, Stretch = Stretch.Fill, Width = 16, Height = 16 };
+
+	private static Border Fill(HdrColor colour) => new() { Width = 16, Height = 16, Background = colour };
+
+	// One pass drawing two surfaces of the same host, one after the other.
+	private static RenderGraph TwoSurfaceGraph(UIPainter painter, DrawListId a, DrawListId b) => RenderGraph.Define(g =>
+	{
+		var screen = g.Backbuffer;
+		g.Pass("ui").Writes(screen).Draw(ctx =>
+		{
+			painter.Draw(ctx, a);
+			painter.Draw(ctx, b);
+		});
+		g.Present(screen);
+	});
+
+	private static void Frames(IEngine engine, UIHost host, UIPainter painter, int count)
+	{
+		for (var frame = 0; frame < count; frame++)
+		{
+			host.Tick(1.0 / 60.0, 0f, new Vector2(W, H));
+			host.Render();
+			painter.Prepare();
+			engine.Render(Inputs);
+		}
+	}
+
 	private enum Colour { Red, Green, Blue, Other }
 
 	// Which primary a pixel is, with room for the UI's colour conversion; anything mixed or dark is Other.

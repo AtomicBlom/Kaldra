@@ -39,6 +39,21 @@ public class UIPainterKindTests
 		refused.Message.ShouldContain("kind 7");
 	}
 
-	private static DrawCommand Command(uint tag) =>
-		new(new SUIsei.Rect(0f, 0f, 8f, 8f), TextureIndex: 0, IndexOffset: 0, IndexCount: 6, VertexOffset: 0, Tag: tag);
+	[Test]
+	public void A_command_naming_a_slot_the_table_lacks_is_refused()
+	{
+		// A command's TextureIndex indexes its own list's slot table. One past the end would index the backend's texture
+		// array out of range mid-recording; the painter names the command and the slot instead.
+		DrawCommand[] commands = [Command(0, slot: 0), Command(4, slot: 1), Command(4, slot: 2)];
+		UIPainter.ValidateSlots(Surface, commands.AsSpan(0, 2), slotCount: 2);
+
+		var refused = Should.Throw<InvalidOperationException>(() => UIPainter.ValidateSlots(Surface, commands, slotCount: 2));
+
+		refused.Message.ShouldContain("command 2");
+		refused.Message.ShouldContain("slot 2");
+		refused.Message.ShouldContain("2 slot(s)");
+	}
+
+	private static DrawCommand Command(uint tag, int slot = 0) =>
+		new(new SUIsei.Rect(0f, 0f, 8f, 8f), TextureIndex: slot, IndexOffset: 0, IndexCount: 6, VertexOffset: 0, Tag: tag);
 }

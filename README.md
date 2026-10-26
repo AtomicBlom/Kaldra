@@ -160,10 +160,10 @@ Two rules keep this honest:
 
 ### Draw a game UI
 
-`Loom.UI.SUIsei`'s `UIPainter` draws a SUIsei host's composited surfaces through `ctx.DrawList`. Each frame, composite the host, then `Prepare` the painter — it uploads any image the UI newly shows, before the frame that samples it — and draw from a pass:
+`Loom.UI.SUIsei`'s `UIPainter` draws a SUIsei host's composited surfaces through `ctx.DrawList`. Each frame, composite the host, then `Prepare` the painter — it uploads any image or glyph-atlas page the UI newly shows, before the frame that samples it, shares it between surfaces, and releases what the UI stopped showing — and draw from a pass:
 
 ```csharp
-var ui = UIPainter.Create(engine, host, FontAtlas.Default);
+var ui = UIPainter.Create(engine, host);
 g.Pass("hud").Blends(screen).Draw(ctx => ui.Draw(ctx, UISurface.Hud));
 
 // each frame, before engine.Render:

@@ -11,16 +11,22 @@ using DrawCommand = SUIsei.Drawing.DrawCommand;
 using DrawListData = SUIsei.Drawing.DrawListData;
 using DrawListId = SUIsei.Drawing.DrawListId;
 using LoomDrawCommand = Loom.Core.Hosting.DrawCommand;
+using TextureSource = SUIsei.Drawing.TextureSource;
 
 namespace Loom.UI.SUIsei;
 
 /// <summary>
 /// Renders composited UI draw lists through the public engine API — the bridge between the headless
-/// <see cref="UIHost"/> and the render graph, with no backend knowledge. Create it once after the engine exists
-/// (it registers the <c>ui</c> technique and uploads the white texel + optional glyph atlas through the public API),
-/// keep it for the engine's lifetime, and each frame call <see cref="Prepare"/> after <see cref="UIHost.Render"/> and
-/// <see cref="Draw"/> from a pass that blends the target. A painter is a stable handle bundle, so a pass closure may
-/// capture it.
+/// <see cref="UIHost"/> and the render graph, with no backend knowledge. Create it once after the engine exists (it
+/// registers the <c>ui</c> technique), keep it for the engine's lifetime, and each frame call <see cref="Prepare"/>
+/// after <see cref="UIHost.Render"/> and <see cref="Draw"/> from a pass that blends the target. A painter is a stable
+/// handle bundle, so a pass closure may capture it.
+/// <para>
+/// Every texture a list samples arrives in the list's own slot table (<see cref="DrawListData.TextureSlots"/>) — the
+/// white texel, the compositor's glyph-atlas pages, images — so the painter uploads nothing up front and needs no
+/// font: it uploads each source the first time any surface names it, shares it between every surface that does, and
+/// releases it once none does.
+/// </para>
 /// </summary>
 public sealed class UIPainter
 {
@@ -30,21 +36,27 @@ public sealed class UIPainter
 
 	private readonly UIHost _host;
 	private readonly IEngine _engine;
-	private readonly Texture _white;
-	// The base UI textures a command selects by index: the 1×1 white texel (fills/borders) at 0, the optional MTSDF
-	// glyph atlas at 1. Shared by every image-free list (no per-frame allocation); a list that references images gets a
-	// wider array of its own.
-	private readonly Texture[] _baseTextures;
-	// Images uploaded once and cached by their stable ImageSource.TextureIndex (≥ 2).
-	private readonly Dictionary<int, Texture> _imageTextures = [];
+	// Every source some surface's slot table names, uploaded once however many surfaces share it. Keyed by the source
+	// itself: sources are identities, compared by reference.
+	private readonly Dictionary<TextureSource, Resident> _resident = new(ReferenceEqualityComparer.Instance);
 	// What Prepare resolved for each surface, kept across frames. Per surface because a painter can serve several, whose
-	// revisions advance independently.
+	// lists change independently.
 	private readonly Dictionary<DrawListId, PreparedSurface> _surfaces = [];
+	// Counts Prepare calls, so a surface that a pass did not see — its root was removed — can be told apart and swept.
+	private uint _pass;
+
+	/// <summary>An uploaded source: its texture, the content version that texture holds, and how many surfaces name it.</summary>
+	private sealed class Resident(Texture texture, uint version)
+	{
+		public Texture Texture = texture;
+		public uint Version = version;
+		public int Surfaces;
+	}
 
 	/// <summary>
-	/// One surface's drawing state, kept across frames: the draw-list stream its geometry is kept under, and the texture
-	/// array its commands index — rebuilt only when the surface's list changes, so a UI that references images allocates
-	/// nothing on a frame where it did not change.
+	/// One surface's drawing state, kept across frames: the draw-list stream its geometry is kept under, the texture
+	/// array its commands index by slot, and the sources it holds references on. The array is rebuilt only when the
+	/// list's <see cref="DrawListData.TextureRevision"/> moves, so a frame whose UI did not change allocates nothing.
 	/// </summary>
 	private sealed class PreparedSurface(int stream)
 	{
@@ -52,70 +64,84 @@ public sealed class UIPainter
 		public int Stream { get; } = stream;
 		public Texture[] Textures = [];
 		public int Count;
-		public uint Revision = uint.MaxValue; // no real revision, so the first Prepare always builds
-											  // Set by Prepare, consumed by Draw: a frame that skipped Prepare is caught at its first Draw rather than only
-											  // once its UI happens to change.
+		// The sources this surface holds a reference on (its slot table, as last resolved), and a second array to build
+		// the next table into while the old references are still held.
+		public TextureSource[] Sources = [];
+		public TextureSource[] Building = [];
+		public int SourceCount;
+		// The revisions last checked and resolved; MaxValue, which no list carries, means not yet.
+		public uint Revision = uint.MaxValue;
+		public uint TextureRevision = uint.MaxValue;
+		public uint SeenIn;
+		// Set by Prepare, consumed by Draw: a frame that skipped Prepare is caught at its first Draw rather than only
+		// once its UI happens to change.
 		public bool Armed;
 	}
 
-	private UIPainter(IEngine engine, UIHost host, Texture white, Texture? font)
+	private UIPainter(IEngine engine, UIHost host)
 	{
 		_engine = engine;
 		_host = host;
-		_white = white;
-		_baseTextures = font is { } f ? [white, f] : [white];
 	}
 
-	/// <summary>
-	/// Register the <c>ui</c> technique and upload the UI textures, returning a painter to keep.
-	/// <paramref name="fontAtlas"/> is the MTSDF glyph atlas the compositor laid glyphs out against;
-	/// null sets up a painter for rect/border-only surfaces (no text).
-	/// </summary>
-	public static UIPainter Create(IEngine engine, UIHost host, FontAtlas? fontAtlas = null)
+	/// <summary>Register the <c>ui</c> technique and return a painter to keep. Nothing is uploaded until <see cref="Prepare"/>.</summary>
+	public static UIPainter Create(IEngine engine, UIHost host)
 	{
 		engine.DefineTechnique(Technique, new TechniqueDescriptor(Technique, HasVertexInput: true,
 			Blend: BlendMode.PremultipliedAlpha, LinearFilter: true, Layout: VertexLayout.Overlay, HasListPush: true));
-
-		var white = engine.CreateTexture(TextureData.FromRgba8(1, 1, [255, 255, 255, 255], TextureFormat.Rgba8Unorm, generateMips: false));
-
-		Texture? font = null;
-		if (fontAtlas is null)
-			return new UIPainter(engine, host, white, font);
-
-		var img = fontAtlas.Image;
-		var td = TextureData.FromRgba8(img.Width, img.Height, img.Pixels.ToArray(), TextureFormat.Rgba8Unorm, generateMips: false);
-		font = engine.CreateTexture(td);
-
-		return new UIPainter(engine, host, white, font);
+		return new UIPainter(engine, host);
 	}
 
 	/// <summary>
-	/// Make this frame's composited lists drawable: check each changed list's command kinds, upload the images it
-	/// references, mint a draw-list stream for each surface seen for the first time, and rebuild a surface's texture
-	/// array when its list changed. Call once per frame, after <see cref="UIHost.Render"/> and before
-	/// <see cref="IEngine.Render"/>.
+	/// Make this frame's composited lists drawable. For each list that changed: check its commands, upload the sources
+	/// its slot table newly names, rebuild its texture array, and let go of the sources it stopped naming — a source no
+	/// surface names any more is released, and the engine keeps it until the frames in flight are done with it. A
+	/// surface seen for the first time mints a draw-list stream; one whose root is gone gives up its sources. Call once
+	/// per frame, after <see cref="UIHost.Render"/> and before <see cref="IEngine.Render"/>.
 	/// <para>
-	/// It is a step of its own because images cannot be uploaded where they are discovered. <see cref="Draw"/> runs in
-	/// a pass callback, while the frame's commands are recorded, and an upload made there is submitted only ahead of
-	/// the next frame — so a new image's first frame would sample a texture its pixels had not reached, which is why
-	/// the engine refuses to create one there. A frame whose lists did not change does none of this, and allocates
-	/// nothing.
+	/// It is a step of its own because textures cannot be created or released where they are discovered.
+	/// <see cref="Draw"/> runs in a pass callback, while the frame's commands are recorded: an upload made there is
+	/// submitted only ahead of the next frame, so a new image's first frame would sample a texture its pixels had not
+	/// reached, and the engine refuses it. A frame whose lists did not change does none of this, and allocates nothing.
 	/// </para>
 	/// </summary>
 	public void Prepare()
 	{
+		_pass++;
 		var lists = _host.DrawLists;
 		for (var i = 0; i < lists.Count; i++)
 		{
 			var (id, draw) = lists[i];
 			if (!_surfaces.TryGetValue(id, out var surface))
 				_surfaces[id] = surface = new PreparedSurface(_engine.AllocateDrawListStream());
-			if (surface.Revision != draw.Revision)
+			surface.SeenIn = _pass;
+
+			// The texture revision is checked every frame, not only when the geometry changes: a source's content can
+			// change under a list whose geometry did not.
+			var revisionMoved = surface.Revision != draw.Revision;
+			var texturesMoved = surface.TextureRevision != draw.TextureRevision;
+			if (revisionMoved || texturesMoved)
 			{
+				var slots = draw.TextureSlots;
 				ValidateKinds(id, draw.Commands.Span);
-				ResolveTextures(surface, draw);
+				ValidateSlots(id, draw.Commands.Span, slots.Count);
+				if (texturesMoved)
+					Resolve(surface, slots);
+				surface.Revision = draw.Revision;
+				surface.TextureRevision = draw.TextureRevision;
 			}
 			surface.Armed = true;
+		}
+
+		// A surface the host no longer lists (its root was removed) holds its sources no longer. Removing the entry being
+		// enumerated does not invalidate a Dictionary enumerator, so this sweep allocates nothing.
+		foreach (var (id, surface) in _surfaces)
+		{
+			if (surface.SeenIn == _pass)
+				continue;
+			for (var s = 0; s < surface.SourceCount; s++)
+				Unreference(surface.Sources[s]);
+			_surfaces.Remove(id);
 		}
 	}
 
@@ -140,11 +166,12 @@ public sealed class UIPainter
 		if (draw is null)
 			return;
 
-		if (!_surfaces.TryGetValue(id, out var surface) || !surface.Armed || surface.Revision != draw.Revision)
+		if (!_surfaces.TryGetValue(id, out var surface) || !surface.Armed
+			|| surface.Revision != draw.Revision || surface.TextureRevision != draw.TextureRevision)
 		{
 			throw new InvalidOperationException(
 				$"UIPainter.Draw: surface {id.Value}'s draw list was not prepared for this frame. Call UIPainter.Prepare() once " +
-				"per frame, after UIHost.Render() and before IEngine.Render: it uploads the images the list references, which " +
+				"per frame, after UIHost.Render() and before IEngine.Render: it uploads the textures the list samples, which " +
 				"cannot be uploaded from the pass that draws them. A surface is prepared for one Draw per frame.");
 		}
 		surface.Armed = false;
@@ -200,51 +227,89 @@ public sealed class UIPainter
 	}
 
 	/// <summary>
-	/// Build the texture array a surface's commands index by <c>TextureIndex</c>. An image-free list shares the base
-	/// array (white + optional glyph atlas); a list that references images gets a wider array of its own, with each
-	/// image uploaded once (cached by index) and any gap filled with the white texel.
-	/// <para>
-	/// Runs only when the list's <c>Revision</c> moves — the token the compositor advances exactly when the list
-	/// changed — so a steady frame reuses what it built and a UI with images costs no allocation per frame.
-	/// </para>
+	/// Refuse a list whose command names a texture slot its slot table does not have. The backend would index the
+	/// texture array out of range mid-recording; this names the command and the surface instead, once per revision.
 	/// </summary>
-	private void ResolveTextures(PreparedSurface surface, DrawListData draw)
+	internal static void ValidateSlots(DrawListId surface, ReadOnlySpan<DrawCommand> commands, int slotCount)
 	{
-		surface.Revision = draw.Revision;
-		if (draw.Images.Count == 0)
+		for (var i = 0; i < commands.Length; i++)
 		{
-			surface.Textures = _baseTextures;
-			surface.Count = _baseTextures.Length;
-			return;
+			var slot = commands[i].TextureIndex;
+			if (slot >= 0 && slot < slotCount)
+				continue;
+			throw new InvalidOperationException(
+				$"UIPainter: command {i} of surface {surface.Value}'s draw list samples texture slot {slot}, but the list's " +
+				$"slot table has {slotCount} slot(s). A command's TextureIndex indexes its own list's TextureSlots.");
 		}
+	}
 
-		var max = _baseTextures.Length - 1;
-		foreach (var image in draw.Images)
+	/// <summary>
+	/// Rebuild a surface's texture array from its slot table. The new table's sources are referenced before the old
+	/// table's are let go, so a source the surface keeps naming is never released and uploaded again in between.
+	/// </summary>
+	private void Resolve(PreparedSurface surface, IReadOnlyList<TextureSource> slots)
+	{
+		var count = slots.Count;
+		if (surface.Textures.Length < count)
+			surface.Textures = new Texture[Math.Max(count, surface.Textures.Length * 2)];
+		if (surface.Building.Length < count)
+			surface.Building = new TextureSource[Math.Max(count, surface.Building.Length * 2)];
+
+		for (var s = 0; s < count; s++)
 		{
-			if (image.TextureIndex > max)
-				max = image.TextureIndex;
+			var source = slots[s];
+			surface.Textures[s] = Reference(source);
+			surface.Building[s] = source;
 		}
+		for (var s = 0; s < surface.SourceCount; s++)
+			Unreference(surface.Sources[s]);
 
-		// The base array is shared by every image-free surface, so a surface gains an array of its own before writing.
-		var count = max + 1;
-		if (surface.Textures == _baseTextures || surface.Textures.Length < count)
-			surface.Textures = new Texture[Math.Max(count, surface.Textures.Length + (surface.Textures.Length / 2))];
-
-		var textures = surface.Textures;
-		for (var i = 0; i < count; i++)
-			textures[i] = i < _baseTextures.Length ? _baseTextures[i] : _white;
-
-		foreach (var image in draw.Images)
-		{
-			if (!_imageTextures.TryGetValue(image.TextureIndex, out var texture))
-			{
-				var atlas = image.Pixels;
-				texture = _engine.CreateTexture(TextureData.FromRgba8(atlas.Width, atlas.Height, atlas.Pixels.ToArray(), TextureFormat.Rgba8Unorm, generateMips: false));
-				_imageTextures[image.TextureIndex] = texture;
-			}
-			textures[image.TextureIndex] = texture;
-		}
-
+		(surface.Sources, surface.Building) = (surface.Building, surface.Sources);
+		surface.SourceCount = count;
 		surface.Count = count;
 	}
+
+	/// <summary>
+	/// Take a reference on <paramref name="source"/> for one surface and return its texture, uploading it the first time
+	/// any surface names it. A source whose content <see cref="TextureSource.Version"/> moved since its upload gets its
+	/// new pixels uploaded as a new texture and the old one released: every other surface naming it sees its texture
+	/// revision move as well, so all of them rebind in the same <see cref="Prepare"/>.
+	/// </summary>
+	private Texture Reference(TextureSource source)
+	{
+		if (!_resident.TryGetValue(source, out var resident))
+		{
+			_resident[source] = resident = new Resident(Upload(source), source.Version);
+		}
+		else if (resident.Version != source.Version)
+		{
+			var stale = resident.Texture;
+			resident.Texture = Upload(source);
+			resident.Version = source.Version;
+			_engine.ReleaseTexture(stale);
+		}
+		resident.Surfaces++;
+		return resident.Texture;
+	}
+
+	/// <summary>Let go of one surface's reference on <paramref name="source"/>, releasing its texture when it was the last.</summary>
+	private void Unreference(TextureSource source)
+	{
+		var resident = _resident[source];
+		if (--resident.Surfaces > 0)
+			return;
+		_resident.Remove(source);
+		_engine.ReleaseTexture(resident.Texture);
+	}
+
+	private Texture Upload(TextureSource source) =>
+		_engine.CreateTexture(TextureData.FromRgba8(source.Width, source.Height, source.Pixels.Span, TextureFormat.Rgba8Unorm, generateMips: false));
+
+	// What the painter holds, for tests that pin its sharing and release rules without a capture.
+	internal int ResidentSourceCount => _resident.Count;
+
+	internal Texture? ResidentTexture(TextureSource source) => _resident.TryGetValue(source, out var resident) ? resident.Texture : null;
+
+	internal ReadOnlySpan<Texture> SlotTextures(DrawListId id) =>
+		_surfaces.TryGetValue(id, out var surface) ? surface.Textures.AsSpan(0, surface.Count) : default;
 }
