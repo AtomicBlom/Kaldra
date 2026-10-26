@@ -148,6 +148,30 @@ public sealed class InWorldPanel
 	/// </summary>
 	public void Draw(IRenderContext ctx) => _painter.Draw(ctx, Surface);
 
+	/// <summary>
+	/// Where a point on the panel appears on screen — the inverse of the projection <see cref="Tick"/> applies to queued
+	/// screen pointers: panel pixels → the quad in the world (through <see cref="WorldTransform"/>, which a billboard
+	/// updates in <see cref="Tick"/>) → <paramref name="viewProjection"/> → framebuffer pixels. Null when the point is
+	/// behind the camera.
+	/// </summary>
+	/// <param name="panelPixel">A point on the panel, in panel pixels [0..PixelWidth) × [0..PixelHeight).</param>
+	/// <param name="viewProjection">Camera view-projection (clip-space-corrected), as passed to <see cref="Tick"/>.</param>
+	/// <param name="framebufferSize">Window framebuffer size in pixels.</param>
+	public Vector2? ProjectToScreen(Vector2 panelPixel, Matrix4x4 viewProjection, Vector2 framebufferSize)
+	{
+		// Panel pixels → quad-local (a unit XY plane, +Y up) → world → clip.
+		var local = new Vector3((panelPixel.X / _pixelWidth) - 0.5f, 0.5f - (panelPixel.Y / _pixelHeight), 0f);
+		var clip = Vector4.Transform(new Vector4(Vector3.Transform(local, WorldTransform), 1f), viewProjection);
+		if (clip.W <= 0f)
+			return null;
+
+		// NDC → screen, undoing TryUnprojectToPanel's mapping, including its per-backend Y sign.
+		var ndc = new Vector2(clip.X / clip.W, clip.Y / clip.W);
+		return new Vector2(
+			(ndc.X + 1f) * 0.5f * framebufferSize.X,
+			((_ndcYSign * ndc.Y) + 1f) * 0.5f * framebufferSize.Y);
+	}
+
 	private void UpdateBillboard(Matrix4x4 view)
 	{
 		if (!Matrix4x4.Invert(view, out var inverseView))

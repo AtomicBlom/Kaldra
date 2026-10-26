@@ -1,0 +1,44 @@
+using Loom.Core.Hosting;
+using Loom.UI.SUIsei;
+
+using DrawCommand = SUIsei.Drawing.DrawCommand;
+using DrawListId = SUIsei.Drawing.DrawListId;
+
+namespace Loom.Tests;
+
+/// <summary>
+/// A draw command's tag picks the <c>ui</c> shader's branch, and a shader cannot reject a value it does not know: an
+/// unknown kind falls through its <c>switch</c> to a plain fill. So the painter checks the kinds itself before a list is
+/// drawn — every one the shader draws, plus the two layer markers the walker consumes — and refuses anything else by
+/// command and surface. Device-free: the check runs on the command stream alone.
+/// </summary>
+public class UIPainterKindTests
+{
+	private static readonly DrawListId Surface = new(3);
+
+	[Test]
+	public void Every_kind_the_ui_shader_draws_and_both_layer_markers_are_accepted()
+	{
+		DrawCommand[] commands =
+		[
+			Command(0), Command(1), Command(2), Command(3), Command(DrawListGeometry.KindImage),
+			Command(DrawListGeometry.TagBeginLayer), Command(DrawListGeometry.TagEndLayer),
+		];
+		UIPainter.ValidateKinds(Surface, commands);
+	}
+
+	[Test]
+	public void An_unknown_kind_is_refused_by_command_and_surface()
+	{
+		DrawCommand[] commands = [Command(0), Command(DrawListGeometry.KindImage), Command(7)];
+
+		var refused = Should.Throw<InvalidOperationException>(() => UIPainter.ValidateKinds(Surface, commands));
+
+		refused.Message.ShouldContain("command 2");
+		refused.Message.ShouldContain("surface 3");
+		refused.Message.ShouldContain("kind 7");
+	}
+
+	private static DrawCommand Command(uint tag) =>
+		new(new SUIsei.Rect(0f, 0f, 8f, 8f), TextureIndex: 0, IndexOffset: 0, IndexCount: 6, VertexOffset: 0, Tag: tag);
+}

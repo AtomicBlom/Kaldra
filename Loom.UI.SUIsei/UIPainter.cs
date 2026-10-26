@@ -90,14 +90,16 @@ public sealed class UIPainter
 	}
 
 	/// <summary>
-	/// Make this frame's composited lists drawable: upload the images they reference, mint a draw-list stream for each
-	/// surface seen for the first time, and rebuild a surface's texture array when its list changed. Call once per
-	/// frame, after <see cref="UIHost.Render"/> and before <see cref="IEngine.Render"/>.
+	/// Make this frame's composited lists drawable: check each changed list's command kinds, upload the images it
+	/// references, mint a draw-list stream for each surface seen for the first time, and rebuild a surface's texture
+	/// array when its list changed. Call once per frame, after <see cref="UIHost.Render"/> and before
+	/// <see cref="IEngine.Render"/>.
 	/// <para>
 	/// It is a step of its own because images cannot be uploaded where they are discovered. <see cref="Draw"/> runs in
 	/// a pass callback, while the frame's commands are recorded, and an upload made there is submitted only ahead of
 	/// the next frame — so a new image's first frame would sample a texture its pixels had not reached, which is why
-	/// the engine refuses to create one there. A frame whose lists did not change allocates nothing here.
+	/// the engine refuses to create one there. A frame whose lists did not change does none of this, and allocates
+	/// nothing.
 	/// </para>
 	/// </summary>
 	public void Prepare()
@@ -109,7 +111,10 @@ public sealed class UIPainter
 			if (!_surfaces.TryGetValue(id, out var surface))
 				_surfaces[id] = surface = new PreparedSurface(_engine.AllocateDrawListStream());
 			if (surface.Revision != draw.Revision)
+			{
+				ValidateKinds(id, draw.Commands.Span);
 				ResolveTextures(surface, draw);
+			}
 			surface.Armed = true;
 		}
 	}
@@ -168,6 +173,30 @@ public sealed class UIPainter
 		// zero, so two hosts' ids collide.
 		var identity = new DrawListIdentity(surface.Stream, draw.Revision);
 		ctx.DrawList(Technique, identity, surface.Textures.AsSpan(0, surface.Count), draw.Vertices.Span, draw.Indices.Span, loomCommands, push);
+	}
+
+	/// <summary>
+	/// Refuse a list carrying a command kind the <c>ui</c> shader does not draw. A command's <c>Tag</c> selects the
+	/// shader's branch: kinds 0–4 (fill, rounded rect, border, glyph, image) are drawn, and 5 and 6 are the
+	/// group-opacity layer markers the draw-list walker consumes before a command reaches the shader. Anything else
+	/// would reach the shader's <c>switch</c> and fall through to a plain fill, because a shader has no way to fail —
+	/// so a compositor and shader that disagreed about a kind would draw the wrong thing without a word. Run once per
+	/// revision, from <see cref="Prepare"/>, so a steady frame pays nothing.
+	/// </summary>
+	internal static void ValidateKinds(DrawListId surface, ReadOnlySpan<DrawCommand> commands)
+	{
+		for (var i = 0; i < commands.Length; i++)
+		{
+			var tag = commands[i].Tag;
+			if (tag <= DrawListGeometry.KindImage || tag == DrawListGeometry.TagBeginLayer || tag == DrawListGeometry.TagEndLayer)
+				continue;
+			throw new InvalidOperationException(
+				$"UIPainter: command {i} of surface {surface.Value}'s draw list has kind {tag}, which the ui shader does not draw. " +
+				$"It draws kinds 0–{DrawListGeometry.KindImage} (fill, rounded rect, border, glyph, image), and " +
+				$"{DrawListGeometry.TagBeginLayer} and {DrawListGeometry.TagEndLayer} are the group-opacity layer markers. " +
+				"An unknown kind would draw as a plain fill, so the compositor that produced this list and ui.slang must " +
+				"gain the kind together.");
+		}
 	}
 
 	/// <summary>
