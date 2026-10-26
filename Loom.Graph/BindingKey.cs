@@ -10,7 +10,7 @@ namespace Loom.Graph;
 /// <para>
 /// It lives here rather than in a backend because the handles are opaque numbers — a 64-bit Vulkan handle, a WebGPU
 /// table index — and the one thing every backend needs beyond equality is the same: <see cref="Names"/>, which finds
-/// the keys that name an object being destroyed (see <see cref="BindingCache{TValue}"/>).
+/// the keys that name an object being destroyed (see <see cref="BindingCache"/>).
 /// </para>
 /// </summary>
 public struct BindingKey : IEquatable<BindingKey>

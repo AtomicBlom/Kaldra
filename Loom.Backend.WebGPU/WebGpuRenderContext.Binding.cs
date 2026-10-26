@@ -176,11 +176,11 @@ internal sealed partial class WebGpuRenderContext
 			}
 		}
 		if (_bindGroups.TryGetValue(key, out var cached))
-			return cached;
+			return (int)cached;
 
 		var handle = _engine.Handles.Allocate(WebGpuHandleAllocator.BindGroups);
 		WebGpuInterop.CreateBindGroup(handle, layout, entries);
-		_bindGroups.Add(key, handle);
+		_bindGroups.Add(key, BindingHandle(handle));
 		return handle;
 	}
 
@@ -195,7 +195,7 @@ internal sealed partial class WebGpuRenderContext
 	{
 		_bindGroups.Evict(kind, BindingHandle(handle), _evictedGroups);
 		foreach (var group in _evictedGroups)
-			_engine.Handles.Release(WebGpuHandleAllocator.BindGroups, group);
+			_engine.Handles.Release(WebGpuHandleAllocator.BindGroups, (int)group);
 		_evictedGroups.Clear();
 	}
 

@@ -40,9 +40,9 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	// Per-(technique, bound resources) bind groups. Transients are stable per graph, so a fullscreen/draw's inputs
 	// don't change frame to frame — the group is created once and reused. Cleared on graph swap and hot-reload, and
 	// evicted entry by entry when the app releases a texture or mesh one names: every handle it names is recycled.
-	private readonly BindingCache<int> _bindGroups = new();
+	private readonly BindingCache _bindGroups = new();
 	// Scratch for the groups one eviction removes, kept so a release allocates nothing once it has grown.
-	private readonly List<int> _evictedGroups = [];
+	private readonly List<ulong> _evictedGroups = [];
 
 	// The current pass's attachment formats (set by the engine before the pass's Record runs) — the formats a
 	// technique bakes its pipeline against.
@@ -143,7 +143,7 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	public void ClearBindGroups()
 	{
 		foreach (var handle in _bindGroups.Values)
-			_engine.Handles.Release(WebGpuHandleAllocator.BindGroups, handle);
+			_engine.Handles.Release(WebGpuHandleAllocator.BindGroups, (int)handle);
 		_bindGroups.Clear();
 	}
 

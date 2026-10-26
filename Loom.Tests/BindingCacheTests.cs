@@ -3,7 +3,7 @@ using Loom.Graph;
 namespace Loom.Tests;
 
 /// <summary>
-/// <see cref="BindingCache{TValue}"/> is what keeps a cached descriptor set or bind group from outliving an object it
+/// <see cref="BindingCache"/> is what keeps a cached descriptor set or bind group from outliving an object it
 /// names. Vulkan and WebGPU both key their caches by object handle, and WebGPU's handles are table indices its allocator
 /// hands straight back out: release a texture and the next view created gets its view's number. A bind group still
 /// keyed by that number would then bind the destroyed view in the new texture's place — a wrong image, not an error.
@@ -19,15 +19,15 @@ public class BindingCacheTests
 	public void A_recycled_view_handle_misses_once_the_released_view_is_evicted()
 	{
 		// A draw list sampling texture A builds a group naming A's view, handle 7.
-		var cache = new BindingCache<int>();
+		var cache = new BindingCache();
 		cache.Add(KeyNamingView(7), 100);
 
 		// A is released: its groups go first, then handle 7 returns to the allocator. Texture B's view is created next
 		// and is handed handle 7. Its draw must build a fresh group, not hit A's.
-		var evicted = new List<int>();
+		var evicted = new List<ulong>();
 		cache.Evict(BoundObject.View, 7, evicted);
 
-		evicted.ShouldBe([100], "the group naming the released view should come back for the backend to release");
+		evicted.ShouldBe([100UL], "the group naming the released view should come back for the backend to release");
 		cache.TryGetValue(KeyNamingView(7), out _).ShouldBeFalse("a key naming the recycled handle must miss once the released view's group is evicted");
 	}
 
@@ -37,16 +37,16 @@ public class BindingCacheTests
 		// The hazard eviction exists for, stated as a fact about the key: the same number names the same key, whatever
 		// object currently owns it. If this stopped being true the cache would need no eviction — and the other tests
 		// would pass for the wrong reason.
-		var cache = new BindingCache<int>();
+		var cache = new BindingCache();
 		cache.Add(KeyNamingView(7), 100);
 		cache.TryGetValue(KeyNamingView(7), out var stale).ShouldBeTrue();
-		stale.ShouldBe(100);
+		stale.ShouldBe(100UL);
 	}
 
 	[Test]
 	public void Eviction_takes_every_binding_naming_the_object_and_nothing_else()
 	{
-		var cache = new BindingCache<int>();
+		var cache = new BindingCache();
 		var withSampledView = KeyNamingView(7);
 		var viewAmongOthers = new BindingKey(Layout, Sampler);
 		viewAmongOthers.Add(0, BoundObject.View, 5);
@@ -57,13 +57,13 @@ public class BindingCacheTests
 		cache.Add(viewAmongOthers, 2);
 		cache.Add(otherView, 3);
 
-		var evicted = new List<int>();
+		var evicted = new List<ulong>();
 		cache.Evict(BoundObject.View, 7, evicted);
 
-		evicted.Order().ShouldBe([1, 2]);
+		evicted.Order().ShouldBe([1UL, 2UL]);
 		cache.Count.ShouldBe(1);
 		cache.TryGetValue(otherView, out var kept).ShouldBeTrue();
-		kept.ShouldBe(3);
+		kept.ShouldBe(3UL);
 	}
 
 	[Test]
@@ -71,19 +71,19 @@ public class BindingCacheTests
 	{
 		// WebGPU numbers each object table from zero, so a buffer and a view share every small handle. Releasing view 7
 		// must not drop a group that binds buffer 7 — and releasing mesh buffer 7 must not drop one that samples view 7.
-		var cache = new BindingCache<int>();
+		var cache = new BindingCache();
 		var buffer = new BindingKey(Layout);
 		buffer.Add(0, BoundObject.Buffer, 7);
 		cache.Add(buffer, 1);
 		cache.Add(KeyNamingView(7), 2);
 
-		var evicted = new List<int>();
+		var evicted = new List<ulong>();
 		cache.Evict(BoundObject.View, 7, evicted);
-		evicted.ShouldBe([2]);
+		evicted.ShouldBe([2UL]);
 
 		evicted.Clear();
 		cache.Evict(BoundObject.Buffer, 7, evicted);
-		evicted.ShouldBe([1]);
+		evicted.ShouldBe([1UL]);
 		cache.Count.ShouldBe(0);
 	}
 

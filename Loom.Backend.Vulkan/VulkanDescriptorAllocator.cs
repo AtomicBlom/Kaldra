@@ -12,8 +12,9 @@ namespace Loom.Backend.Vulkan;
 /// </summary>
 internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 {
-	/// <summary>A set from the persistent chain, with the pool it came from — freeing one set on its own needs both.</summary>
-	public readonly record struct PersistentSet(DescriptorSet Set, DescriptorPool Pool);
+	// The pool each live persistent set came from, by the set's handle: freeing one set on its own needs both, and the
+	// cache that holds the set keeps only its handle.
+	private readonly Dictionary<ulong, DescriptorPool> _setPools = [];
 
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
@@ -23,8 +24,9 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 	private int _frameIndex;
 	private int _poolIndex;
 	private int _persistentIndex;
-	// Persistent sets dropped from the cache that a frame in flight may still bind, each with the last frame that can.
-	private readonly List<(PersistentSet Set, ulong LastReadingFrame)> _retiring = [];
+	// Persistent sets dropped from the cache that a frame in flight may still bind, each with its pool and the last frame
+	// that can.
+	private readonly List<(DescriptorSet Set, DescriptorPool Pool, ulong LastReadingFrame)> _retiring = [];
 
 	public VulkanDescriptorAllocator(VulkanContext ctx, int framesInFlight, uint maxSetsPerFrame = 64)
 	{
@@ -83,10 +85,10 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 	/// <para>
 	/// The caller is responsible for calling <see cref="ResetPersistent"/> whenever a whole generation of what cached
 	/// sets name dies, and <see cref="RetirePersistent"/> for each set evicted on its own — see
-	/// <see cref="Loom.Graph.BindingCache{TValue}"/>'s invariant.
+	/// <see cref="Loom.Graph.BindingCache"/>'s invariant.
 	/// </para>
 	/// </summary>
-	public PersistentSet AllocatePersistent(DescriptorSetLayout layout)
+	public DescriptorSet AllocatePersistent(DescriptorSetLayout layout)
 	{
 		while (true)
 		{
@@ -104,7 +106,8 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 			if (result is not (Result.ErrorOutOfPoolMemory or Result.ErrorFragmentedPool))
 			{
 				result.Check("vkAllocateDescriptorSets");
-				return new PersistentSet(set, pool);
+				_setPools.Add(set.Handle, pool);
+				return set;
 			}
 			_persistentIndex++;
 			if (_persistentIndex >= _persistentPools.Count)
@@ -120,7 +123,12 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 	/// Free a persistent set evicted from the cache once frame <paramref name="lastReadingFrame"/> has completed. A frame
 	/// already submitted may bind it, so it is freed on the same schedule as the object whose release evicted it.
 	/// </summary>
-	public void RetirePersistent(PersistentSet set, ulong lastReadingFrame) => _retiring.Add((set, lastReadingFrame));
+	public void RetirePersistent(DescriptorSet set, ulong lastReadingFrame)
+	{
+		if (!_setPools.Remove(set.Handle, out var pool))
+			throw new VulkanException($"Descriptor set 0x{set.Handle:X} is not a live persistent set, so it cannot be retired.");
+		_retiring.Add((set, pool, lastReadingFrame));
+	}
 
 	/// <summary>Free every retired persistent set whose last reading frame is <paramref name="completedFrame"/> or earlier.</summary>
 	public void CollectRetired(ulong completedFrame)
@@ -129,7 +137,7 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 		{
 			if (_retiring[i].LastReadingFrame > completedFrame)
 				continue;
-			var (set, pool) = _retiring[i].Set;
+			var (set, pool, _) = _retiring[i];
 			_vk.FreeDescriptorSets(_ctx.Device, pool, 1, in set).Check("vkFreeDescriptorSets");
 			_retiring.RemoveAt(i);
 		}
@@ -142,6 +150,7 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 		foreach (var pool in _persistentPools)
 			_vk.ResetDescriptorPool(_ctx.Device, pool, 0).Check("vkResetDescriptorPool");
 		_persistentIndex = 0;
+		_setPools.Clear();
 		_retiring.Clear();
 	}
 
