@@ -21,7 +21,7 @@ public class UIPainterKindTests
 	{
 		DrawCommand[] commands =
 		[
-			Command(0), Command(1), Command(2), Command(3), Command(DrawListGeometry.KindImage),
+			Command(0), Command(1), Command(2), Command(3), Command(DrawListGeometry.KindImage), Command(7),
 			Command(DrawListGeometry.TagBeginLayer), Command(DrawListGeometry.TagEndLayer),
 		];
 		UIPainter.ValidateKinds(Surface, commands);
@@ -30,13 +30,14 @@ public class UIPainterKindTests
 	[Test]
 	public void An_unknown_kind_is_refused_by_command_and_surface()
 	{
-		DrawCommand[] commands = [Command(0), Command(DrawListGeometry.KindImage), Command(7)];
+		// 7 is the vector kind, numbered past the layer markers; 8 is the first kind the shader does not draw.
+		DrawCommand[] commands = [Command(0), Command(7), Command(8)];
 
 		var refused = Should.Throw<InvalidOperationException>(() => UIPainter.ValidateKinds(Surface, commands));
 
 		refused.Message.ShouldContain("command 2");
 		refused.Message.ShouldContain("surface 3");
-		refused.Message.ShouldContain("kind 7");
+		refused.Message.ShouldContain("kind 8");
 	}
 
 	[Test]
