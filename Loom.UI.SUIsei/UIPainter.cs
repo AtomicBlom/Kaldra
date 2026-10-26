@@ -32,7 +32,7 @@ public sealed class UIPainter
 {
 	private const string Technique = "ui";
 	// The vector kind: ui.slang's KIND_VECTOR, the one drawn kind numbered past the layer markers.
-	private const uint KindVector = 7;
+	private const uint KindVector = (uint)UIPrimKind.Vector;
 	// Paper-white luminance reference for an HDR target: UIPaperWhiteNits / 80. SDR targets pass 1.0.
 	private const float HdrPaperWhiteScale = 200f / 80f;
 
