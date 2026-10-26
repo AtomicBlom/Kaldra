@@ -163,7 +163,7 @@ internal sealed unsafe partial class VulkanRenderContext
 	/// </para>
 	/// <para>
 	/// <b>Invariant:</b> nothing a cached set names may be destroyed while the set is cached (see
-	/// <see cref="BindingCache{TValue}"/>). The ring buffers cannot die at all (see
+	/// <see cref="BindingCache"/>). The ring buffers cannot die at all (see
 	/// <see cref="VulkanInstanceUploadBuffer"/>). Transient image views, samplers and set layouts die only at graph swap,
 	/// resize and shader hot-reload, all of which call <see cref="FlushDescriptorCache"/>. Texture views and mesh
 	/// buffers die one at a time when the app releases them, which calls <see cref="EvictBindings"/>. A further place
@@ -173,14 +173,14 @@ internal sealed unsafe partial class VulkanRenderContext
 	private DescriptorSet GetOrCreateSet(DescriptorSetLayout layout, in BindingKey key, WriteDescriptorSet* writes, int count)
 	{
 		if (_cachedSets.TryGetValue(key, out var cached))
-			return cached.Set;
+			return new DescriptorSet(cached);
 
-		var persistent = _descriptors.AllocatePersistent(layout);
+		var set = _descriptors.AllocatePersistent(layout);
 		for (var i = 0; i < count; i++)
-			writes[i].DstSet = persistent.Set;
+			writes[i].DstSet = set;
 		_vk.UpdateDescriptorSets(_ctx.Device, (uint)count, writes, 0, null);
-		_cachedSets.Add(key, persistent);
-		return persistent.Set;
+		_cachedSets.Add(key, set.Handle);
+		return set;
 	}
 
 	/// <summary>Drop every cached set and free the sets behind them. Called at the drained moments where something a
@@ -206,7 +206,7 @@ internal sealed unsafe partial class VulkanRenderContext
 	{
 		_cachedSets.Evict(kind, handle, _evictedSets);
 		foreach (var set in _evictedSets)
-			_descriptors.RetirePersistent(set, lastReadingFrame);
+			_descriptors.RetirePersistent(new DescriptorSet(set), lastReadingFrame);
 		_evictedSets.Clear();
 	}
 
