@@ -18,13 +18,19 @@ namespace Loom.Tests;
 public class DrawListGeometryTests
 {
 	[Test]
-	public void Scissor_truncates_each_edge_independently()
+	public void Scissor_keeps_the_pixels_whose_centres_the_clip_covers()
 	{
-		// The case the three backends disagreed on: a fractional origin whose fraction exceeds the extent's. Truncating
-		// each edge covers every pixel whose origin is inside the clip (x=10 up to but excluding 15); subtracting first
-		// and truncating the difference — trunc(15.4 - 10.5) = 4 — loses the last one.
-		DrawListGeometry.Scissor(new Rect(10.5f, 10.5f, 4.9f, 4.9f), 100, 100)
-			.ShouldBe((10, 10, 5, 5));
+		// A fractional origin whose fraction exceeds the extent's: x 10.5..15.4. Each edge is rounded on its own, so the
+		// pixels whose centres lie inside are kept, 10 (its centre on the near edge) to 14; subtracting first and
+		// rounding the difference would lose one.
+		DrawListGeometry.Scissor(new Rect(10.5f, 10.5f, 4.9f, 4.9f), 100, 100).ShouldBe((10, 10, 5, 5));
+
+		// Edges between pixel rows: x 10.4..30.4 keeps the centres 10.5 to 29.5, y 10.6..20.6 the centres 11.5 to 20.5.
+		// Truncating instead keeps row 10 (centre 10.5, outside) and loses row 20 (centre 20.5, inside).
+		DrawListGeometry.Scissor(new Rect(10.4f, 10.6f, 20f, 10f), 100, 100).ShouldBe((10, 11, 20, 10));
+
+		// A centre on the far edge is out.
+		DrawListGeometry.Scissor(new Rect(0f, 0f, 10.5f, 10.5f), 100, 100).ShouldBe((0, 0, 10, 10));
 	}
 
 	[Test]
