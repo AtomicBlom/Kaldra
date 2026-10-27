@@ -29,6 +29,7 @@ internal sealed partial class WebGpuEngine
 		_listVertexRing.BeginFrame();
 		_listIndexRing.BeginFrame();
 		_context.BeginFrame(inputs.DeltaSeconds, inputs.Time);
+		_layerTargets.BeginFrame(_context); // before recording, so a layer texture it retires is named only by submitted work
 
 		// Everything the derived plan needs recording, in the order EngineBase fixes for every backend — which is also
 		// what moved this backend's readback copies ahead of its capture copy, matching the other two.

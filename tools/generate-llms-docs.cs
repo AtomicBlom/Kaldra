@@ -34,16 +34,14 @@ var xmlSummaries = new List<(string Member, string Summary)>();
 // Only include key consumer-facing assemblies in XML summaries (keeps full output manageable)
 var keyAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     { "Loom.Core", "Loom.Graph", "Loom.Assets", "SUIsei" };
-// A Release build copies each assembly's XML into every project output that references it (and a publish adds more),
-// so the same file turns up many times. Read one copy per assembly, the newest, or every summary repeats once per
-// copy and the output depends on which projects happen to have been built. A doc file is named after its assembly,
-// so group by file name, and emit the assemblies in name order whatever their timestamps.
+// Every project that references an assembly copies its XML doc into its own output, so one assembly's doc is on disk
+// many times over. Read each assembly once, from its newest copy, so the output depends on the sources rather than on
+// how many projects happen to have been built.
 var xmlPaths = Directory.EnumerateFiles(repoRoot, "*.xml", SearchOption.AllDirectories)
     .Where(p => !p.Contains("obj") && !p.Contains("external") && p.Contains("Release"))
-    .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
-    .Where(copies => keyAssemblies.Contains(copies.Key))
-    .OrderBy(copies => copies.Key, StringComparer.Ordinal)
-    .Select(copies => copies.OrderByDescending(File.GetLastWriteTimeUtc).First());
+    .OrderByDescending(File.GetLastWriteTimeUtc)
+    .ThenBy(p => p, StringComparer.Ordinal);
+var assembliesRead = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
 foreach (var xmlPath in xmlPaths)
 {
@@ -52,7 +50,7 @@ foreach (var xmlPath in xmlPaths)
         var xd = new XmlDocument();
         xd.Load(xmlPath);
         var assemblyName = xd.SelectSingleNode("/doc/assembly/name")?.InnerText ?? "";
-        if (!keyAssemblies.Contains(assemblyName)) continue;
+        if (!keyAssemblies.Contains(assemblyName) || !assembliesRead.Add(assemblyName)) continue;
         var members = xd.SelectNodes("/doc/members/member");
         if (members is null) continue;
 
@@ -162,7 +160,7 @@ string BuildFull()
     {
         sb.AppendLine("## Public API Summaries (from XML docs)");
         sb.AppendLine();
-        foreach (var (member, summary) in xmlSummaries)
+        foreach (var (member, summary) in xmlSummaries.OrderBy(s => s.Member, StringComparer.Ordinal))
             sb.AppendLine($"- **{member}**: {summary}");
     }
 
