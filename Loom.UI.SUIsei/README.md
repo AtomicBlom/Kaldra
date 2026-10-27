@@ -8,6 +8,7 @@ SUIsei is headless: a `UIHost` ticks, routes input, and composites your XAML vis
 
 - Provides `UIPainter` — submit a host's composited draw lists into a render pass through `IRenderContext.DrawList`. SUIsei's draw-list structs are binary-identical to Loom's, so the submission is zero-copy.
 - Registers the `ui` technique, and uploads, shares and releases the textures the draw lists sample — the white texel, the glyph atlas pages, images — through the public engine API.
+- Provides `InWorldPanel`, a UI tree drawn into a texture on a quad in the scene, and `ScreenAnchors`, screen-space elements pinned to world points ([World anchors](#world-anchors)).
 - Includes the UI shader (compiled from Slang) distributed as a content file alongside the package.
 
 Neither the Vulkan nor the DirectX 12 backend references SUIsei — the integration lives entirely in this package, on top of the same neutral draw-list verb the ImGui overlay uses.
@@ -58,6 +59,31 @@ ui.Prepare();                                      // upload, share and release 
 **Several hosts in one frame.** Every `UIHost` numbers its surfaces from zero, so a HUD and an `InWorldPanel` both have a surface 0. The painter does not use those ids for the geometry the backend keeps between frames: it mints a draw-list stream per surface from `engine.AllocateDrawListStream()`, unique on the engine, so any number of hosts and painters can draw in the same frame.
 
 `InWorldPanel` drives its own host and painter: its `Render()` composites and prepares in one call, so call it each frame before `engine.Render(...)` and draw it with `panel.Draw(ctx)`.
+
+## World anchors
+
+`ScreenAnchors` pins screen-space elements to world points — a label over an object, a marker on a path — and keeps them there as the camera moves:
+
+```csharp
+// Once: anchors on a view of their own, reading the engine's clip-space convention.
+var anchors = ScreenAnchors.Create(engine, host.CreateRoot(new UILayer(1)));
+var start = anchors.Add(label, worldPoint, alignment: new(0.5f, 1f), pixelOffset: new(0f, -8f));
+
+g.Pass("labels").Blends(g.Backbuffer).Draw(ctx => ui.Draw(ctx, anchors.View.Surface));
+
+// Each frame, between the host's Tick and Render:
+host.Tick(dt, time, framebufferSize);
+anchors.Update(camera.ViewProjection, framebufferSize, dt);
+host.Render();
+ui.Prepare();
+```
+
+- **Where an element goes.** `alignment` is the point of the element, as a fraction of its size, that sits on the projected point: (0,0) its top-left corner, (0.5,0.5) its centre, (0.5,1) the middle of its bottom edge. `pixelOffset` moves it further, in layout units (pixels at a layout scale of 1). The projection is `Loom.Core.Geometry`'s `viewProjection.TryProjectToScreen`, with the engine's `ClipSpaceCorrection` read once at `Create`, so a point lands on the same pixel on Vulkan, DirectX 12 and WebGPU. Pass the view-projection the frame renders the world with, correction included — `Camera.ViewProjection` is.
+- **Each element gets a container.** The container carries the anchor's position, as its `UIElement.Translation`, and its fade, as its `Opacity`; the element's own layout, transform and opacity — and any storyboard on them — are left alone and compose with it. `Translation` writes the container's visual directly, so moving anchors lays nothing out.
+- **Fades.** An anchor fades out over `FadeSeconds` (default 0.2) while its point is off the viewport, beyond `ViewportMargin`, or behind the eye — where it stays at the last place it was seen — and fades back in when the point returns. A fully faded container leaves layout and composition until then, so hidden anchors cost nothing per frame. A new anchor joins hidden and fades in once the host has laid it out.
+- **No allocation per frame.** Anchors live in a pooled array of structs; `Add` allocates the container, `Update` nothing. `Loom.Tests`' `ScreenAnchorsTests` moves a hundred anchors a frame — shapes, boxes and text, fading in and out — through `Update`, the host's `Tick` and its `Render` with no allocation once warm.
+- **Give the anchors a view of their own.** `Create` takes a `UIView` whose root is empty and fills it. SUIsei recomposites a view's whole draw list when anything in it changes, and moving anchors change every frame, so on a view shared with a static HUD they would recomposite the HUD every frame as well. A root of its own on the HUD's host works; so does a host of its own, which also lets the anchors be placed against a camera computed after the HUD has composited (the gallery's In-World UI demo does this).
+- **Not occluded.** UI draws over the frame without reading its depth, so an anchor whose point is behind a wall still shows. Hiding it would take the scene's depth at the anchor points — a pass sampling the depth target at each point into a small target, read back a frame or two late, with the fade covering the latency.
 
 ## Dependencies
 

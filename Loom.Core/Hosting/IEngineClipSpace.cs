@@ -14,9 +14,12 @@ namespace Loom.Core.Hosting;
 public interface IEngineClipSpace
 {
 	/// <summary>
-	/// The clip-space fix-up to post-multiply onto a right-handed, +Y-up view-projection: <c>diag(1,-1,1,1)</c> on
-	/// a +Y-down API (Vulkan), identity on a +Y-up one (DirectX12). Composing it lets a host-built projection render
-	/// upright on either backend without the host hardcoding a backend's clip-space Y direction.
+	/// The clip-space fix-up to post-multiply onto a right-handed, +Y-up view-projection: <c>diag(1,-1,1,1)</c> on a
+	/// backend that puts NDC Y=-1 at the top of its targets (Vulkan natively, and DirectX12, which pairs it with a
+	/// negative-height viewport), identity on one that puts +1 there (WebGPU). Composing it lets a host-built projection
+	/// render upright on every backend without the host hardcoding a backend's clip-space Y direction. Anything that
+	/// maps between screen pixels and NDC — <c>Matrix4x4.TryProjectToScreen</c> and <c>TryUnprojectFromScreen</c> in
+	/// <c>Loom.Core.Geometry</c> — takes the same matrix, to know which way NDC Y runs.
 	/// </summary>
 	Matrix4x4 ClipSpaceCorrection { get; }
 }

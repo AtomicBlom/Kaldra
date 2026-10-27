@@ -283,6 +283,9 @@ Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projec
 | `Vertex` (`Loom.Core.Geometry`) | The canonical interleaved vertex — `record struct (Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Tangent)`, 48 bytes. |
 | `SkinnedVertex` (`Loom.Core.Animation`) | The skinned bind-pose vertex — `Vertex` fields plus four bone indices (`Joint0..3`) + `Vector4 Weights`, 80 bytes. |
 | `OverlayVertex` (`Loom.Core.Geometry`) | The 2D overlay vertex (position, uv, premultiplied RGBA16F colour, custom) used by draw lists. |
+| `viewProjection.TryProjectToScreen(world, viewportSize, clipSpaceCorrection, out screen, out depth)` (`Loom.Core.Geometry`) | Extension member on `Matrix4x4`: a world point → viewport pixels (top-left origin, +Y down) and NDC depth, through the view-projection an app hands its shaders. `clipSpaceCorrection` is `IEngine.ClipSpaceCorrection`, which says which way the backend's NDC Y runs, so the pixel is the same on every backend. False when the point is on or behind the eye's plane. |
+| `viewProjection.TryUnprojectFromScreen(screen, depth, viewportSize, clipSpaceCorrection, out world)` (`Loom.Core.Geometry`) | The inverse: the world point under a viewport pixel at an NDC depth (0 and 1 give the near and far ends of its ray). |
+| `viewProjection.GetFrustumCorners()` / `ToFrustum()` (`Loom.Core.Geometry`) | Extension members on `Matrix4x4`: the eight world-space frustum corners, and the six planes as a `Frustum`. |
 | `VertexLayout` (`Loom.Core.Geometry`) | A backend-neutral per-stream attribute layout. Built-ins: `MeshStandard`, `MeshSkinned`, `Overlay`, `Transform` (the standard per-instance 4×4 matrix stream). |
 | `Material` (`Loom.Core.Materials`) | An opaque `record struct (int Id)` — an ordered `Texture` bundle from `IEngine.CreateMaterial` that fills a technique's reflected sampler slots. |
 | `Texture` (`Loom.Core.Materials`) | An opaque handle to an uploaded texture from `IEngine.CreateTexture`. Survives graph swaps; dies at `IEngine.ReleaseTexture`. Ids start at 1, so `default(Texture)` names nothing and is refused. |
@@ -310,3 +313,14 @@ The cross-backend verb behind overlay/UI-style rendering (game UI via SUIsei, Im
 |---|---|
 | `DrawCommand` | One run within a list — `record struct (Rect ClipRect, int TextureIndex, int IndexOffset, int IndexCount, int VertexOffset, uint Tag)`. `Tag` is the per-command value a list-push technique reads. |
 | `DrawListIdentity` | `record struct (int Stream, uint Revision)` — which kept geometry stream a list is and which revision of it. `Transient` (revision 0) keeps nothing; a stable stream comes from `IEngine.AllocateDrawListStream()` and is refused otherwise, because two producers sharing one would draw each other's geometry. |
+
+## World-anchored UI (`Loom.UI.SUIsei`)
+
+Screen-space SUIsei elements that follow points in the world — labels over objects, markers along a path. App-side: the engine names no anchor; this sits in the SUIsei bridge on top of `TryProjectToScreen`.
+
+| Member | Role |
+|---|---|
+| `ScreenAnchors.Create(engine, view)` | Anchors that fill `view`, a `UIView` of their own (its root must be empty), reading `engine.ClipSpaceCorrection` once. Draw `anchors.View.Surface` with a `UIPainter` like any view. |
+| `anchors.Add(element, world, alignment, pixelOffset)` → `ScreenAnchorId` | Wrap `element` in a container pinned to `world`: `alignment` is the fraction of the element's size that sits on the point ((0.5, 1) the middle of its bottom edge), `pixelOffset` a further offset in layout units. |
+| `anchors.SetWorldPosition(id, world)` / `SetPlacement(id, alignment, pixelOffset)` / `Remove(id)` / `GetFade(id)` | Move, re-place, remove (a removed id throws if used again) and read an anchor's fade. |
+| `anchors.Update(viewProjection, framebufferSize, deltaSeconds)` | Each frame between the host's `Tick` and `Render`: move every container to its projected point through `UIElement.Translation` (no layout) and step its fade — out while the point is off the viewport (beyond `ViewportMargin`) or behind the eye, on the container, so the element's own opacity is untouched. Allocates nothing. `FadeSeconds` sets the fade's length. |

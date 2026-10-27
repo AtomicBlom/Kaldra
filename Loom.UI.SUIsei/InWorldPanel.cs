@@ -1,4 +1,5 @@
 using System.Numerics;
+using Loom.Core.Geometry;
 using Loom.Core.Hosting;
 using SUIsei;
 using SUIsei.Input;
@@ -31,15 +32,13 @@ public sealed class InWorldPanel
 	private readonly int _pixelWidth;
 	private readonly int _pixelHeight;
 	private readonly bool _billboard;
-	// The screen-to-NDC Y multiplier TryUnprojectToPanel needs, derived from the same ClipSpaceCorrection the camera
-	// composed into viewProjection (so this can never drift out of sync with a backend's actual convention the way a
-	// hardcoded assumption would): +1 when the correction negates Y (Vulkan/DirectX12 — screen Y=0 already lands on
-	// NDC Y=-1, the top, with no further flip needed), -1 when it's Identity (WebGPU's native Y-up NDC — screen Y=0
-	// must map to NDC Y=+1, the top, so the plain screen-to-NDC formula needs negating).
-	private readonly float _ndcYSign;
+	// The engine's ClipSpaceCorrection, read once at creation: the same correction the camera composed into the
+	// view-projection Tick receives, so turning a screen position into a ray can never drift out of sync with the
+	// backend's NDC Y direction the way a hardcoded assumption would.
+	private readonly Matrix4x4 _clipSpaceCorrection;
 
 	private InWorldPanel(UIHost host, UIView view, UIPainter painter,
-		int pixelWidth, int pixelHeight, Matrix4x4 worldTransform, bool billboard, float ndcYSign)
+			int pixelWidth, int pixelHeight, Matrix4x4 worldTransform, bool billboard, Matrix4x4 clipSpaceCorrection)
 	{
 		_host = host;
 		_view = view;
@@ -48,7 +47,7 @@ public sealed class InWorldPanel
 		_pixelHeight = pixelHeight;
 		WorldTransform = worldTransform;
 		_billboard = billboard;
-		_ndcYSign = ndcYSign;
+		_clipSpaceCorrection = clipSpaceCorrection;
 	}
 
 	/// <summary>
@@ -67,8 +66,7 @@ public sealed class InWorldPanel
 		var host = new UIHost();
 		var view = host.CreateRoot(new UILayer(0, layoutScale), interactive: true);
 		var painter = UIPainter.Create(engine, host);
-		var ndcYSign = engine.ClipSpaceCorrection.M22 < 0f ? 1f : -1f;
-		return new InWorldPanel(host, view, painter, pixelWidth, pixelHeight, worldTransform, billboard, ndcYSign);
+		return new InWorldPanel(host, view, painter, pixelWidth, pixelHeight, worldTransform, billboard, engine.ClipSpaceCorrection);
 	}
 
 	/// <summary>The underlying <see cref="UIView"/>. Set <c>View.Root.Content</c> to assign the panel's UI tree.</summary>
@@ -158,17 +156,12 @@ public sealed class InWorldPanel
 	/// <param name="framebufferSize">Window framebuffer size in pixels.</param>
 	public Vector2? ProjectToScreen(Vector2 panelPixel, Matrix4x4 viewProjection, Vector2 framebufferSize)
 	{
-		// Panel pixels → quad-local (a unit XY plane, +Y up) → world → clip.
+		// Panel pixels → quad-local (a unit XY plane, +Y up) → world → framebuffer pixels, undoing TryUnprojectToPanel's
+		// mapping through the same clip-space correction.
 		var local = new Vector3((panelPixel.X / _pixelWidth) - 0.5f, 0.5f - (panelPixel.Y / _pixelHeight), 0f);
-		var clip = Vector4.Transform(new Vector4(Vector3.Transform(local, WorldTransform), 1f), viewProjection);
-		if (clip.W <= 0f)
-			return null;
-
-		// NDC → screen, undoing TryUnprojectToPanel's mapping, including its per-backend Y sign.
-		var ndc = new Vector2(clip.X / clip.W, clip.Y / clip.W);
-		return new Vector2(
-			(ndc.X + 1f) * 0.5f * framebufferSize.X,
-			((_ndcYSign * ndc.Y) + 1f) * 0.5f * framebufferSize.Y);
+		return viewProjection.TryProjectToScreen(Vector3.Transform(local, WorldTransform), framebufferSize, _clipSpaceCorrection, out var screen, out _)
+			? screen
+			: null;
 	}
 
 	private void UpdateBillboard(Matrix4x4 view)
@@ -204,21 +197,12 @@ public sealed class InWorldPanel
 	{
 		uiLocal = default;
 
-		// Map screen coords to the engine's NDC. viewProjection is clip-space-corrected, so its Y convention matches
-		// _ndcYSign (derived from that same correction at construction) — screen Y=0 (top) always lands on whichever
-		// NDC Y the active backend puts at the top, on every backend.
-		var ndc = new Vector2(
-			(screenPos.X / framebufferSize.X) * 2f - 1f,
-			_ndcYSign * ((screenPos.Y / framebufferSize.Y) * 2f - 1f));
-
-		if (!Matrix4x4.Invert(viewProjection, out var invVP))
+		// The ray under the pointer, from the near plane (NDC Z=0) to the far one (Z=1). viewProjection is
+		// clip-space-corrected, and the same correction tells the unprojection which way the backend's NDC Y runs, so
+		// screen Y=0 (top) lands on whichever NDC Y the active backend puts at the top.
+		if (!viewProjection.TryUnprojectFromScreen(screenPos, 0f, framebufferSize, _clipSpaceCorrection, out var nearW)
+			|| !viewProjection.TryUnprojectFromScreen(screenPos, 1f, framebufferSize, _clipSpaceCorrection, out var farW))
 			return false;
-
-		// Unproject near (Z=0) and far (Z=1) clip-space points to world space.
-		var nearH = Vector4.Transform(new Vector4(ndc.X, ndc.Y, 0f, 1f), invVP);
-		var farH = Vector4.Transform(new Vector4(ndc.X, ndc.Y, 1f, 1f), invVP);
-		var nearW = new Vector3(nearH.X, nearH.Y, nearH.Z) / nearH.W;
-		var farW = new Vector3(farH.X, farH.Y, farH.Z) / farH.W;
 		var rayDir = Vector3.Normalize(farW - nearW);
 
 		// Transform ray into quad-local space. The quad is a unit XY plane (Z = 0, spanning [-0.5, 0.5]²).

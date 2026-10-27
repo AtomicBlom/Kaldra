@@ -174,6 +174,22 @@ ui.Prepare();
 
 Several hosts can draw in one frame (a HUD plus an in-world panel): each painter keeps its surfaces' geometry under draw-list streams it mints with `engine.AllocateDrawListStream()`, so their surface ids, which every host numbers from zero, never collide. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
 
+UI can follow the world two ways. `InWorldPanel` draws a UI tree into a texture on a quad in the scene. `ScreenAnchors` keeps screen-space elements — labels, markers — pinned to world points: each frame it moves them to where the frame's view-projection puts their points, and fades out the ones whose points leave the viewport or go behind the eye. Give the anchors a view of their own, since they change every frame and SUIsei recomposites a whole view when anything in it changes:
+
+```csharp
+var anchors = ScreenAnchors.Create(engine, host.CreateRoot(new UILayer(1)));
+anchors.Add(new TextBlock { Text = "Start" }, startLine, alignment: new(0.5f, 1f), pixelOffset: new(0f, -8f));
+g.Pass("labels").Blends(screen).Draw(ctx => ui.Draw(ctx, anchors.View.Surface));
+
+// each frame: lay out, place, composite
+host.Tick(dt, time, size);
+anchors.Update(camera.ViewProjection, size, dt);
+host.Render();
+ui.Prepare();
+```
+
+The projection under it is plain matrix maths in `Loom.Core.Geometry` — `viewProjection.TryProjectToScreen(world, size, engine.ClipSpaceCorrection, out var pixel, out var depth)` — which reads the engine's clip-space correction to put a point on the same pixel on every backend.
+
 ### Build & run
 
 ```bash
