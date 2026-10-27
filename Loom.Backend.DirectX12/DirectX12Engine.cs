@@ -126,6 +126,11 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_fenceEvent = CreateEventW(0, 0, 0, 0);
 		if (_fenceEvent == 0)
 			throw new InvalidOperationException("CreateEvent failed for the DirectX12 frame-pacing fence.");
+		// Bind the wait now rather than on the frame that first needs it. The runtime binds a P/Invoke on its first call
+		// and allocates while it does (the library's name, as a managed string), and a frame only waits once the GPU
+		// falls behind, which can first happen long after the loop is warm. The event starts unsignalled, so a zero
+		// timeout returns at once and leaves it that way.
+		WaitForSingleObject(_fenceEvent, 0);
 
 		_pipelineBlobs = new DirectX12PipelineBlobCache(_ctx, settings.PersistentPipelineCache);
 		_techniques = new DirectX12TechniqueCache(_ctx, _pipelineBlobs);
