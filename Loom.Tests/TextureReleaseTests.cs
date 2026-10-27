@@ -237,7 +237,7 @@ public class TextureReleaseTests
 		private readonly OverlayVertex[] _quad;
 		private readonly ushort[] _indices = [0, 1, 2, 0, 2, 3];
 		private readonly DrawCommand[] _command;
-		private readonly Texture[] _bound = new Texture[1];
+		private readonly TextureRef[] _bound = new TextureRef[1];
 
 		public Scene(IRenderBackend backend)
 		{

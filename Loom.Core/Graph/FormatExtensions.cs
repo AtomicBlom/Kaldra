@@ -28,5 +28,21 @@ public static class FormatExtensions
 			_ => throw new NotSupportedException(
 				$"Format {format} has no defined texel size. Add it to FormatExtensions.BytesPerTexel rather than to a backend."),
 		};
+
+		/// <summary>
+		/// Whether a shader can read this format as a filterable float texture on every backend — what a technique
+		/// that declares a plain <c>Texture2D</c> and a filtering sampler (a draw list's) can bind. Depth and integer
+		/// formats sample through different shader types, and WebGPU does not filter <see cref="Format.R32F"/> without
+		/// an optional feature, so those three are false.
+		/// </summary>
+		/// <exception cref="NotSupportedException">A format with no entry, which can only be a newly added one.</exception>
+		public bool IsFilterableFloat => format switch
+		{
+			Format.Rgba8Srgb or Format.Rgba8Unorm or Format.Bgra8Srgb or Format.Rgb10A2 => true,
+			Format.Rgba16F or Format.R16F or Format.Rg16F => true,
+			Format.R32F or Format.R32Uint or Format.Depth32F => false,
+			_ => throw new NotSupportedException(
+				$"Format {format} has no sampling class. Add it to FormatExtensions.IsFilterableFloat rather than to a backend."),
+		};
 	}
 }

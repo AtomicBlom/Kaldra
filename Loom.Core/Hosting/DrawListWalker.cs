@@ -37,7 +37,7 @@ public enum DrawListStep
 public ref struct DrawListWalker
 {
 	private readonly ReadOnlySpan<DrawCommand> _commands;
-	private readonly ReadOnlySpan<Texture> _textures;
+	private readonly ReadOnlySpan<TextureRef> _textures;
 	private readonly ReadOnlySpan<OverlayVertex> _overlay;
 	private readonly bool _layersSupported;
 	private readonly int _targetWidth;
@@ -77,7 +77,7 @@ public ref struct DrawListWalker
 	/// <param name="surfaceHeight">Height of the list's own coordinate space.</param>
 	public DrawListWalker(
 		ReadOnlySpan<DrawCommand> commands,
-		ReadOnlySpan<Texture> textures,
+		ReadOnlySpan<TextureRef> textures,
 		ReadOnlySpan<OverlayVertex> overlay,
 		bool layersSupported,
 		int targetWidth,
@@ -128,7 +128,11 @@ public ref struct DrawListWalker
 	/// <summary>A draw step's per-command tag, for the technique's push block.</summary>
 	public uint Tag { get; private set; }
 
-	/// <summary>The texture id a draw step samples, already resolved through the submission's texture span.</summary>
+	/// <summary>
+	/// The texture id a draw step samples, already resolved through the submission's texture span by
+	/// <see cref="Resolve"/>: an engine texture is its own <see cref="Texture.Id"/>, and a graph texture is its resource
+	/// id offset by <see cref="InspectableResource.DebugTextureBase"/>.
+	/// </summary>
 	public int TextureId { get; private set; }
 
 	/// <summary>
@@ -223,7 +227,7 @@ public ref struct DrawListWalker
 			IndexCount = c.IndexCount;
 			VertexOffset = c.VertexOffset;
 			Tag = c.Tag;
-			TextureId = _textures[Math.Clamp(c.TextureIndex, 0, _textures.Length - 1)].Id;
+			TextureId = Resolve(_textures[Math.Clamp(c.TextureIndex, 0, _textures.Length - 1)]);
 			TextureChanged = TextureId != _boundTextureId;
 			_boundTextureId = TextureId;
 			Step = DrawListStep.Draw;
@@ -232,6 +236,15 @@ public ref struct DrawListWalker
 
 		return false;
 	}
+
+	/// <summary>
+	/// The id a backend binds for <paramref name="texture"/>. A graph texture takes the encoding
+	/// <see cref="IRenderContext.ResolveInspectable"/> already hands out, so a backend resolves every live graph image
+	/// through one branch, and the memoisation compares one integer whichever kind a command names. Texture stores never
+	/// mint an id that reaches the base, so the two ranges cannot overlap.
+	/// </summary>
+	public static int Resolve(in TextureRef texture) =>
+		texture.Resource is { } resource ? InspectableResource.DebugTextureBase + resource.Id : texture.Texture.Id;
 
 	/// <summary>
 	/// Pop one still-open layer for the defensive unwind, reporting the depth being abandoned; false once none are

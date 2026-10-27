@@ -13,9 +13,9 @@ namespace Loom.Backend.DirectX12;
 
 internal sealed unsafe partial class DirectX12RenderContext
 {
-	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
+	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<TextureRef> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{
-		_validate.DrawList(technique, identity);
+		_validate.DrawList(technique, identity, textures);
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
 		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);

@@ -19,7 +19,7 @@ public class DrawListWalkerTests
 {
 	private const int Target = 100;
 
-	private static readonly Texture[] Textures = [new Texture(7, 4, 4), new Texture(9, 4, 4)];
+	private static readonly TextureRef[] Textures = [new Texture(7, 4, 4), new Texture(9, 4, 4)];
 
 	private static DrawCommand Draw(int textureIndex = 0, int indexOffset = 0, int indexCount = 3, uint tag = 1) =>
 		new(new Rect(0f, 0f, Target, Target), textureIndex, indexOffset, indexCount, 0, tag);

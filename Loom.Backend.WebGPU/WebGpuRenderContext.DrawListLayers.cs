@@ -21,9 +21,9 @@ internal sealed partial class WebGpuRenderContext
 	/// renders into a fresh transparent layer at full alpha, then one KIND_IMAGE quad multiplies it by the group
 	/// alpha back into the resumed parent — so the whole subtree fades once (overlaps stay a single colour).
 	/// </summary>
-	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
+	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<TextureRef> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{
-		_validate.DrawList(technique, identity);
+		_validate.DrawList(technique, identity, textures);
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
 
@@ -98,7 +98,7 @@ internal sealed partial class WebGpuRenderContext
 			// Bound unconditionally, so walker.TextureChanged has nothing to save here: the push block carries this
 			// command's tag at a fresh dynamic offset, so the bind group has to be set either way — and the group itself
 			// is already cached by the resources it names, which is what the desktop backends' memoisation buys them.
-			BindCommand(baked, sampler, _engine.TextureView(walker.TextureId), push, walker.Tag);
+			BindCommand(baked, sampler, ListTextureView(walker.TextureId), push, walker.Tag);
 
 			var (clipX, clipY, clipW, clipH) = walker.Scissor;
 			writer.SetScissor(clipX, clipY, clipW, clipH);
@@ -120,6 +120,13 @@ internal sealed partial class WebGpuRenderContext
 
 	// Index-buffer format id understood by the shim's OP_SET_INDEX_BUFFER: 0 = uint16.
 	private const int IndexFormatUint16 = 0;
+
+	// The view a draw-list texture id names: a loaded texture's, or — offset by DebugTextureBase — a graph resource's
+	// live view, for a TextureRef the pass declared with .Samples (the graph made it sampleable for this pass). The
+	// bind-group cache keys on the view handle, and graph views are dropped from it whenever they are recreated.
+	private int ListTextureView(int textureId) => textureId >= InspectableResource.DebugTextureBase
+		? _engine.Transients.ViewHandle(textureId - InspectableResource.DebugTextureBase)
+		: _engine.TextureView(textureId);
 
 	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.
 	private bool _warnedLayerNesting;

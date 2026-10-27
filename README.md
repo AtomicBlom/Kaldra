@@ -174,6 +174,19 @@ ui.Prepare();
 
 Several hosts can draw in one frame (a HUD plus an in-world panel): each painter keeps its surfaces' geometry under draw-list streams it mints with `engine.AllocateDrawListStream()`, so their surface ids, which every host numbers from zero, never collide. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
 
+### Show a render target in a draw list
+
+A draw list's textures are `TextureRef`s: an engine `Texture`, or a graph texture another pass rendered this frame — a minimap, a portal view, a preview. The pass that submits the list declares the target with `.Samples` like any sampled input, which orders it after the target's producer and makes it readable; a list naming an undeclared target throws `PassBindingException`, and a depth or integer target is refused because a list samples through a filtering float sampler.
+
+```csharp
+var map = g.Domain("map", 256, 256).Color("map.color", Format.Rgba8Srgb);
+g.Pass("map").Reads(mapViewProj).Writes(map).Draw(ctx => DrawTopDown(ctx));
+panel.Textures[1] = map;                                   // TextureRef[], rewritten in place
+g.Pass("minimap").Samples(map).Blends(screen).Draw(panel, static (ctx, p) => p.Draw(ctx));
+```
+
+The gallery's *UI Live Texture* demo does exactly this.
+
 ### Build & run
 
 ```bash

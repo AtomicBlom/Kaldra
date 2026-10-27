@@ -64,7 +64,7 @@ public sealed class UIPainter
 	{
 		// Minted once by IEngine.AllocateDrawListStream, so no other producer on the engine can share it.
 		public int Stream { get; } = stream;
-		public Texture[] Textures = [];
+		public TextureRef[] Textures = [];
 		public int Count;
 		// The sources this surface holds a reference on (its slot table, as last resolved), and a second array to build
 		// the next table into while the old references are still held.
@@ -256,7 +256,7 @@ public sealed class UIPainter
 	{
 		var count = slots.Count;
 		if (surface.Textures.Length < count)
-			surface.Textures = new Texture[Math.Max(count, surface.Textures.Length * 2)];
+			surface.Textures = new TextureRef[Math.Max(count, surface.Textures.Length * 2)];
 		if (surface.Building.Length < count)
 			surface.Building = new TextureSource[Math.Max(count, surface.Building.Length * 2)];
 
@@ -315,6 +315,6 @@ public sealed class UIPainter
 
 	internal Texture? ResidentTexture(TextureSource source) => _resident.TryGetValue(source, out var resident) ? resident.Texture : null;
 
-	internal ReadOnlySpan<Texture> SlotTextures(DrawListId id) =>
+	internal ReadOnlySpan<TextureRef> SlotTextures(DrawListId id) =>
 		_surfaces.TryGetValue(id, out var surface) ? surface.Textures.AsSpan(0, surface.Count) : default;
 }

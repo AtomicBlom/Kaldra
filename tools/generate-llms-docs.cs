@@ -34,9 +34,16 @@ var xmlSummaries = new List<(string Member, string Summary)>();
 // Only include key consumer-facing assemblies in XML summaries (keeps full output manageable)
 var keyAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     { "Loom.Core", "Loom.Graph", "Loom.Assets", "SUIsei" };
+// A Release build copies each assembly's XML into every project output that references it (and a publish adds more),
+// so the same file turns up many times. Read one copy per assembly, the newest, or every summary repeats once per
+// copy and the output depends on which projects happen to have been built. A doc file is named after its assembly,
+// so group by file name, and emit the assemblies in name order whatever their timestamps.
 var xmlPaths = Directory.EnumerateFiles(repoRoot, "*.xml", SearchOption.AllDirectories)
     .Where(p => !p.Contains("obj") && !p.Contains("external") && p.Contains("Release"))
-    .OrderBy(p => p);
+    .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
+    .Where(copies => keyAssemblies.Contains(copies.Key))
+    .OrderBy(copies => copies.Key, StringComparer.Ordinal)
+    .Select(copies => copies.OrderByDescending(File.GetLastWriteTimeUtc).First());
 
 foreach (var xmlPath in xmlPaths)
 {

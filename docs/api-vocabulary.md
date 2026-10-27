@@ -65,12 +65,16 @@ The complete set of attachment/target formats:
 |---|---|
 | `Rgba8Srgb` | sRGB colour the eye reads directly (the default backbuffer encoding). |
 | `Rgba8Unorm` | 8-bit RGBA linear data (packed material params). |
+| `Bgra8Srgb` | The channel-swapped sibling of `Rgba8Srgb` — the backbuffer takes it where the platform's preferred swapchain or canvas format is BGRA (most WebGPU canvases). |
 | `Rgb10A2` | 10/10/10/2 packed — cheap higher-precision normals. |
 | `Rgba16F` | HDR colour with range for bloom. |
 | `R16F` | Single-channel float — SSAO, the exposure scalar, small object-id picking. |
+| `R32F` | Single-channel full-precision float — the only single-channel float WebGPU allows as a read-write storage texture (the auto-exposure scalar). |
 | `R32Uint` | Single-channel 32-bit uint — exact integer object ids of any range. |
 | `Rg16F` | Two-channel float — velocity, JFA seed coordinates. |
 | `Depth32F` | 32-bit float depth. |
+
+`format.BytesPerTexel` and `format.IsFilterableFloat` (`FormatExtensions`) answer the two questions every backend needs the same answer to: a readback's texel size, and whether a shader can read the format through a filtering float sampler on every backend (false for `Depth32F`, `R32Uint` and `R32F`).
 
 ### `Queue` (`Loom.Core.Graph`)
 
@@ -181,8 +185,8 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 | `Dispatch(technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)` | Dispatch a compute technique over a workgroup grid. |
 | `Draw(in DrawCall call)` | Submit one raster draw (the unified draw verb — see `DrawCall`). |
 | `DispatchSkin(technique, Mesh skinnedMesh, ReadOnlySpan<Matrix4x4> palette, BufferHandle output, int vertexCount)` | Compute pre-skin a bind pose by a bone palette into `output` (a `.ReadWrites` buffer). |
-| `DrawList<TVertex>(technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push)` | Submit a batched indexed draw list (the overlay/UI path). `identity` is `DrawListIdentity.Transient` for a list rebuilt every frame, or a minted stream + revision for one whose geometry the backend may keep. |
-| `ResolveInspectable(int resourceId)` | Resolve an inspectable resource id to a `Texture?` bindable in a draw list this frame. |
+| `DrawList<TVertex>(technique, DrawListIdentity identity, ReadOnlySpan<TextureRef> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push)` | Submit a batched indexed draw list (the overlay/UI path). Each command samples `textures[TextureIndex]` — an engine `Texture` or a graph texture (see `TextureRef`). `identity` is `DrawListIdentity.Transient` for a list rebuilt every frame, or a minted stream + revision for one whose geometry the backend may keep. |
+| `ResolveInspectable(int resourceId)` | Resolve an inspectable resource id to a `Texture?` bindable in a draw list this frame — the resource viewer's hook, which needs no `.Samples` because inspection keeps every inspectable resource sampleable. |
 
 ### `FrameInputs`
 
@@ -310,3 +314,25 @@ The cross-backend verb behind overlay/UI-style rendering (game UI via SUIsei, Im
 |---|---|
 | `DrawCommand` | One run within a list — `record struct (Rect ClipRect, int TextureIndex, int IndexOffset, int IndexCount, int VertexOffset, uint Tag)`. `Tag` is the per-command value a list-push technique reads. |
 | `DrawListIdentity` | `record struct (int Stream, uint Revision)` — which kept geometry stream a list is and which revision of it. `Transient` (revision 0) keeps nothing; a stable stream comes from `IEngine.AllocateDrawListStream()` and is refused otherwise, because two producers sharing one would draw each other's geometry. |
+| `TextureRef` | What one slot of a list samples: an engine `Texture` (implicit from `Texture`) or a graph texture an earlier pass rendered this frame (implicit from `ColorHandle`/`DepthHandle`, or `new TextureRef(ITextureHandle)`). A value type, so a producer keeps an array of them and rewrites it in place. A graph texture is an ordinary sampled input: the submitting pass declares it with `.Samples` or the list throws `PassBindingException`, and its format must sample as a filterable float (`Format.IsFilterableFloat`), so a depth, integer or `R32F` target is refused on every backend. The backend resolves it to the live image each submission, so a resize needs nothing from the caller. |
+
+A list that shows a target the frame rendered — a minimap, a portal, a render-to-texture preview — declares it like any other sampled input and names its handle in the texture span:
+
+```csharp
+var map = g.Domain("map", 256, 256).Color("map.color", Format.Rgba8Srgb);
+g.Pass("map").Reads(mapViewProj).Writes(map).Draw(ctx => DrawTopDown(ctx));
+g.Pass("minimap").Samples(map).Blends(g.Backbuffer)        // .Samples orders it after "map" and makes it readable
+    .Draw(panel, static (ctx, panel) => ctx.DrawList("ui", DrawListIdentity.Transient,
+        panel.Textures,                                    // TextureRef[]: [whiteTexel, map]
+        panel.Vertices, panel.Indices, panel.Commands, panel.Push));
+```
+
+### UI bridges
+
+The UI libraries reach the GPU only through `DrawList`; each bridge is a stable producer a pass holds as state.
+
+| Type (`namespace`) | Role |
+|---|---|
+| `UIPainter` (`Loom.UI.SUIsei`) | `UIPainter.Create(engine, host)` registers the `ui` technique and returns the painter for a SUIsei `UIHost`. Call `Prepare()` once per frame after the host composites and before `engine.Render`: it uploads the images the frame's slot tables newly name, replaces a source whose pixels changed and releases one nothing references any more (after the frames in flight, through `IEngine.ReleaseTexture`). `Draw(ctx, surface)` inside a pass only binds and submits, and throws if `Prepare` did not run since that surface's last draw. |
+| `InWorldPanel` (`Loom.UI.SUIsei`) | A SUIsei surface rendered into its own texture and placed in the world: `Create(engine, width, height, worldTransform, billboard, layoutScale)`, then per frame `QueueScreenPointer`, `Tick`, `Render` (composite + prepare) and `Draw(ctx)` in the pass that renders the panel's target. |
+| `ImGuiPainter` (`Loom.UI.ImGui`) | `ImGuiPainter.Create(engine)` registers the `imgui` technique and uploads the font atlas; `Draw(ctx)` submits the frame's Dear ImGui draw data, plus the resource viewer's thumbnails (`SetThumbnails`, through `ResolveInspectable`) and debug lines (`SetDebugLines`). Desktop only. |

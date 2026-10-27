@@ -216,6 +216,10 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_width = Math.Max(1, width);
 		_height = Math.Max(1, height);
 		WebGpuInterop.ConfigureCanvas(_width, _height);
+		// A resize recreates the screen-sized transients and releases their old view handles for reuse, so a cached bind
+		// group naming one would bind a destroyed view — or, once the handle is reissued, an unrelated one. Same reason
+		// as ReleaseGraphResources; a resize is rare enough that rebuilding every group costs nothing worth keeping.
+		_context.ClearBindGroups();
 		_transients?.Resize(_width, _height);
 	}
 
