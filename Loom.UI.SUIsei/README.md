@@ -120,3 +120,12 @@ ui.Prepare();
 - [`SUIsei`](https://www.nuget.org/packages/SUIsei) — UI runtime (transitive)
 
 Reference [`Loom.Sdk`](https://www.nuget.org/packages/Loom.Sdk) with `<UseSUIsei>true</UseSUIsei>` to pull this package in automatically alongside the selected backend.
+
+**Turning SUIsei on gives you XAML.** The same switch wires in SUIsei's XAML generator, so the app can author `.xaml` views:
+- Every `*.xaml` under the project, or under `SUIseiXamlSourceDir`, compiles into its partial `x:Class`, with typed `x:Name` fields and `InitializeComponent()`.
+- XAML errors fail the build at the view's own file and line (`View.xaml(7,3): error SUISEI003: …`).
+- The views are `dotnet watch` inputs, so an edited view hot-reloads.
+- Folders the project keeps out of its items through `DefaultItemExcludes` stay out: a game whose project holds the Loom submodule beneath it excludes it once.
+- `SUIseiXamlEnable=false` keeps the runtime without the generator.
+
+Built from source, the SDK imports SUIsei's own build files, which reference the generator project. Packaged, it references the `SUIsei` package, which bundles the generator. The SUIsei package's build and analyzer assets do not reach an app through this package's dependency on it, so referencing `Loom.UI.SUIsei` alone, without the SDK, gives the runtime without XAML.

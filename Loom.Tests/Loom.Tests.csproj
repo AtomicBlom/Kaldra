@@ -26,6 +26,13 @@
     <Content Include="Goldens\**\*.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Apps SdkXamlTests builds through the Loom SDK, each its own project (in no solution): none of their sources,
+       nor what their builds leave under them, are this project's. -->
+  <ItemGroup>
+    <Compile Remove="SdkFixtures\**" />
+    <None Remove="SdkFixtures\**" />
+  </ItemGroup>
+
   <!-- The committed rigged-bar glTF (one source of truth in the gallery's assets), linked beside the test
        assembly so GltfSkinningLoadTests can load it through GltfLoader. -->
   <ItemGroup>
