@@ -174,6 +174,8 @@ ui.Prepare();
 
 Several hosts can draw in one frame (a HUD plus an in-world panel): each painter keeps its surfaces' geometry under draw-list streams it mints with `engine.AllocateDrawListStream()`, so their surface ids, which every host numbers from zero, never collide. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
 
+Turning SUIsei on in the SDK (`<UseSUIsei>true</UseSUIsei>`) gives an app SUIsei's XAML as well as its runtime: every `.xaml` view in the project compiles into its partial `x:Class`, with typed `x:Name` fields and `InitializeComponent()`. XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. Folders the project keeps out of its items through `DefaultItemExcludes` (a submodule beneath it, say) stay out of its XAML too.
+
 UI can follow the world two ways. `InWorldPanel` draws a UI tree into a texture on a quad in the scene. `ScreenAnchors` keeps screen-space elements — labels, markers — pinned to world points: each frame it moves them to where the frame's view-projection puts their points, and fades out the ones whose points leave the viewport or go behind the eye. Give the anchors a view of their own, since they change every frame and SUIsei recomposites a whole view when anything in it changes:
 
 ```csharp
@@ -241,6 +243,7 @@ Consuming Loom selects backends through the SDK:
 ```xml
 <UseVulkan>true</UseVulkan>
 <UseDirectX12>false</UseDirectX12>
+<UseSUIsei>true</UseSUIsei>   <!-- SUIsei's runtime, its Loom bridge, and XAML views -->
 ```
 
 ## Architecture
