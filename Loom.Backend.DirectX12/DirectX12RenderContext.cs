@@ -126,6 +126,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		_storageUpload.BeginFrame(slot);  // and the bone-palette staging
 		_listVtx.BeginFrame(slot);        // and the draw-list geometry staging
 		_listIdx.BeginFrame(slot);
+		_layerTargets.BeginFrame(slot);
 		_frameIndex++;
 		ForgetBindings();                 // a freshly reset command list has nothing bound
 	}

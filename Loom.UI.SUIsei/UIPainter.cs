@@ -75,8 +75,6 @@ public sealed class UIPainter
 		// Minted once by IEngine.AllocateDrawListStream, so no other producer on the engine can share it.
 		public int Stream { get; } = stream;
 		public TextureRef[] Textures = [];
-		// Whether each slot's texels are straight alpha, for the command tags.
-		public bool[] Straight = [];
 		public int Count;
 		public LoomDrawCommand[] Commands = [];
 		public int CommandCount;
@@ -174,7 +172,7 @@ public sealed class UIPainter
 				ValidateSlots(id, draw.Commands.Span, slots.Count);
 				if (texturesMoved)
 					Resolve(id, surface, slots);
-				Retag(surface, draw.Commands.Span);
+				Retag(surface, draw.Commands.Span, slots);
 				surface.Revision = draw.Revision;
 				surface.TextureRevision = draw.TextureRevision;
 			}
@@ -334,9 +332,7 @@ public sealed class UIPainter
 		var count = slots.Count;
 		if (surface.Textures.Length < count)
 		{
-			var capacity = Math.Max(count, surface.Textures.Length * 2);
-			surface.Textures = new TextureRef[capacity];
-			surface.Straight = new bool[capacity];
+			surface.Textures = new TextureRef[Math.Max(count, surface.Textures.Length * 2)];
 		}
 
 		surface.ShowsHostImage = false;
@@ -344,7 +340,6 @@ public sealed class UIPainter
 		{
 			var source = slots[s];
 			surface.Textures[s] = source is HostImageSource host ? Bind(id, host) : Upload(source);
-			surface.Straight[s] = source.AlphaMode == TextureAlphaMode.Straight;
 			surface.ShowsHostImage |= source is HostImageSource;
 		}
 		surface.Count = count;
@@ -352,25 +347,36 @@ public sealed class UIPainter
 	}
 
 	/// <summary>
-	/// Copy a list's commands into the surface's own array, folding each image and vector command's slot alpha mode into
-	/// its tag (<see cref="TagStraightAlpha"/>). SUIsei declares alpha per source, not per command, and the shader's only
-	/// per-command input is the tag; the vertices and indices still reach the backend uncopied.
+	/// Copy a list's commands into the surface's own array through <see cref="CopyCommands"/>; the vertices and indices
+	/// still reach the backend uncopied.
 	/// </summary>
-	private static void Retag(PreparedSurface surface, ReadOnlySpan<DrawCommand> commands)
+	private static void Retag(PreparedSurface surface, ReadOnlySpan<DrawCommand> commands, IReadOnlyList<TextureSource> slots)
 	{
 		if (surface.Commands.Length < commands.Length)
 			surface.Commands = new LoomDrawCommand[Math.Max(commands.Length, surface.Commands.Length * 2)];
 
+		CopyCommands(commands, slots, surface.Commands);
+		surface.CommandCount = commands.Length;
+	}
+
+	/// <summary>
+	/// Copy <paramref name="commands"/> into <paramref name="destination"/> as the engine's commands, folding the alpha mode
+	/// of each image and vector command's slot in <paramref name="slots"/> into its tag (<see cref="TagStraightAlpha"/>).
+	/// SUIsei declares alpha per source, not per command, and the shader's only per-command input is the tag. Anything that
+	/// submits a SUIsei list through the <c>ui</c> technique hands it commands made this way.
+	/// </summary>
+	internal static void CopyCommands(ReadOnlySpan<DrawCommand> commands, IReadOnlyList<TextureSource> slots, Span<LoomDrawCommand> destination)
+	{
 		// SUIsei.Drawing.DrawCommand and Loom.Core.Hosting.DrawCommand are structurally identical (same fields, same
 		// order, both [StructLayout(Sequential)]), so the copy is a reinterpretation of the bytes.
-		MemoryMarshal.Cast<DrawCommand, LoomDrawCommand>(commands).CopyTo(surface.Commands);
+		MemoryMarshal.Cast<DrawCommand, LoomDrawCommand>(commands).CopyTo(destination);
 		for (var i = 0; i < commands.Length; i++)
 		{
-			ref var command = ref surface.Commands[i];
-			if ((command.Tag == DrawListGeometry.KindImage || command.Tag == KindVector) && surface.Straight[command.TextureIndex])
+			ref var command = ref destination[i];
+			if ((command.Tag == DrawListGeometry.KindImage || command.Tag == KindVector)
+				&& slots[command.TextureIndex].AlphaMode == TextureAlphaMode.Straight)
 				command = command with { Tag = command.Tag | TagStraightAlpha };
 		}
-		surface.CommandCount = commands.Length;
 	}
 
 	/// <summary>
@@ -421,12 +427,18 @@ public sealed class UIPainter
 		return new TextureRef((ITextureHandle)texture);
 	}
 
-	// The texture format is how the GPU decodes a source's bytes: an sRGB source's sampler decodes each texel to linear
-	// light before filtering, exactly as SUIsei's rasterizer does; a linear one (an atlas page's distances, the white
-	// texel) is read raw. Alpha mode is not the format's business: the shader premultiplies a straight slot's sample.
-	private Texture CreateTexture(TextureSource source) =>
-		_engine.CreateTexture(TextureData.FromRgba8(source.Width, source.Height, source.Pixels.Span,
-			source.ColorSpace == TextureColorSpace.Srgb ? TextureFormat.Rgba8Srgb : TextureFormat.Rgba8Unorm, generateMips: false));
+	/// <summary>Upload <paramref name="source"/>'s texels as <see cref="UploadData"/> describes them.</summary>
+	private Texture CreateTexture(TextureSource source) => _engine.CreateTexture(UploadData(source));
+
+	/// <summary>
+	/// The texels <paramref name="source"/> uploads as. The format is how the GPU decodes them: an sRGB source's sampler
+	/// decodes each texel to linear light before filtering, exactly as SUIsei's rasterizer does; a linear one (an atlas
+	/// page's distances, the white texel) is read raw. Alpha mode is not the format's business: the shader premultiplies a
+	/// straight slot's sample, told so by <see cref="CopyCommands"/>.
+	/// </summary>
+	internal static TextureData UploadData(TextureSource source) =>
+		TextureData.FromRgba8(source.Width, source.Height, source.Pixels.Span,
+			source.ColorSpace == TextureColorSpace.Srgb ? TextureFormat.Rgba8Srgb : TextureFormat.Rgba8Unorm, generateMips: false);
 
 	// What the painter holds, for tests that pin its sharing and release rules without a capture.
 	internal int ResidentSourceCount => _resident.Count;
