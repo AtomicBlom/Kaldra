@@ -258,6 +258,95 @@ public class UIImageTests
 		}
 	}
 
+	[Test]
+	public void An_image_disposed_after_the_host_rendered_is_drawn_once_more_then_released()
+	{
+		// The app may dispose an image between UIHost.Render and Prepare. That render's list was composited before the
+		// Dispose and still names it, and the host reports it released only at its next render, which redraws the surface
+		// without it. So the frame between draws the image as it was, and the next one releases its texture.
+		var failures = new List<string>();
+		foreach (var backend in AvailableBackends())
+		{
+			var errors = CaptureErrors(out var previousSink);
+			var shown = Path.Combine(Path.GetTempPath(), $"loom-disposed-shown-{backend.Name}-{Guid.NewGuid():N}.png");
+			var gone = Path.Combine(Path.GetTempPath(), $"loom-disposed-gone-{backend.Name}-{Guid.NewGuid():N}.png");
+			try
+			{
+				using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+				var host = new UIHost();
+				var view = host.CreateRoot(UILayer.Default);
+				var red = new byte[4 * 4 * 4];
+				Fill(red, 255, 0, 0);
+				var image = BitmapSource.FromRgba8(4, 4, red);
+				// A second image that first appears in the very render it is disposed after, so Prepare meets it new — the
+				// slot table moves and it is uploaded although it is already disposed.
+				var green = new byte[4 * 4 * 4];
+				Fill(green, 0, 255, 0);
+				var late = BitmapSource.FromRgba8(4, 4, green);
+				var canvas = new Canvas { Width = W, Height = H };
+				canvas.Children.Add(Placed(new Image { Source = image, Stretch = Stretch.Fill, Width = 32, Height = 32 }, 0, 0));
+				view.Root.Content = canvas;
+				var painter = UIPainter.Create(engine, host);
+				engine.SetGraph(RenderGraph.Define(g =>
+				{
+					g.BackbufferClear = Background;
+					var screen = g.Backbuffer;
+					g.Pass("ui").Writes(screen).Draw((painter, view.Surface), static (ctx, ui) => ui.painter.Draw(ctx, ui.Surface));
+					g.Present(screen);
+				}));
+				Frame(host, painter);
+				engine.Render(Inputs);
+				var texture = painter.ResidentTexture(image).ShouldNotBeNull();
+
+				// Disposed after the host rendered: this frame's list still names both, and both draw.
+				canvas.Children.Add(Placed(new Image { Source = late, Stretch = Stretch.Fill, Width = 32, Height = 32 }, 40, 0));
+				host.Tick(1.0 / 60.0, 0f, new Vector2(W, H));
+				host.Render();
+				image.Dispose();
+				late.Dispose();
+				painter.Prepare();
+				engine.RequestCapture(shown);
+				engine.Render(Inputs);
+				painter.ResidentTexture(image).ShouldBe(texture, $"{backend.Name}: the frame between still samples the image");
+				painter.ResidentTexture(late).ShouldNotBeNull($"{backend.Name}: an image first named in the frame it was disposed in is still drawn");
+
+				// The next render redraws the surface without them and reports them released, so Prepare lets the textures go.
+				Frame(host, painter);
+				engine.Render(Inputs);
+				painter.ResidentTexture(image).ShouldBeNull($"{backend.Name}: the next render released the disposed image");
+				painter.ResidentTexture(late).ShouldBeNull($"{backend.Name}: the next render released the late image");
+				painter.ResidentSourceCount.ShouldBe(1, $"{backend.Name}: only the white texel is left");
+				engine.RequestCapture(gone);
+				Frame(host, painter);
+				engine.Render(Inputs);
+				Frame(host, painter);
+				engine.Render(Inputs);
+
+				LoomLog.Sink = previousSink;
+				foreach (var error in errors)
+					failures.Add($"{backend.Name}: the debug layer reported: {error}");
+				var (w, _, before) = PngReader.Read(shown);
+				var (_, _, after) = PngReader.Read(gone);
+				var i = (16 * w + 16) * 4;
+				var j = (16 * w + 56) * 4;
+				if (before[i] != 255 || before[i + 1] != 0 || before[i + 2] != 0)
+					failures.Add($"{backend.Name}: the frame after the Dispose shows ({before[i]}, {before[i + 1]}, {before[i + 2]}), not the red image");
+				if (before[j] != 0 || before[j + 1] != 255 || before[j + 2] != 0)
+					failures.Add($"{backend.Name}: the frame after the Dispose shows ({before[j]}, {before[j + 1]}, {before[j + 2]}), not the late green image");
+				if ((after[i] == 255 && after[i + 1] == 0 && after[i + 2] == 0) || (after[j] == 0 && after[j + 1] == 255 && after[j + 2] == 0))
+					failures.Add($"{backend.Name}: an image is still drawn after the host released it");
+			}
+			finally
+			{
+				LoomLog.Sink = previousSink;
+				if (File.Exists(shown)) File.Delete(shown);
+				if (File.Exists(gone)) File.Delete(gone);
+			}
+		}
+
+		failures.ShouldBeEmpty("A disposed image was not drawn once more and then released:\n  " + string.Join("\n  ", failures));
+	}
+
 	// A canvas of images that tell the two alpha modes and both colour spaces apart: a straight sRGB image at 1:1 and
 	// magnified (where the premultiply has to follow the filter, or its transparent texels' colour bleeds into the
 	// edges), the same texels premultiplied and linear, and the straight one painting an ellipse through a brush (the

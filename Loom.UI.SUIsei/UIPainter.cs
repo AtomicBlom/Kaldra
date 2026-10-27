@@ -150,7 +150,7 @@ public sealed class UIPainter
 	/// reached, and the engine refuses it. A frame whose lists did not change does none of this, and allocates nothing.
 	/// </para>
 	/// </summary>
-	/// <exception cref="InvalidOperationException">A list samples a host image whose tag no texture is bound to, or whose colour space its texture's format does not decode; or a disposed source.</exception>
+	/// <exception cref="InvalidOperationException">A list samples a host image whose tag no texture is bound to, or whose colour space its texture's format does not decode; or a source the same render reported released.</exception>
 	public void Prepare()
 	{
 		_pass++;
@@ -181,10 +181,13 @@ public sealed class UIPainter
 			surface.Armed = true;
 		}
 
-		// What the host's last render let go of: nothing about to be drawn samples these. A host image's texture is the
-		// app's and was never uploaded, so it has nothing here to release. Reading the list again after a second Prepare
-		// in the same frame finds nothing left to release.
+		// What the host's last render let go of: nothing about to be drawn samples these, which is the host's promise and
+		// is checked before anything is released on the strength of it. A host image's texture is the app's and was never
+		// uploaded, so it has nothing here to release. Reading the list again after a second Prepare in the same frame
+		// finds nothing left to release.
 		var released = _host.ReleasedTextures;
+		if (released.Count > 0)
+			RequireUnnamed(released, lists);
 		for (var i = 0; i < released.Count; i++)
 		{
 			if (_resident.Remove(released[i], out var resident))
@@ -299,6 +302,32 @@ public sealed class UIPainter
 		}
 	}
 
+	/// <summary>
+	/// Refuse to release a source a list about to be drawn still names. The host promises that no list of a render names a
+	/// source that render reported released, and SUIsei's own compositor keeps it; one that broke it would have the painter
+	/// release a texture the frame then samples. Runs only on a frame that released something, so a steady frame pays
+	/// nothing.
+	/// </summary>
+	private static void RequireUnnamed(IReadOnlyList<TextureSource> released, IReadOnlyList<(DrawListId Id, DrawListData Data)> lists)
+	{
+		for (var l = 0; l < lists.Count; l++)
+		{
+			var slots = lists[l].Data.TextureSlots;
+			for (var s = 0; s < slots.Count; s++)
+			{
+				for (var r = 0; r < released.Count; r++)
+				{
+					if (!ReferenceEquals(slots[s], released[r]))
+						continue;
+					throw new InvalidOperationException(
+						$"UIPainter: surface {lists[l].Id.Value}'s draw list samples a {slots[s].GetType().Name} that the same render " +
+						"reported released (UIHost.ReleasedTextures). No list of a render may name a source it released; the " +
+						"compositor that drew this surface broke that, and releasing the texture now would free one this frame samples.");
+				}
+			}
+		}
+	}
+
 	/// <summary>Rebuild a surface's texture array, and which of its slots are straight alpha, from its slot table.</summary>
 	private void Resolve(DrawListId id, PreparedSurface surface, IReadOnlyList<TextureSource> slots)
 	{
@@ -314,7 +343,7 @@ public sealed class UIPainter
 		for (var s = 0; s < count; s++)
 		{
 			var source = slots[s];
-			surface.Textures[s] = source is HostImageSource host ? Bind(id, host) : Upload(id, source);
+			surface.Textures[s] = source is HostImageSource host ? Bind(id, host) : Upload(source);
 			surface.Straight[s] = source.AlphaMode == TextureAlphaMode.Straight;
 			surface.ShowsHostImage |= source is HostImageSource;
 		}
@@ -349,17 +378,14 @@ public sealed class UIPainter
 	/// <see cref="TextureSource.Version"/> moved since its upload gets its new texels uploaded as a new texture and the old
 	/// one released: every other surface naming it sees its texture revision move as well, so all of them rebind in the
 	/// same <see cref="Prepare"/>.
+	/// <para>
+	/// A disposed source is drawn like any other. A list composited before the app disposed it still names it, and the
+	/// host reports it released only at its next render, which redraws those surfaces without it — so the frame between
+	/// shows it as it was, and its texels are still there to upload.
+	/// </para>
 	/// </summary>
-	private Texture Upload(DrawListId id, TextureSource source)
+	private Texture Upload(TextureSource source)
 	{
-		if (source.IsDisposed)
-		{
-			// The host redraws a surface whose source was disposed, so its list cannot name one.
-			throw new InvalidOperationException(
-				$"UIPainter: surface {id.Value}'s draw list samples a disposed {source.GetType().Name}. A list drawn after the " +
-				"source was disposed should no longer name it; was this list composited before the Dispose?");
-		}
-
 		if (!_resident.TryGetValue(source, out var resident))
 		{
 			_resident[source] = resident = new Resident(CreateTexture(source), source.Version);
