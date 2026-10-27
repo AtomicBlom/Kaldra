@@ -103,19 +103,25 @@ public static class DrawListGeometry
 	}
 
 	/// <summary>
-	/// A command's scissor rectangle in target pixels, clamped to the target. Each edge is truncated independently,
-	/// so the rectangle covers exactly the pixels whose origin falls inside the clip. A width or height of zero or
-	/// less means the command is fully clipped and must be skipped — the caller has to check, because a backend that
-	/// hands a negative extent to an unsigned API wraps it into an enormous one.
+	/// A command's scissor rectangle in target pixels, clamped to the target. It holds the pixels whose centres the clip
+	/// covers, the rule rasterization itself follows: from the first pixel whose centre lies on or past the clip's near
+	/// edge to the last whose centre lies before its far edge, each edge rounded on its own. SUIsei's software rasterizer
+	/// clips by the same rule, so a clip edge that falls between two pixel rows keeps the same row on the GPU as in the
+	/// oracle. A width or height of zero or less means the command is fully clipped and must be skipped — the caller has
+	/// to check, because a backend that hands a negative extent to an unsigned API wraps it into an enormous one.
 	/// </summary>
 	public static (int X, int Y, int Width, int Height) Scissor(Rect clip, int targetWidth, int targetHeight)
 	{
-		var x = (int)MathF.Max(0f, clip.X);
-		var y = (int)MathF.Max(0f, clip.Y);
-		var right = (int)MathF.Min(targetWidth, clip.X + clip.Width);
-		var bottom = (int)MathF.Min(targetHeight, clip.Y + clip.Height);
+		var x = FirstCentreAtOrPast(clip.X, targetWidth);
+		var y = FirstCentreAtOrPast(clip.Y, targetHeight);
+		var right = FirstCentreAtOrPast(clip.X + clip.Width, targetWidth);
+		var bottom = FirstCentreAtOrPast(clip.Y + clip.Height, targetHeight);
 		return (x, y, right - x, bottom - y);
 	}
+
+	// The first pixel whose centre (its index + 0.5) lies on or past `edge`, within [0, extent]. Clamped before rounding,
+	// so no edge, however far off the target, can overflow the conversion.
+	private static int FirstCentreAtOrPast(float edge, int extent) => (int)MathF.Ceiling(Math.Clamp(edge - 0.5f, 0f, extent));
 
 	/// <summary>
 	/// A group-opacity layer's bounds in the draw list's own coordinate space, clamped to the surface and grown by a
