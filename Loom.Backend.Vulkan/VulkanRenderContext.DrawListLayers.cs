@@ -10,9 +10,9 @@ namespace Loom.Backend.Vulkan;
 
 internal sealed unsafe partial class VulkanRenderContext
 {
-	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
+	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<TextureRef> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{
-		_validate.DrawList(technique, identity);
+		_validate.DrawList(technique, identity, textures);
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
 		var baked = Bake(technique);
@@ -135,8 +135,9 @@ internal sealed unsafe partial class VulkanRenderContext
 
 			if (walker.TextureChanged)
 			{
-				// An id offset by DebugTextureBase is an inspectable graph resource (the resource viewer): sample this
-				// frame's live transient image instead of a loaded texture-store entry.
+				// An id offset by DebugTextureBase is a graph resource — a TextureRef the pass declared with .Samples, or
+				// an inspectable one (the resource viewer): sample this frame's live image instead of a loaded
+				// texture-store entry. The graph has already put a declared one in ShaderReadOnlyOptimal for this pass.
 				var view = walker.TextureId >= InspectableResource.DebugTextureBase
 					? _resources.Get(_frameSlot, walker.TextureId - InspectableResource.DebugTextureBase).View
 					: _textures.View(walker.TextureId);

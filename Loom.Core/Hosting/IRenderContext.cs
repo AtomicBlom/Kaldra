@@ -91,6 +91,14 @@ public interface IRenderContext
 	/// (a list-push technique, <see cref="Materials.TechniqueDescriptor.HasListPush"/>). Several calls in one pass
 	/// each draw, rather than one overwriting another.
 	/// <para>
+	/// A <see cref="TextureRef"/> names an engine <see cref="Texture"/> or a graph texture an earlier pass rendered.
+	/// A graph texture is an ordinary sampled input: this pass must declare it with <c>.Samples</c> — which is what
+	/// orders it after its producer and puts it in a sampleable layout — or the submission throws
+	/// <see cref="PassBindingException"/>; and its format must sample as a filterable float
+	/// (<see cref="Graph.FormatExtensions"/>), so a depth or integer target is refused. Each submission resolves it to
+	/// the resource's live image, so a resize or a graph swap that keeps the handle needs nothing from the caller.
+	/// </para>
+	/// <para>
 	/// <paramref name="identity"/> names the geometry stream. A stable identity lets the backend keep the uploaded
 	/// vertices and indices and skip re-staging them while the revision holds — the spans are then read only when
 	/// the revision moves. <see cref="DrawListIdentity.Transient"/> stages fresh every frame, which a producer whose
@@ -100,7 +108,7 @@ public interface IRenderContext
 	void DrawList<TVertex>(
 		string technique,
 		DrawListIdentity identity,
-		ReadOnlySpan<Texture> textures,
+		ReadOnlySpan<TextureRef> textures,
 		ReadOnlySpan<TVertex> vertices,
 		ReadOnlySpan<ushort> indices,
 		ReadOnlySpan<DrawCommand> commands,

@@ -49,7 +49,7 @@ public sealed class ImGuiPainter
 	private ImGuiVertex[] _verts = [];
 	private ushort[] _indices = [];
 	private DrawCommand[] _commands = [];
-	private Texture[] _thumbTextures = [];
+	private TextureRef[] _thumbTextures = [];
 
 	// The host sets these each frame (empty by default): which graph resources to preview, and the frustum-freeze
 	// line segments (x0,y0,x1,y1 in framebuffer pixels) to overlay.
@@ -176,7 +176,7 @@ public sealed class ImGuiPainter
 		var sx = 2f / displaySize.X;
 		var sy = 2f / displaySize.Y;
 		ReadOnlySpan<float> push = [sx, sy, -1f - clipOff.X * sx, -1f - clipOff.Y * sy];
-		ReadOnlySpan<Texture> textures = [_font];
+		ReadOnlySpan<TextureRef> textures = [_font];
 		ctx.DrawList(Technique, DrawListIdentity.Transient, textures, _verts.AsSpan(0, vtxBase), _indices.AsSpan(0, idxBase), _commands.AsSpan(0, cmd), push);
 	}
 
@@ -186,7 +186,7 @@ public sealed class ImGuiPainter
 			return;
 
 		if (_thumbTextures.Length < _thumbnailCount)
-			_thumbTextures = new Texture[_thumbnailCount];
+			_thumbTextures = new TextureRef[_thumbnailCount];
 		var count = 0;
 		for (var i = 0; i < _thumbnailCount; i++)
 			if (ctx.ResolveInspectable(_thumbnails[i]) is { } texture)
@@ -237,7 +237,7 @@ public sealed class ImGuiPainter
 		// All segments share the font atlas (the white texel) and one scissor — a single run.
 		_commands[0] = new DrawCommand(new Rect(0, 0, displaySize.X, displaySize.Y), 0, 0, _lineCount * 6, 0, 0);
 		ReadOnlySpan<float> push = [2f / displaySize.X, 2f / displaySize.Y, -1f, -1f];
-		ReadOnlySpan<Texture> textures = [_font];
+		ReadOnlySpan<TextureRef> textures = [_font];
 		ctx.DrawList(Technique, DrawListIdentity.Transient, textures, _verts.AsSpan(0, _lineCount * 4), _indices.AsSpan(0, _lineCount * 6), _commands.AsSpan(0, 1), push);
 	}
 

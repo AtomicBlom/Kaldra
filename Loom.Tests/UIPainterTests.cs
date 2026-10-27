@@ -9,6 +9,7 @@ using SUIsei;
 using SUIsei.Controls;
 using SUIsei.Drawing;
 using SUIsei.Media;
+using SUIsei.Media.Imaging;
 
 namespace Loom.Tests;
 
@@ -98,7 +99,7 @@ public class UIPainterTests
 			var host = new UIHost();
 			var view = host.CreateRoot(UILayer.Default);
 			var red = Enumerable.Repeat<byte[]>([255, 0, 0, 255], 16).SelectMany(texel => texel).ToArray();
-			view.Root.Content = new Image { Source = ImageSource.FromRgba8(4, 4, red), Stretch = Stretch.Fill, Width = W, Height = H };
+			view.Root.Content = new Image { Source = BitmapSource.FromRgba8(4, 4, red), Stretch = Stretch.Fill, Width = W, Height = H };
 			var painter = UIPainter.Create(engine, host);
 			engine.SetGraph(RenderGraph.Define(g =>
 			{
@@ -133,7 +134,7 @@ public class UIPainterTests
 			var red = Enumerable.Repeat<byte[]>([255, 0, 0, 255], 16).SelectMany(texel => texel).ToArray();
 			var panel = new StackPanel { Background = new SolidColorBrush(HdrColor.FromRgb(0, 0, 255)) };
 			panel.Children.Add(new TextBlock { Text = "Steady", FontSize = 14f });
-			panel.Children.Add(new Image { Source = ImageSource.FromRgba8(4, 4, red), Stretch = Stretch.Fill, Width = 16, Height = 16 });
+			panel.Children.Add(new Image { Source = BitmapSource.FromRgba8(4, 4, red), Stretch = Stretch.Fill, Width = 16, Height = 16 });
 			view.Root.Content = panel;
 			var painter = UIPainter.Create(engine, host);
 			engine.SetGraph(RenderGraph.Define(g =>
@@ -172,7 +173,7 @@ public class UIPainterTests
 			var host = new UIHost();
 			var first = host.CreateRoot(UILayer.Default);
 			var second = host.CreateRoot(UILayer.Default);
-			var image = ImageSource.FromRgba8(4, 4, Solid(255, 0, 0));
+			var image = BitmapSource.FromRgba8(4, 4, Solid(255, 0, 0));
 			first.Root.Content = ImageElement(image);
 			second.Root.Content = ImageElement(image);
 			var painter = UIPainter.Create(engine, host);
@@ -210,7 +211,7 @@ public class UIPainterTests
 			var host = new UIHost();
 			var kept = host.CreateRoot(UILayer.Default);
 			var removed = host.CreateRoot(UILayer.Default);
-			var image = ImageSource.FromRgba8(4, 4, Solid(255, 0, 0));
+			var image = BitmapSource.FromRgba8(4, 4, Solid(255, 0, 0));
 			kept.Root.Content = Fill(HdrColor.FromRgb(0, 255, 0));
 			removed.Root.Content = ImageElement(image);
 			var painter = UIPainter.Create(engine, host);

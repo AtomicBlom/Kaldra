@@ -71,9 +71,10 @@ internal sealed unsafe partial class DirectX12RenderContext
 		_ctx.Device.CreateShaderResourceView(_textures.Resource(textureId), &srv, dest);
 	}
 
-	// Bind a draw-list texture: a loaded texture (full mip chain) by id, or — for an inspectable graph resource (id
-	// offset by DebugTextureBase, the resource viewer) — a single-mip SRV over this frame's transient image, so a
-	// debug overlay can preview live graph contents through the resource's sampleable format (R32_FLOAT for depth).
+	// Bind a draw-list texture: a loaded texture (full mip chain) by id, or — for a graph resource (id offset by
+	// DebugTextureBase: a TextureRef the pass declared with .Samples, or an inspectable one for the resource viewer) — a
+	// single-mip SRV over this frame's live image, through the resource's sampleable format (R32_FLOAT for depth). The
+	// graph has already moved a declared one to a shader-resource state for this pass.
 	private void WriteListTextureSrv(int id, CpuDescriptorHandle dest)
 	{
 		if (id < InspectableResource.DebugTextureBase || _transients is null)
