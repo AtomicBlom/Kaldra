@@ -11,8 +11,11 @@
 //   Vector      — one triangle of a tessellated stroke or fill: the product of up to four half-plane edge
 //                 coverages, times the vertex colour and the bound texture (the white texel for a solid paint).
 // Colours are PREMULTIPLIED (the compositor folds opacity in), so the renderer blends premultiplied alpha-over
-// (src=ONE, dst=ONE_MINUS_SRC_ALPHA) — not ImGui's straight-alpha. The atlas binds linear/UNORM (SDF distances
-// are linear, never sRGB-decoded).
+// (src=ONE, dst=ONE_MINUS_SRC_ALPHA) — not ImGui's straight-alpha.
+// A texture reads as its source declares. The colour space is the bound format's: an sRGB image binds an sRGB format,
+// so the sampler decodes each texel to linear light before filtering, while the atlas and the white texel bind
+// linear/UNORM (SDF distances are never decoded). The alpha mode rides the command: STRAIGHT_ALPHA in its tag means the
+// slot's texels are straight, so the arms that paint with a slot (image, vector) premultiply the filtered sample.
 // SUIsei's software rasterizer is this fragment's CPU oracle: each arm has a twin there computing the same thing.
 
 // UIPrimKind (SUIsei) — keep in sync. Values 0..4 and 7 are the shaded primitive families this fragment switches
@@ -29,6 +32,11 @@ static const uint KIND_GLYPH = 3;
 static const uint KIND_IMAGE = 4;
 static const uint KIND_VECTOR = 7;
 
+// A command's tag is its kind in the low byte plus flags above it. STRAIGHT_ALPHA marks an image or vector command whose
+// slot holds straight-alpha texels; UIPainter sets it from the slot's source, and SUIsei's kinds never reach it.
+static const uint KIND_MASK = 0xFF;
+static const uint STRAIGHT_ALPHA = 0x100;
+
 // The smallest gradient length edgeCoverage divides by. A distance that does not vary across its triangle — an
 // unused Vector slot, which holds a large positive "inside" value — would otherwise divide by zero.
 static const float MIN_GRADIENT = 1e-6;
@@ -39,8 +47,8 @@ struct PushConstants
 	float2 translate;      // surface-pixel -> clip translate
 	float  paperWhite;     // HDR: linear scale = UIPaperWhiteNits / 80; 1.0 on SDR
 	uint   isHdr;          // 1 when the target is scRGB-HDR (apply paperWhite), else 0
-	uint   kind;           // UIPrimKind for this draw command. Last in the block: the draw-list verb rewrites the
-	                       // final push slot per command with the command's tag, so the per-command field sits here.
+	uint   kind;           // The command's tag: its UIPrimKind in the low byte, STRAIGHT_ALPHA above. Last in the block:
+	                       // the draw-list verb rewrites the final push slot per command with the tag, so it sits here.
 };
 
 LOOM_PUSH_CONSTANT PushConstants pc;
@@ -101,12 +109,22 @@ float edgeCoverage(float d)
 
 float median3(float3 v) { return max(min(v.r, v.g), min(max(v.r, v.g), v.b)); }
 
+// The premultiplied colour the bound slot paints with: the decoded, filtered sample, multiplied by its own alpha when the
+// slot is straight. The premultiply comes after the filter, as the rasterizer's does, so a straight image's transparent
+// texels (whose colour is arbitrary) never bleed into its edges. Call only from a switch arm, for the same uniformity
+// reason as edgeCoverage: Sample takes implicit derivatives.
+float4 slotColour(float2 uv)
+{
+	float4 s = tex.Sample(uv);
+	return (pc.kind & STRAIGHT_ALPHA) != 0 ? float4(s.rgb * s.a, s.a) : s;
+}
+
 [shader("fragment")]
 float4 fragmentMain(VsOut input) : SV_Target
 {
 	float4 colour = input.colour;
 
-	switch (pc.kind)
+	switch (pc.kind & KIND_MASK)
 	{
 	case KIND_ROUNDED_RECT:
 	{
@@ -134,7 +152,7 @@ float4 fragmentMain(VsOut input) : SV_Target
 		break;
 	}
 	case KIND_IMAGE:
-		colour *= tex.Sample(input.uv);
+		colour *= slotColour(input.uv);
 		break;
 	case KIND_VECTOR:
 	{
@@ -143,7 +161,7 @@ float4 fragmentMain(VsOut input) : SV_Target
 		// edge. An unused slot holds a large positive value, so its coverage is 1.
 		float4 d = input.params;
 		float coverage = edgeCoverage(d.x) * edgeCoverage(d.y) * edgeCoverage(d.z) * edgeCoverage(d.w);
-		colour *= tex.Sample(input.uv) * coverage;
+		colour *= slotColour(input.uv) * coverage;
 		break;
 	}
 

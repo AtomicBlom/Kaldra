@@ -33,7 +33,8 @@ public static class DrawListGeometry
 	/// technique's kinds mirror SUIsei's <c>UIPrimKind</c>: 0 fill, 1 rounded rect, 2 border, 3 glyph, 4 image
 	/// (<see cref="KindImage"/>, which a layer composite reuses), and 7 vector — one triangle of a tessellated stroke or
 	/// fill, whose <see cref="OverlayVertex.Custom"/> carries four signed half-plane distances that the shader turns
-	/// into edge coverage.
+	/// into edge coverage. A tag may carry flags above its kind's byte — the <c>ui</c> technique's image and vector kinds
+	/// take a straight-alpha bit (0x100) — and the markers are compared whole, so a flagged tag is never one.
 	/// </para>
 	/// </summary>
 	public const uint TagBeginLayer = 5;

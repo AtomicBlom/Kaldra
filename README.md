@@ -185,7 +185,7 @@ panel.Textures[1] = map;                                   // TextureRef[], rewr
 g.Pass("minimap").Samples(map).Blends(screen).Draw(panel, static (ctx, p) => p.Draw(ctx));
 ```
 
-The gallery's *UI Live Texture* demo does exactly this.
+A SUIsei page shows one the same way: a `HostImageSource` names it by tag, `UIPainter.SetExternalTexture(tag, handle)` binds the tag to the graph texture, and the pass that draws the UI declares it with `.Samples`. The gallery's *UI Live Texture* demo shows a minimap this way, beside a `WriteableBitmap` it redraws on the CPU every frame. The painter replaces that bitmap's texture on each change and releases the old one past the frames in flight; updating a texture in place is a labelled gap. Images read as their sources declare — sRGB decoded before filtering, straight alpha premultiplied after it — exactly as SUIsei's software rasterizer reads them. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
 
 ### Build & run
 

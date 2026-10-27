@@ -45,7 +45,34 @@ ui.Prepare();                                      // upload, share and release 
 
 `ui.Draw(ctx, view.Surface)` then submits that surface's composited list, binding what `Prepare` resolved; it is a no-op when the frame carries no list for that id or the list is empty.
 
-**Textures come in the draw list.** Each list carries its own slot table (`DrawListData.TextureSlots`): slot 0 is the white texel, then the glyph-atlas pages and images its commands sample, each once, and a command's `TextureIndex` indexes that table. The painter keeps one texture per source, shared by every surface that names it, so an image shown in two places uploads once. It rebuilds a surface's slot→texture array only when the list's `TextureRevision` moves, and when no surface names a source any more — the image left the UI, or its root was removed — it releases the texture with `engine.ReleaseTexture`, which keeps it until the frames in flight are done with it. A source whose content `Version` moves is uploaded again and the old texture released. There is no font to pass: text samples the compositor's own atlas pages, so UVs always match. The array holds `TextureRef`s, the engine's type for a draw-list slot, which can name a graph texture another pass rendered as well as an uploaded one.
+**Textures come in the draw list.** Each list carries its own slot table (`DrawListData.TextureSlots`): slot 0 is the white texel, then the glyph-atlas pages and images its commands sample, each once, and a command's `TextureIndex` indexes that table. The painter keeps one texture per source, shared by every surface that names it, so an image shown in two places uploads once. It rebuilds a surface's slot→texture array only when the list's `TextureRevision` moves. There is no font to pass: text samples the compositor's own atlas pages, so UVs always match. The array holds `TextureRef`s, the engine's type for a draw-list slot, which can name a graph texture another pass rendered as well as an uploaded one.
+
+**Images read as their sources declare.** Every `TextureSource` declares a `ColorSpace` and an `AlphaMode`, and the GPU reads it exactly as SUIsei's software rasterizer does:
+- An sRGB source (an ordinary image, the default for `BitmapSource` and `WriteableBitmap`) uploads as `Rgba8Srgb`, so the sampler decodes each texel to linear light before filtering. A linear one (atlas pages, the white texel, data) uploads as `Rgba8Unorm` and is read raw.
+- A straight-alpha source (again the image default, as in a PNG) is premultiplied by the shader *after* the filter, so the colour of fully transparent texels never bleeds into an image's edges. The painter tells the shader per command: it copies each changed list's commands once and sets bit `0x100` of the tag on an image or vector command whose slot is straight. The vector arm reads the slot the same way, so an `ImageBrush` on a shape or a rounded border is premultiplied too.
+- `Loom.Tests`' `UIImageTests` draws straight and premultiplied images, magnified and through a brush, and holds the GPU to the rasterizer.
+
+**Lifetime follows the host.** After each `Render`, `UIHost.ReleasedTextures` lists the sources the host let go of: no surface draws them any more (the element was removed, its root was removed, a hot-reload rebuild replaced the tree), or the app disposed them while they were drawn. `Prepare` releases their textures with `engine.ReleaseTexture`, which keeps each one until the frames in flight are done with it. So `Prepare` must run after every `Render`, which `Draw` already demands.
+
+**A `WriteableBitmap` is replaced, not updated.** `Invalidate()` moves the bitmap's `Version`, so the lists that show it move their `TextureRevision` with no layout and no recomposite. `Prepare` then uploads the new texels as a new texture and releases the old one past the frames in flight. A bitmap rewritten every frame costs the managed heap only the upload's copy of its texels: SUIsei's side and the engine's frame allocate nothing (`UIImageTests` pins both). Updating a texture in place, or streaming into one, is a labelled gap: it needs staging that is ordered against the frames still reading the texture.
+
+**Host images show the app's own render targets.** A `HostImageSource` (SUIsei's `SUIsei.Extensions`) has a tag and a size but no texels. Bind the graph texture it should show, and declare it on the pass that draws the UI:
+
+```csharp
+var map = g.Domain("map", 256, 256).Color("map.color", Format.Rgba8Srgb);
+ui.SetExternalTexture("minimap", map);       // every HostImageSource tagged "minimap" shows this target
+g.Pass("map").Writes(map).Draw(ctx => DrawTopDown(ctx));
+g.Pass("ui").Samples(map).Blends(g.Backbuffer).Draw(ctx => ui.Draw(ctx, view.Surface));
+
+// in the page: new Image { Source = new HostImageSource("minimap", 256, 256, TextureAlphaMode.Premultiplied, TextureColorSpace.Srgb) }
+```
+
+Each rule fails loud:
+- A host image whose tag has no texture makes `Prepare` throw, naming the tag.
+- A host image whose `ColorSpace` the target's format would not decode makes `Prepare` throw: an sRGB image needs an sRGB format, and a linear one a non-sRGB format.
+- A UI pass that does not declare the texture with `.Samples` throws `PassBindingException` when it draws.
+
+The texture is the app's: the painter binds it but never uploads or releases it. Call `SetExternalTexture` again with the new handle when the graph is rebuilt. The gallery's *UI Live Texture* demo shows a minimap this way, beside a `WriteableBitmap` it redraws every frame.
 
 **Why `Prepare` is a separate step.** `Draw` runs inside a pass callback, while the engine is recording the frame. A texture created there would be uploaded only ahead of the *next* frame, so the first frame to show a new image would sample nothing — the engine therefore refuses to create or release a texture inside a pass. `Prepare` does that work between frames instead, and only when a surface's list has changed, so a steady UI costs no allocation. `Draw` throws if `Prepare` did not run for the frame it is drawing (or ran before the host last rendered), naming the missing step, rather than drawing a frame that is only right while the UI happens not to change.
 
