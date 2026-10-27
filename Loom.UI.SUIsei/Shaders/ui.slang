@@ -5,8 +5,8 @@
 //   Fill        — solid quad (no SDF, no texture).
 //   RoundedRect — analytic rounded-box SDF in local rect space, one-pixel edge coverage.
 //   Border      — analytic rounded-box ring (outer minus inner), one-pixel edge coverage.
-//   Glyph       — MTSDF text: median(rgb) distance, screenPxRange-scaled coverage. The .a channel is a true SDF
-//                 reserved for outline/shadow/glow — unused here.
+//   Glyph       — MTSDF text: median(rgb) distance, screenPxRange-scaled coverage. An outline or shadow quad reads
+//                 the true distance in .a instead, its edge moved out and softened by the quad's params.
 //   Image       — sample the atlas/source texture, tint by the vertex colour.
 //   Vector      — one triangle of a tessellated stroke or fill: the product of up to four half-plane edge
 //                 coverages, times the vertex colour and the bound texture (the white texel for a solid paint).
@@ -64,7 +64,7 @@ struct VsIn
 	[[vk::location(0)]] float2 position : POSITION;  // surface pixels (post-transform, post-DPI)
 	[[vk::location(1)]] float2 uv       : TEXCOORD0; // glyph/image atlas uv, OR 0..1 across the rect (SDF)
 	[[vk::location(2)]] float4 colour   : COLOR0;    // premultiplied RGBA16F
-	[[vk::location(3)]] float4 params   : TEXCOORD1; // rect: (cornerRadius, borderThickness, sizeX, sizeY); glyph: (screenPxRange, …)
+	[[vk::location(3)]] float4 params   : TEXCOORD1; // rect: (cornerRadius, borderThickness, sizeX, sizeY); glyph: (screenPxRange, bias, softness, 0)
 };
 
 struct VsOut
@@ -146,9 +146,18 @@ float4 fragmentMain(VsOut input) : SV_Target
 	}
 	case KIND_GLYPH:
 	{
-		float3 msdf = tex.Sample(input.uv).rgb;
-		float sd = median3(msdf) - 0.5;
-		colour *= saturate(sd * input.params.x + 0.5); // params.x = screenPxRange (per glyph run)
+		// params = (screenPxRange, bias, softness, 0), bias and softness in units of the atlas's distance range. Both 0
+		// draws the glyph itself, from the median of the RGB distances. Otherwise the quad is an outline or a shadow, read
+		// from the true distance in A: its edge moved out by the bias and ramped over the softness, never under one pixel.
+		// The quad's params pick the arm by select, not by branch, so the sample stays in uniform control flow.
+		float4 s = tex.Sample(input.uv);
+		float screenPxRange = input.params.x;
+		float bias = input.params.y;
+		float softness = input.params.z;
+		bool effect = any(input.params.yz > 0.0);
+		float sd = select(effect, s.a - 0.5 + bias, median3(s.rgb) - 0.5);
+		float k = select(effect, min(screenPxRange, 1.0 / max(softness, 1e-6)), screenPxRange);
+		colour *= saturate(sd * k + 0.5);
 		break;
 	}
 	case KIND_IMAGE:
