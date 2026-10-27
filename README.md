@@ -37,7 +37,7 @@ You declare *what* each render pass reads and writes; Loom derives ordering, bar
 
 **Draw throughput** — 10,000 *discrete* draws (own model matrix, own material — not one instanced call) render on both backends with **zero managed allocations per frame**. Materials keep their descriptor tables rather than rewriting them per draw, redundant pipeline/geometry re-binds are elided, each pass's barriers go in one submission, resource uploads batch into the frame instead of draining the GPU per resource, and compiled pipelines persist between runs. The `Draw Scale` demo is the workload; `DrawScaleTests` is the headless gate and prints µs/draw — reported, never asserted, since it moves with machine and driver.
 
-**Game UI** — [`SUIsei`](external/SUIsei), a standalone WinUI-3-compatible, NativeAOT-clean XAML UI runtime, rendered through Loom's neutral draw-list path (the same one ImGui uses). The UI demos are held to the same golden-image and cross-backend parity tests as the rest of the gallery, with a check that their UI actually reaches the frame, and the vertex and command structs SUIsei hands Loom without a copy are guarded field by field.
+**Game UI** — [`SUIsei`](external/SUIsei), a standalone WinUI-3-compatible, NativeAOT-clean XAML UI runtime, rendered through Loom's neutral draw-list path (the same one ImGui uses). Beyond controls and text it draws WinUI's shapes (`Rectangle`, `Ellipse`, `Line`, `Polyline`, `Polygon`, `Path` with path markup) with every stroke join, cap and dash, linear gradients on fills and strokes, `UIElement.Clip` and image brushes, as tessellated vector triangles antialiased over one pixel at any angle; a translucent stroke stays one colour where it crosses itself, and SUIsei's `suisei:StrokeTrim` and along-length stroke gradients animate draw-on reveals. The `Vector UI` demo shows them all from one XAML page, and the GPU is held to SUIsei's CPU rasterizer on that page. The UI demos are held to the same golden-image and cross-backend parity tests as the rest of the gallery, with a check that their UI actually reaches the frame, and the vertex and command structs SUIsei hands Loom without a copy are guarded field by field.
 
 ## How to use it
 
@@ -173,6 +173,22 @@ ui.Prepare();
 ```
 
 Several hosts can draw in one frame (a HUD plus an in-world panel): each painter keeps its surfaces' geometry under draw-list streams it mints with `engine.AllocateDrawListStream()`, so their surface ids, which every host numbers from zero, never collide. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
+
+UI can follow the world two ways. `InWorldPanel` draws a UI tree into a texture on a quad in the scene. `ScreenAnchors` keeps screen-space elements — labels, markers — pinned to world points: each frame it moves them to where the frame's view-projection puts their points, and fades out the ones whose points leave the viewport or go behind the eye. Give the anchors a view of their own, since they change every frame and SUIsei recomposites a whole view when anything in it changes:
+
+```csharp
+var anchors = ScreenAnchors.Create(engine, host.CreateRoot(new UILayer(1)));
+anchors.Add(new TextBlock { Text = "Start" }, startLine, alignment: new(0.5f, 1f), pixelOffset: new(0f, -8f));
+g.Pass("labels").Blends(screen).Draw(ctx => ui.Draw(ctx, anchors.View.Surface));
+
+// each frame: lay out, place, composite
+host.Tick(dt, time, size);
+anchors.Update(camera.ViewProjection, size, dt);
+host.Render();
+ui.Prepare();
+```
+
+The projection under it is plain matrix maths in `Loom.Core.Geometry` — `viewProjection.TryProjectToScreen(world, size, engine.ClipSpaceCorrection, out var pixel, out var depth)` — which reads the engine's clip-space correction to put a point on the same pixel on every backend.
 
 ### Build & run
 

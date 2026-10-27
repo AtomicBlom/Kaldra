@@ -34,9 +34,14 @@ var xmlSummaries = new List<(string Member, string Summary)>();
 // Only include key consumer-facing assemblies in XML summaries (keeps full output manageable)
 var keyAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     { "Loom.Core", "Loom.Graph", "Loom.Assets", "SUIsei" };
+// Every project that references an assembly copies its XML doc into its own output, so one assembly's doc is on disk
+// many times over. Read each assembly once, from its newest copy, so the output depends on the sources rather than on
+// how many projects happen to have been built.
 var xmlPaths = Directory.EnumerateFiles(repoRoot, "*.xml", SearchOption.AllDirectories)
     .Where(p => !p.Contains("obj") && !p.Contains("external") && p.Contains("Release"))
-    .OrderBy(p => p);
+    .OrderByDescending(File.GetLastWriteTimeUtc)
+    .ThenBy(p => p, StringComparer.Ordinal);
+var assembliesRead = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
 foreach (var xmlPath in xmlPaths)
 {
@@ -45,7 +50,7 @@ foreach (var xmlPath in xmlPaths)
         var xd = new XmlDocument();
         xd.Load(xmlPath);
         var assemblyName = xd.SelectSingleNode("/doc/assembly/name")?.InnerText ?? "";
-        if (!keyAssemblies.Contains(assemblyName)) continue;
+        if (!keyAssemblies.Contains(assemblyName) || !assembliesRead.Add(assemblyName)) continue;
         var members = xd.SelectNodes("/doc/members/member");
         if (members is null) continue;
 
@@ -155,7 +160,7 @@ string BuildFull()
     {
         sb.AppendLine("## Public API Summaries (from XML docs)");
         sb.AppendLine();
-        foreach (var (member, summary) in xmlSummaries)
+        foreach (var (member, summary) in xmlSummaries.OrderBy(s => s.Member, StringComparer.Ordinal))
             sb.AppendLine($"- **{member}**: {summary}");
     }
 

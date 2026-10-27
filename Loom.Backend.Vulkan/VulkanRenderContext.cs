@@ -181,6 +181,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		_storageUpload.BeginFrame(frameSlot);  // and the bone-palette staging
 		_listVtx.BeginFrame(frameSlot);        // and the draw-list geometry staging
 		_listIdx.BeginFrame(frameSlot);
+		_layerTargets.BeginFrame(frameSlot);
 		_frameIndex++;
 		ForgetBindings();                      // a fresh command buffer has nothing bound
 
