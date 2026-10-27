@@ -7,10 +7,11 @@ namespace Loom.Tests;
 /// The Loom SDK's <c>UseSUIsei</c> switch gives an app SUIsei's XAML, not only its runtime. Built through the SDK from
 /// source, an app with a <c>.xaml</c> view gets the view's typed tree generated and can run it; a XAML error fails the
 /// build at the <c>.xaml</c>'s own file and line; and the views are <c>dotnet watch</c> inputs, which is what XAML Hot
-/// Reload runs on. The apps are the fixtures under <c>SdkFixtures</c>, each its own project, built with the test run's
-/// own configuration so their Loom references are the ones this run already built. The packaged SDK points the same
-/// switch at the SUIsei package, which carries the same generator and <c>.xaml</c> registration; no test here builds
-/// against packages.
+/// Reload runs on. A view under a folder the app keeps out of its items (<c>DefaultItemExcludes</c>), as a game keeps
+/// out the Loom submodule beneath it, stays out of its XAML too: the app's fixture holds a broken one there. The apps are
+/// the fixtures under <c>SdkFixtures</c>, each its own project, built with the test run's own configuration so their
+/// Loom references are the ones this run already built. The packaged SDK points the same switch at the SUIsei package,
+/// which carries the same generator and <c>.xaml</c> registration; no test here builds against packages.
 /// </summary>
 [NotInParallel] // the fixtures build against the same referenced projects
 public class SdkXamlTests

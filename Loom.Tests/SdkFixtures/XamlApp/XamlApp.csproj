@@ -14,6 +14,9 @@
     <UseSUIsei>true</UseSUIsei>
     <!-- No shaders of its own. -->
     <LoomShaderOutputMode>None</LoomShaderOutputMode>
+    <!-- Vendored\ stands for another repository's checkout beneath the app (a submodule): its own projects and views,
+         one of them broken, kept out of the app's items the usual way. The app builds only if its XAML stays out too. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);Vendored/**</DefaultItemExcludes>
     <!-- Keep the generated tree on disk, so a test can see what the generator wrote. -->
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
   </PropertyGroup>
