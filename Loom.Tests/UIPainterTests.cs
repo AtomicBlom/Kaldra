@@ -8,6 +8,7 @@ using Loom.UI.SUIsei;
 using SUIsei;
 using SUIsei.Controls;
 using SUIsei.Drawing;
+using SUIsei.Media;
 
 namespace Loom.Tests;
 
@@ -130,7 +131,7 @@ public class UIPainterTests
 			var host = new UIHost();
 			var view = host.CreateRoot(UILayer.Default);
 			var red = Enumerable.Repeat<byte[]>([255, 0, 0, 255], 16).SelectMany(texel => texel).ToArray();
-			var panel = new StackPanel { Background = HdrColor.FromRgb(0, 0, 255) };
+			var panel = new StackPanel { Background = new SolidColorBrush(HdrColor.FromRgb(0, 0, 255)) };
 			panel.Children.Add(new TextBlock { Text = "Steady", FontSize = 14f });
 			panel.Children.Add(new Image { Source = ImageSource.FromRgba8(4, 4, red), Stretch = Stretch.Fill, Width = 16, Height = 16 });
 			view.Root.Content = panel;
@@ -268,7 +269,7 @@ public class UIPainterTests
 
 	private static Image ImageElement(ImageSource source) => new() { Source = source, Stretch = Stretch.Fill, Width = 16, Height = 16 };
 
-	private static Border Fill(HdrColor colour) => new() { Width = 16, Height = 16, Background = colour };
+	private static Border Fill(HdrColor colour) => new() { Width = 16, Height = 16, Background = new SolidColorBrush(colour) };
 
 	// One pass drawing two surfaces of the same host, one after the other.
 	private static RenderGraph TwoSurfaceGraph(UIPainter painter, DrawListId a, DrawListId b) => RenderGraph.Define(g =>
@@ -356,7 +357,7 @@ public class UIPainterTests
 				HorizontalAlignment = side,
 				Width = side == HorizontalAlignment.Stretch ? W : W / 2,
 				Height = H,
-				Background = colour,
+				Background = new SolidColorBrush(colour),
 			};
 			Surface = view.Surface;
 			Painter = UIPainter.Create(engine, Host);

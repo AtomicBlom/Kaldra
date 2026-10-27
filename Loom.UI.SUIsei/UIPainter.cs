@@ -31,6 +31,8 @@ namespace Loom.UI.SUIsei;
 public sealed class UIPainter
 {
 	private const string Technique = "ui";
+	// The vector kind: ui.slang's KIND_VECTOR, the one drawn kind numbered past the layer markers.
+	private const uint KindVector = (uint)UIPrimKind.Vector;
 	// Paper-white luminance reference for an HDR target: UIPaperWhiteNits / 80. SDR targets pass 1.0.
 	private const float HdrPaperWhiteScale = 200f / 80f;
 
@@ -204,8 +206,8 @@ public sealed class UIPainter
 
 	/// <summary>
 	/// Refuse a list carrying a command kind the <c>ui</c> shader does not draw. A command's <c>Tag</c> selects the
-	/// shader's branch: kinds 0–4 (fill, rounded rect, border, glyph, image) are drawn, and 5 and 6 are the
-	/// group-opacity layer markers the draw-list walker consumes before a command reaches the shader. Anything else
+	/// shader's branch: kinds 0–4 (fill, rounded rect, border, glyph, image) and 7 (vector) are drawn, and 5 and 6 are
+	/// the group-opacity layer markers the draw-list walker consumes before a command reaches the shader. Anything else
 	/// would reach the shader's <c>switch</c> and fall through to a plain fill, because a shader has no way to fail —
 	/// so a compositor and shader that disagreed about a kind would draw the wrong thing without a word. Run once per
 	/// revision, from <see cref="Prepare"/>, so a steady frame pays nothing.
@@ -215,12 +217,15 @@ public sealed class UIPainter
 		for (var i = 0; i < commands.Length; i++)
 		{
 			var tag = commands[i].Tag;
-			if (tag <= DrawListGeometry.KindImage || tag == DrawListGeometry.TagBeginLayer || tag == DrawListGeometry.TagEndLayer)
+			if (tag <= DrawListGeometry.KindImage || tag == KindVector
+				|| tag == DrawListGeometry.TagBeginLayer || tag == DrawListGeometry.TagEndLayer)
+			{
 				continue;
+			}
 			throw new InvalidOperationException(
 				$"UIPainter: command {i} of surface {surface.Value}'s draw list has kind {tag}, which the ui shader does not draw. " +
-				$"It draws kinds 0–{DrawListGeometry.KindImage} (fill, rounded rect, border, glyph, image), and " +
-				$"{DrawListGeometry.TagBeginLayer} and {DrawListGeometry.TagEndLayer} are the group-opacity layer markers. " +
+				$"It draws kinds 0–{DrawListGeometry.KindImage} (fill, rounded rect, border, glyph, image) and {KindVector} (vector), " +
+				$"and {DrawListGeometry.TagBeginLayer} and {DrawListGeometry.TagEndLayer} are the group-opacity layer markers. " +
 				"An unknown kind would draw as a plain fill, so the compositor that produced this list and ui.slang must " +
 				"gain the kind together.");
 		}
