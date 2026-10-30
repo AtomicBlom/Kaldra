@@ -57,6 +57,12 @@
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true'" />
+
+    <!-- What the compile must have produced for it to count as up to date: the SPIR-V, and the WGSL when it is
+         emitted. With the SPIR-V alone, an output folder that already held another build's SPIR-V (a desktop build
+         of the same project) skipped the compile, and the WGSL was never made. -->
+    <_LoomShaderOutput Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')" />
+    <_LoomShaderOutput Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'" />
   </ItemGroup>
 
   <!-- Incremental: recompile when ANY .slang (entry OR shared module) is newer than ANY .spv. Listing every
@@ -64,7 +70,7 @@
   <Target Name="LoomCompileShaders"
           Condition="'$(LoomShaderOutputMode)' != 'None'"
           Inputs="@(LoomSlangSource)"
-          Outputs="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
+          Outputs="@(_LoomShaderOutput)">
     <Error Condition="'$(PkgSlang_Sdk)' == ''"
            Text="LoomShaderOutputMode='$(LoomShaderOutputMode)' but Slang.Sdk is not referenced in this project. Add a Slang.Sdk PackageReference with GeneratePathProperty=&quot;true&quot;." />
     <Error Condition="!Exists('$(SlangCompiler)')"
@@ -196,20 +202,36 @@
         <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
-      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'">
+      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true' and '$(LoomEmbedWgsl)' != 'true'">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         <Link>shaders\%(Filename).wgsl</Link>
         <PackagePath>contentFiles/any/any/shaders/%(Filename).wgsl</PackagePath>
         <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
-      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true'">
+      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true' and '$(LoomEmbedWgsl)' != 'true'">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         <Link>shaders\%(Filename).wgsl.json</Link>
         <PackagePath>contentFiles/any/any/shaders/%(Filename).wgsl.json</PackagePath>
         <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
+    </ItemGroup>
+
+    <!-- Content with LoomEmbedWgsl (a library's shaders, as Loom.UI.SUIsei's): the WGSL is embedded while the rest stay
+         loose, because a browser app has no shader folder to look in. The web host finds it by the library's
+         "<AssemblyName>.Shaders." prefix. -->
+    <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content' and '$(LoomEmitWgsl)' == 'true' and '$(LoomEmbedWgsl)' == 'true'">
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).wgsl</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).wgsl.json</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
     </ItemGroup>
 
     <!-- Embed (engine): .spv/.json (+ HLSL) become EmbeddedResource with a STABLE flat manifest name the engine

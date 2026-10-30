@@ -156,6 +156,12 @@ public abstract class LoomApplication : IHostedApplication
 	protected void SetClipboardText(string text) => _host.SetClipboardText(text);
 
 	/// <summary>
+	/// Offer the user a file to keep (see <see cref="IHostControl.SaveFile"/>): in the browser, its save dialog or a
+	/// download. Call it from the input that asked for it. False when the host offers no files.
+	/// </summary>
+	protected bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents) => _host.SaveFile(name, contentType, contents);
+
+	/// <summary>
 	/// Request that the next frame be rendered. Only meaningful under <see cref="RenderMode.OnDemand"/>, where a
 	/// frame is otherwise skipped: call this whenever app state changes so the change is drawn (an input handler, an
 	/// async load completing, an animation advancing). Idempotent within a frame, and safe to call from any thread —

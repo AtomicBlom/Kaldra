@@ -15,6 +15,10 @@
     <!-- Loose .spv/.json (+ signed DXIL when the build includes DirectX12) copied to shaders\ and flowed to the app. -->
     <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
     <LoomShaderOutputMode>Content</LoomShaderOutputMode>
+    <!-- And WGSL, embedded under "Loom.UI.SUIsei.Shaders.", for an app in the browser: whichever way the app builds,
+         this library is the same assembly, so it always carries it -->
+    <LoomEmitWgsl>true</LoomEmitWgsl>
+    <LoomEmbedWgsl>true</LoomEmbedWgsl>
   </PropertyGroup>
 
   <PropertyGroup Label="NuGet">

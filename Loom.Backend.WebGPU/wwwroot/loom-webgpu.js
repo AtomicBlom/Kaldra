@@ -434,6 +434,64 @@ export function getLocationSearch() { return globalThis.location?.search ?? ""; 
 // debugging — the on-page #status line carries the same text so headless captures see it too.
 export function consoleError(text) { console.error(text); }
 
+// ── Clipboard and files, for the host's IHostControl ──
+
+// What was last pasted into the page. Reading the clipboard outright (navigator.clipboard.readText) asks the player's
+// permission, and in a cross-origin iframe (itch.io's, for one) it is refused; a paste event carries the text without
+// asking. Ctrl+V fires it straight after the keydown, so it has arrived by the frame that reads the key.
+let pastedText = null;
+export function startClipboard() {
+	document.addEventListener("paste", e => {
+		const text = e.clipboardData?.getData("text/plain");
+		if (text) pastedText = text;
+	});
+}
+export function getPastedText() { return pastedText ?? ""; }
+
+// Copies text. navigator.clipboard needs a secure context and, in a cross-origin iframe, the embedding page's
+// permission (clipboard-write); without them the old copy command still works while the input that asked for it is recent.
+export function writeClipboardText(text) {
+	const byCommand = () => {
+		const area = document.createElement("textarea");
+		area.value = text;
+		area.style.position = "fixed";
+		area.style.opacity = "0";
+		document.body.appendChild(area);
+		area.select();
+		try { document.execCommand("copy"); } catch { /* nothing more to try */ }
+		area.remove();
+		canvas?.focus?.();
+	};
+	if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(byCommand);
+	else byCommand();
+}
+
+// Offers the player a file: the browser's save dialog, asking where it goes, where the browser has one and lets this
+// page use it (not in a cross-origin iframe), and otherwise a download. Either needs the input that asked for it to be
+// recent. Cancelling the dialog saves nothing.
+export async function saveFile(name, contentType, bytes) {
+	const blob = new Blob([bytes.slice()], { type: contentType });
+	if (typeof window.showSaveFilePicker === "function") {
+		try {
+			const dot = name.lastIndexOf(".");
+			const types = dot > 0 ? [{ description: name.slice(dot + 1).toUpperCase(), accept: { [contentType]: [name.slice(dot)] } }] : undefined;
+			const handle = await window.showSaveFilePicker({ suggestedName: name, types });
+			const writable = await handle.createWritable();
+			await writable.write(blob);
+			await writable.close();
+			return;
+		} catch (e) {
+			if (e?.name === "AbortError") return;   // the player cancelled
+			// refused here (an iframe, an old activation): download it instead
+		}
+	}
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url; a.download = name;
+	document.body.appendChild(a); a.click(); a.remove();
+	setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 let frameCallback = null;
 export function startFrameLoop(dotnetFrame) {
 	frameCallback = dotnetFrame;

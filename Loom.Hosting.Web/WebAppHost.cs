@@ -127,6 +127,7 @@ public sealed partial class WebAppHost : IAppHost
 		// the key/button ups for anything held across a tab switch, which would otherwise strand it down.
 		_input = new WebInputPump(app.QueueInput, app.SetFocus);
 		StartInputHandlers(_input.OnPointerMove, _input.OnGamepadButton, _input.OnGamepadAxis, _input.OnEvent, _input.OnKey);
+		StartClipboard();
 
 		SetStatus($"Loom running on {engine.DeviceName} ({width}x{height})");
 		StartFrameLoop(Frame);
@@ -197,22 +198,46 @@ public sealed partial class WebAppHost : IAppHost
 			((IHostedApplication)current).Unload();
 			engine.WaitIdle();
 		}
+
+		// The browser can't be asked for the clipboard without a prompt (and not at all in a cross-origin iframe), so
+		// this is the text last pasted into the page: Ctrl+V's paste event lands before the frame that reads the key.
+		[SupportedOSPlatform("browser")]
+		public string? GetClipboardText() => GetPastedText() is { Length: > 0 } text ? text : null;
+
+		[SupportedOSPlatform("browser")]
+		public void SetClipboardText(string text) => WriteClipboardText(text);
+
+		[SupportedOSPlatform("browser")]
+		public bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents)
+		{
+			SaveFileJs(name, contentType, contents.ToArray());
+			return true;
+		}
 	}
 
 	// Resolve a shader artifact (e.g. "triangle.wgsl" / "triangle.wgsl.json") from the application's own assembly,
-	// whose shaders embed under "<AssemblyName>.Shaders." (the Loom shader-compile default).
+	// whose shaders embed under "<AssemblyName>.Shaders." (the Loom shader-compile default), or failing that from any
+	// loaded library that embeds its own the same way (Loom.UI.SUIsei's "ui", with LoomEmbedWgsl). The app's come
+	// first, so an app can stand in its own for a library's.
 	private static byte[]? ResolveEntryAssemblyShader(string nameWithExtension)
 	{
-		var assembly = Assembly.GetEntryAssembly();
-		if (assembly is null)
-			return null;
-		var prefix = assembly.GetName().Name + ".Shaders.";
-		using var stream = assembly.GetManifestResourceStream(prefix + nameWithExtension);
-		if (stream is null)
-			return null;
-		var bytes = new byte[stream.Length];
-		stream.ReadExactly(bytes);
-		return bytes;
+		var entry = Assembly.GetEntryAssembly();
+		if (entry is not null && Read(entry) is { } own)
+			return own;
+		foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+			if (assembly != entry && !assembly.IsDynamic && Read(assembly) is { } bytes)
+				return bytes;
+		return null;
+
+		byte[]? Read(Assembly assembly)
+		{
+			using var stream = assembly.GetManifestResourceStream(assembly.GetName().Name + ".Shaders." + nameWithExtension);
+			if (stream is null)
+				return null;
+			var bytes = new byte[stream.Length];
+			stream.ReadExactly(bytes);
+			return bytes;
+		}
 	}
 
 	// Parse the "w,h" device-pixel size the JS side reports for the canvas, falling back to the app's options
@@ -272,6 +297,23 @@ public sealed partial class WebAppHost : IAppHost
 	[JSImport("startResizeHandler", Module)]
 	[SupportedOSPlatform("browser")]
 	private static partial void StartResizeHandler([JSMarshalAs<JSType.Function>] Action onResize);
+
+	[JSImport("startClipboard", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial void StartClipboard();
+
+	[JSImport("getPastedText", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial string GetPastedText();
+
+	[JSImport("writeClipboardText", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial void WriteClipboardText(string text);
+
+	// Async on the JS side (the save dialog); nothing waits on it
+	[JSImport("saveFile", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial void SaveFileJs(string name, string contentType, byte[] bytes);
 
 	// Attach the DOM/Gamepad-API input listeners. Each callback carries at most three values (the ceiling the
 	// source-generated JS interop marshals for a function): the three-value events get a dedicated callback
