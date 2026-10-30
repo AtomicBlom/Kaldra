@@ -629,6 +629,35 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 	requestAnimationFrame(tick);
 }
 
+// The same input, and the window's resizes, queued for the host to take once a frame (takeHostEvents) rather than
+// called into C# as they happen. A multithreaded runtime runs C# on a worker (the "deputy"), which the page's own
+// thread may only call asynchronously; the host's frame is that one async call, and it collects everything else.
+// One event a line, fields apart by spaces (a KeyboardEvent.code has none):
+//   m x y type        pointer move          e kind a b       onEvent's low-rate channel
+//   b pad index down  gamepad button        k code down      key
+//   a pad index value gamepad axis          r                the window resized
+let hostEvents = [];
+export function startHostEventQueue() {
+	startInputHandlers(
+		(x, y, type) => hostEvents.push(`m ${x} ${y} ${type}`),
+		(pad, index, down) => hostEvents.push(`b ${pad} ${index} ${down}`),
+		(pad, index, value) => hostEvents.push(`a ${pad} ${index} ${value}`),
+		(kind, a, b) => hostEvents.push(`e ${kind} ${a} ${b}`),
+		(code, down) => hostEvents.push(`k ${code} ${down ? 1 : 0}`));
+	let resized = false;
+	window.addEventListener("resize", () => {
+		if (resized) return;
+		resized = true;
+		requestAnimationFrame(() => { resized = false; hostEvents.push("r"); });
+	});
+}
+export function takeHostEvents() {
+	if (hostEvents.length === 0) return "";
+	const text = hostEvents.join("\n");
+	hostEvents = [];
+	return text;
+}
+
 function align4(n) { return (n + 3) & ~3; }
 
 // Diagnostic hook (read via the CDP verification harness): the pending error queue plus device/canvas state.

@@ -20,3 +20,20 @@ Reference [`Loom.Sdk`](https://www.nuget.org/packages/Loom.Sdk) as `Sdk="Loom.Sd
 ```csharp
 LoomApplication.Run(new MyApp(), args);
 ```
+
+## Threads
+
+The host works the same on the single-threaded runtime and the multithreaded one (`<WasmEnableThreads>true</WasmEnableThreads>`),
+where C# runs on a worker the page's thread may only call asynchronously. So every call from the page into C# is async:
+`loom-boot.js` calls the host's `Frame` export once a `requestAnimationFrame` (letting one still running finish rather
+than queueing behind it), and the page's input and resizes are queued for `Frame` to take, not called in as they come.
+A multithreaded app can then put long work on `Task.Run` and the frame goes on.
+
+The multithreaded runtime needs a cross-origin isolated page: the server must send `Cross-Origin-Opener-Policy:
+same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. Without them it can't start, and the page says why.
+
+## Trying it locally
+
+`dotnet run --file tools/loom-serve.cs -- <publish dir> [--port 5080] [--no-isolation]` serves a published app as a host
+would: cross-origin isolated (unless `--no-isolation`), with the .NET runtime's files under the right types (a worker
+module served as `text/plain` won't start), the publish's precompressed files, and nothing cached.

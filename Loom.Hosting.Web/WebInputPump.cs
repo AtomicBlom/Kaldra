@@ -14,8 +14,9 @@ namespace Loom.Hosting.Web;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Events arrive from the <c>startInputHandlers</c> shim (loom-webgpu.js) over a handful of callbacks, each
-/// carrying at most three values (the ceiling the source-generated JS interop marshals for a function). The
+/// Events come from the <c>startInputHandlers</c> shim (loom-webgpu.js), queued by <c>startHostEventQueue</c> and fed
+/// in by the host at the start of each frame, in the shape of a handful of callbacks, each carrying at most three
+/// values (the ceiling the source-generated JS interop marshals for a function). The
 /// three-value events get their own callback — <see cref="OnPointerMove"/>, <see cref="OnGamepadButton"/>,
 /// <see cref="OnGamepadAxis"/>; the rest share a discriminated low-rate channel, <see cref="OnEvent"/>; and
 /// <see cref="OnKey"/> carries the physical <c>KeyboardEvent.code</c> string this side maps to a neutral key.
@@ -25,7 +26,7 @@ namespace Loom.Hosting.Web;
 /// <para>
 /// Held keys, mouse buttons and gamepad buttons are tracked so <see cref="ReleaseAllHeld"/> can synthesize the
 /// releases the browser drops when the page loses focus or is hidden — a key held across a tab switch would
-/// otherwise strand down. Single-threaded by design: DOM events fire between requestAnimationFrame callbacks.
+/// otherwise strand down. Single-threaded by design: the host feeds it on the thread that runs the frame.
 /// </para>
 /// </remarks>
 internal sealed class WebInputPump

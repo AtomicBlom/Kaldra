@@ -9,8 +9,8 @@ using Loom.Core.Hosting;
 namespace Loom.Hosting.Web;
 
 /// <summary>
-/// The browser <see cref="IAppHost"/>: brings the WebGPU device up on a JS-supplied canvas, then drives the
-/// application's frame loop through requestAnimationFrame. Unlike the desktop host, <see cref="Run"/> does not
+/// The browser <see cref="IAppHost"/>: brings the WebGPU device up on a JS-supplied canvas, then runs a frame each
+/// time the JS boot helper calls <see cref="Frame"/>, once a requestAnimationFrame. Unlike the desktop host, <see cref="Run"/> does not
 /// block — a browser app can't block its entry thread — so it just registers the application; the JS boot helper
 /// then calls the <see cref="StartApp"/> export with the page's canvas selector to start everything. The canvas
 /// identity flows in from the page (an embedder owns their own <c>&lt;canvas&gt;</c>); it is never hardcoded here.
@@ -33,9 +33,10 @@ public sealed partial class WebAppHost : IAppHost
 	private static double _lastTimestampMs;
 	private static int _frame;
 
-	// The DOM/Gamepad-API → neutral input bridge, held for the lifetime of the app (its OnInput/OnKey delegates
-	// are handed to the JS input shim once at startup).
+	// The DOM/Gamepad-API → neutral input bridge, held for the lifetime of the app, fed the page's queued events at
+	// the start of each frame
 	private static WebInputPump? _input;
+	private static string _canvasSelector = "";
 
 	// Capture mode (?capture=<name>): a frozen 1/60 s clock and a one-shot grab at a fixed frame, so a headless
 	// browser capture is deterministic and pixel-comparable with a desktop reference.
@@ -126,21 +127,27 @@ public sealed partial class WebAppHost : IAppHost
 		// the app's focus hook. On blur/hide the pump synthesizes releases for everything held — the browser drops
 		// the key/button ups for anything held across a tab switch, which would otherwise strand it down.
 		_input = new WebInputPump(app.QueueInput, app.SetFocus);
-		StartInputHandlers(_input.OnPointerMove, _input.OnGamepadButton, _input.OnGamepadAxis, _input.OnEvent, _input.OnKey);
+		_canvasSelector = canvasSelector;
+		StartHostEventQueue();
 		StartClipboard();
 
 		SetStatus($"Loom running on {engine.DeviceName} ({width}x{height})");
-		StartFrameLoop(Frame);
-		StartResizeHandler(() => Resize(canvasSelector));
 	}
 
+	/// <summary>
+	/// One frame, which the JS boot helper calls once a requestAnimationFrame: the input and resizes the page queued
+	/// since the last, then the application's tick and render. Async to JS, as a multithreaded runtime requires of a
+	/// call from the page's thread (its C# runs on a worker); the frame itself runs to the end before it returns.
+	/// </summary>
+	[JSExport]
 	[SupportedOSPlatform("browser")]
-	private static void Frame(double timestampMs)
+	internal static Task Frame(double timestampMs)
 	{
 		var engine = _engine;
 		if (LoomApplication.Current is not { } current || engine is null)
-			return;
+			return Task.CompletedTask;
 		var app = (IHostedApplication)current;
+		TakeHostEventsInto(_input!);
 
 		double delta;
 		if (_captureName is not null)
@@ -169,6 +176,35 @@ public sealed partial class WebAppHost : IAppHost
 			_engine = null; // stop ticking after a fault
 		}
 		_frame++;
+		return Task.CompletedTask;
+	}
+
+	// The page's queued events (startHostEventQueue in loom-webgpu.js), one a line, to the input pump, and a resize to
+	// the engine and the app
+	[SupportedOSPlatform("browser")]
+	private static void TakeHostEventsInto(WebInputPump input)
+	{
+		string events = TakeHostEvents();
+		if (events.Length == 0)
+			return;
+		bool resized = false;
+		foreach (var line in events.Split('\n'))
+		{
+			var f = line.Split(' ');
+			switch (f[0])
+			{
+				case "m" when f.Length == 4: input.OnPointerMove(D(f[1]), D(f[2]), D(f[3])); break;
+				case "b" when f.Length == 4: input.OnGamepadButton(D(f[1]), D(f[2]), D(f[3])); break;
+				case "a" when f.Length == 4: input.OnGamepadAxis(D(f[1]), D(f[2]), D(f[3])); break;
+				case "e" when f.Length == 4: input.OnEvent(D(f[1]), D(f[2]), D(f[3])); break;
+				case "k" when f.Length == 3: input.OnKey(f[1], f[2] == "1"); break;
+				case "r": resized = true; break;
+			}
+		}
+		if (resized)
+			Resize(_canvasSelector);
+
+		static double D(string s) => double.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
 	}
 
 	[SupportedOSPlatform("browser")]
@@ -290,13 +326,14 @@ public sealed partial class WebAppHost : IAppHost
 	[SupportedOSPlatform("browser")]
 	private static partial void ConsoleError(string text);
 
-	[JSImport("startFrameLoop", Module)]
+	// Queue the page's DOM/Gamepad-API input and resizes for TakeHostEvents, rather than calling into C# as they come
+	[JSImport("startHostEventQueue", Module)]
 	[SupportedOSPlatform("browser")]
-	private static partial void StartFrameLoop([JSMarshalAs<JSType.Function<JSType.Number>>] Action<double> onFrame);
+	private static partial void StartHostEventQueue();
 
-	[JSImport("startResizeHandler", Module)]
+	[JSImport("takeHostEvents", Module)]
 	[SupportedOSPlatform("browser")]
-	private static partial void StartResizeHandler([JSMarshalAs<JSType.Function>] Action onResize);
+	private static partial string TakeHostEvents();
 
 	[JSImport("startClipboard", Module)]
 	[SupportedOSPlatform("browser")]
@@ -314,17 +351,4 @@ public sealed partial class WebAppHost : IAppHost
 	[JSImport("saveFile", Module)]
 	[SupportedOSPlatform("browser")]
 	private static partial void SaveFileJs(string name, string contentType, byte[] bytes);
-
-	// Attach the DOM/Gamepad-API input listeners. Each callback carries at most three values (the ceiling the
-	// source-generated JS interop marshals for a function): the three-value events get a dedicated callback
-	// (pointer move, gamepad button, gamepad axis), the rest share the discriminated onEvent channel, and onKey
-	// carries the physical KeyboardEvent.code string plus its down/up state (mapped to a neutral key on this side).
-	[JSImport("startInputHandlers", Module)]
-	[SupportedOSPlatform("browser")]
-	private static partial void StartInputHandlers(
-		[JSMarshalAs<JSType.Function<JSType.Number, JSType.Number, JSType.Number>>] Action<double, double, double> onPointerMove,
-		[JSMarshalAs<JSType.Function<JSType.Number, JSType.Number, JSType.Number>>] Action<double, double, double> onGamepadButton,
-		[JSMarshalAs<JSType.Function<JSType.Number, JSType.Number, JSType.Number>>] Action<double, double, double> onGamepadAxis,
-		[JSMarshalAs<JSType.Function<JSType.Number, JSType.Number, JSType.Number>>] Action<double, double, double> onEvent,
-		[JSMarshalAs<JSType.Function<JSType.String, JSType.Boolean>>] Action<string, bool> onKey);
 }
