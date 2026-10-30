@@ -149,6 +149,12 @@ public abstract class LoomApplication : IHostedApplication
 	/// </summary>
 	protected void Exit() => _host.RequestExit();
 
+	/// <summary>The text on the system clipboard, or null when it holds none or the host has no clipboard.</summary>
+	protected string? GetClipboardText() => _host.GetClipboardText();
+
+	/// <summary>Put <paramref name="text"/> on the system clipboard; nothing happens on a host without one.</summary>
+	protected void SetClipboardText(string text) => _host.SetClipboardText(text);
+
 	/// <summary>
 	/// Request that the next frame be rendered. Only meaningful under <see cref="RenderMode.OnDemand"/>, where a
 	/// frame is otherwise skipped: call this whenever app state changes so the change is drawn (an input handler, an

@@ -19,4 +19,13 @@ public interface IHostControl
 	/// not implement it.
 	/// </summary>
 	void RequestRender() { }
+
+	/// <summary>
+	/// The text on the system clipboard, or null when it holds none or the host cannot read it. Defaults to null so a
+	/// host without a clipboard need not implement it.
+	/// </summary>
+	string? GetClipboardText() => null;
+
+	/// <summary>Put <paramref name="text"/> on the system clipboard. Defaults to a no-op so a host without a clipboard need not implement it.</summary>
+	void SetClipboardText(string text) { }
 }

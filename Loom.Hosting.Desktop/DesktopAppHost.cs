@@ -81,7 +81,9 @@ public sealed class DesktopAppHost : IAppHost
 
 		using var engine = backend.Create(surface, window.FramebufferSize.X, window.FramebufferSize.Y, options.EngineSettings);
 
-		IHostControl host = new WindowHostControl(window);
+		// The input context comes first: the host control reaches the clipboard through its keyboard.
+		using var inputContext = window.CreateInput();
+		IHostControl host = new WindowHostControl(window, inputContext);
 		driver.Load(engine, host);
 
 		// The host reports the initial size before the first frame, exactly like every later resize.
@@ -89,7 +91,6 @@ public sealed class DesktopAppHost : IAppHost
 
 		// Pump the window's platform input devices into the app's neutral input queue. The pump takes the input
 		// context (not the window), so a host with its own window can reuse it against its own context.
-		using var inputContext = window.CreateInput();
 		using var inputPump = new DesktopInputPump(inputContext, driver);
 
 		// A 0x0 framebuffer (minimized) has nothing to render into — skip both the engine resize and driver.Resize
@@ -186,12 +187,21 @@ public sealed class DesktopAppHost : IAppHost
 
 	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,
 	// which unwinds window.Run() and lets Run's teardown (Unload + WaitIdle) proceed.
-	private sealed class WindowHostControl(IWindow window) : IHostControl
+	private sealed class WindowHostControl(IWindow window, IInputContext input) : IHostControl
 	{
 		public void RequestExit() => window.Close();
 
 		// Wake the event-driven loop so the next frame renders (a no-op effect when not event-driven). Thread-safe
 		// per Silk's ContinueEvents contract, so an app may invalidate from an off-thread callback.
 		public void RequestRender() => window.ContinueEvents();
+
+		// Silk reaches the system clipboard through a keyboard (GLFW's is the window's); with none attached there is no clipboard.
+		public string? GetClipboardText() => input.Keyboards.Count > 0 ? input.Keyboards[0].ClipboardText : null;
+
+		public void SetClipboardText(string text)
+		{
+			if (input.Keyboards.Count > 0)
+				input.Keyboards[0].ClipboardText = text;
+		}
 	}
 }
