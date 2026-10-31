@@ -37,7 +37,13 @@ export async function runLoom({ canvas = '#loom-canvas' } = {}) {
 
 async function start(canvas) {
 	const { dotnet } = await import('../../_framework/dotnet.js');
-	const { setModuleImports, runMain, getAssemblyExports } = await dotnet.create();
+	// A multithreaded runtime runs each thread on a Web Worker from a pool made before the app starts. One started past the
+	// pool needs a new worker made while the app runs, and on .NET 11 that hangs the deputy: its frame finishes, but the
+	// page never hears so and asks for no more. A pool big enough for an app's threads never needs one. The single-threaded
+	// runtime ignores these.
+	const { setModuleImports, runMain, getAssemblyExports } = await dotnet
+		.withConfig({ pthreadPoolInitialSize: 16, pthreadPoolUnusedSize: 4 })
+		.create();
 	setModuleImports('loom-webgpu', { ...loomWebgpu });
 	// runMain runs the app's Main -> LoomApplication.Run, which (via the web host) registers the app and returns.
 	await runMain();
