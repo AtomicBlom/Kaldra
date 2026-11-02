@@ -275,6 +275,12 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	float HdrPaperWhiteNits { get => 200f; set { } }
 
 	/// <summary>
+	/// The brightest an HDR output shows, in nits: what highlights should roll off toward rather than clip at. The desktop
+	/// host keeps it at the peak the window's monitor reports; 1000 where it can't tell. Unused on SDR output.
+	/// </summary>
+	float HdrPeakNits { get => 1000f; set { } }
+
+	/// <summary>
 	/// Per-pass GPU timings from the most recently <em>completed</em> frame (a frame or two stale, like
 	/// <see cref="Read"/> — timestamps are read back after the slot's fence). In execution order; the entries
 	/// align with the active graph's leaf passes. Empty when timing is disabled or no timed frame has retired.

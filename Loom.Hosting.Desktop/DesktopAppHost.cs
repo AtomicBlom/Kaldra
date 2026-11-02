@@ -118,8 +118,9 @@ public sealed class DesktopAppHost : IAppHost
 		// advances the app one frame until it calls Exit() (RequestExit closes the window) or the window is closed.
 		// Headless verification of a hosted app is done by in-process tests driving the engine offscreen, not by a
 		// capture/smoke mode on this production host.
-		// Where the desktop shows SDR white on the window's monitor, for an HDR frame's paper white: asked once a second,
-		// so moving the window to another monitor or moving Windows' "SDR content brightness" slider follows.
+		// Where the desktop shows SDR white on the window's monitor, for an HDR frame's paper white, and the brightest it
+		// shows, for its highlights: asked once a second, so moving the window to another monitor or moving Windows' "SDR
+		// content brightness" slider follows.
 		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
 		var sinceWhite = double.MaxValue;
 		var total = 0.0;
@@ -135,6 +136,11 @@ public sealed class DesktopAppHost : IAppHost
 				{
 					engine.HdrPaperWhiteNits = nits;
 					LoomLog.Info($"SDR white on the window's monitor: {nits:F0} nits");
+				}
+				if (DisplayPeak.Nits(hwnd) is { } peak && peak != engine.HdrPeakNits)
+				{
+					engine.HdrPeakNits = peak;
+					LoomLog.Info($"the window's monitor peaks at {peak:F0} nits");
 				}
 			}
 			inputPump.Update(delta);

@@ -66,6 +66,9 @@ public abstract class EngineBase : IEngine
 	/// <inheritdoc/>
 	public float HdrPaperWhiteNits { get; set; } = 200f;
 
+	/// <inheritdoc/>
+	public float HdrPeakNits { get; set; } = 1000f;
+
 	/// <summary>Per-pass GPU timings from the most recently completed frame (empty when timing is disabled).</summary>
 	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
 
