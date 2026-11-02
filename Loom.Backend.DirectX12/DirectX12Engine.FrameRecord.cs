@@ -37,7 +37,7 @@ public sealed unsafe partial class DirectX12Engine
 		// mid-frame can re-bind the replacement itself.
 		_ring.BeginFrame(_commandList, index);
 		_aliasBarriered.Clear(); // each aliased transient gets one aliasing barrier on its first use this frame
-		_context.BeginFrame(_commandList, inputs, _settings.HdrOutput, index, _presentTarget.Width, _presentTarget.Height);
+		_context.BeginFrame(_commandList, inputs, _presentTarget.HdrActive, index, _presentTarget.Width, _presentTarget.Height);
 
 		// Everything the derived plan needs recording, in the order EngineBase fixes for every backend.
 		var capturing = TakeCapturePath(CaptureSupported(), _presentTarget.Format) is not null;

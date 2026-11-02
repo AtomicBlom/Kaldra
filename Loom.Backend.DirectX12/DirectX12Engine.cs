@@ -108,7 +108,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_ctx = ctx;
 		_presentTarget = offscreen
 			? new DirectX12OffscreenTarget(_ctx, width, height, BufferCount)
-			: new DirectX12Swapchain(_ctx, hwnd, width, height, BufferCount);
+			: new DirectX12Swapchain(_ctx, hwnd, width, height, BufferCount, settings.HdrOutput);
 
 		for (uint i = 0; i < BufferCount; i++)
 		{

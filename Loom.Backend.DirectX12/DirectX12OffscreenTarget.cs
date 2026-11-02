@@ -15,6 +15,9 @@ namespace Loom.Backend.DirectX12;
 /// </summary>
 internal sealed unsafe class DirectX12OffscreenTarget : IDirectX12PresentTarget
 {
+	/// <summary>Never: an offscreen target is read back as 8-bit images.</summary>
+	public bool HdrActive => false;
+
 	private readonly DirectX12Context _ctx;
 	private readonly uint _bufferCount;
 	private readonly ComPtr<ID3D12Resource>[] _buffers;
