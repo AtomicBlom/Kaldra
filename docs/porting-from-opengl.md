@@ -464,5 +464,3 @@ Worth knowing before you start, each with the workaround used above:
 - **No mesh-less draw from CPU instances** — instance a unit quad.
 - **No primitive topology** — lines, strips and fans become triangle instances.
 - **No headless desktop host** — drive the app on an offscreen engine.
-- DirectX 12 keeps every mesh in an upload heap, which suits small geometry; a large mesh, such as a terrain grid, is
-  read across the bus each frame.

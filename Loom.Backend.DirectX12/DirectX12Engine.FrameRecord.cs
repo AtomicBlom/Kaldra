@@ -44,6 +44,9 @@ public sealed unsafe partial class DirectX12Engine
 		RecordFrame();
 
 		SilkMarshal.ThrowHResult(_commandList.Close());
+		// A mesh or texture created after the top of the frame (in a graph's prepare step) recorded its copy since the
+		// drain; it goes to the queue ahead of the frame that draws it.
+		_uploads.Flush();
 		var list = (ID3D12CommandList*)_commandList.Handle;
 		_ctx.GraphicsQueue.ExecuteCommandLists(1, &list);
 		_presentTarget.Present(_settings.VSync);

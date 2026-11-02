@@ -137,8 +137,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		// Starting sizes, not budgets — the heap grows when a scene wants more. The persistent region holds one table
 		// per (material, technique) and the transient region a frame's per-pass SRVs plus the resource viewer's debug SRVs.
 		_ring = new DirectX12DescriptorHeap(_ctx, persistentCapacity: 256, transientPerFrame: 256, BufferCount);
-		_meshes = new DirectX12MeshStore(_ctx);
 		_uploads = new DirectX12UploadBatch(_ctx);
+		_meshes = new DirectX12MeshStore(_ctx, _uploads);
 		_textures = new DirectX12TextureStore(_ctx, _uploads);
 		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, Materials, (int)BufferCount, Validation);
 		for (uint i = 0; i < BufferCount; i++)
@@ -283,9 +283,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 				buffer.Dispose();
 		_transients?.Dispose();
 		_context.Dispose();
-		_meshes.Dispose();
 		_pipelineBlobs.Save(); // write back whatever this run compiled, before the device goes away
 		_uploads.Dispose(); // before the stores — it holds their staging resources until the last execute retires
+		_meshes.Dispose();
 		_textures.Dispose();
 		_ring.Dispose();
 		_techniques.Dispose();
@@ -490,9 +490,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 	protected override Mesh UploadSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
-	// Every frame that may draw the mesh has been submitted, and signals at most the current fence value. Mesh buffers
-	// live in an upload heap, so there is no pending copy into them to wait for.
-	protected override void RetireMesh(Mesh mesh) => _meshes.Release(mesh.Id, _fenceValue);
+	// As a texture's: the mesh's copy into its default-heap buffers may still be pending in the upload batch, which
+	// executes ahead of the next frame. So its buffers wait for the next value the frame fence signals.
+	protected override void RetireMesh(Mesh mesh) => _meshes.Release(mesh.Id, _fenceValue + 1);
 
 	protected override Texture UploadTexture(TextureData data) => _textures.Create(data);
 
