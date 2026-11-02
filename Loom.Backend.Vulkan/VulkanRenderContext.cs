@@ -206,6 +206,19 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
 	// technique's storage-buffer slots (after the sampled inputs, before the uniform slots).
 	public const int MaxStorageBuffers = GraphLimits.MaxStorageBuffersPerPass;
+
+	// The storage buffers the pass .Reads, for a technique's draw: the first as many as it declares, in the order the
+	// pass read them. A pass may read more than one technique uses (one storage buffer for the road, beside techniques
+	// that read none); a technique that declares more than the pass reads would read an unbound slot, so it throws.
+	private int PassStorage(Span<Silk.NET.Vulkan.Buffer> into, in ShaderBindingMap map, string technique)
+	{
+		var declared = map.StorageBuffers.Length;
+		if (declared > _activeStorageCount)
+			throw new VulkanException($"Technique '{technique}' declares {declared} storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		for (var j = 0; j < declared; j++)
+			into[j] = _resources.GetStorageBuffer(_frameSlot, _activeStorageIds[j]);
+		return declared;
+	}
 	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
 	private int _activeStorageCount;
 
@@ -327,9 +340,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 
 		// The app-writable storage buffers the pass .Reads bind after the sampled inputs, before the uniform slots.
 		Span<Silk.NET.Vulkan.Buffer> storageBuffers = stackalloc Silk.NET.Vulkan.Buffer[MaxStorageBuffers];
-		var storageCount = 0;
-		for (var j = 0; j < _activeStorageCount && storageCount < MaxStorageBuffers; j++)
-			storageBuffers[storageCount++] = _resources.GetStorageBuffer(_frameSlot, _activeStorageIds[j]);
+		var storageCount = PassStorage(storageBuffers, template.Bindings, technique);
 
 		if (inputs.Length > 0 || storageCount > 0 || uboCount > 0)
 			BindSampledInputs(baked, template.Bindings, inputs, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount]);

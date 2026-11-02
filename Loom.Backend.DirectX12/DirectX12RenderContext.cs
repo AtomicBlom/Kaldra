@@ -234,6 +234,18 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		ForgetBindings();
 	}
 
+	// The pass's .Reads storage buffers (SSBOs), as read-only root SRVs from each UPLOAD buffer's address: the first as
+	// many as the technique declares, in the order the pass read them. A pass may read more than one technique uses (one
+	// storage buffer for the road, beside techniques that read none); a technique that declares more than the pass reads
+	// would read an unbound root SRV, so it throws.
+	private void BindPassStorage(DirectX12Technique baked, string technique)
+	{
+		if (baked.InputBufferCount > _activeStorageCount)
+			throw new InvalidOperationException($"DirectX12: technique '{technique}' declares {baked.InputBufferCount} storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		for (var s = 0; s < baked.InputBufferCount; s++)
+			_cmd.SetGraphicsRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients!.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
+	}
+
 	public void FullScreen(string technique, params ReadOnlySpan<ResourceHandle> inputs) =>
 		FullScreen(technique, default, inputs);
 
@@ -268,12 +280,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		}
 		if (inputs.Length > 0)
 			BindInputs(baked, inputs);
-		// The pass's .Reads storage buffers (SSBOs) bind as read-only root SRVs from each UPLOAD buffer's address.
-		if (baked.InputBufferBaseParam >= 0)
-		{
-			for (var s = 0; s < _activeStorageCount; s++)
-				_cmd.SetGraphicsRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients!.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
-		}
+		BindPassStorage(baked, technique);
 
 		BindTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
 		_cmd.DrawInstanced(3, 1, 0, 0); // fullscreen triangle, vertices fabricated from SV_VertexID

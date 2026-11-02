@@ -66,7 +66,11 @@ internal sealed partial class WebGpuRenderContext
 			AddEntry(entries, ref e, bindings.SampledSamplerBindings[i], EntrySampler, sampler, 0, 0);
 		}
 
-		for (var j = 0; j < _activeStorageCount && j < bindings.StorageBufferBindings.Length; j++)
+		// The pass's .Reads storage buffers: the first as many as the technique declares, in the order the pass read them.
+		// One that declares more than the pass reads would bind a group missing an entry, so it throws here instead.
+		if (bindings.StorageBufferBindings.Length > _activeStorageCount)
+			throw new InvalidOperationException($"WebGPU: technique '{technique}' declares {bindings.StorageBufferBindings.Length} storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		for (var j = 0; j < bindings.StorageBufferBindings.Length; j++)
 			AddEntry(entries, ref e, bindings.StorageBufferBindings[j], EntryBuffer, transients.BufferHandle(_activeStorageIds[j]), 0, 0);
 
 		// Uniform slots in the shader's order: the slot reflection named as the per-material block takes the material's

@@ -26,12 +26,16 @@ internal sealed unsafe partial class DirectX12RenderContext
 		// Material textures or sampled graph resources fill the SRV table — mutually exclusive texture source.
 		if (call.Material is { } material)
 		{
+			if (baked.InputBufferCount > 0)
+				throw new InvalidOperationException($"DirectX12: technique '{call.Technique}' reads a storage buffer and draws with a material; a material draw binds no storage buffers.");
 			if (baked.TableParam >= 0 && baked.InputCount > 0)
 				BindMaterialTable(baked, material, call.Technique);
 		}
-		else if (!call.Sampled.IsEmpty)
+		else
 		{
-			BindInputs(baked, call.Sampled);
+			if (!call.Sampled.IsEmpty)
+				BindInputs(baked, call.Sampled);
+			BindPassStorage(baked, call.Technique);
 		}
 
 		BindTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);

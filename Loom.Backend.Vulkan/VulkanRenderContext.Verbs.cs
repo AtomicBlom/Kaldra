@@ -23,16 +23,22 @@ internal sealed unsafe partial class VulkanRenderContext
 		Span<UniformBinding> ubos = stackalloc UniformBinding[MaxUniformBuffers];
 		var uboCount = FillUniformSlots(ubos, call, template);
 
-		// Material textures (+ those UBOs) or sampled graph resources (+ those UBOs) — mutually exclusive texture
-		// source. An empty combination leaves the draw unbound (the depth-only path with no constants).
+		// The storage buffers the pass .Reads, as many as the technique declares, in the order the pass read them
+		Span<Silk.NET.Vulkan.Buffer> storageBuffers = stackalloc Silk.NET.Vulkan.Buffer[MaxStorageBuffers];
+		var storageCount = PassStorage(storageBuffers, template.Bindings, call.Technique);
+
+		// Material textures (+ those UBOs) or sampled graph resources (+ those UBOs and storage buffers) — mutually
+		// exclusive texture source. An empty combination leaves the draw unbound (the depth-only path with no constants).
 		if (call.Material is { } material)
 		{
+			if (storageCount > 0)
+				throw new VulkanException($"Technique '{call.Technique}' reads a storage buffer and draws with a material; a material draw binds no storage buffers.");
 			if (template.SampleCount > 0 || uboCount > 0)
 				BindMaterialTextures(baked, template, material, call.Technique, ubos[..uboCount]);
 		}
-		else if (!call.Sampled.IsEmpty || uboCount > 0)
+		else if (!call.Sampled.IsEmpty || uboCount > 0 || storageCount > 0)
 		{
-			BindSampledInputs(baked, template.Bindings, call.Sampled, template.LinearFilter, default, ubos[..uboCount]);
+			BindSampledInputs(baked, template.Bindings, call.Sampled, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount]);
 		}
 
 		if (call.Instances.IndirectBuffer is { } args)
