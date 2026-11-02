@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
+using Loom.Graph;
 using Loom.Core.Materials;
 
 namespace Loom.Backend.WebGPU;
@@ -32,6 +33,9 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 	public required VertexLayout? Layout { get; init; }
 	public required VertexLayout? Instance { get; init; }
 	public required CullMode Cull { get; init; }
+
+	/// <summary>The function the comparison samplers on <see cref="WebGpuBindingModel.SampledCompared"/>'s slots compare by.</summary>
+	public DepthCompare? SampleCompare { get; init; }
 
 	/// <summary>The depth comparison baked into the pipeline when the pass has a depth target.</summary>
 	public required DepthCompare DepthTest { get; init; }
@@ -77,6 +81,7 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 	public static WebGpuTechniqueTemplate Create(WebGpuHandleAllocator handles, string shaderName, string wgsl, byte[]? reflectionJson, in TechniqueDescriptor descriptor)
 	{
 		var bindings = WebGpuBindingModel.Parse(wgsl, reflectionJson, shaderName);
+		ShaderBindingMap.CheckCompare(shaderName, bindings.ComparedCount, descriptor.SampleCompare);
 
 		var module = handles.Allocate(WebGpuHandleAllocator.ShaderModules);
 		WebGpuInterop.CreateShaderModule(module, wgsl, shaderName);
@@ -118,6 +123,7 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 			Cull = descriptor.Cull,
 			DepthTest = descriptor.DepthTest,
 			Bias = descriptor.Bias,
+			SampleCompare = descriptor.SampleCompare,
 			MaterialUniformSlot = bindings.MaterialUniformSlot,
 			MaterialParameterBytes = bindings.MaterialParameterBytes,
 			ShaderModule = module,

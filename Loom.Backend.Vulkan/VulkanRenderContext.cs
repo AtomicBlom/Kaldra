@@ -343,7 +343,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		var storageCount = PassStorage(storageBuffers, template.Bindings, technique);
 
 		if (inputs.Length > 0 || storageCount > 0 || uboCount > 0)
-			BindSampledInputs(baked, template.Bindings, inputs, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount]);
+			BindSampledInputs(baked, template.Bindings, inputs, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount], template.SampleCompare);
 
 		_vk.CmdDraw(_cmd, 3, 1, 0, 0); // 3 fabricated verts cover the target; no vertex buffer
 	}
@@ -460,6 +460,31 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// Nearest keeps the low-res pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
 	// the smooth filtering a chunky pixel glow still wants internally. The sampler is part of the combined
 	// image-sampler descriptor, so the technique's LinearFilter flag just selects which one FullScreen binds.
+	// One comparison sampler per compare function, made the first time a technique asks for it
+	private readonly Sampler[] _compareSamplers = new Sampler[(int)DepthCompare.Always + 1];
+
+	private Sampler CompareSampler(DepthCompare compare)
+	{
+		ref var sampler = ref _compareSamplers[(int)compare];
+		if (sampler.Handle != 0)
+			return sampler;
+		SamplerCreateInfo info = new()
+		{
+			SType = StructureType.SamplerCreateInfo,
+			MagFilter = Filter.Linear,
+			MinFilter = Filter.Linear,
+			MipmapMode = SamplerMipmapMode.Nearest,
+			AddressModeU = SamplerAddressMode.ClampToEdge,
+			AddressModeV = SamplerAddressMode.ClampToEdge,
+			AddressModeW = SamplerAddressMode.ClampToEdge,
+			CompareEnable = true,
+			CompareOp = VulkanTechnique.ToCompareOp(compare),
+			MaxLod = Vk.LodClampNone,
+		};
+		_vk.CreateSampler(_ctx.Device, in info, null, out sampler).Check("vkCreateSampler");
+		return sampler;
+	}
+
 	private Sampler CreateSampler(Filter filter, SamplerAddressMode address = SamplerAddressMode.ClampToEdge)
 	{
 		var mip = filter == Filter.Linear ? SamplerMipmapMode.Linear : SamplerMipmapMode.Nearest;
@@ -495,6 +520,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			_vk.DestroySampler(_ctx.Device, _repeatLinearSampler, null);
 		if (_repeatNearestSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _repeatNearestSampler, null);
+		foreach (var sampler in _compareSamplers)
+			if (sampler.Handle != 0)
+				_vk.DestroySampler(_ctx.Device, sampler, null);
 		if (_mirrorLinearSampler.Handle != 0)
 			_vk.DestroySampler(_ctx.Device, _mirrorLinearSampler, null);
 		if (_mirrorNearestSampler.Handle != 0)

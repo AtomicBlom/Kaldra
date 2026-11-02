@@ -35,6 +35,7 @@ namespace Loom.Core.Materials;
 /// <param name="Cull">Which triangle faces the rasterizer discards — <see cref="CullMode.None"/> (the default, draw both faces), <see cref="CullMode.Back"/> for solid closed geometry, or <see cref="CullMode.Front"/>. Front faces are counter-clockwise; register a separate technique for a shader you want drawn both single- and double-sided.</param>
 /// <param name="DepthTest">The depth comparison a fragment must pass to survive, when the pass has a depth target. <see cref="DepthCompare.LessOrEqual"/> (the default) is the conventional near-is-0 buffer; <see cref="DepthCompare.GreaterOrEqual"/> is its reversed-Z counterpart and must be paired with a depth target cleared to 0 and a reversed projection.</param>
 /// <param name="Bias">A constant + slope-scaled depth offset for this technique, or null (the default) for none. The shadow-acne knob; see <see cref="DepthBias"/> for why the constant term is not portable between backends but the slope-scaled term is.</param>
+/// <param name="SampleCompare">The function a texture the shader reads by comparison (a <c>Sampler2DShadow</c> read with <c>SampleCmp</c>) compares its reference with the stored depth by: the reference passes when <c>reference [compare] stored</c>, so a reversed-depth shadow map takes <see cref="DepthCompare.GreaterOrEqual"/>. Which inputs compare is found in the shader; a technique whose shader compares must name this, and one whose shader doesn't must not. Comparison samplers filter (2×2 PCF in hardware) and clamp to the edge.</param>
 public readonly record struct TechniqueDescriptor(
 	string Shader,
 	string VertexEntry = "vertexMain",
@@ -50,7 +51,8 @@ public readonly record struct TechniqueDescriptor(
 	bool HasListPush = false,
 	CullMode Cull = CullMode.None,
 	DepthCompare DepthTest = DepthCompare.LessOrEqual,
-	DepthBias? Bias = null)
+	DepthBias? Bias = null,
+	DepthCompare? SampleCompare = null)
 {
 	/// <summary>The conventional compute entry-point name, and the one the shader build compiles by.</summary>
 	public const string DefaultComputeEntry = "computeMain";

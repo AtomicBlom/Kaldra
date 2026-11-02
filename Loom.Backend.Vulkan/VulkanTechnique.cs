@@ -261,7 +261,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 
 	// Exhaustive so a new DepthCompare member fails loud here instead of silently falling back to a test that
 	// happens to compile.
-	private static CompareOp ToCompareOp(DepthCompare compare) => compare switch
+	internal static CompareOp ToCompareOp(DepthCompare compare) => compare switch
 	{
 		DepthCompare.Never => CompareOp.Never,
 		DepthCompare.Less => CompareOp.Less,

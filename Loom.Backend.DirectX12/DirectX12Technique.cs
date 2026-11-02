@@ -327,16 +327,20 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		// (bloom composite, SSAO, deferred lighting) references s1.. — absent from the root signature, the PS would
 		// reference a sampler the root signature doesn't declare and CreateGraphicsPipelineState fails. Static
 		// samplers don't count against the 64-DWORD root budget, so N of them is free.
+		// A slot the shader samples by comparison (SampleCmp) takes a filtered comparison sampler, clamped to the edge,
+		// comparing by the technique's SampleCompare: the hardware's 2×2 PCF.
 		var samplerCount = template.InputCount;
 		var samplers = stackalloc StaticSamplerDesc[samplerCount > 0 ? samplerCount : 1];
 		for (var i = 0; i < samplerCount; i++)
+		{
+			var compare = template.ComparedInputs is { } c && i < c.Length && c[i];
 			samplers[i] = new StaticSamplerDesc
 			{
-				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-				AddressU = ToTextureAddress(template.Address),
-				AddressV = ToTextureAddress(template.Address),
-				AddressW = ToTextureAddress(template.Address),
-				ComparisonFunc = ComparisonFunc.Never,
+				Filter = compare ? Filter.ComparisonMinMagLinearMipPoint : template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
+				AddressU = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressV = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressW = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				ComparisonFunc = compare ? ToD3DCompare(template.SampleCompare!.Value) : ComparisonFunc.Never,
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
 				MaxLOD = float.MaxValue,
@@ -344,6 +348,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				RegisterSpace = 0,
 				ShaderVisibility = ShaderVisibility.Pixel,
 			};
+		}
 		// A pass that reads any vertex stream (mesh, instanced, or particle) needs the input-assembler layout flag.
 		var flags = template.Layout is not null || template.Instance is not null ? RootSignatureFlags.AllowInputAssemblerInputLayout : RootSignatureFlags.None;
 		var rootDesc = new RootSignatureDesc

@@ -315,6 +315,11 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		// The bytecode is compiled offline and shipped, like the Vulkan .spv — no runtime compiler is involved.
 		byte[] vertexBytecode, fragmentBytecode;
 		var inputCount = reflection.SampleCount;
+		// Which inputs the shader samples by comparison, from its SPIR-V: the DXIL can't say, and the reflection describes
+		// a shadow sampler as it does any single-channel texture
+		var spirv = DirectX12Shaders.TryResolveSpirv(dir, shader);
+		var compared = ShaderBindingMap.From(reflection, spirv is null ? null : SpirvDepthTextures.Bindings(spirv));
+		ShaderBindingMap.CheckCompare(name, compared.ComparedCount, descriptor.SampleCompare);
 		var storageImages = 0;
 		var storageBuffers = 0;
 		var storageBufferStride = 0;
@@ -358,7 +363,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			descriptor.IsCompute, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
 			descriptor.Cull, descriptor.DepthTest, descriptor.Bias,
-			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes));
+			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes,
+			[.. compared.ComparedTextures], descriptor.SampleCompare));
 		return new TechniqueShape(
 			new MaterialLayout(inputCount, reflection.MaterialParameterBytes),
 			reflection.UniformBufferBytes,

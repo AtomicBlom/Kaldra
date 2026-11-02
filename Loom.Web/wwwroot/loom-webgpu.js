@@ -169,6 +169,9 @@ export function releaseHandle(table, handle) {
 	tables[table][handle] = undefined;
 }
 
+// DepthCompare's order: a comparison sampler's compare is 1 + its index, 0 for none
+const COMPARE_FUNCTIONS = ["never", "less", "equal", "less-equal", "greater", "not-equal", "greater-equal", "always"];
+
 export function createSampler(handle, linear, addressMode, compare) {
 	const filter = linear ? "linear" : "nearest";
 	const mode = ADDRESS_MODES[addressMode] ?? "clamp-to-edge";
@@ -176,7 +179,7 @@ export function createSampler(handle, linear, addressMode, compare) {
 		magFilter: filter, minFilter: filter, mipmapFilter: filter,
 		addressModeU: mode, addressModeV: mode, addressModeW: mode,
 	};
-	if (compare) desc.compare = "less-equal";
+	if (compare) desc.compare = COMPARE_FUNCTIONS[compare - 1];
 	tables[T_SAMPLERS][handle] = device.createSampler(desc);
 }
 

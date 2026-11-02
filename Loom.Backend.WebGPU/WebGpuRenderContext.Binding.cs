@@ -62,8 +62,12 @@ internal sealed partial class WebGpuRenderContext
 		var sampler = sampledViews.Length > 0 ? _engine.Samplers.Get(baked.Template.LinearFilter, baked.Template.Address) : 0;
 		for (var i = 0; i < sampledViews.Length; i++)
 		{
+			// A slot the shader reads by comparison takes a comparison sampler with the technique's function
+			var slotSampler = i < bindings.SampledCompared.Length && bindings.SampledCompared[i]
+				? _engine.Samplers.GetComparison(baked.Template.SampleCompare!.Value)
+				: sampler;
 			AddEntry(entries, ref e, bindings.SampledTextureBindings[i], EntryView, sampledViews[i], 0, 0);
-			AddEntry(entries, ref e, bindings.SampledSamplerBindings[i], EntrySampler, sampler, 0, 0);
+			AddEntry(entries, ref e, bindings.SampledSamplerBindings[i], EntrySampler, slotSampler, 0, 0);
 		}
 
 		// The pass's .Reads storage buffers: the first as many as the technique declares, in the order the pass read them.

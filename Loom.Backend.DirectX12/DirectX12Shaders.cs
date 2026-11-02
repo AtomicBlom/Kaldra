@@ -71,6 +71,19 @@ internal static class DirectX12Shaders
 	/// shader would cause. Vulkan already throws for the equivalent gap.
 	/// </para>
 	/// </summary>
+	/// <summary>
+	/// The shader's SPIR-V, embedded or loose beside the <c>.dxil</c>, or null: read for which textures it samples by
+	/// comparison (<see cref="SpirvDepthTextures"/>), which neither the DXIL here nor the reflection sidecar says.
+	/// </summary>
+	public static byte[]? TryResolveSpirv(string shaderDir, string name)
+	{
+		var spirv = TryReadEmbedded(name + ".spv");
+		if (spirv is not null)
+			return spirv;
+		var path = Path.Combine(shaderDir, name + ".spv");
+		return File.Exists(path) ? File.ReadAllBytes(path) : null;
+	}
+
 	public static ShaderReflection ResolveReflection(string shaderDir, string name)
 	{
 		var json = TryReadEmbedded(name + ".json");

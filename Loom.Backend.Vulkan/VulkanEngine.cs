@@ -246,11 +246,13 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.IsCompute ? descriptor.ComputeEntry : descriptor.FragmentEntry,
 			descriptor.IsCompute ? SpirvEntryPoints.Stage.Compute : SpirvEntryPoints.Stage.Fragment,
 			descriptor.Shader);
+		var bindings = ShaderBindingMap.From(reflection, SpirvDepthTextures.Bindings(spirv));
+		ShaderBindingMap.CheckCompare(name, bindings.ComparedCount, descriptor.SampleCompare);
 		_registry[name] = new VulkanTechniqueTemplate(
 			spirv,
 			vertexEntry,
 			fragmentEntry,
-			ShaderBindingMap.From(reflection),
+			bindings,
 			descriptor.HasVertexInput,
 			descriptor.Blend,
 			descriptor.LinearFilter,
@@ -264,7 +266,8 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.DepthTest,
 			descriptor.Bias,
 			reflection.MaterialUniformSlot,
-			reflection.MaterialParameterBytes);
+			reflection.MaterialParameterBytes,
+			descriptor.SampleCompare);
 		return new TechniqueShape(
 			new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes),
 			reflection.UniformBufferBytes,

@@ -38,7 +38,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		}
 		else if (!call.Sampled.IsEmpty || uboCount > 0 || storageCount > 0)
 		{
-			BindSampledInputs(baked, template.Bindings, call.Sampled, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount]);
+			BindSampledInputs(baked, template.Bindings, call.Sampled, template.LinearFilter, storageBuffers[..storageCount], ubos[..uboCount], template.SampleCompare);
 		}
 
 		if (call.Instances.IndirectBuffer is { } args)

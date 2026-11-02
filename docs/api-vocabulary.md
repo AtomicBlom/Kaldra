@@ -229,6 +229,7 @@ engine.DefineTechnique("foliage", new TechniqueDescriptor("foliage",
 | `Cull` (`CullMode.None`) | Which faces the rasterizer discards — front faces are counter-clockwise. |
 | `DepthTest` (`DepthCompare.LessOrEqual`) | The depth comparison a fragment must pass, when the pass has a depth target. |
 | `Bias` (`null`) | A constant + slope-scaled depth offset (`DepthBias`) — the shadow-acne knob. |
+| `SampleCompare` (`null`) | The compare function of the shader's comparison samplers: a `Sampler2DShadow` read with `SampleCmp` passes where `reference [compare] stored` (a reversed-depth shadow map takes `GreaterOrEqual`). Which inputs compare is found in the shader (its SPIR-V's depth-comparison samples; WebGPU's `sampler_comparison`); they get a filtered (2×2 PCF), edge-clamped comparison sampler and the rest keep `LinearFilter`'s. A shader that compares without it, or a technique naming it whose shader doesn't, throws at `DefineTechnique`. |
 
 Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) with reflection JSON. The Slang-side half of the contract — the platform macros, the two independent numbering schemes, and where a push block actually lands — is [`shader-authoring.md`](shader-authoring.md).
 

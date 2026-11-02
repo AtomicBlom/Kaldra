@@ -14,9 +14,12 @@ internal sealed unsafe partial class VulkanRenderContext
 	// declared whatever number that is. (The slots used to be counted out here as 0..N-1, then the storage buffers
 	// and UBOs offset past `inputs.Length` — the count the *pass* supplied, not the count the *shader* declares, so
 	// a pass supplying fewer inputs than the shader reflects shifted every following descriptor onto a wrong slot.)
-	private void BindSampledInputs(VulkanTechnique baked, in ShaderBindingMap map, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<Silk.NET.Vulkan.Buffer> storageBuffers = default, ReadOnlySpan<UniformBinding> ubos = default)
+	private void BindSampledInputs(VulkanTechnique baked, in ShaderBindingMap map, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<Silk.NET.Vulkan.Buffer> storageBuffers = default, ReadOnlySpan<UniformBinding> ubos = default, DepthCompare? compare = null)
 	{
 		var sampler = linear ? _linearSampler : _nearestSampler;
+		// A slot the shader reads by comparison takes a comparison sampler, filtered (the hardware's 2×2 PCF). The key
+		// below names one sampler, which is safe: which slots compare, and with what, is fixed per technique, and so
+		// per layout.
 		var count = inputs.Length + storageBuffers.Length + ubos.Length;
 		var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
 		var bufferInfos = stackalloc DescriptorBufferInfo[storageBuffers.Length + ubos.Length];
@@ -28,7 +31,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			ref var image = ref _resources.Get(_frameSlot, inputs[i].Id);
 			imageInfos[i] = new DescriptorImageInfo
 			{
-				Sampler = sampler,
+				Sampler = !map.ComparedTextures.IsDefaultOrEmpty && map.ComparedTextures[i] ? CompareSampler(compare!.Value) : sampler,
 				ImageView = image.View,
 				ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
 			};

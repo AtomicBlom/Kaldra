@@ -21,4 +21,5 @@ internal readonly record struct DirectX12TechniqueTemplate(
 	int UniformBufferCount = 0, int InputBufferCount = 0, bool HasListPush = false,
 	CullMode Cull = CullMode.None,
 	DepthCompare DepthTest = DepthCompare.LessOrEqual, DepthBias? Bias = null,
-	int? MaterialUniformSlot = null, int MaterialParameterBytes = 0);
+	int? MaterialUniformSlot = null, int MaterialParameterBytes = 0,
+	bool[]? ComparedInputs = null, DepthCompare? SampleCompare = null);

@@ -48,6 +48,14 @@ internal sealed partial class WebGpuBindingModel
 	/// <summary>WGSL sampler binding paired with each sampled texture (Slang's combined-sampler split).</summary>
 	public required int[] SampledSamplerBindings { get; init; }
 
+	/// <summary>Whether each sampled input's sampler is a <c>sampler_comparison</c> (a shadow sampler read with
+	/// <c>SampleCmp</c>), in Loom slot order: such a slot binds a comparison sampler with the technique's
+	/// <c>SampleCompare</c>.</summary>
+	public bool[] SampledCompared { get; init; } = [];
+
+	/// <summary>How many sampled inputs are read by comparison.</summary>
+	public int ComparedCount => SampledCompared.Count(c => c);
+
 	/// <summary>WGSL binding of each read-write storage image (a compute technique's <c>RWTexture2D</c>), in slot order.</summary>
 	public required int[] StorageImageBindings { get; init; }
 
@@ -195,6 +203,7 @@ internal sealed partial class WebGpuBindingModel
 			Entries = entries,
 			SampledTextureBindings = [.. sampledTex],
 			SampledSamplerBindings = [.. sampledSamp],
+			SampledCompared = [.. sampledSamp.Select(b => declared.TryGetValue(b, out var d) && d.Type == "sampler_comparison")],
 			StorageImageBindings = [.. storageImages],
 			StorageBufferBindings = [.. storageBuffers],
 			UniformBufferBindings = [.. uniforms],
