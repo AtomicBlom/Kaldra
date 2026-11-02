@@ -64,10 +64,22 @@ public abstract class EngineBase : IEngine
 	}
 
 	/// <inheritdoc/>
-	public float HdrPaperWhiteNits { get; set; } = 200f;
+	public float? DisplaySdrWhiteNits { get; set; }
 
 	/// <inheritdoc/>
-	public float HdrPeakNits { get; set; } = 1000f;
+	public float? DisplayPeakNits { get; set; }
+
+	/// <inheritdoc/>
+	public float? HdrPaperWhiteChoice { get; set; }
+
+	/// <inheritdoc/>
+	public float? HdrPeakChoice { get; set; }
+
+	/// <inheritdoc/>
+	public float HdrPaperWhiteNits => HdrPaperWhiteChoice ?? DisplaySdrWhiteNits ?? 200f;
+
+	/// <inheritdoc/>
+	public float HdrPeakNits => MathF.Max(HdrPeakChoice ?? DisplayPeakNits ?? 1000f, HdrPaperWhiteNits);
 
 	/// <summary>Per-pass GPU timings from the most recently completed frame (empty when timing is disabled).</summary>
 	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;

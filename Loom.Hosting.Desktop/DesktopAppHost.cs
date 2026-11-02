@@ -132,14 +132,14 @@ public sealed class DesktopAppHost : IAppHost
 			if ((sinceWhite += delta) >= 1.0)
 			{
 				sinceWhite = 0.0;
-				if (SdrWhiteLevel.Nits(hwnd) is { } nits && nits != engine.HdrPaperWhiteNits)
+				if (SdrWhiteLevel.Nits(hwnd) is { } nits && nits != engine.DisplaySdrWhiteNits)
 				{
-					engine.HdrPaperWhiteNits = nits;
+					engine.DisplaySdrWhiteNits = nits;
 					LoomLog.Info($"SDR white on the window's monitor: {nits:F0} nits");
 				}
-				if (DisplayPeak.Nits(hwnd) is { } peak && peak != engine.HdrPeakNits)
+				if (DisplayPeak.Nits(hwnd) is { } peak && peak != engine.DisplayPeakNits)
 				{
-					engine.HdrPeakNits = peak;
+					engine.DisplayPeakNits = peak;
 					LoomLog.Info($"the window's monitor peaks at {peak:F0} nits");
 				}
 			}

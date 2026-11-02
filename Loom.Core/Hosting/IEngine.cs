@@ -267,18 +267,33 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	bool GpuTimingEnabled { get; set; }
 
 	/// <summary>
-	/// Where white paper sits on an HDR output, in nits: the luminance an app's SDR-referred white (its UI, its paper
-	/// white) should be written at, so it matches the rest of the desktop. The desktop host keeps it at the luminance the
-	/// OS shows SDR white at on the window's monitor (Windows' "SDR content brightness"); 200 where it can't tell. Unused
-	/// on SDR output, where white is simply 1.
+	/// What the display the frame goes to reports, in nits: where the OS shows SDR white on it (Windows' "SDR content
+	/// brightness") and the brightest it shows. The desktop host keeps both current for the window's monitor; null where
+	/// it can't tell. Reports only: what a frame uses is <see cref="HdrPaperWhiteNits"/> and <see cref="HdrPeakNits"/>.
 	/// </summary>
-	float HdrPaperWhiteNits { get => 200f; set { } }
+	float? DisplaySdrWhiteNits { get => null; set { } }
+
+	/// <inheritdoc cref="DisplaySdrWhiteNits"/>
+	float? DisplayPeakNits { get => null; set { } }
+
+	/// <summary>The app's own choice of paper white and peak (a player's setting), or null to follow the display.</summary>
+	float? HdrPaperWhiteChoice { get => null; set { } }
+
+	/// <inheritdoc cref="HdrPaperWhiteChoice"/>
+	float? HdrPeakChoice { get => null; set { } }
 
 	/// <summary>
-	/// The brightest an HDR output shows, in nits: what highlights should roll off toward rather than clip at. The desktop
-	/// host keeps it at the peak the window's monitor reports; 1000 where it can't tell. Unused on SDR output.
+	/// Where white paper sits on an HDR output, in nits: the luminance SDR-referred white (a UI, an app's paper white) is
+	/// written at, so it matches the rest of the desktop. The app's choice, else the display's SDR white, else 200.
+	/// Unused on SDR output, where white is simply 1.
 	/// </summary>
-	float HdrPeakNits { get => 1000f; set { } }
+	float HdrPaperWhiteNits => HdrPaperWhiteChoice ?? DisplaySdrWhiteNits ?? 200f;
+
+	/// <summary>
+	/// The brightest an HDR output shows, in nits: what highlights roll off toward rather than clip at. The app's choice,
+	/// else the display's peak, else 1000; never below paper white. Unused on SDR output.
+	/// </summary>
+	float HdrPeakNits => MathF.Max(HdrPeakChoice ?? DisplayPeakNits ?? 1000f, HdrPaperWhiteNits);
 
 	/// <summary>
 	/// Per-pass GPU timings from the most recently <em>completed</em> frame (a frame or two stale, like
