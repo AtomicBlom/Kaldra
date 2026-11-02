@@ -119,29 +119,38 @@ public sealed class DesktopAppHost : IAppHost
 		// Headless verification of a hosted app is done by in-process tests driving the engine offscreen, not by a
 		// capture/smoke mode on this production host.
 		// Where the desktop shows SDR white on the window's monitor, for an HDR frame's paper white, and the brightest it
-		// shows, for its highlights: asked once a second, so moving the window to another monitor or moving Windows' "SDR
-		// content brightness" slider follows.
+		// shows, for its highlights: asked once a second, on the thread pool, so moving the window to another monitor or
+		// moving Windows' "SDR content brightness" slider follows.
 		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
 		var sinceWhite = double.MaxValue;
+		Task<(float? White, float? Peak)>? luminance = null;
 		var total = 0.0;
 		window.Render += delta =>
 		{
 			if (minimized)
 				return;
 			total += delta;
-			if ((sinceWhite += delta) >= 1.0)
+			// Asked off the frame's thread: a DXGI factory and the display configuration take milliseconds, which on the
+			// frame showed as a stall once a second. The answer is taken on the next frame after it arrives.
+			if (luminance is { IsCompleted: true } asked)
+			{
+				var (nits, peak) = asked.Result;
+				luminance = null;
+				if (nits is { } white && white != engine.DisplaySdrWhiteNits)
+				{
+					engine.DisplaySdrWhiteNits = white;
+					LoomLog.Info($"SDR white on the window's monitor: {white:F0} nits");
+				}
+				if (peak is { } brightest && brightest != engine.DisplayPeakNits)
+				{
+					engine.DisplayPeakNits = brightest;
+					LoomLog.Info($"the window's monitor peaks at {brightest:F0} nits");
+				}
+			}
+			if ((sinceWhite += delta) >= 1.0 && luminance == null)
 			{
 				sinceWhite = 0.0;
-				if (SdrWhiteLevel.Nits(hwnd) is { } nits && nits != engine.DisplaySdrWhiteNits)
-				{
-					engine.DisplaySdrWhiteNits = nits;
-					LoomLog.Info($"SDR white on the window's monitor: {nits:F0} nits");
-				}
-				if (DisplayPeak.Nits(hwnd) is { } peak && peak != engine.DisplayPeakNits)
-				{
-					engine.DisplayPeakNits = peak;
-					LoomLog.Info($"the window's monitor peaks at {peak:F0} nits");
-				}
+				luminance = Task.Run(() => (SdrWhiteLevel.Nits(hwnd), DisplayPeak.Nits(hwnd)));
 			}
 			inputPump.Update(delta);
 			driver.Tick(new FrameTime(delta, total));
