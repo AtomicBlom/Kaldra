@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
+using Loom.Core.Diagnostics;
 using Loom.Core.Hosting;
 
 using Silk.NET.Input;
@@ -117,12 +118,25 @@ public sealed class DesktopAppHost : IAppHost
 		// advances the app one frame until it calls Exit() (RequestExit closes the window) or the window is closed.
 		// Headless verification of a hosted app is done by in-process tests driving the engine offscreen, not by a
 		// capture/smoke mode on this production host.
+		// Where the desktop shows SDR white on the window's monitor, for an HDR frame's paper white: asked once a second,
+		// so moving the window to another monitor or moving Windows' "SDR content brightness" slider follows.
+		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
+		var sinceWhite = double.MaxValue;
 		var total = 0.0;
 		window.Render += delta =>
 		{
 			if (minimized)
 				return;
 			total += delta;
+			if ((sinceWhite += delta) >= 1.0)
+			{
+				sinceWhite = 0.0;
+				if (SdrWhiteLevel.Nits(hwnd) is { } nits && nits != engine.HdrPaperWhiteNits)
+				{
+					engine.HdrPaperWhiteNits = nits;
+					LoomLog.Info($"SDR white on the window's monitor: {nits:F0} nits");
+				}
+			}
 			inputPump.Update(delta);
 			driver.Tick(new FrameTime(delta, total));
 		};

@@ -267,6 +267,14 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	bool GpuTimingEnabled { get; set; }
 
 	/// <summary>
+	/// Where white paper sits on an HDR output, in nits: the luminance an app's SDR-referred white (its UI, its paper
+	/// white) should be written at, so it matches the rest of the desktop. The desktop host keeps it at the luminance the
+	/// OS shows SDR white at on the window's monitor (Windows' "SDR content brightness"); 200 where it can't tell. Unused
+	/// on SDR output, where white is simply 1.
+	/// </summary>
+	float HdrPaperWhiteNits { get => 200f; set { } }
+
+	/// <summary>
 	/// Per-pass GPU timings from the most recently <em>completed</em> frame (a frame or two stale, like
 	/// <see cref="Read"/> — timestamps are read back after the slot's fence). In execution order; the entries
 	/// align with the active graph's leaf passes. Empty when timing is disabled or no timed frame has retired.

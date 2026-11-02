@@ -40,8 +40,6 @@ public sealed class UIPainter
 	// ui.slang's STRAIGHT_ALPHA: set on an image or vector command whose slot holds straight-alpha texels, so the shader
 	// premultiplies the filtered sample. Above the kind's byte, which SUIsei's kinds never reach.
 	private const uint TagStraightAlpha = 0x100;
-	// Paper-white luminance reference for an HDR target: UIPaperWhiteNits / 80. SDR targets pass 1.0.
-	private const float HdrPaperWhiteScale = 200f / 80f;
 
 	private readonly UIHost _host;
 	private readonly IEngine _engine;
@@ -242,7 +240,8 @@ public sealed class UIPainter
 		push[1] = 2.0f / draw.CoordinateSize.Y;
 		push[2] = -1.0f;
 		push[3] = -1.0f;
-		push[4] = draw.IsHdrTarget ? HdrPaperWhiteScale : 1.0f;
+		// Paper white on an HDR (scRGB, 1.0 = 80 nits) target: where the engine says the desktop puts SDR white. SDR: 1.
+		push[4] = draw.IsHdrTarget ? _engine.HdrPaperWhiteNits / 80f : 1.0f;
 		push[5] = BitConverter.UInt32BitsToSingle(draw.IsHdrTarget ? 1u : 0u);
 
 		// SUIsei.Drawing.OverlayVertex has the same binary layout as Loom.Core.Geometry.OverlayVertex;

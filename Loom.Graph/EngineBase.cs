@@ -63,6 +63,9 @@ public abstract class EngineBase : IEngine
 		set => _gpuTimingEnabled = value && Capabilities.GpuTiming;
 	}
 
+	/// <inheritdoc/>
+	public float HdrPaperWhiteNits { get; set; } = 200f;
+
 	/// <summary>Per-pass GPU timings from the most recently completed frame (empty when timing is disabled).</summary>
 	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
 
