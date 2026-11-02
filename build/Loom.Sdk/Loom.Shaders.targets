@@ -38,6 +38,7 @@
       <VertexEntry>vertexMain</VertexEntry>
       <FragmentEntry>fragmentMain</FragmentEntry>
       <ComputeEntry>computeMain</ComputeEntry>
+      <Stages></Stages>
     </LoomSlangEntry>
   </ItemDefinitionGroup>
 
@@ -113,7 +114,8 @@
          never embedded in the expression, so quotes/parens/semicolons in the shader cannot break argument parsing.
 
          The scan is per-file and does not follow #include, so a stage declared in an imported module is invisible
-         here. That is caught by the entry-presence check below rather than silently dropping the stage. -->
+         here. That is caught by the entry-presence check below rather than silently dropping the stage, unless the
+         item names its stages itself (Stages, below). -->
     <ItemGroup Condition="'$(LoomEmitDxil)' == 'true'">
       <!-- VertexEntry/FragmentEntry/ComputeEntry ride along from LoomSlangEntry (the ItemDefinitionGroup default,
            or a per-shader override) — a transform copies the source item's metadata. -->
@@ -128,6 +130,18 @@
         <VertexOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(VertexEntry)\s*\('))</VertexOk>
         <FragmentOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(FragmentEntry)\s*\('))</FragmentOk>
         <ComputeOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(ComputeEntry)\s*\('))</ComputeOk>
+      </_LoomDxilEntry>
+      <!-- A shader whose entry points come from an #include (one source compiled twice, a variant defining a macro and
+           including the other) declares its stages on the item, since the scan above can't see them:
+             <LoomSlangEntry Update="Shaders\*_cast.slang" Stages="vertex;fragment" />
+           Its entry functions are then taken on trust; slangc fails the compile if one is missing. -->
+      <_LoomDxilEntry Condition="'%(_LoomDxilEntry.Stages)' != ''">
+        <HasVertex>$([System.String]::Copy(';%(_LoomDxilEntry.Stages);').Contains(';vertex;'))</HasVertex>
+        <HasFragment>$([System.String]::Copy(';%(_LoomDxilEntry.Stages);').Contains(';fragment;'))</HasFragment>
+        <HasCompute>$([System.String]::Copy(';%(_LoomDxilEntry.Stages);').Contains(';compute;'))</HasCompute>
+        <VertexOk>True</VertexOk>
+        <FragmentOk>True</FragmentOk>
+        <ComputeOk>True</ComputeOk>
       </_LoomDxilEntry>
     </ItemGroup>
     <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True' And '%(_LoomDxilEntry.VertexOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;vertex&quot;)] entry point, but no function named '%(_LoomDxilEntry.VertexEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; VertexEntry=&quot;yourEntry&quot; /&gt;." />
