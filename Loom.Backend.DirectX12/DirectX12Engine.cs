@@ -227,6 +227,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height, previous);
 			previous?.Dispose();
 			_context.SetTransients(_transients);
+			ForgetUploadedShadows();   // the new transients' Constants and Storage buffers hold nothing yet
 			RecreateSwapchainSizedReadback();
 			for (uint i = 0; i < BufferCount; i++)
 				_backbufferState[i] = ResourceStates.Present;

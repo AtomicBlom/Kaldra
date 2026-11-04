@@ -500,6 +500,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// The DeviceWaitIdle above is what makes freeing those sets safe here.
 		_context.FlushDescriptorCache();
 		RecreateSwapchainSizedReadback();
+		ForgetUploadedShadows();   // in case the recreation replaced a Constants or Storage buffer: upload each again
 
 		if (_presentTarget.ImageCount != oldImageCount)
 		{

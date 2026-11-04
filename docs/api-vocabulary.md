@@ -18,7 +18,7 @@ A graph is built once with `RenderGraph.Define(g => { … })` and set on the eng
 | `g.Buffer("name", count, layout)` | The same, sized by a `VertexLayout`'s stride — the spelling for a buffer a compute fills and a draw consumes as its per-instance stream. Naming the layout the technique names lets the draw path reject a stride mismatch. |
 | `g.Buffer("name", byteSize)` | The same as an opaque block of `byteSize` bytes. Declares no element contract, so neither draw-path guard applies — prefer one of the two above. |
 | `g.Constants<T>("name")` | An app-written uniform/constant block of `sizeof(T)` bytes → `ConstantsHandle`. Fill with `engine.Write`. |
-| `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. |
+| `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. A `Constants` or `Storage` buffer is uploaded only into the frame slots behind its last `Write`, so one written once costs nothing per frame however large it is; the last `Write` persists either way. |
 | `g.Persistent("name", format, size=1)` | A screen-sized cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. A window resize reallocates it at the new extent, so its contents are lost (there is no resample) — use `domain.Persistent` on a fixed-size domain for history that must outlive a resize. |
 
 ### Pass access declarations (`PassBuilder`, all chainable)

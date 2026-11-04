@@ -50,6 +50,11 @@ internal sealed partial class WebGpuEngine
 	// The shadows become queue-level WriteBuffer ops, which the replayer applies before every pass — so the last
 	// IEngine.Write persists and what the GPU reads this frame is current (the write is ordered before this frame's
 	// submit, and after the previous frame's reads, by WebGPU's queue ordering).
+	// One copy of each Constants and Storage buffer: the queue orders a write before every later frame's reads
+	protected override int ShadowSlot => 0;
+
+	protected override int ShadowSlotCount => 1;
+
 	protected override void WriteConstantsShadow(int id, ReadOnlySpan<byte> bytes) => EmitBufferUpload(id, bytes);
 
 	protected override void WriteStorageShadow(int id, ReadOnlySpan<byte> bytes) => EmitBufferUpload(id, bytes);

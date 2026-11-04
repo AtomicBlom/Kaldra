@@ -294,6 +294,44 @@ public abstract class EngineBase : IEngine
 			throw new ArgumentException(
 				$"Constants '{handle.Name}' is {shadow.Length} bytes but the written {typeof(T).Name} is {size} bytes — the type must match the declared parameter-buffer size.", nameof(value));
 		MemoryMarshal.Write(shadow, in value);
+		Written(handle.Id);
+	}
+
+	// How many times each app-writable buffer has been written (id → count), and per frame slot the count its GPU copy
+	// holds (-1: none yet). A frame uploads only the buffers its slot's copy is behind on, so a buffer written once
+	// costs nothing per frame after every slot has caught up, however large it is; and the last Write still persists.
+	private readonly Dictionary<int, int> _writes = [];
+	private readonly Dictionary<int, int[]> _uploadedWrites = [];
+
+	private void Written(int id) => CollectionsMarshal.GetValueRefOrNullRef(_writes, id)++;
+
+	// Whether this slot's copy of a buffer is behind its last Write; if it is, it is about to be brought up to date
+	private bool Behind(int id, int slot)
+	{
+		var uploaded = _uploadedWrites[id];
+		var writes = _writes[id];
+		if (uploaded[slot] == writes)
+			return false;
+		uploaded[slot] = writes;
+		return true;
+	}
+
+	/// <summary>Which of the per-frame-slot copies of each Constants and Storage buffer the frame being recorded reads.</summary>
+	protected abstract int ShadowSlot { get; }
+
+	/// <summary>How many per-frame-slot copies of each Constants and Storage buffer the backend keeps (1 where the API
+	/// orders a buffer write before the next frame's reads itself).</summary>
+	protected abstract int ShadowSlotCount { get; }
+
+	/// <summary>
+	/// Every Constants and Storage buffer's GPU copies are new (a resize rebuilt them, say): upload each again into
+	/// every slot, whether or not it has been written since. A backend calls this wherever it replaces those buffers
+	/// outside <see cref="SetGraph"/>.
+	/// </summary>
+	protected void ForgetUploadedShadows()
+	{
+		foreach (var uploaded in _uploadedWrites.Values)
+			Array.Fill(uploaded, -1);
 	}
 
 	// CPU shadow of each active-graph Storage resource (id → its bytes), like _constants but an array; the backend
@@ -335,6 +373,7 @@ public abstract class EngineBase : IEngine
 			shadow = GrowStorageBuffer(handle.Id, bytes.Length, shadow);
 		}
 		bytes.CopyTo(shadow);
+		Written(handle.Id);
 	}
 
 	// Grow a growable storage buffer to hold at least requiredBytes: enlarge the CPU shadow (geometric — at least
@@ -350,6 +389,7 @@ public abstract class EngineBase : IEngine
 		_storage[id] = grown;
 		WaitIdle();
 		GrowStorage(id, newCapacity);
+		Array.Fill(_uploadedWrites[id], -1);   // new buffers in every slot
 		return grown;
 	}
 
@@ -448,12 +488,20 @@ public abstract class EngineBase : IEngine
 		// starts zero-filled, so a technique that reads a buffer the app hasn't written yet sees a defined value.
 		_constants.Clear();
 		_storage.Clear();
+		_writes.Clear();
+		_uploadedWrites.Clear();
 		foreach (var resource in graph.Resources)
 		{
 			if (resource.Kind == ResourceKind.Constants)
 				_constants[resource.Id] = new byte[resource.ByteSize];
 			else if (resource.Kind == ResourceKind.Storage)
 				_storage[resource.Id] = new byte[resource.ByteSize];
+			else
+				continue;
+			_writes[resource.Id] = 0;
+			var uploaded = new int[ShadowSlotCount];
+			Array.Fill(uploaded, -1);
+			_uploadedWrites[resource.Id] = uploaded;
 		}
 
 		// Drop the previous graph's readback bytes; the backend refills per target as frames retire.
@@ -573,13 +621,17 @@ public abstract class EngineBase : IEngine
 	/// </summary>
 	protected void RecordFrame()
 	{
-		// Flush each app-writable buffer's CPU shadow into what this frame will read. Re-uploading every frame (these
-		// are tiny) is what makes the last IEngine.Write persist: a static parameter is written once and an animated one
-		// per frame, and either way what the GPU reads this frame is current.
+		// Bring this frame slot's copy of each app-writable buffer up to its last IEngine.Write, which is what makes that
+		// write persist: a static parameter is written once and an animated one per frame, and either way what the GPU
+		// reads this frame is current. A copy already up to date is left alone, so a large buffer written once (a
+		// world's per-point tints) costs nothing per frame once every slot holds it.
+		var slot = ShadowSlot;
 		foreach (var (id, bytes) in ConstantsShadows)
-			WriteConstantsShadow(id, bytes);
+			if (Behind(id, slot))
+				WriteConstantsShadow(id, bytes);
 		foreach (var (id, bytes) in StorageShadows)
-			WriteStorageShadow(id, bytes);
+			if (Behind(id, slot))
+				WriteStorageShadow(id, bytes);
 
 		BeginFrameTimestamps();
 

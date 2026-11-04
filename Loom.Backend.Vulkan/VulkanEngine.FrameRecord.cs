@@ -179,6 +179,11 @@ internal sealed unsafe partial class VulkanEngine
 	// bits and the graph has passes to time.
 	private bool TimingActive => GpuTimingEnabled && _timingPools.Length > 0;
 
+	// A host-visible copy of each Constants and Storage buffer per frame in flight
+	protected override int ShadowSlot => _currentFrame;
+
+	protected override int ShadowSlotCount => MaxFramesInFlight;
+
 	protected override void WriteConstantsShadow(int id, ReadOnlySpan<byte> bytes) =>
 		_transients!.WriteConstants(_currentFrame, id, bytes);
 

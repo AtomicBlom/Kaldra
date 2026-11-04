@@ -77,6 +77,11 @@ public sealed unsafe partial class DirectX12Engine
 	// Each slot owns a sub-range of the one timestamp heap.
 	private uint TimingBase => (uint)(2 * _timingPassCount) * RecordingIndex;
 
+	// A persistently mapped copy of each Constants and Storage buffer per buffered frame
+	protected override int ShadowSlot => (int)RecordingIndex;
+
+	protected override int ShadowSlotCount => (int)BufferCount;
+
 	protected override void WriteConstantsShadow(int id, ReadOnlySpan<byte> bytes) =>
 		_transients!.WriteConstants(RecordingIndex, id, bytes);
 
