@@ -379,8 +379,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			SrcBlend = srcBlend,
 			DestBlend = dstBlend,
 			BlendOp = BlendOp.Add,
-			SrcBlendAlpha = srcBlend,
-			DestBlendAlpha = dstBlend,
+			// D3D12 refuses a *_COLOR factor in the alpha equation (Multiply's DestColor): alpha takes its alpha twin
+			SrcBlendAlpha = AlphaFactor(srcBlend),
+			DestBlendAlpha = AlphaFactor(dstBlend),
 			BlendOpAlpha = BlendOp.Add,
 			LogicOpEnable = false,
 			LogicOp = LogicOp.Noop,
@@ -523,6 +524,17 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		DepthCompare.GreaterOrEqual => ComparisonFunc.GreaterEqual,
 		DepthCompare.Always => ComparisonFunc.Always,
 		_ => throw new NotSupportedException($"DirectX12: DepthCompare '{compare}' is not mapped to a comparison func."),
+	};
+
+	// A blend factor as the alpha equation may take it: D3D12 allows no *_COLOR factor there, so a colour factor becomes
+	// the alpha factor of the same source (Vulkan and WebGPU take either, reading the alpha channel the same way)
+	private static Blend AlphaFactor(Blend factor) => factor switch
+	{
+		Blend.SrcColor => Blend.SrcAlpha,
+		Blend.InvSrcColor => Blend.InvSrcAlpha,
+		Blend.DestColor => Blend.DestAlpha,
+		Blend.InvDestColor => Blend.InvDestAlpha,
+		_ => factor,
 	};
 
 	// Exhaustive so a new SamplerAddress member fails loud here instead of silently mapping to Clamp.
