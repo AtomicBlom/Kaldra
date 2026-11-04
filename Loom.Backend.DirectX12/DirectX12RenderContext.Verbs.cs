@@ -96,6 +96,18 @@ internal sealed unsafe partial class DirectX12RenderContext
 				_cmd.DrawInstanced((uint)call.VertexCount, (uint)call.Instances.Count, 0, 0);
 			}
 		}
+		else if (call.Instances.StaticBuffer is { } stored)
+		{
+			// Instances uploaded once: a view over the stored buffer's range, from the draw's first instance
+			stored.CheckInstanceStride(baked.InstanceStride, call.Technique);
+			var instanceView = new VertexBufferView
+			{
+				BufferLocation = _meshes.BindPoseAddress(stored.Storage.Id) + (ulong)(call.Instances.StaticFirst * stored.Stride),
+				SizeInBytes = (uint)(call.Instances.Count * stored.Stride),
+				StrideInBytes = (uint)stored.Stride,
+			};
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, instanceView, (uint)call.Instances.Count, call.Indices);
+		}
 		else
 		{
 			// CPU-driven instances: upload the type-erased span to the per-frame ring.

@@ -715,6 +715,27 @@ public abstract class EngineBase : IEngine
 	}
 
 	/// <inheritdoc/>
+	public InstanceBuffer CreateInstances<T>(ReadOnlySpan<T> instances, VertexLayout layout) where T : unmanaged
+	{
+		ThrowIfRecording(nameof(CreateInstances));
+		ArgumentNullException.ThrowIfNull(layout);
+		if (instances.IsEmpty)
+			throw new ArgumentException("An instance buffer holds at least one instance.", nameof(instances));
+		// Stored as a mesh whose vertices are the instances: every backend already uploads those to GPU-resident memory,
+		// resolves them at draw time and frees them after the frames in flight. The one index is never drawn.
+		var storage = UploadMesh(instances, layout, [0u]);
+		return new InstanceBuffer(storage, instances.Length, layout.Stride);
+	}
+
+	/// <inheritdoc/>
+	public void ReleaseInstances(InstanceBuffer instances)
+	{
+		AssertRenderThread(nameof(ReleaseInstances));
+		ThrowIfRecording(nameof(ReleaseInstances));
+		RetireMesh(instances.Storage);
+	}
+
+	/// <inheritdoc/>
 	public Texture CreateTexture(TextureData data)
 	{
 		ThrowIfRecording(nameof(CreateTexture));

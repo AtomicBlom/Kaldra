@@ -157,6 +157,15 @@ internal sealed partial class WebGpuRenderContext
 			return;
 		}
 
+		if (call.Instances.StaticBuffer is { } stored)
+		{
+			// Instances uploaded once: the stored buffer itself, from the draw's first instance
+			stored.CheckInstanceStride(instanceStride, call.Technique);
+			meshes.DrawInstanced(writer, _validate.RequireMesh(call).Id, meshes.BindPoseBuffer(stored.Storage.Id),
+				call.Instances.StaticFirst * stored.Stride, call.Instances.Count, call.Indices);
+			return;
+		}
+
 		if (call.Instances.CpuData.IsEmpty)
 			return;
 		var offset = _engine.InstanceRing.Reserve(call.Instances.CpuData, call.Instances.CpuData.Length);

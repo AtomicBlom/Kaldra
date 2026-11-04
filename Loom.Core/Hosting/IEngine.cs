@@ -79,6 +79,22 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	void ReleaseMesh(Mesh mesh);
 
 	/// <summary>
+	/// Upload per-instance data once, to GPU-resident memory, and get an <see cref="InstanceBuffer"/> that draws take
+	/// ranges of (<see cref="DrawCall.Static(InstanceBuffer, int, int)"/>) — for instances that don't change from frame to frame, which a CPU
+	/// span (<see cref="DrawCall.From{T}"/>) would upload again every frame. <typeparamref name="T"/> must be laid out to
+	/// match <paramref name="layout"/>, the per-instance layout of the techniques that draw it
+	/// (<c>sizeof(T) == layout.Stride</c>). Created and released as a mesh is: between frames, and the handle lives
+	/// until <see cref="ReleaseInstances"/> or the engine's end.
+	/// </summary>
+	InstanceBuffer CreateInstances<T>(ReadOnlySpan<T> instances, VertexLayout layout) where T : unmanaged;
+
+	/// <summary>
+	/// Free an <see cref="InstanceBuffer"/> — under the same rules as <see cref="ReleaseMesh"/>: dead from this call,
+	/// freed once every frame that may still read it has finished on the GPU, never from inside a pass callback.
+	/// </summary>
+	void ReleaseInstances(InstanceBuffer instances);
+
+	/// <summary>
 	/// Upload a texture (and its mip chain) once and get a stable <see cref="Texture"/> handle to bundle into a
 	/// <see cref="Material"/> or sample from a draw list. Takes neutral <see cref="TextureData"/> — no graphics-API
 	/// type crosses the boundary; the backend's texture store decodes nothing and just uploads the levels. The handle

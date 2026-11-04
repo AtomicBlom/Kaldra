@@ -80,6 +80,14 @@ internal sealed unsafe partial class VulkanRenderContext
 				_vk.CmdDraw(_cmd, (uint)call.VertexCount, (uint)call.Instances.Count, 0, 0);
 			}
 		}
+		else if (call.Instances.StaticBuffer is { } stored)
+		{
+			// Instances uploaded once: the stored buffer itself, from the draw's first instance.
+			stored.CheckInstanceStride(template.Instance?.Stride ?? 0, call.Technique);
+			var buffer = _meshes.BindPoseBuffer(stored.Storage.Id);
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, buffer, (ulong)(call.Instances.StaticFirst * stored.Stride),
+				(uint)call.Instances.Count, call.Indices);
+		}
 		else
 		{
 			// CPU-driven instances: upload the type-erased span to the per-frame ring.

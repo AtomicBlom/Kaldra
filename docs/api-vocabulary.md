@@ -157,6 +157,8 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 | `CreateMesh<T>(ReadOnlySpan<T>, VertexLayout, ReadOnlySpan<uint>)` | Upload geometry with an explicit layout (`sizeof(T) == layout.Stride`). |
 | `CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex>, ReadOnlySpan<uint>)` | Upload a skinned bind-pose mesh (readable by the compute pre-skin) → `Mesh`. |
 | `ReleaseMesh(Mesh)` | Kill a mesh's handle at once; its buffers are freed once no frame in flight can read them. Between frames only. |
+| `CreateInstances<T>(span, layout)` | Upload per-instance data once, to GPU-resident memory, for draws to take ranges of (`DrawCall.Static`): instances that don't change from frame to frame, which a CPU span would upload every frame. `sizeof(T)` must be the layout's stride. |
+| `ReleaseInstances(InstanceBuffer)` | Free one, under `ReleaseMesh`'s rules. |
 | `CreateTexture(TextureData)` | Upload an image + mip chain → `Texture`. Between frames only: an upload made inside a pass would miss the frame that samples it, so it throws there. |
 | `CreateTextureAsync(TextureData)` | Queue an upload from any thread; completes when `ServicePendingUploads` (called by `Render`) drains it. |
 | `ReleaseTexture(Texture)` | Kill a texture's handle at once; its image is destroyed once no frame in flight can read it. Throws for a texture a `Material` holds, and inside a pass. |
@@ -275,16 +277,18 @@ Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projec
 | `Sampled` (`ReadOnlySpan<ResourceHandle>`) | Graph resources bound as sampled inputs (each declared via `.Samples`). |
 | `DrawCall.From<T>(ReadOnlySpan<T>)` | Build an `InstanceSource` from a CPU instance span (uploaded per frame). |
 | `DrawCall.Gpu(BufferHandle, count)` | Build an `InstanceSource` from a GPU-resident buffer a compute pass filled. |
+| `DrawCall.Static(InstanceBuffer, first, count)` | Build an `InstanceSource` from a range of instances uploaded once (`IEngine.CreateInstances`); nothing is uploaded per frame. The range is checked against the buffer, and the technique's instance stride against its stride. |
 | `DrawCall.Indirect(BufferHandle, byteOffset)` | Build an `InstanceSource` whose counts come from a buffer (declared `.ReadsIndirect`); `Indices` is ignored — the range comes from the buffer. |
 | `DrawCall.Range(firstIndex, indexCount, baseVertex)` | Build an `IndexRange`, so one mesh can hold several primitives. |
 
-`InstanceSource` (a nested `ref struct`) exposes `IsEmpty` and `Count`; construct it only via `DrawCall.From` / `DrawCall.Gpu` / `DrawCall.Indirect`. An indirect draw has no CPU-known `Count` — it reports zero, because only the GPU knows. Skinning is `ctx.DispatchSkin(...)` (a compute pre-skin into a `.ReadsVertex` buffer) followed by an ordinary `ctx.Draw` of that buffer.
+`InstanceSource` (a nested `ref struct`) exposes `IsEmpty` and `Count`; construct it only via `DrawCall.From` / `DrawCall.Gpu` / `DrawCall.Static` / `DrawCall.Indirect`. An indirect draw has no CPU-known `Count` — it reports zero, because only the GPU knows. Skinning is `ctx.DispatchSkin(...)` (a compute pre-skin into a `.ReadsVertex` buffer) followed by an ordinary `ctx.Draw` of that buffer.
 
 ## Geometry & materials
 
 | Type (`namespace`) | Role |
 |---|---|
 | `Mesh` (`Loom.Core.Geometry`) | An opaque handle to uploaded geometry from `IEngine.CreateMesh` / `CreateSkinnedMesh`. Survives graph swaps; dies at `IEngine.ReleaseMesh`. |
+| `InstanceBuffer` (`Loom.Core.Geometry`) | A handle to instances uploaded once by `IEngine.CreateInstances`: its count and stride, stored as a mesh is. Dies at `IEngine.ReleaseInstances`. |
 | `Vertex` (`Loom.Core.Geometry`) | The canonical interleaved vertex — `record struct (Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Tangent)`, 48 bytes. |
 | `SkinnedVertex` (`Loom.Core.Animation`) | The skinned bind-pose vertex — `Vertex` fields plus four bone indices (`Joint0..3`) + `Vector4 Weights`, 80 bytes. |
 | `OverlayVertex` (`Loom.Core.Geometry`) | The 2D overlay vertex (position, uv, premultiplied RGBA16F colour, custom) used by draw lists. |
