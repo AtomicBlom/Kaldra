@@ -575,8 +575,18 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 
 	// Keyboard state via the physical (layout-independent) code; drop auto-repeat — the host's held state already
 	// covers a key held across frames, and typed characters come through the text channel below.
-	window.addEventListener("keydown", e => { if (!e.repeat) onKey(e.code, true); });
-	window.addEventListener("keyup", e => onKey(e.code, false));
+	// Keys the browser would also act on, which mean nothing on a page that is a game are kept from it: F1's help, F3 and
+	// F7's find and caret browsing, F10 and a lone Alt's menu, Tab's focus moving off the canvas. F5, F11 and F12
+	// (reload, full screen, developer tools) and anything with Ctrl or Meta held (Ctrl+V's paste) stay the browser's.
+	const keptFromBrowser = new Set(["F1", "F2", "F3", "F4", "F6", "F7", "F8", "F9", "F10", "Tab", "AltLeft", "AltRight"]);
+	window.addEventListener("keydown", e => {
+		if (keptFromBrowser.has(e.code) && !e.ctrlKey && !e.metaKey) e.preventDefault();
+		if (!e.repeat) onKey(e.code, true);
+	});
+	window.addEventListener("keyup", e => {
+		if (keptFromBrowser.has(e.code) && !e.ctrlKey && !e.metaKey) e.preventDefault();   // a lone Alt opens the menu on its release
+		onKey(e.code, false);
+	});
 	// Typed text via keypress: it delivers a layout/shift-resolved character that raw key codes can't. Emit only
 	// genuine single-character values (skip named keys like "Enter"/"ArrowUp" that also fire keypress), one event
 	// per code point so an astral character (e.g. an emoji) arrives as a single UTF-32 code point.
