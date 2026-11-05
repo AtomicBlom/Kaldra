@@ -31,6 +31,7 @@ namespace Loom.Backend.Vulkan;
 /// <param name="MaterialUniformSlot">Which uniform slot carries the per-material parameter block, or null when the shader declares none.</param>
 /// <param name="MaterialParameterBytes">Bytes of per-material parameters to stage into the uniform ring per draw; 0 when the shader declares no block.</param>
 /// <param name="SampleCompare">The compare function of the comparison samplers on the slots <see cref="ShaderBindingMap.ComparedTextures"/> marks (TechniqueDescriptor.SampleCompare).</param>
+/// <param name="AlphaToCoverage">Whether alpha decides the samples a fragment covers in a multisampled pass (TechniqueDescriptor.AlphaToCoverage).</param>
 public readonly record struct VulkanTechniqueTemplate(
 	byte[] Spirv,
 	string VertexEntry,
@@ -50,7 +51,8 @@ public readonly record struct VulkanTechniqueTemplate(
 	DepthBias? Bias = null,
 	int? MaterialUniformSlot = null,
 	int MaterialParameterBytes = 0,
-	DepthCompare? SampleCompare = null)
+	DepthCompare? SampleCompare = null,
+	bool AlphaToCoverage = false)
 {
 	/// <summary>Sampled inputs the shader reads, bound as combined image samplers.</summary>
 	public int SampleCount => Bindings.SampledTextures.Length;

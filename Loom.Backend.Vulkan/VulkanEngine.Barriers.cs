@@ -37,14 +37,26 @@ internal sealed unsafe partial class VulkanEngine
 	{
 		_imageBarrierCount = 0;
 		_bufferBarrierCount = 0;
+		_resolveCount = 0;
 		foreach (var transition in transitions)
 			QueueTransition(transition);
 		FlushBarriers(cmd);
+		if (_resolveCount > 0)
+			Resolve(cmd);
 	}
+
+	// The multisampled targets this batch resolves for sampling (their ids), between its barriers and the ones after
+	private int[] _resolveIds = new int[8];
+	private int _resolveCount;
 
 	private void QueueTransition(ResourceTransition transition)
 	{
 		var id = transition.Resource.Id;
+		if (!_bufferIds.Contains(id) && _transients!.Get(_currentFrame, id).Resolves)
+		{
+			QueueResolving(transition);
+			return;
+		}
 
 		// Buffers have no layout — queue a buffer memory barrier scoped by the from/to stage+access. This is the
 		// compute(StorageWrite) → vertex-input(VertexAttributeRead) hand-off for GPU particles.
@@ -87,6 +99,61 @@ internal sealed unsafe partial class VulkanEngine
 
 		var range = new ImageSubresourceRange(image.Aspect, 0, 1, 0, 1);
 		QueueImageBarrier(image.Image, range, src.Layout, dst.Layout, srcStage, srcAccess, dst.Stage, dst.Access);
+	}
+
+	// A multisampled colour target that a pass samples. Its own image is only ever drawn into, so it rests as a colour
+	// attachment; the graph taking it to ShaderRead is where it is resolved, into the image samplers read
+	// (ResourceImage.SampledView): it goes to a transfer source and the resolve to a transfer destination here, the
+	// resolve runs after this batch's barriers, and the barriers after it put each where it rests.
+	private void QueueResolving(ResourceTransition transition)
+	{
+		ref var image = ref _transients!.Get(_currentFrame, transition.Resource.Id);
+		var range = new ImageSubresourceRange(image.Aspect, 0, 1, 0, 1);
+		var attachment = VulkanStateMapping.For(ResourceState.ColorAttachment);
+		var drawn = transition.From == ResourceState.Undefined ? VulkanStateMapping.For(ResourceState.Undefined) : attachment;
+		switch (transition.To)
+		{
+			case ResourceState.ColorAttachment:
+				// Drawn into again: it has rested as an attachment since it was last resolved, unless it is new
+				if (transition.From == ResourceState.Undefined)
+					QueueImageBarrier(image.Image, range, drawn.Layout, attachment.Layout, PipelineStageFlags2.AllCommandsBit,
+						AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit, attachment.Stage, attachment.Access);
+				return;
+			case ResourceState.ShaderRead:
+				QueueImageBarrier(image.Image, range, drawn.Layout, ImageLayout.TransferSrcOptimal, drawn.Stage, drawn.Access,
+					PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferReadBit);
+				// What the resolve held before is overwritten whole; it waits only for whatever last sampled it
+				QueueImageBarrier(image.Resolve, range, ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
+					PipelineStageFlags2.AllCommandsBit, AccessFlags2.None, PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferWriteBit);
+				if (_resolveCount == _resolveIds.Length)
+					Array.Resize(ref _resolveIds, _resolveIds.Length * 2);
+				_resolveIds[_resolveCount++] = transition.Resource.Id;
+				return;
+			default:
+				throw new VulkanException($"'{transition.Resource.Name}' is multisampled and is resolved only to be sampled; the graph takes it to {transition.To}.");
+		}
+	}
+
+	// Each target queued by QueueResolving resolved into its sampled image, then the sampled image made readable and the
+	// target an attachment again
+	private void Resolve(CommandBuffer cmd)
+	{
+		var read = VulkanStateMapping.For(ResourceState.ShaderRead);
+		var attachment = VulkanStateMapping.For(ResourceState.ColorAttachment);
+		for (var k = 0; k < _resolveCount; k++)
+		{
+			ref var image = ref _transients!.Get(_currentFrame, _resolveIds[k]);
+			var layers = new ImageSubresourceLayers(image.Aspect, 0, 0, 1);
+			var region = new ImageResolve(layers, default, layers, default, new Extent3D(image.Extent.Width, image.Extent.Height, 1));
+			_vk.CmdResolveImage(cmd, image.Image, ImageLayout.TransferSrcOptimal, image.Resolve, ImageLayout.TransferDstOptimal, 1, in region);
+			var range = new ImageSubresourceRange(image.Aspect, 0, 1, 0, 1);
+			QueueImageBarrier(image.Resolve, range, ImageLayout.TransferDstOptimal, read.Layout, PipelineStageFlags2.AllTransferBit,
+				AccessFlags2.TransferWriteBit, read.Stage, read.Access);
+			QueueImageBarrier(image.Image, range, ImageLayout.TransferSrcOptimal, attachment.Layout, PipelineStageFlags2.AllTransferBit,
+				AccessFlags2.TransferReadBit, attachment.Stage, attachment.Access);
+		}
+		_resolveCount = 0;
+		FlushBarriers(cmd);
 	}
 
 	private void QueueImageBarrier(

@@ -125,7 +125,7 @@ internal sealed partial class WebGpuRenderContext
 	// live view, for a TextureRef the pass declared with .Samples (the graph made it sampleable for this pass). The
 	// bind-group cache keys on the view handle, and graph views are dropped from it whenever they are recreated.
 	private int ListTextureView(int textureId) => textureId >= InspectableResource.DebugTextureBase
-		? _engine.Transients.ViewHandle(textureId - InspectableResource.DebugTextureBase)
+		? _engine.Transients.SampledViewHandle(textureId - InspectableResource.DebugTextureBase)
 		: _engine.TextureView(textureId);
 
 	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.

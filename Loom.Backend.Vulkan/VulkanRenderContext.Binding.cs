@@ -32,7 +32,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			imageInfos[i] = new DescriptorImageInfo
 			{
 				Sampler = !map.ComparedTextures.IsDefaultOrEmpty && map.ComparedTextures[i] ? CompareSampler(compare!.Value) : sampler,
-				ImageView = image.View,
+				ImageView = image.SampledView,
 				ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
 			};
 			writes[w++] = new WriteDescriptorSet
@@ -43,7 +43,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				DescriptorType = DescriptorType.CombinedImageSampler,
 				PImageInfo = &imageInfos[i],
 			};
-			key.Add(map.SampledTextures[i].Index, BoundObject.View, image.View.Handle);
+			key.Add(map.SampledTextures[i].Index, BoundObject.View, image.SampledView.Handle);
 		}
 		// Read-only storage buffers (SSBOs), at the slots the shader gave them.
 		for (var s = 0; s < storageBuffers.Length; s++)

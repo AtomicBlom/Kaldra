@@ -50,6 +50,7 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	private int _colorCount;
 	private int _depthFormatId = -1;
 	private bool _depthReadOnly;
+	private int _samples = 1;   // the current pass's multisample count, which its pipelines are baked for
 
 	// The current pass's colour-attachment view handles + render area — captured so a draw list's group-opacity
 	// layers can suspend this scope (end pass), render children offscreen, then resume it (LoadOp.Load) and composite.
@@ -82,9 +83,10 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	/// read-only — a read-only pass bakes with depth writes off so a transparent draw tests against, but does not
 	/// disturb, the opaque depth. Called by the engine before the pass's Record runs.
 	/// </summary>
-	public void BeginPass(GraphPass pass, ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly, ReadOnlySpan<int> colorViews, int areaWidth, int areaHeight, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
+	public void BeginPass(GraphPass pass, ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly, ReadOnlySpan<int> colorViews, int areaWidth, int areaHeight, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default, int samples = 1)
 	{
 		_validate.BeginPass(pass);
+		_samples = samples;
 		if (colorFormatIds.Length > MaxColorFormats)
 			throw new WebGpuException($"A pass has {colorFormatIds.Length} color attachments; the pipeline-key buffer holds {MaxColorFormats}.");
 		_colorCount = colorFormatIds.Length;
@@ -108,11 +110,11 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	{
 		var template = _engine.Template(technique);
 		var colorFormats = ((ReadOnlySpan<int>)_colorFormatIds)[.._colorCount];
-		var key = new PipelineKey(technique, colorFormats, _depthFormatId, _depthReadOnly);
+		var key = new PipelineKey(technique, colorFormats, _depthFormatId, _depthReadOnly, _samples);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
-		var baked = WebGpuTechnique.Bake(_engine.Handles, template, technique, colorFormats, _depthFormatId, depthWrite: !_depthReadOnly);
+		var baked = WebGpuTechnique.Bake(_engine.Handles, template, technique, colorFormats, _depthFormatId, depthWrite: !_depthReadOnly, _samples);
 		_baked[key] = baked;
 		return baked;
 	}
@@ -219,8 +221,9 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 		private readonly int _colorCount;
 		private readonly int _depthFormatId;
 		private readonly bool _depthReadOnly;
+		private readonly int _samples;
 
-		public PipelineKey(string technique, ReadOnlySpan<int> colorFormats, int depthFormatId, bool depthReadOnly)
+		public PipelineKey(string technique, ReadOnlySpan<int> colorFormats, int depthFormatId, bool depthReadOnly, int samples)
 		{
 			_technique = technique;
 			_colorCount = colorFormats.Length;
@@ -228,11 +231,13 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 				_colorFormats[i] = colorFormats[i];
 			_depthFormatId = depthFormatId;
 			_depthReadOnly = depthReadOnly;
+			_samples = samples;
 		}
 
 		public bool Equals(PipelineKey other)
 		{
 			if (_colorCount != other._colorCount
+				|| _samples != other._samples
 				|| _depthFormatId != other._depthFormatId
 				|| _depthReadOnly != other._depthReadOnly
 				|| !string.Equals(_technique, other._technique, StringComparison.Ordinal))
@@ -253,6 +258,7 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 			for (var i = 0; i < _colorCount; i++)
 				hash.Add(_colorFormats[i]);
 			hash.Add(_depthFormatId);
+			hash.Add(_samples);
 			hash.Add(_depthReadOnly);
 			return hash.ToHashCode();
 		}

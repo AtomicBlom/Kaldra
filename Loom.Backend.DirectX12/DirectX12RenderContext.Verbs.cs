@@ -13,7 +13,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 {
 	public void Draw(in DrawCall call)
 	{
-		var baked = _techniques.GetOrBake(call.Technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		var baked = _techniques.GetOrBake(call.Technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly, _samples);
 		_validate.Draw(call);
 		BindGraphicsState(baked);
 

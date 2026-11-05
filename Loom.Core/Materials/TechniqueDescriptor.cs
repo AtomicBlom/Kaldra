@@ -36,6 +36,7 @@ namespace Loom.Core.Materials;
 /// <param name="DepthTest">The depth comparison a fragment must pass to survive, when the pass has a depth target. <see cref="DepthCompare.LessOrEqual"/> (the default) is the conventional near-is-0 buffer; <see cref="DepthCompare.GreaterOrEqual"/> is its reversed-Z counterpart and must be paired with a depth target cleared to 0 and a reversed projection.</param>
 /// <param name="Bias">A constant + slope-scaled depth offset for this technique, or null (the default) for none. The shadow-acne knob; see <see cref="DepthBias"/> for why the constant term is not portable between backends but the slope-scaled term is.</param>
 /// <param name="SampleCompare">The function a texture the shader reads by comparison (a <c>Sampler2DShadow</c> read with <c>SampleCmp</c>) compares its reference with the stored depth by: the reference passes when <c>reference [compare] stored</c>, so a reversed-depth shadow map takes <see cref="DepthCompare.GreaterOrEqual"/>. Which inputs compare is found in the shader; a technique whose shader compares must name this, and one whose shader doesn't must not. Comparison samplers filter (2×2 PCF in hardware) and clamp to the edge.</param>
+/// <param name="AlphaToCoverage">In a multisampled pass, whether the fragment's alpha decides how many of its samples it covers, so a cut-out (a leaf, a fence's wire) is edged as smoothly as geometry rather than stepped by a discard. No effect in a pass of one sample.</param>
 public readonly record struct TechniqueDescriptor(
 	string Shader,
 	string VertexEntry = "vertexMain",
@@ -52,7 +53,8 @@ public readonly record struct TechniqueDescriptor(
 	CullMode Cull = CullMode.None,
 	DepthCompare DepthTest = DepthCompare.LessOrEqual,
 	DepthBias? Bias = null,
-	DepthCompare? SampleCompare = null)
+	DepthCompare? SampleCompare = null,
+	bool AlphaToCoverage = false)
 {
 	/// <summary>The conventional compute entry-point name, and the one the shader build compiles by.</summary>
 	public const string DefaultComputeEntry = "computeMain";

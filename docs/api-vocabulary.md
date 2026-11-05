@@ -47,7 +47,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 |---|---|
 | `g.Backbuffer` | The swapchain colour target (`ColorHandle`) — *is* the present surface. Hand it to `.Writes`/`.Blends` and `g.Present`. |
 | `g.Screen` | The native-resolution `Domain` (alias for `g.Backbuffer.Domain`); declare full-res sibling targets here. |
-| `g.Domain("name", width, height, samples=1)` | A fixed-size `Domain` (a constant-size pixel-art world); `samples` is the MSAA count (power of two). |
+| `g.Domain("name", width, height, samples=1)` | A fixed-size `Domain` (a constant-size pixel-art world); `samples` is the MSAA count (power of two, within `Capabilities.SampleCounts`: WebGPU has 1 and 4). Every target in a multisampled domain is multisampled, and so is every pipeline drawing into it. A pass that `.Samples` a multisampled colour target reads its *resolve*: the engine resolves it into a single-sample image of its own wherever the graph takes it from being drawn to being sampled, so nothing in the graph names the resolve. A multisampled depth target can't be sampled, and a multisampled target can't be read back. |
 | `g.Domain("name", scale, samples=1)` | A backbuffer-relative `Domain` — `scale × native`, re-resolved on resize (e.g. `0.5f` for half-res). |
 | `domain.Color("name", format, clearValue?=null, noClear?=false)` | A colour target in this domain → `ColorHandle`. `noClear: true` skips the clear (only when the first pass covers every pixel). |
 | `domain.Color("name", format, scale, …)` | A colour target at a fraction of the domain's resolution (mip chains, bloom pyramid). |
@@ -231,6 +231,7 @@ engine.DefineTechnique("foliage", new TechniqueDescriptor("foliage",
 | `Cull` (`CullMode.None`) | Which faces the rasterizer discards — front faces are counter-clockwise. |
 | `DepthTest` (`DepthCompare.LessOrEqual`) | The depth comparison a fragment must pass, when the pass has a depth target. |
 | `Bias` (`null`) | A constant + slope-scaled depth offset (`DepthBias`) — the shadow-acne knob. |
+| `AlphaToCoverage` (`false`) | In a multisampled pass, the fragment's alpha decides how many of its samples it covers, so a cut-out (a leaf, a fence's wire) is edged as smoothly as geometry rather than stepped by a discard. How alpha becomes a sample mask is the driver's choice and differs between APIs on one GPU, so such edges aren't at pixel parity across backends. No effect in a pass of one sample. |
 | `SampleCompare` (`null`) | The compare function of the shader's comparison samplers: a `Sampler2DShadow` read with `SampleCmp` passes where `reference [compare] stored` (a reversed-depth shadow map takes `GreaterOrEqual`). Which inputs compare is found in the shader (its SPIR-V's depth-comparison samples; WebGPU's `sampler_comparison`); they get a filtered (2×2 PCF), edge-clamped comparison sampler and the rest keep `LinearFilter`'s. A shader that compares without it, or a technique naming it whose shader doesn't, throws at `DefineTechnique`. |
 
 Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) with reflection JSON. The Slang-side half of the contract — the platform macros, the two independent numbering schemes, and where a push block actually lands — is [`shader-authoring.md`](shader-authoring.md).

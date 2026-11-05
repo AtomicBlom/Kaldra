@@ -336,7 +336,16 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		var multisample = arena.Write(new PipelineMultisampleStateCreateInfo
 		{
 			SType = StructureType.PipelineMultisampleStateCreateInfo,
-			RasterizationSamples = SampleCountFlags.Count1Bit,
+			RasterizationSamples = description.Samples switch
+			{
+				1 => SampleCountFlags.Count1Bit,
+				2 => SampleCountFlags.Count2Bit,
+				4 => SampleCountFlags.Count4Bit,
+				8 => SampleCountFlags.Count8Bit,
+				16 => SampleCountFlags.Count16Bit,
+				_ => throw new VulkanException($"A pass of {description.Samples} samples; a pipeline takes 1, 2, 4, 8 or 16."),
+			},
+			AlphaToCoverageEnable = description.AlphaToCoverage && description.Samples > 1,
 		});
 		// One blend attachment per colour target (a g-buffer writes several). The blend equation is technique
 		// state: None writes opaquely, AlphaOver does src-alpha over-blend (transparency),

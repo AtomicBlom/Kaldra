@@ -202,6 +202,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	public const int MaxUniformBuffers = GraphLimits.MaxUniformBuffersPerPass;
 	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
 	private int _activeConstantsCount;
+	private int _samples = 1;   // the current pass's multisample count, which its pipelines are baked for
 
 	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
 	// technique's storage-buffer slots (after the sampled inputs, before the uniform slots).
@@ -229,8 +230,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	/// <paramref name="constantsIds"/> / <paramref name="storageIds"/> are the parameter and storage buffers the
 	/// pass <c>.Reads</c> (in order), bound to the technique's uniform and storage-buffer slots at draw time.
 	/// </summary>
-	public void BeginPass(GraphPass pass, ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
+	public void BeginPass(GraphPass pass, ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default, int samples = 1)
 	{
+		_samples = samples;
 		_validate.BeginPass(pass);
 		// Copy into the inline buffer (no allocation) rather than .ToArray(); the incoming span points into
 		// the executor's stackalloc, which is gone once this returns. Throw — never clamp — on an over-wide
@@ -369,7 +371,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			throw new TechniqueNotDefinedException(technique);
 
 		var colorFormats = ((ReadOnlySpan<VkFormat>)_colorFormats)[.._colorCount];
-		var key = new PipelineKey(technique, colorFormats, _depthFormat, _depthReadOnly);
+		var key = new PipelineKey(technique, colorFormats, _depthFormat, _depthReadOnly, _samples);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
@@ -382,7 +384,8 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute,
 			Layout: template.Layout, Instance: template.Instance,
 			HasListPush: template.HasListPush, Cull: template.Cull,
-			DepthTest: template.DepthTest, Bias: template.Bias), technique);
+			DepthTest: template.DepthTest, Bias: template.Bias, Samples: _samples,
+			AlphaToCoverage: template.AlphaToCoverage), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
 		// HasFragmentPush are folded into the VulkanTechniqueDescription hash, and LinearFilter only affects the
 		// descriptor's sampler, not the pipeline.
@@ -415,8 +418,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		private readonly int _colorCount;
 		private readonly VkFormat _depthFormat;
 		private readonly bool _depthReadOnly;
+		private readonly int _samples;
 
-		public PipelineKey(string technique, ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly)
+		public PipelineKey(string technique, ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, int samples)
 		{
 			// Bake only ever passes a span already sliced to <= MaxColorFormats by BeginPass's guard, so this
 			// is an internal-contract check — elided in Release, costing nothing on the per-draw hot path.
@@ -427,11 +431,13 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 				_colorFormats[i] = colorFormats[i];
 			_depthFormat = depthFormat;
 			_depthReadOnly = depthReadOnly;
+			_samples = samples;
 		}
 
 		public bool Equals(PipelineKey other)
 		{
 			if (_colorCount != other._colorCount
+				|| _samples != other._samples
 				|| _depthFormat != other._depthFormat
 				|| _depthReadOnly != other._depthReadOnly
 				|| !string.Equals(_technique, other._technique, StringComparison.Ordinal))
@@ -453,6 +459,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 				hash.Add(_colorFormats[i]);
 			hash.Add(_depthFormat);
 			hash.Add(_depthReadOnly);
+			hash.Add(_samples);
 			return hash.ToHashCode();
 		}
 	}

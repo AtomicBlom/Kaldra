@@ -155,11 +155,13 @@ public sealed unsafe partial class DirectX12Engine
 		float? depthClear = null;
 		var depthReadOnly = false;
 		var depthFormat = DxgiFormat.FormatUnknown;
+		var samples = 1;   // all of a pass's attachments share a domain, and so its multisample count
 		Span<float> clearFloats = stackalloc float[4];
 
 		foreach (var attachment in pass.Attachments)
 		{
 			var id = attachment.Resource.Id;
+			samples = attachment.Resource.Domain.Samples;
 			if (attachment.State == ResourceState.ColorAttachment)
 			{
 				// Defensive: derivation already rejects a pass over the limit, and the stack arrays below are sized to
@@ -231,7 +233,7 @@ public sealed unsafe partial class DirectX12Engine
 		var uniformCount = pass.Pass.ResourceIdsWith(AccessKind.ReadUniform, uniformIds);
 		Span<int> storageIds = stackalloc int[DirectX12RenderContext.MaxStorageBuffers];
 		var storageCount = pass.Pass.ResourceIdsWith(AccessKind.ReadStorage, storageIds);
-		_context.BeginPass(pass.Pass, new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
+		_context.BeginPass(pass.Pass, new ReadOnlySpan<DxgiFormat>(formats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount], samples);
 
 		// Hand the context this pass's render-target handles + extent so a draw-list group-opacity layer can rebind
 		// the pass scope after detouring through an offscreen target.

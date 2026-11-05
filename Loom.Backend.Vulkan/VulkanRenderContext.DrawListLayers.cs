@@ -139,7 +139,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				// an inspectable one (the resource viewer): sample this frame's live image instead of a loaded
 				// texture-store entry. The graph has already put a declared one in ShaderReadOnlyOptimal for this pass.
 				var view = walker.TextureId >= InspectableResource.DebugTextureBase
-					? _resources.Get(_frameSlot, walker.TextureId - InspectableResource.DebugTextureBase).View
+					? _resources.Get(_frameSlot, walker.TextureId - InspectableResource.DebugTextureBase).SampledView
 					: _textures.View(walker.TextureId);
 				var set = _descriptors.Allocate(baked.DescriptorSetLayout);
 				var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };

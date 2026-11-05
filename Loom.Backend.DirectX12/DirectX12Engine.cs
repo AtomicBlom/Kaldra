@@ -365,7 +365,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
 			descriptor.Cull, descriptor.DepthTest, descriptor.Bias,
 			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes,
-			[.. compared.ComparedTextures], descriptor.SampleCompare));
+			[.. compared.ComparedTextures], descriptor.SampleCompare, descriptor.AlphaToCoverage));
 		return new TechniqueShape(
 			new MaterialLayout(inputCount, reflection.MaterialParameterBytes),
 			reflection.UniformBufferBytes,

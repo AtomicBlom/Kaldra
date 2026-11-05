@@ -112,7 +112,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		_blobs?.Capture(_blobKey, Pipeline);
 	}
 
-	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, DirectX12PipelineBlobCache? blobs = null, string blobKey = "")
+	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, DirectX12PipelineBlobCache? blobs = null, string blobKey = "", int samples = 1)
 	{
 		_blobs = blobs;
 		_blobKey = blobKey;
@@ -129,7 +129,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			BakeCompute(ctx, template);
 			return;
 		}
-		BakeGraphics(ctx, template, colorFormats, depthFormat, depthReadOnly);
+		BakeGraphics(ctx, template, colorFormats, depthFormat, depthReadOnly, samples);
 	}
 
 	// A compute root signature shaped to the technique: a 16-float scalar root constant at b0 (always) + a root CBV
@@ -260,7 +260,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		}
 	}
 
-	private void BakeGraphics(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	private void BakeGraphics(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, int samples)
 	{
 		// Root signature: optionally a 32-bit root-constants block (the MVP at b0/vertex for a mesh or particle
 		// technique, or a 16-float scalar block at b0/pixel for a post pass — one or the other, mirroring the
@@ -386,7 +386,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			BlendMode.None => (Blend.One, Blend.Zero),
 			_ => throw new NotSupportedException($"DirectX12: BlendMode '{template.Blend}' is not mapped to blend factors."),
 		};
-		var blend = new BlendDesc { AlphaToCoverageEnable = false, IndependentBlendEnable = false };
+		var blend = new BlendDesc { AlphaToCoverageEnable = template.AlphaToCoverage && samples > 1, IndependentBlendEnable = false };
 		blend.RenderTarget[0] = new RenderTargetBlendDesc
 		{
 			BlendEnable = template.Blend != BlendMode.None,
@@ -441,7 +441,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				DSVFormat = hasDepth ? depthFormat : Format.FormatUnknown,
 				PrimitiveTopologyType = PrimitiveTopologyType.Triangle,
 				NumRenderTargets = (uint)colorFormats.Length,
-				SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
+				SampleDesc = new SampleDesc { Count = (uint)samples, Quality = 0 },   // the pass's targets' multisample count
 				Flags = PipelineStateFlags.None,
 			};
 			for (var i = 0; i < colorFormats.Length && i < 8; i++)

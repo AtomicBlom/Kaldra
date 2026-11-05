@@ -18,7 +18,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 		_validate.DrawList(technique, identity, textures);
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly, _samples);
 		BindGraphicsState(baked);
 		// The list brings its own geometry, so whatever mesh the store thought was bound no longer is.
 		_meshes.ResetBindings();

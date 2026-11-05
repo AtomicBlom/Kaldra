@@ -201,6 +201,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	public const int MaxUniformBuffers = GraphLimits.MaxUniformBuffersPerPass;
 	private readonly int[] _activeConstantsIds = new int[MaxUniformBuffers];
 	private int _activeConstantsCount;
+	private int _samples = 1;   // the current pass's multisample count, which its pipelines are baked for
 
 	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
 	// technique's read-only root SRVs (the structured-buffer SSBO seam). The engine fills this in BeginPass.
@@ -215,7 +216,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	/// <paramref name="constantsIds"/> / <paramref name="storageIds"/> are the parameter and storage buffers the
 	/// pass <c>.Reads</c> (in order), bound to the technique's uniform CBVs b1.. and read-only root SRVs at draw time.
 	/// </summary>
-	public void BeginPass(GraphPass pass, ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default)
+	public void BeginPass(GraphPass pass, ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default, int samples = 1)
 	{
 		_validate.BeginPass(pass);
 		if (_colorFormats.Length < colorFormats.Length)
@@ -224,6 +225,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 		_colorCount = colorFormats.Length;
 		_depthFormat = depthFormat;
 		_depthReadOnly = depthReadOnly;
+		_samples = samples;
 		// Derivation rejects a pass that exceeds either cap, so these fit by construction. Copying the whole span
 		// rather than clamping it means an engine bug would throw here instead of silently mis-binding every slot
 		// past the cap, which is what the clamp used to do.
@@ -251,7 +253,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 
 	public void FullScreen(string technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs)
 	{
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly, _samples);
 		_validate.FullScreen(technique, inputs);
 		BindGraphicsState(baked);
 

@@ -5,7 +5,7 @@
 // (see WebGpuCommandWriter.cs) replayed here into a single command encoder. So the WASM↔JS boundary is
 // crossed once per frame, not once per draw.
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const MAGIC = 0x4C574742; // 'LWGB'
 
 // ── Handle tables (order must match WebGpuHandleAllocator's table ids) ──
@@ -40,7 +40,7 @@ const OP_END = 0, OP_BEGIN_RENDER_PASS = 1, OP_END_PASS = 2, OP_SET_RENDER_PIPEL
 	OP_SET_BIND_GROUP = 4, OP_SET_VERTEX_BUFFER = 5, OP_SET_INDEX_BUFFER = 6, OP_DRAW = 7,
 	OP_DRAW_INDEXED = 8, OP_SET_VIEWPORT = 9, OP_SET_SCISSOR = 10, OP_BEGIN_COMPUTE_PASS = 11,
 	OP_SET_COMPUTE_PIPELINE = 12, OP_DISPATCH = 13, OP_WRITE_BUFFER = 14, OP_COPY_TEXTURE_TO_BUFFER = 15,
-	OP_DRAW_INDEXED_INDIRECT = 16;
+	OP_DRAW_INDEXED_INDIRECT = 16, OP_RESOLVE = 17;
 
 let device = null, queue = null, context = null, canvas = null;
 let canvasViewFormat = "bgra8unorm";
@@ -243,6 +243,7 @@ export function createRenderPipeline(handle, descriptorJson) {
 		fragment: { module: tables[T_SHADER_MODULES][d.module], entryPoint: d.fragmentEntry, targets },
 		primitive: { topology: d.topology, cullMode: d.cullMode, frontFace: d.frontFace },
 	};
+	if (d.multisample) desc.multisample = { count: d.multisample.count, alphaToCoverageEnabled: d.multisample.alphaToCoverage };
 	if (d.depth) desc.depthStencil = {
 		format: FORMATS[d.depth.format], depthWriteEnabled: d.depth.write, depthCompare: d.depth.compare,
 		depthBias: d.depth.bias, depthBiasSlopeScale: d.depth.biasSlopeScale, depthBiasClamp: d.depth.biasClamp,
@@ -377,6 +378,13 @@ export function submitFrame(commandsView, arenaView) {
 				break;
 			}
 			case OP_END_PASS: pass.end(); pass = null; break;
+			case OP_RESOLVE: {
+				// A multisampled target resolved into its single-sample view: WebGPU resolves only at a render pass's
+				// end, so this is a pass that loads the target, draws nothing, and resolves it
+				const source = i32[p++], target = i32[p++];
+				encoder.beginRenderPass({ colorAttachments: [{ view: resolveView(source), resolveTarget: resolveView(target), loadOp: "load", storeOp: "store" }] }).end();
+				break;
+			}
 			case OP_SET_RENDER_PIPELINE: pass.setPipeline(tables[T_RENDER_PIPELINES][i32[p++]]); break;
 			case OP_SET_BIND_GROUP: {
 				const group = i32[p++], bg = i32[p++], dynCount = i32[p++];

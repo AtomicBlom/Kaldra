@@ -61,7 +61,17 @@ internal sealed partial class WebGpuEngine
 
 	// Deliberately empty, not omitted: WebGPU tracks resource state itself, so the plan's transitions genuinely have
 	// nothing to translate into here. Only the attachment load/store actions survive, into the render-pass descriptor.
-	protected override void EmitTransitions(ReadOnlySpan<ResourceTransition> transitions) { }
+	// WebGPU tracks resource state itself, so there are no barriers to emit, but a multisampled target the graph takes
+	// to ShaderRead is resolved here, between the passes, into the texture its samplers read
+	protected override void EmitTransitions(ReadOnlySpan<ResourceTransition> transitions)
+	{
+		foreach (var transition in transitions)
+		{
+			ref var tex = ref _transients!.Texture(transition.Resource.Id);
+			if (tex.Resolves && transition.To == ResourceState.ShaderRead)
+				_writer.Resolve(tex.ViewHandle, tex.ResolveView);
+		}
+	}
 
 	// Every g.Readback target (e.g. the picking id buffer) copies into its own map-read buffer.
 	protected override void RecordReadback() => RecordGraphReadbacks();
@@ -112,9 +122,11 @@ internal sealed partial class WebGpuEngine
 		Span<int> colorFormatIds = stackalloc int[attachments.Length];
 		Span<int> colorViews = stackalloc int[attachments.Length];
 		var area = (Width: 0, Height: 0);
+		var samples = 1;   // all of a pass's attachments share a domain, and so its multisample count
 		foreach (var a in attachments)
 		{
 			ref var tex = ref _transients!.Texture(a.Resource.Id);
+			samples = a.Resource.Domain.Samples;
 			if (a.State == ResourceState.ColorAttachment)
 			{
 				colorViews[colorCount] = _transients!.ViewHandle(a.Resource.Id);
@@ -146,7 +158,7 @@ internal sealed partial class WebGpuEngine
 		// The technique pipelines this pass bakes must match the attachment formats declared above. The colour
 		// attachment views + pass area are handed through too, so a draw list's group-opacity layers can suspend and
 		// resume this exact scope below the graph seam.
-		_context.BeginPass(pass.Pass, colorFormatIds[..colorCount], depthFormatId, depthReadOnly, colorViews[..colorCount], area.Width, area.Height, constantsIds[..constantsCount], storageIds[..storageCount]);
+		_context.BeginPass(pass.Pass, colorFormatIds[..colorCount], depthFormatId, depthReadOnly, colorViews[..colorCount], area.Width, area.Height, constantsIds[..constantsCount], storageIds[..storageCount], samples);
 		pass.Pass.Record?.Invoke(_context);
 		_writer.EndPass();
 	}

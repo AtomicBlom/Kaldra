@@ -21,7 +21,7 @@ internal sealed partial class WebGpuRenderContext
 
 		Span<int> views = stackalloc int[inputs.Length];
 		for (var i = 0; i < inputs.Length; i++)
-			views[i] = transients.ViewHandle(inputs[i].Id);
+			views[i] = transients.SampledViewHandle(inputs[i].Id);
 
 		_engine.Writer.SetRenderPipeline(baked.Pipeline);
 		// The float span fills the technique's per-draw block. A LOOM_PUSH_CONSTANT block (≤16 floats) is filled
@@ -55,7 +55,7 @@ internal sealed partial class WebGpuRenderContext
 		{
 			var transients = _engine.Transients;
 			for (var i = 0; i < sampleCount && i < call.Sampled.Length; i++)
-				views[i] = transients.ViewHandle(call.Sampled[i].Id);
+				views[i] = transients.SampledViewHandle(call.Sampled[i].Id);
 		}
 
 		BindAndSet(baked, call.Technique, views, call.Uniforms, default,
@@ -80,7 +80,7 @@ internal sealed partial class WebGpuRenderContext
 			var sampler = sampled.Length > 0 ? _engine.Samplers.Get(baked.Template.LinearFilter, baked.Template.Address) : 0;
 			for (var i = 0; i < sampled.Length && i < bindings.SampledTextureBindings.Length; i++)
 			{
-				AddEntry(entries, ref e, bindings.SampledTextureBindings[i], EntryView, transients.ViewHandle(sampled[i].Id), 0, 0);
+				AddEntry(entries, ref e, bindings.SampledTextureBindings[i], EntryView, transients.SampledViewHandle(sampled[i].Id), 0, 0);
 				AddEntry(entries, ref e, bindings.SampledSamplerBindings[i], EntrySampler, sampler, 0, 0);
 			}
 

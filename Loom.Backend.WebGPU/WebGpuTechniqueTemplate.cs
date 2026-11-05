@@ -37,6 +37,9 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 	/// <summary>The function the comparison samplers on <see cref="WebGpuBindingModel.SampledCompared"/>'s slots compare by.</summary>
 	public DepthCompare? SampleCompare { get; init; }
 
+	/// <summary>Whether alpha decides the samples a fragment covers in a multisampled pass (TechniqueDescriptor.AlphaToCoverage).</summary>
+	public bool AlphaToCoverage { get; init; }
+
 	/// <summary>The depth comparison baked into the pipeline when the pass has a depth target.</summary>
 	public required DepthCompare DepthTest { get; init; }
 
@@ -124,6 +127,7 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 			DepthTest = descriptor.DepthTest,
 			Bias = descriptor.Bias,
 			SampleCompare = descriptor.SampleCompare,
+			AlphaToCoverage = descriptor.AlphaToCoverage,
 			MaterialUniformSlot = bindings.MaterialUniformSlot,
 			MaterialParameterBytes = bindings.MaterialParameterBytes,
 			ShaderModule = module,

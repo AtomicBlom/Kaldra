@@ -22,4 +22,4 @@ internal readonly record struct DirectX12TechniqueTemplate(
 	CullMode Cull = CullMode.None,
 	DepthCompare DepthTest = DepthCompare.LessOrEqual, DepthBias? Bias = null,
 	int? MaterialUniformSlot = null, int MaterialParameterBytes = 0,
-	bool[]? ComparedInputs = null, DepthCompare? SampleCompare = null);
+	bool[]? ComparedInputs = null, DepthCompare? SampleCompare = null, bool AlphaToCoverage = false);

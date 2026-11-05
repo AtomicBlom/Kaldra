@@ -148,7 +148,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				if (i < sampled.Length)
 				{
 					ref var image = ref _resources.Get(_frameSlot, sampled[i].Id);
-					imageInfos[i] = new DescriptorImageInfo { Sampler = sampler, ImageView = image.View, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
+					imageInfos[i] = new DescriptorImageInfo { Sampler = sampler, ImageView = image.SampledView, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
 					write.DstBinding = (uint)map.SampledTextures[i].Index;
 					write.DescriptorType = DescriptorType.CombinedImageSampler;
 					write.PImageInfo = &imageInfos[i];

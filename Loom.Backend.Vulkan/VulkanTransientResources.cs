@@ -44,6 +44,16 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 		public bool SwapchainSized;
 		public ImageUsageFlags Usage;
 		public SampleCountFlags Samples;
+
+		// A multisampled colour target that a pass samples is resolved into a single-sample image of its own where the
+		// graph takes it from being drawn to being sampled (VulkanEngine.Barriers); a sampler reads that image
+		public bool Resolves;
+		public Image Resolve;
+		public ImageView ResolveView;
+		public Allocation? ResolveAllocation;
+
+		/// <summary>The view a shader samples: the resolve's, for a multisampled target, else the image's own.</summary>
+		public readonly ImageView SampledView => Resolves ? ResolveView : View;
 	}
 
 	// One VMA block shared by a bucket's members (per frame slot). The members alias it — never live at once.
@@ -133,7 +143,15 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 		var usage = aspect == ImageAspectFlags.DepthBit
 			? ImageUsageFlags.DepthStencilAttachmentBit
 			: ImageUsageFlags.ColorAttachmentBit;
-		if (sampled.Contains(resource.Id))
+		if (sampled.Contains(resource.Id) && image.Samples != SampleCountFlags.Count1Bit)
+		{
+			// Multisampled and sampled: drawn into here, resolved out of it into an image a shader can sample
+			if (aspect == ImageAspectFlags.DepthBit)
+				throw new VulkanException($"'{resource.Name}' is a multisampled depth target and a pass samples it; only a multisampled colour target is resolved for sampling.");
+			usage |= ImageUsageFlags.TransferSrcBit;
+			image.Resolves = true;
+		}
+		else if (sampled.Contains(resource.Id))
 			usage |= ImageUsageFlags.SampledBit;
 		if (storage.Contains(resource.Id))
 			usage |= ImageUsageFlags.StorageBit; // a compute pass read-writes it (auto-exposure)
@@ -197,6 +215,8 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 			ref var image = ref _images[slot][id];
 			allocation.BindImageMemory(image.Image).Check("vmaBindImageMemory");
 			CreateView(ref image);
+			if (image.Resolves)
+				CreateResolve(ref image);
 			NameImage(slot, id, in image);
 		}
 
@@ -449,8 +469,47 @@ internal sealed unsafe class VulkanTransientResources : IDisposable
 		_vk.CreateImageView(_ctx.Device, in viewInfo, null, out image.View).Check("vkCreateImageView");
 	}
 
+	// The single-sample image a multisampled target resolves into, the same size and format: its own memory, since it
+	// lives as long as the target does
+	private void CreateResolve(ref ResourceImage image)
+	{
+		ImageCreateInfo info = new()
+		{
+			SType = StructureType.ImageCreateInfo,
+			ImageType = ImageType.Type2D,
+			Format = image.Format,
+			Extent = new Extent3D(image.Extent.Width, image.Extent.Height, 1),
+			MipLevels = 1,
+			ArrayLayers = 1,
+			Samples = SampleCountFlags.Count1Bit,
+			Tiling = ImageTiling.Optimal,
+			Usage = ImageUsageFlags.TransferDstBit | ImageUsageFlags.SampledBit,
+			SharingMode = SharingMode.Exclusive,
+			InitialLayout = ImageLayout.Undefined,
+		};
+		_vk.CreateImage(_ctx.Device, in info, null, out image.Resolve).Check("vkCreateImage");
+		_vk.GetImageMemoryRequirements(_ctx.Device, image.Resolve, out var req);
+		image.ResolveAllocation = _allocator.AllocateMemory(in req, new AllocationCreateInfo { Usage = MemoryUsage.GPU_Only });
+		image.ResolveAllocation.BindImageMemory(image.Resolve).Check("vmaBindImageMemory");
+		ImageViewCreateInfo viewInfo = new()
+		{
+			SType = StructureType.ImageViewCreateInfo,
+			Image = image.Resolve,
+			ViewType = ImageViewType.Type2D,
+			Format = image.Format,
+			SubresourceRange = new ImageSubresourceRange(image.Aspect, 0, 1, 0, 1),
+		};
+		_vk.CreateImageView(_ctx.Device, in viewInfo, null, out image.ResolveView).Check("vkCreateImageView");
+	}
+
 	private void DestroyImage(ref ResourceImage image)
 	{
+		if (image.ResolveView.Handle != 0)
+			_vk.DestroyImageView(_ctx.Device, image.ResolveView, null);
+		if (image.Resolve.Handle != 0)
+			_vk.DestroyImage(_ctx.Device, image.Resolve, null);
+		image.ResolveAllocation?.Dispose();
+		(image.ResolveView, image.Resolve, image.ResolveAllocation) = (default, default, null);
 		if (image.View.Handle != 0)
 			_vk.DestroyImageView(_ctx.Device, image.View, null);
 		if (image.Image.Handle != 0)

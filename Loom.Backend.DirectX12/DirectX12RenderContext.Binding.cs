@@ -145,7 +145,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 				Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f }
 			}
 		};
-		_ctx.Device.CreateShaderResourceView(_transients.Resource(_slot, id), &srv, dest);
+		_ctx.Device.CreateShaderResourceView(_transients.SampledResource(_slot, id), &srv, dest);
 	}
 
 	/// <summary>
