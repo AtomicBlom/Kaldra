@@ -114,12 +114,17 @@ internal sealed unsafe partial class VulkanRenderContext
 			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.ComputeBit, 0, (uint)VulkanTechnique.FragmentPushSize, block);
 		}
 
-		var total = sampled.Length + storage.Length;
+		// The constant buffers the technique declares take the pass's .Reads Constants, in order, as a draw's do. One
+		// that declares more than the pass reads would dispatch with a slot unbound, so it throws instead.
+		var template = _registry[technique];
+		var uniforms = template.Bindings.UniformBuffers.Length;
+		if (uniforms > _activeConstantsCount)
+			throw new InvalidOperationException($"Vulkan: compute technique '{technique}' declares {uniforms} constant buffer(s) but its pass .Reads {_activeConstantsCount}; the pass must .Reads each one the technique reads.");
+		var total = sampled.Length + storage.Length + uniforms;
 		if (total > 0)
 		{
 			// Sampled inputs use the technique's declared filter (matching the Draw/FullScreen path and DirectX12's
 			// static sampler) — not a hardcoded nearest, which silently diverged from DirectX12 for a LinearFilter pass.
-			var template = _registry[technique];
 			var sampler = template.LinearFilter ? _linearSampler : _nearestSampler;
 			// Each descriptor's slot and its type come from the same reflected binding, so they cannot disagree.
 			// They could before: the slot was this loop's index while the type was chosen from the runtime handle's
@@ -148,6 +153,15 @@ internal sealed unsafe partial class VulkanRenderContext
 					write.DescriptorType = DescriptorType.CombinedImageSampler;
 					write.PImageInfo = &imageInfos[i];
 				}
+				else if (i >= sampled.Length + storage.Length)
+				{
+					// A constant buffer, whole: dynamic like every uniform in a Loom layout, at offset 0
+					var j = i - sampled.Length - storage.Length;
+					bufferInfos[i] = new DescriptorBufferInfo { Buffer = _resources.GetConstantBuffer(_frameSlot, _activeConstantsIds[j]), Offset = 0, Range = Vk.WholeSize };
+					write.DstBinding = (uint)map.UniformBuffers[j].Index;
+					write.DescriptorType = DescriptorType.UniformBufferDynamic;
+					write.PBufferInfo = &bufferInfos[i];
+				}
 				else
 				{
 					var handle = storage[i - sampled.Length];
@@ -170,7 +184,9 @@ internal sealed unsafe partial class VulkanRenderContext
 				writes[i] = write;
 			}
 			_vk.UpdateDescriptorSets(_ctx.Device, (uint)total, writes, 0, null);
-			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Compute, baked.Layout, 0, 1, in set, 0, null);
+			var offsets = stackalloc uint[Math.Max(uniforms, 1)];
+			new Span<uint>(offsets, Math.Max(uniforms, 1)).Clear();
+			_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Compute, baked.Layout, 0, 1, in set, (uint)uniforms, offsets);
 		}
 
 		_vk.CmdDispatch(_cmd, groups.X, groups.Y, groups.Z);

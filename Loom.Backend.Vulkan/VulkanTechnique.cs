@@ -104,10 +104,8 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		// within it rides pDynamicOffsets at bind time. That is what lets a material's set — its images, its
 		// sampler, its buffers — be written once and cached, with only the per-draw offsets changing.
 		//
-		// Unconditional, including compute, so one shader cannot get a different layout from another. No shipped
-		// compute shader declares a constant buffer, and the Dispatch path binds none; one that did would fail the
-		// validation layer at bind time for supplying no offsets, which is louder than the unbound descriptor it
-		// would have got before.
+		// Unconditional, including compute, so one shader cannot get a different layout from another: a dispatch binds
+		// its pass's .Reads Constants here as a draw does, with dynamic offsets of 0.
 		Append(bindings, ref next, map.UniformBuffers, DescriptorType.UniformBufferDynamic, stage);
 
 		DescriptorSetLayoutCreateInfo info = new()

@@ -132,8 +132,8 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		BakeGraphics(ctx, template, colorFormats, depthFormat, depthReadOnly);
 	}
 
-	// A compute root signature shaped to the technique: a 16-float scalar root constant at b0 (always) + an
-	// optional t0.. SRV table for sampled inputs (e.g. the auto-exposure compute metering the lit scene) + the
+	// A compute root signature shaped to the technique: a 16-float scalar root constant at b0 (always) + a root CBV
+	// per constant buffer it declares at b1.. (the pass's .Reads Constants) + an optional t0.. SRV table for sampled inputs (e.g. the auto-exposure compute metering the lit scene) + the
 	// storage binding — a RW texture (the 1×1 exposure image) OR a RW STRUCTURED buffer (the GPU-particle stream)
 	// via a u0 UAV descriptor TABLE, since both need a real descriptor (a structured buffer's StructureByteStride/
 	// NumElements is what makes the shader's GetDimensions return a non-zero count; a root UAV is a raw GPU address
@@ -143,8 +143,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	// (compute isn't covered by the per-stage VERTEX/PIXEL visibilities). Static samplers s0.. pair with the SRV table.
 	private void BakeCompute(DirectX12Context ctx, DirectX12TechniqueTemplate template)
 	{
-		// root constants (b0) + N read-only structured-buffer root SRVs (t0..) + optional SRV table + storage.
-		var parameters = stackalloc RootParameter[3 + template.InputBufferCount];
+		// root constants (b0) + N uniform CBVs (b1..) + M read-only structured-buffer root SRVs (t0..) + optional SRV
+		// table + storage.
+		var parameters = stackalloc RootParameter[3 + template.UniformBufferCount + template.InputBufferCount];
 		var paramCount = 0;
 		var uavTableCount = template.StorageImages > 0 ? template.StorageImages : template.StorageBuffers;
 		var srvRange = new DescriptorRange { RangeType = DescriptorRangeType.Srv, NumDescriptors = (uint)template.InputCount, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
@@ -160,6 +161,19 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			ShaderVisibility = ShaderVisibility.All,
 			Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = 16 } },
 		};
+		// The pass's .Reads Constants as root CBVs at b1..bN, as a graphics technique takes them: the root constants
+		// own b0.
+		if (template.UniformBufferCount > 0)
+		{
+			CbvRootParam = paramCount;
+			for (var u = 0; u < template.UniformBufferCount; u++)
+				parameters[paramCount++] = new RootParameter
+				{
+					ParameterType = RootParameterType.TypeCbv,
+					ShaderVisibility = ShaderVisibility.All,
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(1 + u), RegisterSpace = 0 } },
+				};
+		}
 		// Read-only structured-buffer inputs (skin: bind-pose verts t0, bone palette t1) as root SRVs by
 		// GPU address — no descriptor heap. The shader's StructuredBuffer<T>s land at t0..t(N-1) in declaration order.
 		if (template.InputBufferCount > 0)

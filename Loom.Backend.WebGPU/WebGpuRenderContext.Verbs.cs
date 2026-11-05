@@ -95,16 +95,43 @@ internal sealed partial class WebGpuRenderContext
 					AddEntry(entries, ref e, bindings.StorageBufferBindings[k - imageCount], EntryBuffer, transients.BufferHandle(storage[k].Id), 0, 0);
 			}
 
-			Span<int> dynOffsets = stackalloc int[1];
+			// The constant buffers the technique declares take the pass's .Reads Constants, in order, whole, as a draw's
+			// do. One that declares more than the pass reads would bind a group missing an entry, so it throws instead.
+			var uniforms = bindings.UniformBufferBindings;
+			if (uniforms.Length > _activeConstantsCount)
+				throw new InvalidOperationException($"WebGPU: compute technique '{technique}' declares {uniforms.Length} constant buffer(s) but its pass .Reads {_activeConstantsCount}; the pass must .Reads each one the technique reads.");
+			Span<int> dynBindings = stackalloc int[uniforms.Length + 1];
+			Span<int> dynOffsets = stackalloc int[uniforms.Length + 1];
 			var dynCount = 0;
+			for (var j = 0; j < uniforms.Length; j++)
+			{
+				AddEntry(entries, ref e, uniforms[j], EntryBuffer, transients.BufferHandle(_activeConstantsIds[j]), 0, 0);
+				dynBindings[dynCount] = uniforms[j];
+				dynOffsets[dynCount++] = 0;
+			}
 			if (bindings.PushBinding >= 0)
 			{
 				_validate.PushFits(technique, push.Length * sizeof(float), routesToUniform: false, 0, bindings.PushByteSize);
 				Span<byte> pushBytes = stackalloc byte[bindings.PushByteSize];
 				pushBytes.Clear();
 				MemoryMarshal.AsBytes(push).CopyTo(pushBytes);
+				dynBindings[dynCount] = bindings.PushBinding;
 				dynOffsets[dynCount++] = _engine.UniformRing.Reserve(pushBytes, bindings.PushByteSize);
 				AddEntry(entries, ref e, bindings.PushBinding, EntryBuffer, _engine.UniformRing.Buffer, 0, bindings.PushByteSize);
+			}
+
+			// WebGPU wants dynamic offsets in ascending binding order
+			for (var i = 1; i < dynCount; i++)
+			{
+				int bind = dynBindings[i], offset = dynOffsets[i], k = i - 1;
+				while (k >= 0 && dynBindings[k] > bind)
+				{
+					dynBindings[k + 1] = dynBindings[k];
+					dynOffsets[k + 1] = dynOffsets[k];
+					k--;
+				}
+				dynBindings[k + 1] = bind;
+				dynOffsets[k + 1] = offset;
 			}
 
 			var bindGroup = GetOrCreateBindGroup(baked.Template.BindGroupLayout, entries[..e]);

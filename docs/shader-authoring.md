@@ -74,6 +74,8 @@ A technique's uniform buffers are filled, slot 0 upward:
 
 So a pass declaring `.Reads(viewProj)` and a draw supplying a per-draw block gives the shader two constant buffers, view-projection first. Adding a second `.Reads` inserts it before the per-draw block — the per-draw block is always last.
 
+A compute dispatch fills its constant buffers from the pass's `.Reads(...)` alone, in declaration order: it has no per-draw block, and its push rides only the scalar block (§9), never a uniform slot. On DirectX 12 they are root CBVs at `b1..bN` as a draw's are, the compute's root constants owning `b0`. A compute technique that declares more constant buffers than its pass reads throws at dispatch on every backend, rather than dispatching with a slot unbound. The Particles demo's fountain (`particle_fountain.slang`) reads its shape this way.
+
 ---
 
 ## 6. WebGPU derives its own assignments — never hand-number for it

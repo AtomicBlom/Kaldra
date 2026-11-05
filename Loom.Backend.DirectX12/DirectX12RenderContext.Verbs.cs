@@ -146,6 +146,13 @@ internal sealed unsafe partial class DirectX12RenderContext
 			_cmd.SetComputeRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
 		}
 
+		// The constant buffers the technique declares take the pass's .Reads Constants, in order, as root CBVs (b1..),
+		// as a draw's do. One that declares more than the pass reads would dispatch with a slot unbound, so it throws.
+		if (baked.UniformBufferCount > _activeConstantsCount)
+			throw new InvalidOperationException($"DirectX12: compute technique '{technique}' declares {baked.UniformBufferCount} constant buffer(s) but its pass .Reads {_activeConstantsCount}; the pass must .Reads each one the technique reads.");
+		for (var u = 0; u < baked.UniformBufferCount; u++)
+			_cmd.SetComputeRootConstantBufferView((uint)(baked.CbvRootParam + u), _transients.Resource(_slot, _activeConstantsIds[u]).GetGPUVirtualAddress());
+
 		// A dispatch can bind two descriptor tables — sampled SRVs and storage UAVs — so the descriptors for both are
 		// reserved before either is bound. Growing the heap between them would leave the first table addressing the
 		// heap that was just retired while its replacement is the one bound, which reads as garbage on the GPU.
