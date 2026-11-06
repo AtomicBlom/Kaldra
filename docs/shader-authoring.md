@@ -76,6 +76,8 @@ So a pass declaring `.Reads(viewProj)` and a draw supplying a per-draw block giv
 
 A compute dispatch fills its constant buffers from the pass's `.Reads(...)` alone, in declaration order: it has no per-draw block, and its push rides only the scalar block (§9), never a uniform slot. On DirectX 12 they are root CBVs at `b1..bN` as a draw's are, the compute's root constants owning `b0`. A compute technique that declares more constant buffers than its pass reads throws at dispatch on every backend, rather than dispatching with a slot unbound. The Particles demo's fountain (`particle_fountain.slang`) reads its shape this way.
 
+A compute technique reads app-written storage the same way: each read-only `StructuredBuffer<T>` it declares takes the pass's `.Reads(storage)` in declaration order, while each `RWStructuredBuffer<T>` takes the dispatch's own storage. Declare the read-write buffers first (`LOOM_BINDING(0)`) and the read-only after them; on DirectX 12 a read-only buffer is a shader resource at the `t` registers after any sampled textures (`register(t0)` where there are none). A compute technique declaring more read-only buffers than its pass reads throws at dispatch on every backend. The Storage Scatter demo (`storage_scatter.slang`) expands a density map written once into a field of sparks this way.
+
 ---
 
 ## 6. WebGPU derives its own assignments — never hand-number for it

@@ -174,8 +174,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(1 + u), RegisterSpace = 0 } },
 				};
 		}
-		// Read-only structured-buffer inputs (skin: bind-pose verts t0, bone palette t1) as root SRVs by
-		// GPU address — no descriptor heap. The shader's StructuredBuffer<T>s land at t0..t(N-1) in declaration order.
+		// Read-only structured-buffer inputs (skin: bind-pose verts t0, bone palette t1; a pass's .Reads Storage) as
+		// root SRVs by GPU address — no descriptor heap. The shader's StructuredBuffer<T>s land after its sampled
+		// textures, at t(S)..t(S+N-1) in declaration order, as a graphics technique's do.
 		if (template.InputBufferCount > 0)
 		{
 			InputBufferBaseParam = paramCount;
@@ -184,7 +185,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				{
 					ParameterType = RootParameterType.TypeSrv,
 					ShaderVisibility = ShaderVisibility.All,
-					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)b, RegisterSpace = 0 } },
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(template.InputCount + b), RegisterSpace = 0 } },
 				};
 		}
 		if (template.InputCount > 0)

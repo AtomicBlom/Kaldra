@@ -62,6 +62,10 @@ internal sealed partial class WebGpuBindingModel
 	/// <summary>WGSL binding of each storage buffer, in slot order.</summary>
 	public required int[] StorageBufferBindings { get; init; }
 
+	/// <summary>Whether each of <see cref="StorageBufferBindings"/> is read-only (<c>var&lt;storage, read&gt;</c>): a compute
+	/// technique's read-only buffers take its pass's <c>.Reads</c> storage, its read-write ones the dispatch's own.</summary>
+	public bool[] StorageBufferReadOnly { get; init; } = [];
+
 	/// <summary>WGSL binding of each descriptor-bound uniform buffer (the per-frame uniform seam), in slot order.</summary>
 	public required int[] UniformBufferBindings { get; init; }
 
@@ -206,6 +210,7 @@ internal sealed partial class WebGpuBindingModel
 			SampledCompared = [.. sampledSamp.Select(b => declared.TryGetValue(b, out var d) && d.Type == "sampler_comparison")],
 			StorageImageBindings = [.. storageImages],
 			StorageBufferBindings = [.. storageBuffers],
+			StorageBufferReadOnly = [.. storageBuffers.Select(b => declared.TryGetValue(b, out var d) && !d.Class.Contains("read_write", StringComparison.Ordinal))],
 			UniformBufferBindings = [.. uniforms],
 			UniformBufferBytes = [.. uniformBytes],
 			PushBinding = pushBinding,

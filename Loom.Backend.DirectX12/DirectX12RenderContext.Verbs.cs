@@ -153,6 +153,13 @@ internal sealed unsafe partial class DirectX12RenderContext
 		for (var u = 0; u < baked.UniformBufferCount; u++)
 			_cmd.SetComputeRootConstantBufferView((uint)(baked.CbvRootParam + u), _transients.Resource(_slot, _activeConstantsIds[u]).GetGPUVirtualAddress());
 
+		// The read-only storage buffers it declares take the pass's .Reads Storage, in order, as root SRVs after its
+		// sampled textures, as a draw's do; one that declares more than the pass reads throws.
+		if (baked.InputBufferCount > _activeStorageCount)
+			throw new InvalidOperationException($"DirectX12: compute technique '{technique}' declares {baked.InputBufferCount} read-only storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		for (var s = 0; s < baked.InputBufferCount; s++)
+			_cmd.SetComputeRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
+
 		// A dispatch can bind two descriptor tables — sampled SRVs and storage UAVs — so the descriptors for both are
 		// reserved before either is bound. Growing the heap between them would leave the first table addressing the
 		// heap that was just retired while its replacement is the one bound, which reads as garbage on the GPU.

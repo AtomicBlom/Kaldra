@@ -35,7 +35,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `.ReadsVertex(BufferHandle)` | Bind a buffer as a vertex / instance stream (a compute pass filled it). |
 | `.ReadsIndirect(BufferHandle)` | Bind a buffer as draw arguments — the counts the command processor reads instead of the CPU supplying them. |
 | `.Reads(IUniformHandle)` | Read a `g.Constants` block as the technique's uniform input, in a raster pass or a compute pass alike: a technique's constant buffers take the pass's blocks in the order read, and a compute technique declaring more than its pass reads throws at dispatch. |
-| `.Reads(IStorageBufferHandle)` | Read a `g.Storage` SSBO read-only (an overload of `.Reads`). Bound to every draw in the pass, mesh or fullscreen, in the order read: a technique takes the first as many as it declares (vertex or fragment stage), and one declaring more than the pass reads throws. A material draw binds none. |
+| `.Reads(IStorageBufferHandle)` | Read a `g.Storage` SSBO read-only (an overload of `.Reads`). Bound to every draw in the pass, mesh or fullscreen, in the order read: a technique takes the first as many as it declares (vertex or fragment stage), and one declaring more than the pass reads throws. A material draw binds none. In a compute pass the technique's read-only storage buffers (`StructuredBuffer<T>`) take them, in the order read, and its read-write ones the dispatch's own storage; one declaring more read-only buffers than its pass reads throws at dispatch. |
 | `.Queue(Queue)` | Assign the pass to a queue (see `Queue` below). |
 | `.Draw(Action<IRenderContext>)` / `.Dispatch(Action<IRenderContext>)` | The per-frame record callback (raster / compute). Pull from `ctx`; never capture per-frame data. |
 

@@ -85,14 +85,22 @@ internal sealed partial class WebGpuRenderContext
 			}
 
 			// Storage resources are passed images-first then buffers (the shader's declaration order): a storage
-			// image binds its view, a storage buffer binds its buffer.
+			// image binds its view. The read-write storage buffers take the dispatch's buffers in order; the read-only
+			// ones the pass's .Reads Storage in order, as a draw's do, and one more than the pass reads throws.
 			var imageCount = bindings.StorageImageBindings.Length;
-			for (var k = 0; k < storage.Length; k++)
+			for (var k = 0; k < storage.Length && k < imageCount; k++)
+				AddEntry(entries, ref e, bindings.StorageImageBindings[k], EntryView, transients.ViewHandle(storage[k].Id), 0, 0);
+			int nextWritten = imageCount, nextRead = 0;
+			for (var b = 0; b < bindings.StorageBufferBindings.Length; b++)
 			{
-				if (k < imageCount)
-					AddEntry(entries, ref e, bindings.StorageImageBindings[k], EntryView, transients.ViewHandle(storage[k].Id), 0, 0);
-				else if (k - imageCount < bindings.StorageBufferBindings.Length)
-					AddEntry(entries, ref e, bindings.StorageBufferBindings[k - imageCount], EntryBuffer, transients.BufferHandle(storage[k].Id), 0, 0);
+				if (b < bindings.StorageBufferReadOnly.Length && bindings.StorageBufferReadOnly[b])
+				{
+					if (nextRead >= _activeStorageCount)
+						throw new InvalidOperationException($"WebGPU: compute technique '{technique}' declares more read-only storage buffers than its pass .Reads ({_activeStorageCount}); the pass must .Reads each one the technique reads.");
+					AddEntry(entries, ref e, bindings.StorageBufferBindings[b], EntryBuffer, transients.BufferHandle(_activeStorageIds[nextRead++]), 0, 0);
+				}
+				else if (nextWritten < storage.Length)
+					AddEntry(entries, ref e, bindings.StorageBufferBindings[b], EntryBuffer, transients.BufferHandle(storage[nextWritten++].Id), 0, 0);
 			}
 
 			// The constant buffers the technique declares take the pass's .Reads Constants, in order, whole, as a draw's
