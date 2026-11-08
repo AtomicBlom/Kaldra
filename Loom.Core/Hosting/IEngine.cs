@@ -294,17 +294,17 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// brightness") and the brightest it shows. The desktop host keeps both current for the window's monitor; null where
 	/// it can't tell. Reports only: what a frame uses is <see cref="HdrPaperWhiteNits"/> and <see cref="HdrPeakNits"/>.
 	/// </summary>
-	float? DisplaySdrWhiteNits { get => null; set { } }
+	float? DisplaySdrWhiteNits { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(DisplaySdrWhiteNits)}; setting it would be dropped."); }
 
 	/// <inheritdoc cref="DisplaySdrWhiteNits"/>
-	float? DisplayPeakNits { get => null; set { } }
+	float? DisplayPeakNits { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(DisplayPeakNits)}; setting it would be dropped."); }
 
 	/// <summary>The app's own choice of paper white and peak (a player's setting), in nits, or null to follow the display.</summary>
 	/// <exception cref="ArgumentOutOfRangeException">Set to zero, a negative, an infinite or a NaN level (<see cref="HdrLevels.Choice"/>).</exception>
-	float? HdrPaperWhiteChoice { get => null; set { } }
+	float? HdrPaperWhiteChoice { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(HdrPaperWhiteChoice)}; setting it would be dropped."); }
 
 	/// <inheritdoc cref="HdrPaperWhiteChoice"/>
-	float? HdrPeakChoice { get => null; set { } }
+	float? HdrPeakChoice { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(HdrPeakChoice)}; setting it would be dropped."); }
 
 	/// <summary>
 	/// Where white paper sits on an HDR output, in nits: the luminance SDR-referred white (a UI, an app's paper white) is
