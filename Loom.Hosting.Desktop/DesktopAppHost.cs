@@ -148,15 +148,16 @@ public sealed class DesktopAppHost : IAppHost
 			{
 				var (nits, peak) = asked.Result;
 				luminance = null;
-				if (nits is { } white && white != engine.DisplaySdrWhiteNits)
+				// A null answer goes through too: a monitor that can't say replaces one that could, rather than keeping its level.
+				if (nits != engine.DisplaySdrWhiteNits)
 				{
-					engine.DisplaySdrWhiteNits = white;
-					LoomLog.Info($"SDR white on the window's monitor: {white:F0} nits");
+					engine.DisplaySdrWhiteNits = nits;
+					LoomLog.Info(nits is { } white ? $"SDR white on the window's monitor: {white:F0} nits" : "the window's monitor reports no SDR white");
 				}
-				if (peak is { } brightest && brightest != engine.DisplayPeakNits)
+				if (peak != engine.DisplayPeakNits)
 				{
-					engine.DisplayPeakNits = brightest;
-					LoomLog.Info($"the window's monitor peaks at {brightest:F0} nits");
+					engine.DisplayPeakNits = peak;
+					LoomLog.Info(peak is { } brightest ? $"the window's monitor peaks at {brightest:F0} nits" : "the window's monitor reports no peak");
 				}
 			}
 			if ((sinceWhite += delta) >= 1.0 && luminance == null)
