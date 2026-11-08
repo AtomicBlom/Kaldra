@@ -62,7 +62,8 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 			Flags = DescriptorHeapFlags.None,
 			NodeMask = 0
 		};
-		SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&heapDesc, out _rtvHeap));
+		SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&heapDesc, out ComPtr<ID3D12DescriptorHeap> madeRtvHeap));
+		_rtvHeap = madeRtvHeap;
 		_rtvStart = _rtvHeap.GetCPUDescriptorHandleForHeapStart();
 
 		CreateSwapChain(width, height);
@@ -135,7 +136,8 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 		var rtvDesc = new RenderTargetViewDesc { Format = RenderTargetFormat, ViewDimension = RtvDimension.Texture2D };
 		for (uint i = 0; i < _bufferCount; i++)
 		{
-			SilkMarshal.ThrowHResult(SwapChain.GetBuffer(i, out _backBuffers[i]));
+			SilkMarshal.ThrowHResult(SwapChain.GetBuffer(i, out ComPtr<ID3D12Resource> madeBackBuffer));
+			_backBuffers[i] = madeBackBuffer;
 			_ctx.Device.CreateRenderTargetView(_backBuffers[i], &rtvDesc, RtvHandle(i));
 		}
 	}

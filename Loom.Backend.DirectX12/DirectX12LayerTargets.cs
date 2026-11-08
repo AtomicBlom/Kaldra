@@ -62,7 +62,8 @@ internal sealed unsafe class DirectX12LayerTargets : IDisposable
 			Height = height;
 			Format = format;
 			var desc = new DescriptorHeapDesc { Type = DescriptorHeapType.Rtv, NumDescriptors = (uint)(slots * MaxDepth), Flags = DescriptorHeapFlags.None, NodeMask = 0 };
-			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&desc, out RtvHeap));
+			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&desc, out ComPtr<ID3D12DescriptorHeap> madeRtvHeap));
+			RtvHeap = madeRtvHeap;
 			Pools = new Target[slots][];
 			for (var i = 0; i < slots; i++)
 				Pools[i] = new Target[MaxDepth];

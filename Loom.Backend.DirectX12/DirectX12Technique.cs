@@ -79,36 +79,52 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// compile when it refuses it. A refusal is the expected outcome after a driver update — every blob goes stale at
 	/// once — so it is a fall-through, not an error.
 	/// </summary>
+	/// <remarks>
+	/// Every object here is created into a local and only then stored. Silk's <c>out ComPtr</c> overloads hand the
+	/// driver the raw address of the destination, unpinned: given a field of this (movable) object, a GC on another
+	/// thread during a long compile moves it, the driver writes the old address, and the field reads back null with
+	/// the call reporting success. A local on the stack never moves.
+	/// </remarks>
 	private void CreateGraphicsPipeline(DirectX12Context ctx, GraphicsPipelineStateDesc* pso)
 	{
+		ComPtr<ID3D12PipelineState> made;
 		if (_blobs?.TryGet(_blobKey) is { } cached)
 		{
 			fixed (byte* p = cached)
 			{
 				pso->CachedPSO = new CachedPipelineState { PCachedBlob = p, CachedBlobSizeInBytes = (nuint)cached.Length };
-				if (ctx.Device.CreateGraphicsPipelineState(pso, out Pipeline) >= 0)
+				if (ctx.Device.CreateGraphicsPipelineState(pso, out made) >= 0)
+				{
+					Pipeline = made;
 					return;
+				}
 			}
 			pso->CachedPSO = default;
 		}
-		SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(pso, out Pipeline));
+		SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(pso, out made));
+		Pipeline = made;
 		_blobs?.Capture(_blobKey, Pipeline);
 	}
 
 	/// <summary>The compute counterpart of <see cref="CreateGraphicsPipeline"/>.</summary>
 	private void CreateComputePipeline(DirectX12Context ctx, ComputePipelineStateDesc* pso)
 	{
+		ComPtr<ID3D12PipelineState> made;
 		if (_blobs?.TryGet(_blobKey) is { } cached)
 		{
 			fixed (byte* p = cached)
 			{
 				pso->CachedPSO = new CachedPipelineState { PCachedBlob = p, CachedBlobSizeInBytes = (nuint)cached.Length };
-				if (ctx.Device.CreateComputePipelineState(pso, out Pipeline) >= 0)
+				if (ctx.Device.CreateComputePipelineState(pso, out made) >= 0)
+				{
+					Pipeline = made;
 					return;
+				}
 			}
 			pso->CachedPSO = default;
 		}
-		SilkMarshal.ThrowHResult(ctx.Device.CreateComputePipelineState(pso, out Pipeline));
+		SilkMarshal.ThrowHResult(ctx.Device.CreateComputePipelineState(pso, out made));
+		Pipeline = made;
 		_blobs?.Capture(_blobKey, Pipeline);
 	}
 
@@ -580,7 +596,8 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		ComPtr<ID3D10Blob> blob = default;
 		ComPtr<ID3D10Blob> error = default;
 		SilkMarshal.ThrowHResult(ctx.D3D12.SerializeRootSignature(rootDesc, D3DRootSignatureVersion.Version1, ref blob, ref error));
-		SilkMarshal.ThrowHResult(ctx.Device.CreateRootSignature(0, blob.GetBufferPointer(), blob.GetBufferSize(), out RootSignature));
+		SilkMarshal.ThrowHResult(ctx.Device.CreateRootSignature(0, blob.GetBufferPointer(), blob.GetBufferSize(), out ComPtr<ID3D12RootSignature> madeRootSignature));
+		RootSignature = madeRootSignature;
 		blob.Dispose();
 		if (error.Handle is not null)
 			error.Dispose();

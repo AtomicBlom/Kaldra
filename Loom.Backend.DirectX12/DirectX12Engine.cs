@@ -112,17 +112,20 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 		for (uint i = 0; i < BufferCount; i++)
 		{
-			SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandAllocator(CommandListType.Direct, out _allocators[i]));
+			SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandAllocator(CommandListType.Direct, out ComPtr<ID3D12CommandAllocator> madeAllocator));
+			_allocators[i] = madeAllocator;
 			_ctx.SetObjectName((ID3D12Object*)_allocators[i].Handle, $"frame-alloc#{i}");
 		}
 
 		// Created in the recording state, then immediately closed — Render() resets it at the top of each frame.
 		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandList(
-			0, CommandListType.Direct, _allocators[0], default(ComPtr<ID3D12PipelineState>), out _commandList));
+			0, CommandListType.Direct, _allocators[0], default(ComPtr<ID3D12PipelineState>), out ComPtr<ID3D12GraphicsCommandList> madeCommandList));
+		_commandList = madeCommandList;
 		SilkMarshal.ThrowHResult(_commandList.Close());
 		_ctx.SetObjectName((ID3D12Object*)_commandList.Handle, "graph-cmdlist");
 
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out _fence));
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out ComPtr<ID3D12Fence> madeFence));
+		_fence = madeFence;
 		_fenceEvent = CreateEventW(0, 0, 0, 0);
 		if (_fenceEvent == 0)
 			throw new InvalidOperationException("CreateEvent failed for the DirectX12 frame-pacing fence.");
@@ -416,7 +419,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 		var perSlot = (uint)(2 * _timingPassCount);
 		var desc = new QueryHeapDesc { Type = QueryHeapType.Timestamp, Count = perSlot * BufferCount, NodeMask = 0 };
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateQueryHeap(&desc, out _timingHeap));
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateQueryHeap(&desc, out ComPtr<ID3D12QueryHeap> madeTimingHeap));
+		_timingHeap = madeTimingHeap;
 		for (uint i = 0; i < BufferCount; i++)
 			_timingReadback[i] = CreateReadbackBuffer((ulong)perSlot * sizeof(ulong));
 	}

@@ -44,7 +44,8 @@ internal sealed unsafe class DirectX12OffscreenTarget : IDirectX12PresentTarget
 			Flags = DescriptorHeapFlags.None,
 			NodeMask = 0
 		};
-		SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&heapDesc, out _rtvHeap));
+		SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&heapDesc, out ComPtr<ID3D12DescriptorHeap> madeRtvHeap));
+		_rtvHeap = madeRtvHeap;
 		_rtvStart = _rtvHeap.GetCPUDescriptorHandleForHeapStart();
 
 		Create(width, height);
@@ -84,7 +85,8 @@ internal sealed unsafe class DirectX12OffscreenTarget : IDirectX12PresentTarget
 			// D3D12_RESOURCE_STATE_COMMON == D3D12_RESOURCE_STATE_PRESENT (both 0) — the same "fresh buffer starts
 			// presentable" state DirectX12Engine assumes for every backbuffer index, windowed or offscreen.
 			SilkMarshal.ThrowHResult(_ctx.Device.CreateCommittedResource(
-				&heapProps, HeapFlags.None, &desc, ResourceStates.Common, &clear, out _buffers[i]));
+				&heapProps, HeapFlags.None, &desc, ResourceStates.Common, &clear, out ComPtr<ID3D12Resource> madeBuffer));
+			_buffers[i] = madeBuffer;
 			_ctx.Device.CreateRenderTargetView(_buffers[i], &rtvDesc, RtvHandle(i));
 		}
 	}

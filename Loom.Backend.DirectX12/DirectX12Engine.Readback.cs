@@ -78,7 +78,8 @@ public sealed unsafe partial class DirectX12Engine
 			Flags = ResourceFlags.None
 		};
 		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommittedResource(
-			&heapProps, HeapFlags.None, &desc, ResourceStates.CopyDest, (ClearValue*)null, out _readback));
+			&heapProps, HeapFlags.None, &desc, ResourceStates.CopyDest, (ClearValue*)null, out ComPtr<ID3D12Resource> madeReadback));
+		_readback = madeReadback;
 		_readbackSize = size;
 	}
 

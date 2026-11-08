@@ -137,13 +137,15 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		if (colorCount > 0)
 		{
 			var d = new DescriptorHeapDesc { Type = DescriptorHeapType.Rtv, NumDescriptors = (uint)(bufferCount * colorCount), Flags = DescriptorHeapFlags.None, NodeMask = 0 };
-			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out _rtvHeap));
+			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out ComPtr<ID3D12DescriptorHeap> madeRtvHeap));
+			_rtvHeap = madeRtvHeap;
 			rtvStart = _rtvHeap.GetCPUDescriptorHandleForHeapStart();
 		}
 		if (depthCount > 0)
 		{
 			var d = new DescriptorHeapDesc { Type = DescriptorHeapType.Dsv, NumDescriptors = (uint)(bufferCount * depthCount), Flags = DescriptorHeapFlags.None, NodeMask = 0 };
-			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out _dsvHeap));
+			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out ComPtr<ID3D12DescriptorHeap> madeDsvHeap));
+			_dsvHeap = madeDsvHeap;
 			dsvStart = _dsvHeap.GetCPUDescriptorHandleForHeapStart();
 		}
 
