@@ -33,10 +33,19 @@ internal sealed partial class WebGpuEngine
 
 		// Everything the derived plan needs recording, in the order EngineBase fixes for every backend — which is also
 		// what moved this backend's readback copies ahead of its capture copy, matching the other two.
-		RecordFrame();
-
-		var commands = _writer.Finish();
-		WebGpuInterop.SubmitFrame(commands, _arena.Used);
+		try
+		{
+			RecordFrame();
+			var commands = _writer.Finish();
+			WebGpuInterop.SubmitFrame(commands, _arena.Used);
+		}
+		catch
+		{
+			// The buffer uploads RecordFrame counted as caught up were only commands in this frame's stream, which is
+			// dropped unsubmitted, so the next frame must upload every buffer again.
+			ForgetUploadedShadows();
+			throw;
+		}
 
 		// Drive the async maps (started the frame after their copy submits, then polled to completion).
 		ServiceCapture();
