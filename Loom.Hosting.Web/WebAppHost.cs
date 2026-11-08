@@ -287,20 +287,31 @@ public sealed partial class WebAppHost : IAppHost
 	// Resolve a shader artifact (e.g. "triangle.wgsl" / "triangle.wgsl.json") from the application's own assembly,
 	// whose shaders embed under "<AssemblyName>.Shaders." (the Loom shader-compile default), or failing that from any
 	// loaded library that embeds its own the same way (Loom.UI.SUIsei's "ui", with LoomEmbedWgsl). The app's come
-	// first, so an app can stand in its own for a library's.
+	// first, so an app can stand in its own for a library's; two libraries embedding the same name is an error, since the
+	// order assemblies are loaded in would otherwise pick one.
 	private static byte[]? ResolveEntryAssemblyShader(string nameWithExtension)
 	{
 		var entry = Assembly.GetEntryAssembly();
 		if (entry is not null && Read(entry) is { } own)
 			return own;
+		Assembly? found = null;
 		foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-			if (assembly != entry && !assembly.IsDynamic && Read(assembly) is { } bytes)
-				return bytes;
-		return null;
+		{
+			if (assembly == entry || assembly.IsDynamic || assembly.GetManifestResourceInfo(ResourceName(assembly)) is null)
+				continue;
+			if (found is not null)
+				throw new InvalidOperationException(
+					$"Shader '{nameWithExtension}' is embedded by both {found.GetName().Name} and {assembly.GetName().Name}; " +
+					"rename one, or embed the one the app means in the app itself, which is looked in first.");
+			found = assembly;
+		}
+		return found is null ? null : Read(found);
+
+		string ResourceName(Assembly assembly) => assembly.GetName().Name + ".Shaders." + nameWithExtension;
 
 		byte[]? Read(Assembly assembly)
 		{
-			using var stream = assembly.GetManifestResourceStream(assembly.GetName().Name + ".Shaders." + nameWithExtension);
+			using var stream = assembly.GetManifestResourceStream(ResourceName(assembly));
 			if (stream is null)
 				return null;
 			var bytes = new byte[stream.Length];
