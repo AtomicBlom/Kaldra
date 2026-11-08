@@ -80,6 +80,14 @@ public sealed class DesktopAppHost : IAppHost
 			? window.Native?.Win32?.Hwnd ?? throw new InvalidOperationException("The DirectX12 backend needs the window's Win32 HWND, which the platform did not expose.")
 			: window.VkSurface ?? throw new InvalidOperationException("The Vulkan backend needs the window's surface, which the windowing platform did not expose.");
 
+		// HDR output only where the window's monitor is in HDR, on every backend alike: a surface or swapchain able to present
+		// scRGB says nothing about the monitor, which composes it down to SDR when it isn't. Where the monitor can't be
+		// asked (off Windows), the backend goes by what its surface offers.
+		if (options.EngineSettings.HdrOutput && DisplayOutput.IsHdr(window.Native?.Win32?.Hwnd ?? 0) == false)
+		{
+			LoomLog.Warning("HDR output was asked for, but the window's monitor is not in HDR; presenting SDR.");
+			options.EngineSettings.HdrOutput = false;
+		}
 		using var engine = backend.Create(surface, window.FramebufferSize.X, window.FramebufferSize.Y, options.EngineSettings);
 
 		// The input context comes first: the host control reaches the clipboard through its keyboard. It is closed as the
@@ -135,7 +143,7 @@ public sealed class DesktopAppHost : IAppHost
 		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
 		var askDisplay = OperatingSystem.IsWindows() && hwnd != 0;
 		// Made once: the window, and so what is asked, doesn't change from one question to the next
-		Func<(float? White, float? Peak)> queryDisplay = () => (SdrWhiteLevel.Nits(hwnd), DisplayPeak.Nits(hwnd));
+		Func<(float? White, float? Peak)> queryDisplay = () => (SdrWhiteLevel.Nits(hwnd), DisplayOutput.PeakNits(hwnd));
 		var sinceWhite = double.MaxValue;
 		Task<(float? White, float? Peak)>? luminance = null;
 		var luminanceFailed = false;
