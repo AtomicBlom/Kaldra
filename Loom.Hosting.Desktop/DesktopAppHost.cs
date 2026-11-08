@@ -84,8 +84,8 @@ public sealed class DesktopAppHost : IAppHost
 
 		// The input context comes first: the host control reaches the clipboard through its keyboard. It is closed as the
 		// window closes (below), not at the end of this method: Silk's Run() resets the window as it returns, destroying
-		// GLFW's window, and the context's disposal puts its callbacks back on that window, which read through the freed
-		// handle crashed the process on exit (0xC0000005 in glfwSetMouseButtonCallback), on some exits and not others.
+		// GLFW's window, and the context's disposal puts its callbacks back on that window, so disposing it after Run
+		// would read through the freed handle (an access violation in glfwSetMouseButtonCallback).
 		var inputContext = window.CreateInput();
 		// Closed by the window's Closing (below). Where Load or a frame throws instead, the window never closes, and Silk
 		// resets it only when Run returns normally, so this using closes the input on a window that is still alive.
@@ -134,6 +134,8 @@ public sealed class DesktopAppHost : IAppHost
 		// Only Windows reports either, and only for a window it has a handle for; elsewhere they stay null and nothing is asked.
 		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
 		var askDisplay = OperatingSystem.IsWindows() && hwnd != 0;
+		// Made once: the window, and so what is asked, doesn't change from one question to the next
+		Func<(float? White, float? Peak)> queryDisplay = () => (SdrWhiteLevel.Nits(hwnd), DisplayPeak.Nits(hwnd));
 		var sinceWhite = double.MaxValue;
 		Task<(float? White, float? Peak)>? luminance = null;
 		var luminanceFailed = false;
@@ -143,8 +145,8 @@ public sealed class DesktopAppHost : IAppHost
 			if (minimized)
 				return;
 			total += delta;
-			// Asked off the frame's thread: a DXGI factory and the display configuration take milliseconds, which on the
-			// frame showed as a stall once a second. The answer is taken on the next frame after it arrives. A query that
+			// Asked off the frame's thread: a DXGI factory and the display configuration take milliseconds, too long for a
+			// frame to wait on. The answer is taken on the next frame after it arrives. A query that
 			// throws costs only its answer, never the frame: the levels stay as they were and it is asked again next
 			// second, with the failure logged the first time.
 			if (luminance is { IsCompleted: true } asked)
@@ -174,7 +176,7 @@ public sealed class DesktopAppHost : IAppHost
 			if (askDisplay && (sinceWhite += delta) >= 1.0 && luminance == null)
 			{
 				sinceWhite = 0.0;
-				luminance = Task.Run(() => (SdrWhiteLevel.Nits(hwnd), DisplayPeak.Nits(hwnd)));
+				luminance = Task.Run(queryDisplay);
 			}
 			inputPump.Update(delta);
 			driver.Tick(new FrameTime(delta, total));
