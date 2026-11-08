@@ -38,6 +38,10 @@ if (!File.Exists(Path.Combine(root, "index.html")))
     Console.Error.WriteLine($"No index.html in {root}: is this a published browser app (dotnet publish -r browser-wasm)?");
     return 1;
 }
+// A request is served only from inside root: compared against root with its separator, so a sibling "<root>2" isn't
+// inside it, and ignoring case only on Windows, whose file system does (elsewhere a differently cased path 404s)
+string rootPrefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
 var types = new FileExtensionContentTypeProvider();
 types.Mappings[".mjs"] = "text/javascript";
@@ -67,7 +71,7 @@ app.Run(async context =>
     string relative = Uri.UnescapeDataString(request.Path.Value ?? "/").TrimStart('/');
     if (relative.Length == 0 || relative.EndsWith('/')) relative += "index.html";
     string path = Path.GetFullPath(Path.Combine(root, relative));
-    if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+    if (!path.StartsWith(rootPrefix, pathComparison) || !File.Exists(path))
     {
         response.StatusCode = 404;
         Console.WriteLine($"404 {request.Path}");
