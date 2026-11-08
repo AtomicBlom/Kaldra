@@ -320,9 +320,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		byte[] vertexBytecode, fragmentBytecode;
 		var inputCount = reflection.SampleCount;
 		// Which inputs the shader samples by comparison, from its SPIR-V: the DXIL can't say, and the reflection describes
-		// a shadow sampler as it does any single-channel texture
-		var spirv = DirectX12Shaders.TryResolveSpirv(dir, shader);
-		var compared = ShaderBindingMap.From(reflection, spirv is null ? null : SpirvDepthTextures.Bindings(spirv));
+		// a shadow sampler as it does any single-channel texture. A shader that samples nothing compares nothing, so
+		// needs no SPIR-V; one that samples throws without it rather than reading as comparing nothing.
+		var compared = ShaderBindingMap.From(reflection,
+			inputCount > 0 ? SpirvDepthTextures.Bindings(DirectX12Shaders.ResolveSpirv(dir, shader), shader) : null);
 		ShaderBindingMap.CheckCompare(name, compared.ComparedCount, descriptor.SampleCompare);
 		var storageImages = 0;
 		var storageBuffers = 0;
