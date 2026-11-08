@@ -23,10 +23,18 @@ public interface IHostControl
 	/// <summary>
 	/// The text on the system clipboard, or null when it holds none or the host cannot read it. Defaults to null so a
 	/// host without a clipboard need not implement it.
+	/// <para>
+	/// Main thread only: the thread the host runs the app's frames on (its <see cref="LoomApplication"/> callbacks), since
+	/// the desktop host's windowing (GLFW) reaches the clipboard there and nowhere else. The desktop host throws
+	/// <see cref="InvalidOperationException"/> for a call from any other thread.
+	/// </para>
 	/// </summary>
 	string? GetClipboardText() => null;
 
-	/// <summary>Put <paramref name="text"/> on the system clipboard. Defaults to a no-op so a host without a clipboard need not implement it.</summary>
+	/// <summary>
+	/// Put <paramref name="text"/> on the system clipboard. Defaults to a no-op so a host without a clipboard need not
+	/// implement it. Main thread only, as <see cref="GetClipboardText"/> is.
+	/// </summary>
 	void SetClipboardText(string text) { }
 
 	/// <summary>

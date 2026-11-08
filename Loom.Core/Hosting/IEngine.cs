@@ -75,6 +75,13 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// GPU, so a mesh can be released the frame after its last draw without waiting for the GPU first. Ids are not
 	/// reused, so a stale handle always fails loudly. Call it between frames: from inside a pass callback it throws,
 	/// because the frame being recorded may already have drawn the mesh.
+	/// <para>
+	/// Render thread only: the thread that created the engine and calls <see cref="Render"/>. The meshes being retired are
+	/// kept without locks, as the frame's own state is, so a call from any other thread throws
+	/// <see cref="InvalidOperationException"/> rather than racing the frame. A mesh built on a worker
+	/// (<see cref="CreateMeshAsync"/>) is released from the render thread once the worker hands it back. The same holds for
+	/// <see cref="ReleaseInstances"/> and <see cref="ReleaseTexture"/>.
+	/// </para>
 	/// </summary>
 	void ReleaseMesh(Mesh mesh);
 

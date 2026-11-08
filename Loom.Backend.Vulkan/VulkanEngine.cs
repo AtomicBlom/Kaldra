@@ -392,9 +392,18 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 	public override void WaitIdle()
 	{
+		// Submit any recorded uploads first, so idle covers them too: a mesh or texture released while its copy was still
+		// pending in the batch is then read by nothing.
+		_uploads.Flush();
 		_vk.DeviceWaitIdle(_ctx.Device);
 		_completedFrame = _submittedFrames;
-		CollectReleased();
+
+		// A release waits for the frame after the newest submitted (the one the upload batch rides ahead of). With that batch
+		// run and the device idle, nothing can read anything released so far, so all of it goes now rather than a frame later.
+		var everythingReleased = _submittedFrames + 1;
+		_meshes.CollectReleased(everythingReleased);
+		_textures.CollectReleased(everythingReleased);
+		_descriptors.CollectRetired(everythingReleased);
 	}
 
 	// Resolve a logical shader name (TechniqueDescriptor.Shader) + asset extension (".spv" or its ".json"

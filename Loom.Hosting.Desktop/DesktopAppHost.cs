@@ -257,9 +257,12 @@ public sealed class DesktopAppHost : IAppHost
 	}
 
 	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,
-	// which unwinds window.Run() and lets Run's teardown (Unload + WaitIdle) proceed.
+	// which unwinds window.Run() and lets Run's teardown (Unload + WaitIdle) proceed. Made on the thread that runs the
+	// window, which is the only one GLFW lets reach the clipboard.
 	private sealed class WindowHostControl(IWindow window, IInputContext input) : IHostControl
 	{
+		private readonly int _mainThreadId = Environment.CurrentManagedThreadId;
+
 		public void RequestExit() => window.Close();
 
 		// Wake the event-driven loop so the next frame renders (a no-op effect when not event-driven). Thread-safe
@@ -267,12 +270,27 @@ public sealed class DesktopAppHost : IAppHost
 		public void RequestRender() => window.ContinueEvents();
 
 		// Silk reaches the system clipboard through a keyboard (GLFW's is the window's); with none attached there is no clipboard.
-		public string? GetClipboardText() => input.Keyboards.Count > 0 ? input.Keyboards[0].ClipboardText : null;
+		public string? GetClipboardText()
+		{
+			ThrowIfNotMainThread(nameof(GetClipboardText));
+			return input.Keyboards.Count > 0 ? input.Keyboards[0].ClipboardText : null;
+		}
 
 		public void SetClipboardText(string text)
 		{
+			ThrowIfNotMainThread(nameof(SetClipboardText));
 			if (input.Keyboards.Count > 0)
 				input.Keyboards[0].ClipboardText = text;
+		}
+
+		// GLFW's clipboard calls are main-thread only; from another thread they fail or corrupt its state without a word.
+		private void ThrowIfNotMainThread(string member)
+		{
+			if (Environment.CurrentManagedThreadId == _mainThreadId)
+				return;
+			throw new InvalidOperationException(
+				$"IHostControl.{member} was called from thread {Environment.CurrentManagedThreadId}, but the desktop host's clipboard " +
+				$"is reached only from its main thread ({_mainThreadId}), the one the app's frames run on. Marshal the call onto it.");
 		}
 	}
 }
