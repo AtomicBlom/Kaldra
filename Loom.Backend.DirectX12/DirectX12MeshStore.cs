@@ -16,8 +16,8 @@ namespace Loom.Backend.DirectX12;
 /// Each mesh's vertices + indices live in <c>DEFAULT</c>-heap (device-local) committed buffers, as the Vulkan store's
 /// do: written once into an <c>UPLOAD</c>-heap staging buffer, then copied across in the shared
 /// <see cref="DirectX12UploadBatch"/>, which executes ahead of the frame that draws them. Drawing straight out of an
-/// upload heap, as the store once did, reads every vertex across the bus each frame: a world of large meshes drew
-/// about fifteen times slower than on Vulkan.
+/// upload heap instead would read every vertex across the bus each frame, which with large meshes draws about fifteen
+/// times slower than Vulkan does.
 /// </para>
 /// </summary>
 internal sealed unsafe class DirectX12MeshStore : IDisposable
