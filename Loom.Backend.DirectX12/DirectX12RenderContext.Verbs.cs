@@ -102,7 +102,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 			stored.CheckInstanceStride(baked.InstanceStride, call.Technique);
 			var instanceView = new VertexBufferView
 			{
-				BufferLocation = _meshes.BindPoseAddress(stored.Storage.Id) + (ulong)call.Instances.StaticFirst * (ulong)stored.Stride,
+				BufferLocation = _meshes.VertexAddress(stored.Storage.Id) + (ulong)call.Instances.StaticFirst * (ulong)stored.Stride,
 				SizeInBytes = checked((uint)((long)call.Instances.Count * stored.Stride)),
 				StrideInBytes = (uint)stored.Stride,
 			};
@@ -250,7 +250,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 		// (stride 0): t0 = bind-pose verts, t1 = bone palette, u0 = output.
 		var paletteBytes = MemoryMarshal.AsBytes(palette);
 		var paletteAddress = _storageUpload.Upload(_slot, paletteBytes);
-		_cmd.SetComputeRootShaderResourceView((uint)baked.InputBufferBaseParam, _meshes.BindPoseAddress(skinnedMesh.Id));
+		_cmd.SetComputeRootShaderResourceView((uint)baked.InputBufferBaseParam, _meshes.VertexAddress(skinnedMesh.Id));
 		_cmd.SetComputeRootShaderResourceView((uint)(baked.InputBufferBaseParam + 1), paletteAddress);
 		_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, output.Id).GetGPUVirtualAddress());
 

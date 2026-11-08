@@ -207,6 +207,11 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
 	// technique's storage-buffer slots (after the sampled inputs, before the uniform slots).
 	public const int MaxStorageBuffers = GraphLimits.MaxStorageBuffersPerPass;
+	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
+	private int _activeStorageCount;
+
+	// The pass being recorded, which a technique's storage slots are held to (ShaderBindingMap.CheckPassStorage)
+	private GraphPass? _pass;
 
 	// The storage buffers the pass .Reads, for a technique's draw: the first as many as it declares, in the order the
 	// pass read them. A pass may read more than one technique uses (beside techniques that read none, or fewer); a
@@ -223,11 +228,6 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 			into[j] = _resources.GetStorageBuffer(_frameSlot, _activeStorageIds[j]);
 		return declared;
 	}
-	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
-	private int _activeStorageCount;
-
-	// The pass being recorded, which a technique's storage slots are held to (ShaderBindingMap.CheckPassStorage)
-	private GraphPass? _pass;
 
 	/// <summary>
 	/// Set the attachment formats of the current pass — the formats its techniques bake against — plus whether
@@ -478,9 +478,6 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		}
 	}
 
-	// Nearest keeps the low-res pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
-	// the smooth filtering a chunky pixel glow still wants internally. The sampler is part of the combined
-	// image-sampler descriptor, so the technique's LinearFilter flag just selects which one FullScreen binds.
 	// One comparison sampler per compare function, made the first time a technique asks for it
 	private readonly Sampler[] _compareSamplers = new Sampler[(int)DepthCompare.Always + 1];
 
@@ -506,6 +503,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		return sampler;
 	}
 
+	// Nearest keeps the low-res pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
+	// the smooth filtering a chunky pixel glow still wants internally. The sampler is part of the combined
+	// image-sampler descriptor, so the technique's LinearFilter flag just selects which one FullScreen binds.
 	private Sampler CreateSampler(Filter filter, SamplerAddressMode address = SamplerAddressMode.ClampToEdge)
 	{
 		var mip = filter == Filter.Linear ? SamplerMipmapMode.Linear : SamplerMipmapMode.Nearest;

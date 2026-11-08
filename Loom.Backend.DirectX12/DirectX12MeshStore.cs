@@ -110,7 +110,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	/// <summary>
 	/// Upload a skinned mesh's bind-pose vertices. A buffer is promoted to any read state on use, so the vertex buffer's GPU
 	/// address binds directly as a structured-buffer root SRV for the compute pre-skin pass
-	/// (<see cref="BindPoseAddress"/>) — no extra usage flag is needed (unlike Vulkan). The vertex count is
+	/// (<see cref="VertexAddress"/>) — no extra usage flag is needed (unlike Vulkan). The vertex count is
 	/// recorded for the dispatch's thread count; the index buffer is what <see cref="DrawSkinned"/> draws.
 	/// </summary>
 	public Mesh CreateSkinned(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices)
@@ -122,8 +122,11 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		return mesh;
 	}
 
-	/// <summary>The skinned mesh's bind-pose buffer GPU address, bound as a structured-buffer root SRV for the compute pre-skin pass.</summary>
-	public ulong BindPoseAddress(int meshId) => _meshes[Slot(meshId)].VertexBuffer.GetGPUVirtualAddress();
+	/// <summary>
+	/// A stored mesh's vertex buffer's GPU address: a skinned mesh's bind pose, bound as a structured-buffer root SRV for the compute pre-skin
+	/// pass, or a static instance buffer's instances, bound as a draw's per-instance stream.
+	/// </summary>
+	public ulong VertexAddress(int meshId) => _meshes[Slot(meshId)].VertexBuffer.GetGPUVirtualAddress();
 
 	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count.</summary>
 	public uint VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;

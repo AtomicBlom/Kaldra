@@ -85,7 +85,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		{
 			// Instances uploaded once: the stored buffer itself, from the draw's first instance.
 			stored.CheckInstanceStride(template.Instance?.Stride ?? 0, call.Technique);
-			var buffer = _meshes.BindPoseBuffer(stored.Storage.Id);
+			var buffer = _meshes.VertexBuffer(stored.Storage.Id);
 			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, buffer, (ulong)call.Instances.StaticFirst * (ulong)stored.Stride,
 				(uint)call.Instances.Count, call.Indices);
 		}
@@ -222,7 +222,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		// own set rather than going through the generic Dispatch storage path.
 		var paletteBytes = MemoryMarshal.AsBytes(palette);
 		var (paletteBuffer, paletteOffset) = _storageUpload.Upload(_frameSlot, paletteBytes);
-		var inBuffer = _meshes.BindPoseBuffer(skinnedMesh.Id);
+		var inBuffer = _meshes.VertexBuffer(skinnedMesh.Id);
 		var outBuffer = _resources.GetBuffer(_frameSlot, output.Id);
 
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);
