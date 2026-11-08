@@ -242,13 +242,16 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 
 		var samplers = stackalloc StaticSamplerDesc[template.InputCount > 0 ? template.InputCount : 1];
 		for (var i = 0; i < template.InputCount; i++)
+		{
+			// A slot the shader samples by comparison takes a comparison sampler, as a graphics technique's does
+			var compare = template.ComparedInputs is { } c && i < c.Length && c[i];
 			samplers[i] = new StaticSamplerDesc
 			{
-				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-				AddressU = ToTextureAddress(template.Address),
-				AddressV = ToTextureAddress(template.Address),
-				AddressW = ToTextureAddress(template.Address),
-				ComparisonFunc = ComparisonFunc.Never,
+				Filter = compare ? Filter.ComparisonMinMagLinearMipPoint : template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
+				AddressU = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressV = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressW = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				ComparisonFunc = compare ? ToD3DCompare(template.SampleCompare!.Value) : ComparisonFunc.Never,
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
 				MaxLOD = float.MaxValue,
@@ -256,6 +259,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				RegisterSpace = 0,
 				ShaderVisibility = ShaderVisibility.All,
 			};
+		}
 
 		var rootDesc = new RootSignatureDesc
 		{
