@@ -309,16 +309,12 @@ public abstract class EngineBase : IEngine
 
 	private void Written(int id) => CollectionsMarshal.GetValueRefOrNullRef(_writes, id)++;
 
-	// Whether this slot's copy of a buffer is behind its last Write; if it is, it is about to be brought up to date
-	private bool Behind(int id, int slot)
-	{
-		var uploaded = _uploadedWrites[id];
-		var writes = _writes[id];
-		if (uploaded[slot] == writes)
-			return false;
-		uploaded[slot] = writes;
-		return true;
-	}
+	// Whether this slot's copy of a buffer is behind its last Write
+	private bool Behind(int id, int slot) => _uploadedWrites[id][slot] != _writes[id];
+
+	// This slot's copy of a buffer now holds its last Write. Marked after the backend's write rather than before, so a write
+	// that throws leaves the slot behind and the next frame tries again.
+	private void CaughtUp(int id, int slot) => _uploadedWrites[id][slot] = _writes[id];
 
 	/// <summary>Which of the per-frame-slot copies of each Constants and Storage buffer the frame being recorded reads.</summary>
 	protected abstract int ShadowSlot { get; }
@@ -629,15 +625,23 @@ public abstract class EngineBase : IEngine
 	{
 		// Bring this frame slot's copy of each app-writable buffer up to its last IEngine.Write, which is what makes that
 		// write persist: a static parameter is written once and an animated one per frame, and either way what the GPU
-		// reads this frame is current. A copy already up to date is left alone, so a large buffer written once (a
-		// world's per-point tints) costs nothing per frame once every slot holds it.
+		// reads this frame is current. A copy already up to date is left alone, so a large buffer written once (a table
+		// of thousands of elements filled at load) costs nothing per frame once every slot holds it.
 		var slot = ShadowSlot;
 		foreach (var (id, bytes) in ConstantsShadows)
-			if (Behind(id, slot))
-				WriteConstantsShadow(id, bytes);
+		{
+			if (!Behind(id, slot))
+				continue;
+			WriteConstantsShadow(id, bytes);
+			CaughtUp(id, slot);
+		}
 		foreach (var (id, bytes) in StorageShadows)
-			if (Behind(id, slot))
-				WriteStorageShadow(id, bytes);
+		{
+			if (!Behind(id, slot))
+				continue;
+			WriteStorageShadow(id, bytes);
+			CaughtUp(id, slot);
+		}
 
 		BeginFrameTimestamps();
 
