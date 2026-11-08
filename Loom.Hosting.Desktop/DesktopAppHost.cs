@@ -87,6 +87,9 @@ public sealed class DesktopAppHost : IAppHost
 		// GLFW's window, and the context's disposal puts its callbacks back on that window, which read through the freed
 		// handle crashed the process on exit (0xC0000005 in glfwSetMouseButtonCallback), on some exits and not others.
 		var inputContext = window.CreateInput();
+		// Closed by the window's Closing (below). Where Load or a frame throws instead, the window never closes, and Silk
+		// resets it only when Run returns normally, so this using closes the input on a window that is still alive.
+		using var input = new WindowInput(inputContext);
 		IHostControl host = new WindowHostControl(window, inputContext);
 		driver.Load(engine, host);
 
@@ -96,15 +99,10 @@ public sealed class DesktopAppHost : IAppHost
 		// Pump the window's platform input devices into the app's neutral input queue. The pump takes the input
 		// context (not the window), so a host with its own window can reuse it against its own context.
 		var inputPump = new DesktopInputPump(inputContext, driver);
-		var inputClosed = false;
-		window.Closing += () =>
-		{
-			if (inputClosed)
-				return;
-			inputClosed = true;
-			inputPump.Dispose();
-			inputContext.Dispose();
-		};
+		input.Pump = inputPump;
+		// Closing is raised synchronously by Close, so an app that calls RequestExit from inside Tick closes its input
+		// there and then, mid-frame: nothing after Tick in the frame below touches the input again.
+		window.Closing += input.Dispose;
 
 		// A 0x0 framebuffer (minimized) has nothing to render into — skip both the engine resize and driver.Resize
 		// so SurfaceSize keeps the last non-zero size, and skip Tick entirely while it stays minimized.
@@ -121,7 +119,7 @@ public sealed class DesktopAppHost : IAppHost
 		{
 			// The OS drops the ups for anything held across a focus loss (alt-tab), so synthesize releases to keep
 			// held keys/buttons from being stranded down.
-			if (!focused && !inputClosed)
+			if (!focused && !input.Closed)
 				inputPump.ReleaseAllHeld();
 			driver.SetFocus(focused);
 		};
@@ -238,6 +236,24 @@ public sealed class DesktopAppHost : IAppHost
 		}
 
 		return Backends.Available;
+	}
+
+	// The window's input context and the pump reading it, closed once, by whichever comes first: the window's Closing, or
+	// the end of Run's scope when Load or a frame throws.
+	private sealed class WindowInput(IInputContext context) : IDisposable
+	{
+		public DesktopInputPump? Pump { get; set; }
+
+		public bool Closed { get; private set; }
+
+		public void Dispose()
+		{
+			if (Closed)
+				return;
+			Closed = true;
+			Pump?.Dispose();
+			context.Dispose();
+		}
 	}
 
 	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,
