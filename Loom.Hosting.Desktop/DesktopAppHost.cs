@@ -82,8 +82,11 @@ public sealed class DesktopAppHost : IAppHost
 
 		using var engine = backend.Create(surface, window.FramebufferSize.X, window.FramebufferSize.Y, options.EngineSettings);
 
-		// The input context comes first: the host control reaches the clipboard through its keyboard.
-		using var inputContext = window.CreateInput();
+		// The input context comes first: the host control reaches the clipboard through its keyboard. It is closed as the
+		// window closes (below), not at the end of this method: Silk's Run() resets the window as it returns, destroying
+		// GLFW's window, and the context's disposal puts its callbacks back on that window, which read through the freed
+		// handle crashed the process on exit (0xC0000005 in glfwSetMouseButtonCallback), on some exits and not others.
+		var inputContext = window.CreateInput();
 		IHostControl host = new WindowHostControl(window, inputContext);
 		driver.Load(engine, host);
 
@@ -92,7 +95,16 @@ public sealed class DesktopAppHost : IAppHost
 
 		// Pump the window's platform input devices into the app's neutral input queue. The pump takes the input
 		// context (not the window), so a host with its own window can reuse it against its own context.
-		using var inputPump = new DesktopInputPump(inputContext, driver);
+		var inputPump = new DesktopInputPump(inputContext, driver);
+		var inputClosed = false;
+		window.Closing += () =>
+		{
+			if (inputClosed)
+				return;
+			inputClosed = true;
+			inputPump.Dispose();
+			inputContext.Dispose();
+		};
 
 		// A 0x0 framebuffer (minimized) has nothing to render into — skip both the engine resize and driver.Resize
 		// so SurfaceSize keeps the last non-zero size, and skip Tick entirely while it stays minimized.
@@ -109,7 +121,7 @@ public sealed class DesktopAppHost : IAppHost
 		{
 			// The OS drops the ups for anything held across a focus loss (alt-tab), so synthesize releases to keep
 			// held keys/buttons from being stranded down.
-			if (!focused)
+			if (!focused && !inputClosed)
 				inputPump.ReleaseAllHeld();
 			driver.SetFocus(focused);
 		};
