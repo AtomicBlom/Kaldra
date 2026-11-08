@@ -10,10 +10,13 @@ namespace Loom.Hosting.Web;
 
 /// <summary>
 /// The browser <see cref="IAppHost"/>: brings the WebGPU device up on a JS-supplied canvas, then runs a frame each
-/// time the JS boot helper calls <see cref="Frame"/>, once a requestAnimationFrame. Unlike the desktop host, <see cref="Run"/> does not
-/// block — a browser app can't block its entry thread — so it just registers the application; the JS boot helper
-/// then calls the <see cref="StartApp"/> export with the page's canvas selector to start everything. The canvas
-/// identity flows in from the page (an embedder owns their own <c>&lt;canvas&gt;</c>); it is never hardcoded here.
+/// time the page calls <see cref="Frame"/>. Unlike the desktop host, <see cref="Run"/> does not block (a browser app
+/// can't block its entry thread), so it just registers the application. The page then drives everything through two
+/// exports: <see cref="StartApp"/> with its canvas selector, which brings the device up and starts queueing the page's
+/// input, and <see cref="Frame"/> once a requestAnimationFrame, which runs one frame. StartApp starts no loop of its own,
+/// so a page that never calls Frame gets no frames; loom-boot.js's runLoom does both, and its header lists the whole
+/// contract for a bootstrap of an embedder's own. The canvas identity flows in from the page (an embedder owns their own
+/// <c>&lt;canvas&gt;</c>); it is never hardcoded here.
 /// </summary>
 public sealed partial class WebAppHost : IAppHost
 {
@@ -66,8 +69,10 @@ public sealed partial class WebAppHost : IAppHost
 	}
 
 	/// <summary>
-	/// The JS boot helper calls this with the page's canvas selector once the .NET runtime is up. Brings up the
-	/// WebGPU device on that canvas, binds the engine to the current application, and starts the frame loop.
+	/// The JS boot helper calls this with the page's canvas selector once the .NET runtime is up and the app's Main has run.
+	/// Brings up the WebGPU device on that canvas, binds the engine to the current application, and starts queueing the
+	/// page's input, resizes and pastes. It runs no frames: the page calls <see cref="Frame"/> once a requestAnimationFrame
+	/// from then on.
 	/// </summary>
 	[JSExport]
 	[SupportedOSPlatform("browser")]
