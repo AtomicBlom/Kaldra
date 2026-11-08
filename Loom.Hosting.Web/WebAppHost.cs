@@ -198,6 +198,7 @@ public sealed partial class WebAppHost : IAppHost
 				case "a" when f.Length == 4: input.OnGamepadAxis(D(f[1]), D(f[2]), D(f[3])); break;
 				case "e" when f.Length == 4: input.OnEvent(D(f[1]), D(f[2]), D(f[3])); break;
 				case "k" when f.Length == 3: input.OnKey(f[1], f[2] == "1"); break;
+				case "g" when f.Length >= 2: input.OnGamepadId(D(f[1]), f.Length > 2 ? line[(f[0].Length + f[1].Length + 2)..] : ""); break;
 				case "r": resized = true; break;
 			}
 		}

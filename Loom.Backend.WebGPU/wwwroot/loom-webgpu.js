@@ -546,7 +546,7 @@ export function startPointerHandler(dotnetPointer) {
 // animation frame, so a high-rate device can't flood the frame's event capacity. Pointer coordinates are device
 // pixels (CSS position × the capped device-pixel ratio, matching getCanvasSize) so a hit-test lands on the
 // geometry the engine rendered.
-export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis, onEvent, onKey) {
+export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis, onEvent, onKey, onGamepadId) {
 	// onEvent kind codes — must match WebInputPump's Kind* constants.
 	const POINTER_BUTTON = 1, WHEEL = 2, TEXT = 3, GAMEPAD_CONNECTION = 4, FOCUS = 5;
 
@@ -614,7 +614,13 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 
 	// Gamepads: connect/disconnect via the DOM events, button/axis changes by diffing the poll-only API each frame.
 	const padStates = [];
-	window.addEventListener("gamepadconnected", e => { padStates[e.gamepad.index] = { buttons: [], axes: [] }; onEvent(GAMEPAD_CONNECTION, e.gamepad.index, 1); });
+	// A pad's Gamepad.id goes first ("DualSense Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)" in
+	// Chromium, "054c-0ce6-DualSense Wireless Controller" in Firefox), so the host knows what it is as it connects
+	window.addEventListener("gamepadconnected", e => {
+		padStates[e.gamepad.index] = { buttons: [], axes: [] };
+		onGamepadId?.(e.gamepad.index, e.gamepad.id ?? "");
+		onEvent(GAMEPAD_CONNECTION, e.gamepad.index, 1);
+	});
 	window.addEventListener("gamepaddisconnected", e => { padStates[e.gamepad.index] = null; onEvent(GAMEPAD_CONNECTION, e.gamepad.index, 0); });
 
 	const AXIS_EPS = 1e-3;
@@ -659,6 +665,7 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 //   m x y type        pointer move          e kind a b       onEvent's low-rate channel
 //   b pad index down  gamepad button        k code down      key
 //   a pad index value gamepad axis          r                the window resized
+//   g pad id...       a pad's Gamepad.id, the rest of the line, just before it connects
 let hostEvents = [];
 export function startHostEventQueue() {
 	startInputHandlers(
@@ -666,7 +673,8 @@ export function startHostEventQueue() {
 		(pad, index, down) => hostEvents.push(`b ${pad} ${index} ${down}`),
 		(pad, index, value) => hostEvents.push(`a ${pad} ${index} ${value}`),
 		(kind, a, b) => hostEvents.push(`e ${kind} ${a} ${b}`),
-		(code, down) => hostEvents.push(`k ${code} ${down ? 1 : 0}`));
+		(code, down) => hostEvents.push(`k ${code} ${down ? 1 : 0}`),
+		(pad, id) => hostEvents.push(`g ${pad} ${id.replace(/[\r\n]+/g, " ")}`));
 	let resized = false;
 	window.addEventListener("resize", () => {
 		if (resized) return;

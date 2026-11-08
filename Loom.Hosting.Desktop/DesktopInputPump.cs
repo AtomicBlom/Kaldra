@@ -87,7 +87,7 @@ public sealed class DesktopInputPump : IDisposable
 		{
 			Subscribe(gamepad);
 			if (gamepad.IsConnected)
-				Queue(InputEvent.GamepadConnected(gamepad.Index));
+				Queue(Connected(gamepad));
 		}
 	}
 
@@ -156,6 +156,11 @@ public sealed class DesktopInputPump : IDisposable
 
 	private void Queue(in InputEvent e) => _sink(in e);
 
+	// GLFW gives a pad its mapping's name ("PS5 Controller", "Xbox Controller"), and Silk.NET no USB ids: the type is
+	// read from the name
+	private static InputEvent Connected(IGamepad gamepad)
+		=> InputEvent.GamepadConnected(gamepad.Index, GamepadIdentity.FromName(gamepad.Name), 0, 0);
+
 	private void FlushPendingMove()
 	{
 		if (!_hasPendingMove)
@@ -186,7 +191,7 @@ public sealed class DesktopInputPump : IDisposable
 				break;
 			case IGamepad gamepad when connected:
 				Subscribe(gamepad);
-				Queue(InputEvent.GamepadConnected(gamepad.Index));
+				Queue(Connected(gamepad));
 				break;
 			case IGamepad gamepad:
 				Unsubscribe(gamepad);

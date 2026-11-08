@@ -35,6 +35,8 @@ public sealed class InputSnapshot
 	private readonly bool[] _padConnected = new bool[PadSlots];
 	private readonly bool[] _padConnectedPrev = new bool[PadSlots];
 	private readonly float[] _padAxes = new float[PadSlots * AxesPerPad];
+	private readonly GamepadType[] _padType = new GamepadType[PadSlots];
+	private readonly uint[] _padIds = new uint[PadSlots];   // vendor << 16 | product, as the connect event carried them
 
 	private readonly TouchPoint[] _touches;
 	private int _touchCount;
@@ -104,7 +106,8 @@ public sealed class InputSnapshot
 			_padAxes[axisBase + (int)GamepadAxis.RightX],
 			_padAxes[axisBase + (int)GamepadAxis.RightY],
 			_padAxes[axisBase + (int)GamepadAxis.LeftTrigger],
-			_padAxes[axisBase + (int)GamepadAxis.RightTrigger]);
+			_padAxes[axisBase + (int)GamepadAxis.RightTrigger],
+			_padType[index], _padIds[index]);
 	}
 
 	/// <summary>Enqueues a rumble effect for a gamepad (a no-op if this snapshot has no rumble queue).</summary>
@@ -183,6 +186,8 @@ public sealed class InputSnapshot
 				if ((uint)e.PadIndex < PadSlots)
 				{
 					_padConnected[e.PadIndex] = true;
+					_padType[e.PadIndex] = (GamepadType)e.Code;
+					_padIds[e.PadIndex] = e.CodePoint;
 					ClearPad(e.PadIndex);
 				}
 
@@ -191,6 +196,8 @@ public sealed class InputSnapshot
 				if ((uint)e.PadIndex < PadSlots)
 				{
 					_padConnected[e.PadIndex] = false;
+					_padType[e.PadIndex] = GamepadType.Unknown;
+					_padIds[e.PadIndex] = 0;
 					ClearPad(e.PadIndex);
 				}
 

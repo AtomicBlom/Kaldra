@@ -48,6 +48,7 @@ internal sealed class WebInputPump
 	private readonly bool[] _keysHeld = new bool[256];
 	private uint _mouseHeld;
 	private readonly uint[] _padButtonsHeld = new uint[4];
+	private readonly (GamepadType Type, ushort Vendor, ushort Product)[] _padIdentity = new (GamepadType, ushort, ushort)[4];
 
 	public WebInputPump(InputSink sink, Action<bool> onFocusChanged)
 	{
@@ -183,12 +184,31 @@ internal sealed class WebInputPump
 		_sink(down ? InputEvent.MouseButtonDown(button) : InputEvent.MouseButtonUp(button));
 	}
 
+	/// <summary>
+	/// A pad's <c>Gamepad.id</c>, which the page sends just before the pad connects: what the pad is
+	/// (<see cref="GamepadIdentity.FromBrowserId"/>), held for its connection.
+	/// </summary>
+	public void OnGamepadId(double pad, string id)
+	{
+		var p = (int)pad;
+		if ((uint)p >= (uint)_padIdentity.Length)
+			return;
+		var type = GamepadIdentity.FromBrowserId(id, out var vendor, out var product);
+		_padIdentity[p] = (type, vendor, product);
+	}
+
 	private void OnGamepadConnection(int pad, bool connected)
 	{
 		// A fresh (dis)connect holds nothing, so clear the pad's tracked buttons rather than stranding them.
 		if ((uint)pad < (uint)_padButtonsHeld.Length)
 			_padButtonsHeld[pad] = 0;
-		_sink(connected ? InputEvent.GamepadConnected(pad) : InputEvent.GamepadDisconnected(pad));
+		if (!connected)
+		{
+			_sink(InputEvent.GamepadDisconnected(pad));
+			return;
+		}
+		var (type, vendor, product) = (uint)pad < (uint)_padIdentity.Length ? _padIdentity[pad] : default;
+		_sink(InputEvent.GamepadConnected(pad, type, vendor, product));
 	}
 
 	private void OnFocus(bool focused)
@@ -236,6 +256,7 @@ internal sealed class WebInputPump
 		14 => GamepadButton.DPadLeft,
 		15 => GamepadButton.DPadRight,
 		16 => GamepadButton.Guide,
+		17 => GamepadButton.Touchpad,   // past the standard layout: Chromium's for a PlayStation pad's touchpad click
 		_ => null,
 	};
 

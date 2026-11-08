@@ -188,9 +188,16 @@ public sealed class SdlGamepadPump : IDisposable
 			return;
 		}
 		_slots[s] = new Slot { Pad = pad, Id = id };
-		LoomLog.Info($"gamepad {s}: '{name}' ({SdlGamepadMap.TypeName(Sdl3.SDL_GetRealGamepadType(pad))}, " +
+		// The real type: behind Steam's virtual Xbox pad, the controller the player holds
+		ushort vendor = Sdl3.SDL_GetGamepadVendor(pad), product = Sdl3.SDL_GetGamepadProduct(pad);
+		var type = SdlGamepadMap.Type(Sdl3.SDL_GetRealGamepadType(pad));
+		if (type == GamepadType.Unknown)
+			type = GamepadIdentity.FromIds(vendor, product);
+		if (type == GamepadType.Unknown)
+			type = GamepadIdentity.FromName(name);
+		LoomLog.Info($"gamepad {s}: '{name}' ({type}, {vendor:x4}:{product:x4}, " +
 			$"{SdlGamepadMap.ConnectionName(Sdl3.SDL_GetGamepadConnectionState(pad))}) through SDL {Version}");
-		_sink(InputEvent.GamepadConnected(s));
+		_sink(InputEvent.GamepadConnected(s, type, vendor, product));
 		if (_focused)
 			ReadAfresh(s);
 	}
@@ -312,21 +319,21 @@ internal static class SdlGamepadMap
 	/// <summary>A motor's strength, 0..1, as SDL's 0..65535.</summary>
 	public static ushort Motor(float strength) => (ushort)MathF.Round(Math.Clamp(strength, 0f, 1f) * 65535f);
 
-	public static string TypeName(int type) => type switch
+	/// <summary>Loom's type for SDL's <c>SDL_GamepadType</c> (its "standard" is a pad SDL doesn't know: Unknown).</summary>
+	public static GamepadType Type(int sdl) => sdl switch
 	{
-		1 => "standard",
-		2 => "Xbox 360",
-		3 => "Xbox One",
-		4 => "PS3",
-		5 => "PS4",
-		6 => "PS5",
-		7 => "Switch Pro",
-		8 => "Joy-Con left",
-		9 => "Joy-Con right",
-		10 => "Joy-Con pair",
-		11 => "GameCube",
-		12 => "Steam",
-		_ => "unknown",
+		2 => GamepadType.Xbox360,
+		3 => GamepadType.XboxOne,
+		4 => GamepadType.PS3,
+		5 => GamepadType.PS4,
+		6 => GamepadType.PS5,
+		7 => GamepadType.SwitchPro,
+		8 => GamepadType.JoyConLeft,
+		9 => GamepadType.JoyConRight,
+		10 => GamepadType.JoyConPair,
+		11 => GamepadType.GameCube,
+		12 => GamepadType.Steam,
+		_ => GamepadType.Unknown,
 	};
 
 	public static string ConnectionName(int state) => state switch
