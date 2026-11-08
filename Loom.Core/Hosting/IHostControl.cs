@@ -22,7 +22,9 @@ public interface IHostControl
 
 	/// <summary>
 	/// The text on the system clipboard, or null when it holds none or the host cannot read it. Defaults to null so a
-	/// host without a clipboard need not implement it.
+	/// host without a clipboard need not implement it. The browser host, which may not read the clipboard without
+	/// asking, answers with the text of a paste into the page in this frame (Ctrl+V's comes in the same frame as its
+	/// keydown), and null in any other.
 	/// <para>
 	/// Main thread only: the thread the host runs the app's frames on (its <see cref="LoomApplication"/> callbacks), since
 	/// the desktop host's windowing (GLFW) reaches the clipboard there and nowhere else. The desktop host throws

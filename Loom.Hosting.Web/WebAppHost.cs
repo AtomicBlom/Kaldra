@@ -48,6 +48,11 @@ public sealed partial class WebAppHost : IAppHost
 	private const int HostEventInput = 4;
 	private const int HostEventKey = 5;
 	private const int HostEventResize = 6;
+	private const int HostEventPaste = 7;
+
+	// The text of a paste the page queued among this frame's events, which GetClipboardText answers with; null in a frame
+	// with none
+	private static string? _pastedText;
 
 	// Capture mode (?capture=<name>): a frozen 1/60 s clock and a one-shot grab at a fixed frame, so a headless
 	// browser capture is deterministic and pixel-comparable with a desktop reference.
@@ -206,6 +211,7 @@ public sealed partial class WebAppHost : IAppHost
 	{
 		var events = _hostEvents;
 		bool resized = false;
+		_pastedText = null;
 		int count;
 		do
 		{
@@ -221,6 +227,7 @@ public sealed partial class WebAppHost : IAppHost
 					case HostEventInput: input.OnEvent(a, b, c); break;
 					case HostEventKey: input.OnKey((int)a, b != 0); break;
 					case HostEventResize: resized = true; break;
+					case HostEventPaste: _pastedText = GetPastedText() is { Length: > 0 } text ? text : null; break;
 				}
 			}
 		}
@@ -258,10 +265,13 @@ public sealed partial class WebAppHost : IAppHost
 			engine.WaitIdle();
 		}
 
-		// The browser can't be asked for the clipboard without a prompt (and not at all in a cross-origin iframe), so
-		// this is the text last pasted into the page: Ctrl+V's paste event lands before the frame that reads the key.
-		[SupportedOSPlatform("browser")]
-		public string? GetClipboardText() => GetPastedText() is { Length: > 0 } text ? text : null;
+		/// <summary>
+		/// The text of a paste into the page in this frame, or null in a frame with none. Unlike the desktop host, this is not
+		/// the clipboard as it stands: a browser asks the player before letting a page read the clipboard (and refuses outright
+		/// in a cross-origin iframe), but a paste event carries its text without asking. Ctrl+V's paste comes straight after
+		/// its keydown, so an app that reads the clipboard when it sees Ctrl+V gets the text pasted, in the same frame.
+		/// </summary>
+		public string? GetClipboardText() => _pastedText;
 
 		[SupportedOSPlatform("browser")]
 		public void SetClipboardText(string text) => WriteClipboardText(text);
