@@ -224,10 +224,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size). The replacement is
 		// built before the old one is released so it can adopt the persistents that survive a resize — their contents
 		// are cross-frame history, and rebuilding them would throw it away.
-		if (Graph is not null)
+		if (_executed is not null)
 		{
 			var previous = _transients;
-			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height, previous);
+			_transients = new DirectX12Transients(_ctx, _executed, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height, previous);
 			previous?.Dispose();
 			_context.SetTransients(_transients);
 			ForgetUploadedShadows();   // the new transients' Constants and Storage buffers hold nothing yet
@@ -386,6 +386,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 	protected override void GrowStorage(int id, int newByteSize) => _transients!.GrowStorage(_ctx, id, newByteSize, Graph!.Resources[id].Name);
 
+	// The graph the transients are built from: the active graph with the resource viewer's sample edges, which decide
+	// what a multisampled target keeps a resolve for. A resize rebuilds from it, not from the graph as authored.
+	private RenderGraph? _executed;
+
 	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed)
 	{
 		// Members after a bucket's first reuse an earlier member's memory mid-frame and need an aliasing barrier on
@@ -394,9 +398,11 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present;
 
-		// Build transients from `executed` (same resources/ids; the injected edges only affect derived state). The
+		// Build transients from `executed` (same resources/ids; its debug-sample edges give an inspected multisampled
+		// target the resolve copy its viewer reads). The
 		// AliasPlan (the transient-memory partition) is the SAME backend-neutral product the Vulkan engine consumes;
 		// this backend turns each bucket into a placed-resource heap shared by its members.
+		_executed = executed;
 		_transients = new DirectX12Transients(_ctx, executed, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height);
 		_context.SetTransients(_transients);
 		SetupReadback(authored);
