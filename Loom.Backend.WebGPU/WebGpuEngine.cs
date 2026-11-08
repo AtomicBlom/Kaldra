@@ -221,7 +221,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 		// as ReleaseGraphResources; a resize is rare enough that rebuilding every group costs nothing worth keeping.
 		_context.ClearBindGroups();
 		_transients?.Resize(_width, _height);
-		ForgetUploadedShadows();   // in case the resize replaced a Constants or Storage buffer: upload each again
+
 	}
 
 	// WebGPU has no host-side GPU idle wait, and it defers destruction of in-flight resources internally, so
