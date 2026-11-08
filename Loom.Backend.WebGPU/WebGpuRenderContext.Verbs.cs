@@ -121,6 +121,7 @@ internal sealed partial class WebGpuRenderContext
 				throw new InvalidOperationException($"WebGPU: compute technique '{technique}' declares {readOnly} read-only storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
 			if (readOnly > 0)
 				baked.Template.Reflected.CheckPassStorage(technique, _pass!, readOnlyOnly: true);
+			baked.Template.Reflected.CheckDispatchStorage(technique, storage);
 			int nextWritten = 0, nextRead = 0;
 			for (var b = 0; b < bindings.StorageBufferBindings.Length; b++)
 			{

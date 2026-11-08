@@ -131,6 +131,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			throw new InvalidOperationException($"Vulkan: compute technique '{technique}' declares {readOnly} read-only storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
 		if (readOnly > 0)
 			map.CheckPassStorage(technique, _pass!, readOnlyOnly: true);
+		map.CheckDispatchStorage(technique, storage);
 		var total = sampled.Length + storage.Length + readOnly + uniforms;
 		if (total > 0)
 		{

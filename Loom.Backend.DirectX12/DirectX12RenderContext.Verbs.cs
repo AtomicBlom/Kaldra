@@ -159,6 +159,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 			throw new InvalidOperationException($"DirectX12: compute technique '{technique}' declares {baked.InputBufferCount} read-only storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
 		if (baked.InputBufferCount > 0)
 			baked.Bindings.CheckPassStorage(technique, _pass!, readOnlyOnly: true);
+		baked.Bindings.CheckDispatchStorage(technique, storage);
 		for (var s = 0; s < baked.InputBufferCount; s++)
 			_cmd.SetComputeRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
 

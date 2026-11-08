@@ -147,4 +147,41 @@ public readonly record struct ShaderBindingMap
 				"reads, so declare them in the shader in the order the pass reads them, from its first.");
 		}
 	}
+
+	/// <summary>
+	/// Hold a compute dispatch's own storage to the technique's read-write slots: its images to the storage images the
+	/// shader declares, and its buffers to the read-write storage buffers (the read-only ones take the pass's <c>.Reads</c>
+	/// storage, <see cref="CheckPassStorage"/>). Throws where the counts differ, on every backend alike: a surplus resource
+	/// would be bound nowhere and a missing one would leave a slot unbound. Allocation-free, for the dispatch path.
+	/// </summary>
+	public void CheckDispatchStorage(string technique, ReadOnlySpan<ResourceHandle> storage)
+	{
+		int images = 0, buffers = 0;
+		foreach (var handle in storage)
+		{
+			if (handle.Kind == ResourceKind.Buffer)
+				buffers++;
+			else
+				images++;
+		}
+		var declaredImages = StorageImages.IsDefault ? 0 : StorageImages.Length;
+		var declaredBuffers = 0;
+		if (!StorageBuffers.IsDefault)
+		{
+			foreach (var binding in StorageBuffers)
+			{
+				if (binding.Kind != ShaderBindingKind.StorageBufferReadOnly)
+					declaredBuffers++;
+			}
+		}
+		if (images != declaredImages)
+			throw new InvalidOperationException(
+				$"Compute technique '{technique}' declares {declaredImages} storage image(s) but its dispatch supplies {images}. " +
+				"A dispatch's storage images fill the shader's RWTexture slots in order, one each.");
+		if (buffers != declaredBuffers)
+			throw new InvalidOperationException(
+				$"Compute technique '{technique}' declares {declaredBuffers} read-write storage buffer(s) but its dispatch supplies {buffers}. " +
+				"A dispatch's storage buffers fill the shader's RWStructuredBuffer slots in order, one each; its read-only " +
+				"StructuredBuffers take the pass's .Reads storage.");
+	}
 }

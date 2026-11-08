@@ -69,6 +69,29 @@ public class StorageSlotTests
 		Should.NotThrow(() => Map(("out", 0, LightType, true), ("map", 1, Float4Type, false)).CheckPassStorage("place", pass, readOnlyOnly: true));
 	}
 
+	[Test]
+	public void A_dispatch_supplies_exactly_the_read_write_storage_its_technique_declares()
+	{
+		ResourceHandle first = null!, second = null!, image = null!;
+		RenderGraph.Define(g =>
+		{
+			first = g.Buffer<Vector4>("first", 4);
+			second = g.Buffer<Vector4>("second", 4);
+			image = g.Persistent("image", Format.Rgba8Srgb);
+			g.Pass("draw").Writes(g.Backbuffer).Draw(_ => { });
+			g.Present(g.Backbuffer);
+		});
+		// One read-write slot, which the dispatch fills, and one read-only, which the pass's .Reads fills
+		var map = Map(("out", 0, Float4Type, true), ("map", 1, Float4Type, false));
+
+		Should.NotThrow(() => map.CheckDispatchStorage("place", [first]));
+		// A surplus buffer would be bound nowhere, a missing one leaves the slot unbound
+		Should.Throw<InvalidOperationException>(() => map.CheckDispatchStorage("place", [first, second])).Message.ShouldContain("supplies 2");
+		Should.Throw<InvalidOperationException>(() => map.CheckDispatchStorage("place", [])).Message.ShouldContain("supplies 0");
+		// An image where the shader declares no RWTexture
+		Should.Throw<InvalidOperationException>(() => map.CheckDispatchStorage("place", [first, image])).Message.ShouldContain("storage image");
+	}
+
 	private const string Float4Type = "{\"kind\":\"vector\",\"elementCount\":4,\"elementType\":{\"kind\":\"scalar\",\"scalarType\":\"float32\"}}";
 	private const string Float3Type = "{\"kind\":\"vector\",\"elementCount\":3,\"elementType\":{\"kind\":\"scalar\",\"scalarType\":\"float32\"}}";
 	private const string UInt2Type = "{\"kind\":\"vector\",\"elementCount\":2,\"elementType\":{\"kind\":\"scalar\",\"scalarType\":\"uint32\"}}";
