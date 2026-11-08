@@ -26,10 +26,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Loom.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Silk.NET.Windowing" />
     <PackageReference Include="Silk.NET.Input" />
     <PackageReference Include="Silk.NET.Maths" />
     <PackageReference Include="Silk.NET.DXGI" />
   </ItemGroup>
+
+  <Import Project="Sdl\Sdl3.targets" />
 
 </Project>

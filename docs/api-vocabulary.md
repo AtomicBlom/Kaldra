@@ -134,6 +134,24 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 
 `Backends.Available` is a list, not a dictionary — select by `Name`, never an indexer. Constructing a backend's `EngineSettings` subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads and registers that backend.
 
+### Input on the desktop (`Loom.Hosting.Desktop`)
+
+The host turns the window's devices into `Loom.Input`'s neutral `InputEvent` stream: keyboards and mice through
+GLFW (`DesktopInputPump`), gamepads through SDL 3 (`SdlGamepadPump`), or through GLFW where SDL is missing or won't start.
+
+| Member | Purpose |
+|---|---|
+| `HostOptions.Pads` (`--pads sdl\|glfw`) | Where gamepads are read from: `GamepadSource.Sdl` (default) or `GamepadSource.Glfw`. |
+| `SdlGamepadPump` | SDL's gamepad subsystem alone (no SDL window), pumped once a frame on the host's thread: SDL's own drivers where it has them (DualSense and DualShock over HID, with rumble; Switch pads; the Steam Controller without Steam), XInput and Windows.Gaming.Input pads otherwise. Pads keep the lowest free of the four slots while connected. The host's focus gates its events: unfocused, held buttons are released; focused again, each pad is read afresh. |
+| `DesktopInputPump(…, gamepads: false)` | Keyboards and mice alone, when SDL has the pads, so no pad is seen twice. |
+| `GamepadButton.Misc1`, `RightPaddle1`, `LeftPaddle1`, `RightPaddle2`, `LeftPaddle2`, `Touchpad` | The buttons past the standard fifteen: a DualSense's mic button and touchpad click, a Steam Controller's grips (paddle 1 each side), an Elite's or DualSense Edge's paddles. GLFW and the browser report none of them. |
+
+SDL 3 is not a package: `Loom.Hosting.Desktop/Sdl/Sdl3.targets` pins SDL's release (version and the SHA-256 of its
+`win32-x64` and `win32-arm64` zips), downloads it once per machine into `%LOCALAPPDATA%\Loom\native\SDL3\<version>`,
+and ships `runtimes/win-<arch>/native/SDL3.dll` and its licence beside the app. A hash that doesn't match fails the
+build; a download that fails warns, and the host reads pads through GLFW. Our own binding (`Sdl3`) is
+`[LibraryImport]` over blittable signatures only.
+
 ### `EngineSettings`
 
 | Member | Purpose |

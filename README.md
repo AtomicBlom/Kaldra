@@ -228,7 +228,7 @@ The sandbox is a `LoomApplication` on the desktop host: every run is interactive
 | `Loom.Backend.WebGPU` | WebGPU backend (browser) |
 | `Loom.Concepts` | App-side helpers — `Camera`, `Frustum`, `Scene`. Not part of the engine |
 | `Loom.Input` | Neutral input: actions, bindings, layered event routing |
-| `Loom.Hosting.Desktop` | Desktop host — window, surface, frame loop, CLI flags |
+| `Loom.Hosting.Desktop` | Desktop host — window, surface, frame loop, CLI flags; gamepads through SDL 3, fetched by the build |
 | `Loom.Hosting.Web` | Browser host, paired with the WebGPU backend |
 | `Loom.UI.SUIsei` | SUIsei XAML-UI integration (via the neutral draw-list verb) |
 | `Loom.UI.ImGui` | Dear ImGui integration |

@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 
 using Loom.Core.Diagnostics;
 using Loom.Core.Hosting;
+using Loom.Hosting.Desktop.Sdl;
 
 using Silk.NET.Input;
 using Silk.NET.Maths;
@@ -24,7 +25,11 @@ public sealed class DesktopAppHost : IAppHost
 {
 #pragma warning disable CA2255 // ModuleInitializer is the intended self-registration hook, matching the backends.
 	[ModuleInitializer]
-	internal static void Register() => AppHost.Register(new DesktopAppHost());
+	internal static void Register()
+	{
+		Sdl3.InstallResolver();   // before any of this assembly's code is compiled (Sdl3.InstallResolver says why)
+		AppHost.Register(new DesktopAppHost());
+	}
 #pragma warning restore CA2255
 
 	public string Name => "Desktop";
@@ -93,9 +98,17 @@ public sealed class DesktopAppHost : IAppHost
 		// The host reports the initial size before the first frame, exactly like every later resize.
 		driver.Resize(window.FramebufferSize.X, window.FramebufferSize.Y);
 
+		// Gamepads through SDL 3 where it is there and starts (Sdl3.targets ships it), GLFW's otherwise, never both.
+		SdlGamepadPump? padPump = null;
+		if (hostOptions.Pads == GamepadSource.Sdl)
+		{
+			padPump = SdlGamepadPump.TryCreate(driver.QueueInput, driver.Rumble, out var why);
+			LoomLog.Info(padPump is null ? $"gamepads through GLFW: {why}" : $"gamepads through SDL {padPump.Version}");
+		}
+
 		// Pump the window's platform input devices into the app's neutral input queue. The pump takes the input
 		// context (not the window), so a host with its own window can reuse it against its own context.
-		var inputPump = new DesktopInputPump(inputContext, driver);
+		var inputPump = new DesktopInputPump(inputContext, driver, gamepads: padPump is null);
 		var inputClosed = false;
 		window.Closing += () =>
 		{
@@ -103,6 +116,7 @@ public sealed class DesktopAppHost : IAppHost
 				return;
 			inputClosed = true;
 			inputPump.Dispose();
+			padPump?.Dispose();
 			inputContext.Dispose();
 		};
 
@@ -123,6 +137,8 @@ public sealed class DesktopAppHost : IAppHost
 			// held keys/buttons from being stranded down.
 			if (!focused && !inputClosed)
 				inputPump.ReleaseAllHeld();
+			if (!inputClosed)
+				padPump?.SetFocus(focused);
 			driver.SetFocus(focused);
 		};
 
@@ -165,6 +181,8 @@ public sealed class DesktopAppHost : IAppHost
 				luminance = Task.Run(() => (SdrWhiteLevel.Nits(hwnd), DisplayPeak.Nits(hwnd)));
 			}
 			inputPump.Update(delta);
+			if (!inputClosed)
+				padPump?.Update(delta);
 			driver.Tick(new FrameTime(delta, total));
 		};
 

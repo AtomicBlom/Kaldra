@@ -42,4 +42,23 @@ public enum GamepadButton
 	DPadDown,
 	DPadLeft,
 	DPadRight,
+
+	/// <summary>An extra button some pads have: the DualSense's mic button, the Xbox Series pad's share button.</summary>
+	Misc1,
+
+	/// <summary>The upper (or only) paddle on the back, under the right hand: a Steam Controller's right grip, an Elite or
+	/// DualSense Edge's first right paddle.</summary>
+	RightPaddle1,
+
+	/// <summary>The upper (or only) paddle on the back, under the left hand: a Steam Controller's left grip.</summary>
+	LeftPaddle1,
+
+	/// <summary>The lower paddle on the back, under the right hand.</summary>
+	RightPaddle2,
+
+	/// <summary>The lower paddle on the back, under the left hand.</summary>
+	LeftPaddle2,
+
+	/// <summary>Clicking a PlayStation pad's touchpad.</summary>
+	Touchpad,
 }

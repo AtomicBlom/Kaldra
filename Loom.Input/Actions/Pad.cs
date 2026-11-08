@@ -30,6 +30,12 @@ public static class Pad
 	public static InputBinding DPadDown => GamepadButton.DPadDown;
 	public static InputBinding DPadLeft => GamepadButton.DPadLeft;
 	public static InputBinding DPadRight => GamepadButton.DPadRight;
+	public static InputBinding Misc1 => GamepadButton.Misc1;
+	public static InputBinding RightPaddle1 => GamepadButton.RightPaddle1;
+	public static InputBinding LeftPaddle1 => GamepadButton.LeftPaddle1;
+	public static InputBinding RightPaddle2 => GamepadButton.RightPaddle2;
+	public static InputBinding LeftPaddle2 => GamepadButton.LeftPaddle2;
+	public static InputBinding Touchpad => GamepadButton.Touchpad;
 
 	/// <summary>The left stick as a 2-D vector source.</summary>
 	public static InputBinding LeftStick => new()
