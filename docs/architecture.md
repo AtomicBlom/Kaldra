@@ -59,8 +59,12 @@ Beside the engine tiers, all backend-neutral and free of graphics-API references
 | `Loom.UI.SUIsei` / `Loom.UI.ImGui` | UI bridges; both reach the GPU only through the neutral draw-list verb, so no backend references a UI library |
 
 In the browser, the host (`Loom.Backend.WebGPU/wwwroot/loom-webgpu.js`) keeps from the browser the keys it would also act
-on but which mean nothing on a page that is an app: F1–F4 and F6–F10 (help, find, caret browsing, the menu), Tab (focus
-leaving the canvas) and a lone Alt. F5, F11, F12 and anything with Ctrl or Meta held (paste) stay the browser's.
+on but which mean nothing to an app being played in its canvas: F1, F3, F7, F9 and F10 (help, find, caret browsing,
+reader view, the menu), Tab (focus leaving the canvas) and a lone Alt. Only while the key's target is the canvas, or the
+page with nothing else focused: in the page's own text fields, buttons and links the browser keeps every key. Shift+Tab
+(the way out of an embedding iframe by keyboard), F6, Shift+F10, F5, F11, F12 and anything with Ctrl or Meta held
+(paste) stay the browser's, and `runLoom({ captureKeys: false })` leaves it every key. The app is sent every key either
+way.
 
 ## Shader pipeline
 

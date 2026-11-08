@@ -32,6 +32,18 @@ A multithreaded app can then put long work on `Task.Run` and the frame goes on.
 The multithreaded runtime needs a cross-origin isolated page: the server must send `Cross-Origin-Opener-Policy:
 same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. Without them it can't start, and the page says why.
 
+## Keys the browser would act on
+
+While the player is in the canvas (the key's target is the canvas, or the page with nothing else focused), the host
+keeps from the browser the keys it would also act on but which mean nothing to an app: F1, F3, F7, F9, F10, Tab and a
+lone Alt. In a text field, button or link of the page's own, the browser keeps every key. Shift+Tab, F6 and Shift+F10
+are always the browser's, so a keyboard user can leave the page, or the iframe it is embedded in (itch.io's), and reach
+the address bar. The app is sent every key either way. To leave every key to the browser, pass `captureKeys: false`:
+
+```js
+await runLoom({ canvas: '#loom-canvas', captureKeys: false });
+```
+
 ## Clipboard
 
 A browser asks the player before a page may read the clipboard, and refuses outright in a cross-origin iframe, but a

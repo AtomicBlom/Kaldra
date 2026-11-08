@@ -14,7 +14,10 @@
 //   ../Loom.Backend.WebGPU/loom-webgpu.js -> /_content/Loom.Backend.WebGPU/loom-webgpu.js (sibling package asset)
 import * as loomWebgpu from '../Loom.Backend.WebGPU/loom-webgpu.js'
 
-export async function runLoom({ canvas = '#loom-canvas' } = {}) {
+// captureKeys: false leaves every key to the browser, F1, Tab and a lone Alt included (see setBrowserKeyCapture in
+// loom-webgpu.js); by default they are kept from it while the player is in the canvas.
+export async function runLoom({ canvas = '#loom-canvas', captureKeys = true } = {}) {
+	loomWebgpu.setBrowserKeyCapture(captureKeys);
 	// A start that fails is put on the page, not only in the console, or "loading .NET runtime" stays up for good. The
 	// runtime is imported here rather than at the top for the same reason: a multithreaded runtime on a page without
 	// cross-origin isolation asserts as its module loads, which would fail this module before it could say so. Other

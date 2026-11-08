@@ -545,6 +545,23 @@ export function startPointerHandler(dotnetPointer) {
 	canvas.addEventListener("pointerup", e => send(e, 2));
 }
 
+// Keys the browser would also act on, which mean nothing to an app being played in its canvas, are kept from the
+// browser: F1's help, F3's find, F7's caret browsing, F9's reader view, F10 and a lone Alt's menu, and Tab moving focus
+// off the canvas. Only while the player is in the app, though: the key's target is the canvas, or the page itself with
+// nothing else focused. In a text field, a button or a link of the page's own the browser keeps every key. Shift+Tab
+// stays the browser's everywhere, the way out of the page (or the iframe it is embedded in) by keyboard alone, as do
+// F6 (to the address bar), Shift+F10 (the context menu), F5, F11 and F12 (reload, full screen, developer tools) and
+// anything with Ctrl or Meta held (Ctrl+V's paste). runLoom({ captureKeys: false }) leaves every key to the browser.
+const keptFromBrowser = new Set(["F1", "F3", "F7", "F9", "F10", "Tab", "AltLeft", "AltRight"]);
+let captureBrowserKeys = true;
+export function setBrowserKeyCapture(on) { captureBrowserKeys = !!on; }
+function keepFromBrowser(e) {
+	if (!captureBrowserKeys || !keptFromBrowser.has(e.code) || e.ctrlKey || e.metaKey) return false;
+	if (e.shiftKey && (e.code === "Tab" || e.code === "F10")) return false;
+	const t = e.target;
+	return t === canvas || t === document.body || t === document.documentElement || t === document || t === window;
+}
+
 // Forward DOM pointer/keyboard/text + Gamepad-API events to the host as neutral input. Each callback carries at
 // most three values (the ceiling the .NET source-generated JS interop marshals for a function): the three-value
 // events get a dedicated callback (onPointerMove, onGamepadButton, onGamepadAxis), the rest share the
@@ -592,16 +609,13 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 
 	// Keyboard state via the physical (layout-independent) code; drop auto-repeat — the host's held state already
 	// covers a key held across frames, and typed characters come through the text channel below.
-	// Keys the browser would also act on, which mean nothing on a page that is a game are kept from it: F1's help, F3 and
-	// F7's find and caret browsing, F10 and a lone Alt's menu, Tab's focus moving off the canvas. F5, F11 and F12
-	// (reload, full screen, developer tools) and anything with Ctrl or Meta held (Ctrl+V's paste) stay the browser's.
-	const keptFromBrowser = new Set(["F1", "F2", "F3", "F4", "F6", "F7", "F8", "F9", "F10", "Tab", "AltLeft", "AltRight"]);
+	// Every key is delivered; keepFromBrowser decides only whether the browser acts on it too.
 	window.addEventListener("keydown", e => {
-		if (keptFromBrowser.has(e.code) && !e.ctrlKey && !e.metaKey) e.preventDefault();
+		if (keepFromBrowser(e)) e.preventDefault();
 		if (!e.repeat) onKey(e.code, true);
 	});
 	window.addEventListener("keyup", e => {
-		if (keptFromBrowser.has(e.code) && !e.ctrlKey && !e.metaKey) e.preventDefault();   // a lone Alt opens the menu on its release
+		if (keepFromBrowser(e)) e.preventDefault();   // a lone Alt opens the menu on its release
 		onKey(e.code, false);
 	});
 	// Typed text via keypress: it delivers a layout/shift-resolved character that raw key codes can't. Emit only
