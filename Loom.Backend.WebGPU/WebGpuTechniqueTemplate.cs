@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Materials;
@@ -90,6 +91,8 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 	{
 		var bindings = WebGpuBindingModel.Parse(wgsl, reflectionJson, shaderName);
 		ShaderBindingMap.CheckCompare(shaderName, bindings.ComparedCount, descriptor.SampleCompare);
+		var reflected = reflectionJson is null ? default : ShaderBindingMap.From(ShaderReflection.FromBytes(reflectionJson, ShaderBindingTarget.Wgsl));
+		reflected.CheckDrawStorage(shaderName, descriptor.IsCompute);
 
 		var module = handles.Allocate(WebGpuHandleAllocator.ShaderModules);
 		WebGpuInterop.CreateShaderModule(module, wgsl, shaderName);
@@ -118,7 +121,7 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 		return new WebGpuTechniqueTemplate(handles)
 		{
 			Bindings = bindings,
-			Reflected = reflectionJson is null ? default : ShaderBindingMap.From(ShaderReflection.FromBytes(reflectionJson, ShaderBindingTarget.Wgsl)),
+			Reflected = reflected,
 			VertexEntry = vertexEntry,
 			FragmentEntry = fragmentEntry,
 			VertexInputLocations = ParseVertexInputLocations(wgsl, vertexEntry),

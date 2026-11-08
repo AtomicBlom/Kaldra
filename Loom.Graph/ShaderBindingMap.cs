@@ -115,6 +115,32 @@ public readonly record struct ShaderBindingMap
 	}
 
 	/// <summary>
+	/// Refuse a draw technique (one that isn't compute) whose shader declares read-write storage: a <c>RWStructuredBuffer</c>
+	/// or a <c>RWTexture</c>. A draw binds only the storage its pass <c>.Reads</c>, read-only, so no backend has anything
+	/// to put in such a slot, and each would leave it unbound in its own way. Checked when the technique is defined, the
+	/// same on every backend.
+	/// </summary>
+	public void CheckDrawStorage(string technique, bool isCompute)
+	{
+		if (isCompute)
+			return;
+		if (!StorageImages.IsDefaultOrEmpty)
+			throw new InvalidOperationException(
+				$"Technique '{technique}' is a draw technique and its shader declares {StorageImages.Length} read-write texture(s) " +
+				$"('{StorageImages[0].Name}' first). A draw binds no storage images; write them from a compute pass.");
+		if (StorageBuffers.IsDefaultOrEmpty)
+			return;
+		foreach (var binding in StorageBuffers)
+		{
+			if (binding.Kind == ShaderBindingKind.StorageBufferReadOnly)
+				continue;
+			throw new InvalidOperationException(
+				$"Technique '{technique}' is a draw technique and its shader declares read-write storage buffer '{binding.Name}'. " +
+				"A draw binds only the storage its pass .Reads, read-only: declare it StructuredBuffer<T>, or write it from a compute pass.");
+		}
+	}
+
+	/// <summary>
 	/// Hold the storage buffers <paramref name="pass"/> <c>.Reads</c> to the technique's storage slots they bind to. The
 	/// binding is positional: the technique's <c>k</c>-th storage slot (with <paramref name="readOnlyOnly"/>, its
 	/// <c>k</c>-th read-only one, as a compute technique's read-write slots take its dispatch's buffers) takes the pass's

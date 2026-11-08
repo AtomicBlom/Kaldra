@@ -248,6 +248,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.Shader);
 		var bindings = ShaderBindingMap.From(reflection, SpirvDepthTextures.Bindings(spirv, descriptor.Shader));
 		ShaderBindingMap.CheckCompare(name, bindings.ComparedCount, descriptor.SampleCompare);
+		bindings.CheckDrawStorage(name, descriptor.IsCompute);
 		_registry[name] = new VulkanTechniqueTemplate(
 			spirv,
 			vertexEntry,

@@ -325,6 +325,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		var compared = ShaderBindingMap.From(reflection,
 			inputCount > 0 ? SpirvDepthTextures.Bindings(DirectX12Shaders.ResolveSpirv(dir, shader), shader) : null);
 		ShaderBindingMap.CheckCompare(name, compared.ComparedCount, descriptor.SampleCompare);
+		compared.CheckDrawStorage(name, descriptor.IsCompute);
 		var storageImages = 0;
 		var storageBuffers = 0;
 		var storageBufferStride = 0;

@@ -92,6 +92,16 @@ public class StorageSlotTests
 		Should.Throw<InvalidOperationException>(() => map.CheckDispatchStorage("place", [first, image])).Message.ShouldContain("storage image");
 	}
 
+	[Test]
+	public void A_draw_technique_declaring_read_write_storage_is_refused()
+	{
+		// A draw binds only what its pass .Reads, read-only; a compute technique's read-write slots take its dispatch's
+		var readWrite = Map(("out", 0, Float4Type, true));
+		Should.Throw<InvalidOperationException>(() => readWrite.CheckDrawStorage("ribbon", isCompute: false)).Message.ShouldContain("'out'");
+		Should.NotThrow(() => readWrite.CheckDrawStorage("expand", isCompute: true));
+		Should.NotThrow(() => Map(("lights", 0, LightType)).CheckDrawStorage("ribbon", isCompute: false));
+	}
+
 	private const string Float4Type = "{\"kind\":\"vector\",\"elementCount\":4,\"elementType\":{\"kind\":\"scalar\",\"scalarType\":\"float32\"}}";
 	private const string Float3Type = "{\"kind\":\"vector\",\"elementCount\":3,\"elementType\":{\"kind\":\"scalar\",\"scalarType\":\"float32\"}}";
 	private const string UInt2Type = "{\"kind\":\"vector\",\"elementCount\":2,\"elementType\":{\"kind\":\"scalar\",\"scalarType\":\"uint32\"}}";
