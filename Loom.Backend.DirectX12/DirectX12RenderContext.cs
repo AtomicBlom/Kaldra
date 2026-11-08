@@ -209,6 +209,9 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
 	private int _activeStorageCount;
 
+	// The pass being recorded, which a technique's storage slots are held to (ShaderBindingMap.CheckPassStorage)
+	private GraphPass? _pass;
+
 	/// <summary>
 	/// Tell the context the current pass's colour-target formats + depth format (or <c>FormatUnknown</c> for no
 	/// depth), so techniques bake matching pipelines. <paramref name="depthReadOnly"/> bakes with depth writes
@@ -219,6 +222,7 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	public void BeginPass(GraphPass pass, ReadOnlySpan<DxgiFormat> colorFormats, DxgiFormat depthFormat, bool depthReadOnly, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default, int samples = 1)
 	{
 		_validate.BeginPass(pass);
+		_pass = pass;
 		if (_colorFormats.Length < colorFormats.Length)
 			_colorFormats = new DxgiFormat[colorFormats.Length];
 		colorFormats.CopyTo(_colorFormats);
@@ -237,13 +241,15 @@ internal sealed unsafe partial class DirectX12RenderContext : IRenderContext, ID
 	}
 
 	// The pass's .Reads storage buffers (SSBOs), as read-only root SRVs from each UPLOAD buffer's address: the first as
-	// many as the technique declares, in the order the pass read them. A pass may read more than one technique uses (one
-	// storage buffer for the road, beside techniques that read none); a technique that declares more than the pass reads
-	// would read an unbound root SRV, so it throws.
+	// many as the technique declares, in the order the pass read them. A pass may read more than one technique uses
+	// (beside techniques that read none, or fewer); a technique that declares more than the pass reads would read an
+	// unbound root SRV, so it throws, and one whose slot can't be reading the buffer bound to it by element size throws.
 	private void BindPassStorage(DirectX12Technique baked, string technique)
 	{
 		if (baked.InputBufferCount > _activeStorageCount)
 			throw new InvalidOperationException($"DirectX12: technique '{technique}' declares {baked.InputBufferCount} storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		if (baked.InputBufferCount > 0)
+			baked.Bindings.CheckPassStorage(technique, _pass!, readOnlyOnly: true);
 		for (var s = 0; s < baked.InputBufferCount; s++)
 			_cmd.SetGraphicsRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients!.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
 	}

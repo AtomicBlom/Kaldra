@@ -209,19 +209,25 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	public const int MaxStorageBuffers = GraphLimits.MaxStorageBuffersPerPass;
 
 	// The storage buffers the pass .Reads, for a technique's draw: the first as many as it declares, in the order the
-	// pass read them. A pass may read more than one technique uses (one storage buffer for the road, beside techniques
-	// that read none); a technique that declares more than the pass reads would read an unbound slot, so it throws.
+	// pass read them. A pass may read more than one technique uses (beside techniques that read none, or fewer); a
+	// technique that declares more than the pass reads would read an unbound slot, so it throws, and one whose slot can't
+	// be reading the buffer bound to it by element size throws.
 	private int PassStorage(Span<Silk.NET.Vulkan.Buffer> into, in ShaderBindingMap map, string technique)
 	{
 		var declared = map.StorageBuffers.Length;
 		if (declared > _activeStorageCount)
 			throw new VulkanException($"Technique '{technique}' declares {declared} storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		if (declared > 0)
+			map.CheckPassStorage(technique, _pass!);
 		for (var j = 0; j < declared; j++)
 			into[j] = _resources.GetStorageBuffer(_frameSlot, _activeStorageIds[j]);
 		return declared;
 	}
 	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
 	private int _activeStorageCount;
+
+	// The pass being recorded, which a technique's storage slots are held to (ShaderBindingMap.CheckPassStorage)
+	private GraphPass? _pass;
 
 	/// <summary>
 	/// Set the attachment formats of the current pass — the formats its techniques bake against — plus whether
@@ -234,6 +240,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	{
 		_samples = samples;
 		_validate.BeginPass(pass);
+		_pass = pass;
 		// Copy into the inline buffer (no allocation) rather than .ToArray(); the incoming span points into
 		// the executor's stackalloc, which is gone once this returns. Throw — never clamp — on an over-wide
 		// pass: silently dropping formats would bake a pipeline with fewer attachments than the pass writes.

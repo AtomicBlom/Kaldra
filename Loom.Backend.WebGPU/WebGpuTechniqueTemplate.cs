@@ -1,11 +1,10 @@
 using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
-using Loom.Graph;
 using Loom.Core.Materials;
+using Loom.Graph;
 
 namespace Loom.Backend.WebGPU;
 
@@ -23,6 +22,12 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 	private readonly WebGpuHandleAllocator _handles;
 
 	public required WebGpuBindingModel Bindings { get; init; }
+
+	/// <summary>The reflection's bindings in the neutral form, which a pass's <c>.Reads</c> storage buffers are held to at
+	/// the draw (<see cref="ShaderBindingMap.CheckPassStorage"/>); its storage buffers line up with
+	/// <see cref="WebGpuBindingModel.StorageBufferBindings"/>, both in binding order.</summary>
+	public ShaderBindingMap Reflected { get; init; }
+
 	public required string VertexEntry { get; init; }
 	public required string FragmentEntry { get; init; }
 	public required bool HasVertexInput { get; init; }
@@ -113,6 +118,7 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 		return new WebGpuTechniqueTemplate(handles)
 		{
 			Bindings = bindings,
+			Reflected = reflectionJson is null ? default : ShaderBindingMap.From(ShaderReflection.FromBytes(reflectionJson, ShaderBindingTarget.Wgsl)),
 			VertexEntry = vertexEntry,
 			FragmentEntry = fragmentEntry,
 			VertexInputLocations = ParseVertexInputLocations(wgsl, vertexEntry),

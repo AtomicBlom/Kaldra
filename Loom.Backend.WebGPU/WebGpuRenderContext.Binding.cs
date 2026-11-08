@@ -74,6 +74,8 @@ internal sealed partial class WebGpuRenderContext
 		// One that declares more than the pass reads would bind a group missing an entry, so it throws here instead.
 		if (bindings.StorageBufferBindings.Length > _activeStorageCount)
 			throw new InvalidOperationException($"WebGPU: technique '{technique}' declares {bindings.StorageBufferBindings.Length} storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		if (bindings.StorageBufferBindings.Length > 0)
+			baked.Template.Reflected.CheckPassStorage(technique, _pass!);
 		for (var j = 0; j < bindings.StorageBufferBindings.Length; j++)
 			AddEntry(entries, ref e, bindings.StorageBufferBindings[j], EntryBuffer, transients.BufferHandle(_activeStorageIds[j]), 0, 0);
 
@@ -121,22 +123,26 @@ internal sealed partial class WebGpuRenderContext
 		}
 
 		var bindGroup = GetOrCreateBindGroup(baked.Template.BindGroupLayout, entries[..e]);
+		SortDynamicOffsets(dynBinding[..dynCount], dynOffset[..dynCount]);
+		_engine.Writer.SetBindGroup(0, bindGroup, dynOffset[..dynCount]);
+	}
 
-		// WebGPU wants dynamic offsets in ascending binding order — sort the (binding, offset) pairs together.
-		for (var i = 1; i < dynCount; i++)
+	// WebGPU wants a bind group's dynamic offsets in ascending binding order: sort the (binding, offset) pairs together,
+	// in place. An insertion sort, since there are only a handful and the draw path must not allocate.
+	private static void SortDynamicOffsets(Span<int> bindings, Span<int> offsets)
+	{
+		for (var i = 1; i < bindings.Length; i++)
 		{
-			int b = dynBinding[i], o = dynOffset[i], k = i - 1;
-			while (k >= 0 && dynBinding[k] > b)
+			int binding = bindings[i], offset = offsets[i], k = i - 1;
+			while (k >= 0 && bindings[k] > binding)
 			{
-				dynBinding[k + 1] = dynBinding[k];
-				dynOffset[k + 1] = dynOffset[k];
+				bindings[k + 1] = bindings[k];
+				offsets[k + 1] = offsets[k];
 				k--;
 			}
-			dynBinding[k + 1] = b;
-			dynOffset[k + 1] = o;
+			bindings[k + 1] = binding;
+			offsets[k + 1] = offset;
 		}
-
-		_engine.Writer.SetBindGroup(0, bindGroup, dynOffset[..dynCount]);
 	}
 
 	private static void AddEntry(Span<int> entries, ref int e, int binding, int kind, int handle, int offset, int size)

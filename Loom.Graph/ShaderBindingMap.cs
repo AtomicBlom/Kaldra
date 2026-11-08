@@ -113,4 +113,38 @@ public readonly record struct ShaderBindingMap
 				$"Technique '{technique}' names SampleCompare {sampleCompare} but its shader reads no texture by comparison " +
 				"(SampleCmp on a Sampler2DShadow).");
 	}
+
+	/// <summary>
+	/// Hold the storage buffers <paramref name="pass"/> <c>.Reads</c> to the technique's storage slots they bind to. The
+	/// binding is positional: the technique's <c>k</c>-th storage slot (with <paramref name="readOnlyOnly"/>, its
+	/// <c>k</c>-th read-only one, as a compute technique's read-write slots take its dispatch's buffers) takes the pass's
+	/// <c>k</c>-th <c>.Reads</c> storage buffer, from the first. So a technique that declares only a later one of a pass's
+	/// buffers reads an earlier one in its place; where the element sizes show it, this throws rather than shading from the
+	/// wrong buffer. A slot or buffer of unknown element size passes, and the counts are each backend's own check.
+	/// Allocation-free, for the draw path.
+	/// </summary>
+	public void CheckPassStorage(string technique, GraphPass pass, bool readOnlyOnly = false)
+	{
+		if (StorageBuffers.IsDefaultOrEmpty)
+			return;
+		int slot = 0, read = 0;
+		foreach (var access in pass.Accesses)
+		{
+			if (access.Kind != AccessKind.ReadStorage)
+				continue;
+			read++;
+			while (readOnlyOnly && slot < StorageBuffers.Length && StorageBuffers[slot].Kind != ShaderBindingKind.StorageBufferReadOnly)
+				slot++;
+			if (slot >= StorageBuffers.Length)
+				return;
+			var binding = StorageBuffers[slot++];
+			if (binding.AcceptsElementSize(access.Resource.Stride))
+				continue;
+			throw new InvalidOperationException(
+				$"Technique '{technique}' reads storage buffer '{binding.Name}' as {binding.ElementStride}-byte elements, but in pass " +
+				$"'{pass.Name}' it binds to the storage buffer the pass .Reads #{read}, '{access.Resource.Name}', of " +
+				$"{access.Resource.Stride}-byte elements. A technique's storage buffers take the pass's .Reads storage in order, its first the first the pass " +
+				"reads, so declare them in the shader in the order the pass reads them, from its first.");
+		}
+	}
 }

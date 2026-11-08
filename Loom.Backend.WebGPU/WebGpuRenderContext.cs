@@ -67,6 +67,9 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
 	private int _activeStorageCount;
 
+	// The pass being recorded, which a technique's storage slots are held to (ShaderBindingMap.CheckPassStorage)
+	private GraphPass? _pass;
+
 	public double DeltaTime { get; private set; }
 	public double Time { get; private set; }
 	public bool HdrOutput => false; // browser output is the SDR canvas; HDR canvas negotiation is a later concern
@@ -86,6 +89,7 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	public void BeginPass(GraphPass pass, ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly, ReadOnlySpan<int> colorViews, int areaWidth, int areaHeight, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default, int samples = 1)
 	{
 		_validate.BeginPass(pass);
+		_pass = pass;
 		_samples = samples;
 		if (colorFormatIds.Length > MaxColorFormats)
 			throw new WebGpuException($"A pass has {colorFormatIds.Length} color attachments; the pipeline-key buffer holds {MaxColorFormats}.");

@@ -193,13 +193,15 @@ public readonly record struct ShaderReflection
 
 				if (baseShape is "structuredBuffer" or "byteAddressBuffer")
 				{
-					// A read-write structured buffer's element size becomes a UAV's StructureByteStride; a raw
-					// byte-address buffer has no element type and stays 0.
-					var stride = readWrite && baseShape == "structuredBuffer" && type.TryGetProperty("resultType", out var resultType)
+					// A structured buffer's element size: a read-write one's becomes a UAV's StructureByteStride, and a
+					// read-only one's is held to the element size of the storage buffer bound to it. A raw byte-address
+					// buffer has no element type and stays 0.
+					var stride = baseShape == "structuredBuffer" && type.TryGetProperty("resultType", out var resultType)
 						? TypeByteSize(resultType)
 						: 0;
+					var alignment = stride > 0 ? TypeAlignment(type.GetProperty("resultType")) : 0;
 					var bufferKind = readWrite ? ShaderBindingKind.StorageBufferReadWrite : ShaderBindingKind.StorageBufferReadOnly;
-					bindings.Add(new ShaderBinding(name, index, bufferKind, slotCount, ElementStride: stride));
+					bindings.Add(new ShaderBinding(name, index, bufferKind, slotCount, ElementStride: stride, ElementAlignment: alignment));
 				}
 				else
 				{
@@ -268,6 +270,39 @@ public readonly record struct ShaderReflection
 				return size;
 			default:
 				return 0; // unknown — can't size generically
+		}
+	}
+
+	// A type's alignment under std430, which is how SPIR-V lays out a structured buffer's elements: a scalar its own size,
+	// a two-vector twice that, a three- or four-vector four times it, a matrix its column vectors', a struct its widest
+	// field's. Unknown types read as 4, the least any element aligns to.
+	private static int TypeAlignment(JsonElement type)
+	{
+		var kind = type.TryGetProperty("kind", out var k) ? k.GetString() : null;
+		switch (kind)
+		{
+			case "scalar":
+				return TypeByteSize(type);
+			case "vector":
+				var count = type.TryGetProperty("elementCount", out var e) ? e.GetInt32() : 4;
+				var scalar = type.TryGetProperty("elementType", out var et) ? TypeByteSize(et) : 4;
+				return (count == 2 ? 2 : count >= 3 ? 4 : 1) * scalar;
+			case "matrix":
+				var element = type.TryGetProperty("elementType", out var met) ? TypeByteSize(met) : 4;
+				return 4 * element;
+			case "struct":
+				var alignment = 4;
+				if (type.TryGetProperty("fields", out var fields) && fields.ValueKind == JsonValueKind.Array)
+				{
+					foreach (var field in fields.EnumerateArray())
+					{
+						if (field.TryGetProperty("type", out var ft))
+							alignment = Math.Max(alignment, TypeAlignment(ft));
+					}
+				}
+				return alignment;
+			default:
+				return 4;
 		}
 	}
 }

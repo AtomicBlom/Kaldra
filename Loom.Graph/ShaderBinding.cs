@@ -16,11 +16,31 @@ namespace Loom.Graph;
 /// 1 unless the sidecar says otherwise.
 /// </param>
 /// <param name="ByteSize">A constant buffer's laid-out size in bytes, padded to its alignment; 0 for every other kind.</param>
-/// <param name="ElementStride">A structured buffer's element stride in bytes; 0 for a raw buffer, a texture, or a constant buffer.</param>
+/// <param name="ElementStride">A structured buffer's element size in bytes, its fields packed as laid out (the end of
+/// its last field); 0 for a raw buffer, a texture, a constant buffer, or an element the sidecar can't size.</param>
+/// <param name="ElementAlignment">A structured buffer's element alignment in bytes under std430 (its widest field's), so
+/// an array of it may pad each element to a multiple of this; 0 where <paramref name="ElementStride"/> is.</param>
 public readonly record struct ShaderBinding(
 	string Name,
 	int Index,
 	ShaderBindingKind Kind,
 	int SlotCount = 1,
 	int ByteSize = 0,
-	int ElementStride = 0);
+	int ElementStride = 0,
+	int ElementAlignment = 0)
+{
+	/// <summary>
+	/// Whether a storage buffer of <paramref name="elementSize"/>-byte elements can be what this structured buffer reads:
+	/// its element size packed, or padded to its alignment, as the app's struct may be either. True when either side is
+	/// unknown (0), since there is then nothing to hold it to.
+	/// </summary>
+	public bool AcceptsElementSize(int elementSize)
+	{
+		if (ElementStride <= 0 || elementSize <= 0)
+			return true;
+		if (elementSize == ElementStride)
+			return true;
+		var alignment = Math.Max(ElementAlignment, 1);
+		return elementSize == (ElementStride + alignment - 1) / alignment * alignment;
+	}
+}

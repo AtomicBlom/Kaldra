@@ -1,6 +1,7 @@
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
@@ -69,6 +70,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 
 	/// <summary>Which uniform slot carries the per-material parameter block, or null when the shader declares none.</summary>
 	public int? MaterialUniformSlot { get; }
+
+	/// <summary>The shader's reflected bindings, which a pass's <c>.Reads</c> storage buffers are held to at the draw.</summary>
+	public ShaderBindingMap Bindings { get; }
 
 	// The on-disk blob cache and this pipeline's key in it. Null cache = this run does not persist pipelines.
 	private readonly DirectX12PipelineBlobCache? _blobs;
@@ -139,6 +143,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		UniformBufferCount = template.UniformBufferCount;
 		InstanceStride = template.Instance?.Stride ?? 0;
 		MaterialUniformSlot = template.MaterialUniformSlot;
+		Bindings = template.Bindings;
 
 		if (template.IsCompute)
 		{
