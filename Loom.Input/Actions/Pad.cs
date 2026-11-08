@@ -3,10 +3,14 @@ namespace Loom.Input;
 /// <summary>
 /// Gamepad binding sources for action definitions. Face buttons and the D-pad convert straight to a button
 /// binding; <see cref="LeftStick"/>/<see cref="RightStick"/> produce 2-D stick sources and <see cref="Triggers"/>
-/// a single axis from the trigger pair. All default to gamepad 0; use <see cref="OnPad"/> to target another pad.
+/// a single axis from the trigger pair. All read the pad last used (<see cref="Last"/>), so a player picks up whichever pad is to\n/// hand; <see cref="OnPad"/> pins one to a particular pad.
 /// </summary>
 public static class Pad
 {
+	/// <summary>The pad index that means the pad last used (<see cref="InputSnapshot.LastPad"/>, or the first connected
+	/// before any is): every binding these helpers make reads it.</summary>
+	public const int Last = -1;
+
 	/// <summary>Bottom face button.</summary>
 	public static InputBinding South => GamepadButton.South;
 
@@ -42,6 +46,7 @@ public static class Pad
 	{
 		Kind = BindingKind.Stick,
 		Family = InputFamily.Gamepad,
+		PadIndex = Last,
 		Code = (int)GamepadAxis.LeftX,
 		Code2 = (int)GamepadAxis.LeftY,
 	};
@@ -51,12 +56,13 @@ public static class Pad
 	{
 		Kind = BindingKind.Stick,
 		Family = InputFamily.Gamepad,
+		PadIndex = Last,
 		Code = (int)GamepadAxis.RightX,
 		Code2 = (int)GamepadAxis.RightY,
 	};
 
 	/// <summary>The trigger pair as one axis (right minus left).</summary>
-	public static InputBinding Triggers => new() { Kind = BindingKind.Triggers, Family = InputFamily.Gamepad };
+	public static InputBinding Triggers => new() { Kind = BindingKind.Triggers, Family = InputFamily.Gamepad, PadIndex = Last };
 
 	/// <summary>The left trigger as a single axis.</summary>
 	public static InputBinding LeftTrigger => GamepadAxis.LeftTrigger;

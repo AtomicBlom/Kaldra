@@ -26,6 +26,56 @@ public sealed class InputActions
 		_byName = byName;
 		_states = new ActionState[definitions.Length];
 		_previousDown = new bool[definitions.Length];
+		foreach (var definition in definitions)
+			definition.KeepAsDefault();
+	}
+
+	/// <summary>The actions' names, in the order they were defined.</summary>
+	public IEnumerable<string> Names => _definitions.Select(d => d.Name);
+
+	/// <summary>Whether <paramref name="name"/> is a button, an axis or a vector action.</summary>
+	public ActionKind KindOf(string name) => _definitions[IndexOf(name)].Kind;
+
+	/// <summary>The sources bound to <paramref name="name"/> now (after any <see cref="Rebind"/> or <see cref="LoadBindings"/>).</summary>
+	public IReadOnlyList<InputBinding> Bindings(string name) => _definitions[IndexOf(name)].Sources;
+
+	/// <summary>The sources <paramref name="name"/> was defined with.</summary>
+	public IReadOnlyList<InputBinding> Defaults(string name) => _definitions[IndexOf(name)].DefaultSources;
+
+	/// <summary>Puts <paramref name="name"/>'s sources, deadzone and curve back as they were defined.</summary>
+	public void ResetToDefaults(string name) => _definitions[IndexOf(name)].ResetToDefault();
+
+	/// <summary>Puts every action's sources, deadzone and curve back as they were defined.</summary>
+	public void ResetToDefaults()
+	{
+		foreach (var definition in _definitions)
+			definition.ResetToDefault();
+	}
+
+	/// <summary>
+	/// The actions that read <paramref name="control"/> in any of their sources (a composite's key counts), for warning of
+	/// a binding that is taken. Pad controls match whatever pad index the binding names.
+	/// </summary>
+	public IEnumerable<string> ActionsUsing(InputControl control)
+	{
+		foreach (var definition in _definitions)
+			if (definition.Sources.Any(s => s.Controls().Any(c => SameControl(c, control))))
+				yield return definition.Name;
+	}
+
+	// One direction of an axis is the axis; a stick is both of its axes
+	private static bool SameControl(InputControl a, InputControl b)
+	{
+		static (ControlKind, int)[] Parts(InputControl c) => c.Kind switch
+		{
+			ControlKind.PadAxis => [(ControlKind.PadAxis, c.Code)],
+			ControlKind.PadStick => c.Code == 0
+				? [(ControlKind.PadAxis, (int)GamepadAxis.LeftX), (ControlKind.PadAxis, (int)GamepadAxis.LeftY)]
+				: [(ControlKind.PadAxis, (int)GamepadAxis.RightX), (ControlKind.PadAxis, (int)GamepadAxis.RightY)],
+			ControlKind.PadTriggers => [(ControlKind.PadAxis, (int)GamepadAxis.LeftTrigger), (ControlKind.PadAxis, (int)GamepadAxis.RightTrigger)],
+			_ => [(c.Kind, c.Code)],
+		};
+		return Parts(a).Intersect(Parts(b)).Any();
 	}
 
 	/// <summary>Defines an action set with the given declarations.</summary>

@@ -34,6 +34,7 @@ public static class Composite
 	{
 		Kind = BindingKind.Composite2D,
 		Family = InputFamily.Gamepad,
+		PadIndex = Pad.Last,
 		Code = (int)GamepadButton.DPadUp,
 		Code2 = (int)GamepadButton.DPadDown,
 		Code3 = (int)GamepadButton.DPadLeft,
