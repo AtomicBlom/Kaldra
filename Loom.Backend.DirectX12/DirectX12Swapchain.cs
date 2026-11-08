@@ -122,8 +122,10 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 			AlphaMode = AlphaMode.Unspecified,
 			Flags = 0
 		};
+		ComPtr<IDXGISwapChain1> madeSwapChain = default;
 		SilkMarshal.ThrowHResult(_ctx.Factory.CreateSwapChainForHwnd(
-			_ctx.GraphicsQueue, _hwnd, &desc, (SwapChainFullscreenDesc*)null, default(ComPtr<IDXGIOutput>), ref SwapChain));
+			_ctx.GraphicsQueue, _hwnd, &desc, (SwapChainFullscreenDesc*)null, default(ComPtr<IDXGIOutput>), ref madeSwapChain));
+		SwapChain = madeSwapChain;
 		_ctx.Factory.MakeWindowAssociation(_hwnd, 1u << 1); // DXGI_MWA_NO_ALT_ENTER — don't let DXGI hijack Alt+Enter
 		_index = 0;
 	}
