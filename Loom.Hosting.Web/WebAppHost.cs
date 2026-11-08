@@ -37,6 +37,17 @@ public sealed partial class WebAppHost : IAppHost
 	// the start of each frame
 	private static WebInputPump? _input;
 	private static string _canvasSelector = "";
+	// The array the page's queued events are taken into each frame: 256 events of four numbers, more taken in turn when
+	// more are queued
+	private static readonly double[] _hostEvents = new double[1024];
+
+	// The kind of each queued event, its first number: kept in lockstep with the HOST_* kinds in loom-webgpu.js
+	private const int HostEventPointerMove = 1;
+	private const int HostEventGamepadButton = 2;
+	private const int HostEventGamepadAxis = 3;
+	private const int HostEventInput = 4;
+	private const int HostEventKey = 5;
+	private const int HostEventResize = 6;
 
 	// Capture mode (?capture=<name>): a frozen 1/60 s clock and a one-shot grab at a fixed frame, so a headless
 	// browser capture is deterministic and pixel-comparable with a desktop reference.
@@ -126,7 +137,7 @@ public sealed partial class WebAppHost : IAppHost
 		// Bridge the page's DOM/Gamepad-API input into the app's neutral queue, and its focus/visibility state into
 		// the app's focus hook. On blur/hide the pump synthesizes releases for everything held — the browser drops
 		// the key/button ups for anything held across a tab switch, which would otherwise strand it down.
-		_input = new WebInputPump(app.QueueInput, app.SetFocus);
+		_input = new WebInputPump(app.QueueInput, app.SetFocus, GetKeyCode);
 		_canvasSelector = canvasSelector;
 		StartHostEventQueue();
 		StartClipboard();
@@ -173,38 +184,49 @@ public sealed partial class WebAppHost : IAppHost
 			var msg = $"RENDER ERROR: {ex}";
 			SetStatus(msg);
 			ConsoleError(msg);
-			_engine = null; // stop ticking after a fault
+			StopTicking(); // stop ticking after a fault
 		}
 		_frame++;
 		return Task.CompletedTask;
 	}
 
-	// The page's queued events (startHostEventQueue in loom-webgpu.js), one a line, to the input pump, and a resize to
-	// the engine and the app
+	// Frame no-ops from here on, and the page stops queueing input for frames that won't come to take it
+	[SupportedOSPlatform("browser")]
+	private static void StopTicking()
+	{
+		_engine = null;
+		StopHostEventQueue();
+	}
+
+	// The page's queued events (startHostEventQueue in loom-webgpu.js), four numbers each, taken into one array held for
+	// the app's lifetime, to the input pump, and a resize to the engine and the app. Nothing here allocates: a frame with a
+	// stick held sends its axes every frame.
 	[SupportedOSPlatform("browser")]
 	private static void TakeHostEventsInto(WebInputPump input)
 	{
-		string events = TakeHostEvents();
-		if (events.Length == 0)
-			return;
+		var events = _hostEvents;
 		bool resized = false;
-		foreach (var line in events.Split('\n'))
+		int count;
+		do
 		{
-			var f = line.Split(' ');
-			switch (f[0])
+			count = TakeHostEvents(events);
+			for (int i = 0; i + 3 < count; i += 4)
 			{
-				case "m" when f.Length == 4: input.OnPointerMove(D(f[1]), D(f[2]), D(f[3])); break;
-				case "b" when f.Length == 4: input.OnGamepadButton(D(f[1]), D(f[2]), D(f[3])); break;
-				case "a" when f.Length == 4: input.OnGamepadAxis(D(f[1]), D(f[2]), D(f[3])); break;
-				case "e" when f.Length == 4: input.OnEvent(D(f[1]), D(f[2]), D(f[3])); break;
-				case "k" when f.Length == 3: input.OnKey(f[1], f[2] == "1"); break;
-				case "r": resized = true; break;
+				double a = events[i + 1], b = events[i + 2], c = events[i + 3];
+				switch ((int)events[i])
+				{
+					case HostEventPointerMove: input.OnPointerMove(a, b, c); break;
+					case HostEventGamepadButton: input.OnGamepadButton(a, b, c); break;
+					case HostEventGamepadAxis: input.OnGamepadAxis(a, b, c); break;
+					case HostEventInput: input.OnEvent(a, b, c); break;
+					case HostEventKey: input.OnKey((int)a, b != 0); break;
+					case HostEventResize: resized = true; break;
+				}
 			}
 		}
+		while (count == events.Length);
 		if (resized)
 			Resize(_canvasSelector);
-
-		static double D(string s) => double.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
 	}
 
 	[SupportedOSPlatform("browser")]
@@ -225,12 +247,13 @@ public sealed partial class WebAppHost : IAppHost
 
 	private sealed class BrowserHostControl : IHostControl
 	{
+		[SupportedOSPlatform("browser")]
 		public void RequestExit()
 		{
 			var engine = _engine;
 			if (engine is null || LoomApplication.Current is not { } current)
 				return;
-			_engine = null; // stop ticking — Frame() no-ops once this is null
+			StopTicking();
 			((IHostedApplication)current).Unload();
 			engine.WaitIdle();
 		}
@@ -331,9 +354,21 @@ public sealed partial class WebAppHost : IAppHost
 	[SupportedOSPlatform("browser")]
 	private static partial void StartHostEventQueue();
 
+	// Fills destination with as many whole queued events as fit and returns how many numbers it wrote
 	[JSImport("takeHostEvents", Module)]
 	[SupportedOSPlatform("browser")]
-	private static partial string TakeHostEvents();
+	private static partial int TakeHostEvents([JSMarshalAs<JSType.MemoryView>] Span<double> destination);
+
+	// The KeyboardEvent.code of a key id the page sent, asked once per id
+	[JSImport("getKeyCode", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial string GetKeyCode(int id);
+
+	// Drops what is queued and queues nothing more: called once the host stops taking events, or the queue would grow for
+	// as long as the page stays open
+	[JSImport("stopHostEventQueue", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial void StopHostEventQueue();
 
 	[JSImport("startClipboard", Module)]
 	[SupportedOSPlatform("browser")]

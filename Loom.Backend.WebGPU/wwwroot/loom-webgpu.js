@@ -652,33 +652,76 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 	requestAnimationFrame(tick);
 }
 
-// The same input, and the window's resizes, queued for the host to take once a frame (takeHostEvents) rather than
-// called into C# as they happen. A multithreaded runtime runs C# on a worker (the "deputy"), which the page's own
-// thread may only call asynchronously; the host's frame is that one async call, and it collects everything else.
-// One event a line, fields apart by spaces (a KeyboardEvent.code has none):
-//   m x y type        pointer move          e kind a b       onEvent's low-rate channel
-//   b pad index down  gamepad button        k code down      key
-//   a pad index value gamepad axis          r                the window resized
-let hostEvents = [];
+// The same input and the window's resizes, queued for the host to take once a frame
+// (takeHostEvents) rather than called into C# as they happen. A multithreaded runtime runs C# on a worker (the
+// "deputy"), which the page's own thread may only call asynchronously; the host's frame is that one async call, and it
+// collects everything else.
+//
+// An event is four numbers, [kind, a, b, c], so the host takes a frame's events into an array of its own without a
+// string or an allocation. The kinds, kept in lockstep with WebAppHost's HostEvent* constants:
+//   1 pointer move     x, y, pointer type          4 onEvent's channel   its kind, a, b
+//   2 gamepad button   pad, index, down            5 key                 key id, down
+//   3 gamepad axis     pad, index, value           6 the window resized
+// A key is its KeyboardEvent.code's id, numbered in the order the page first meets each code; the host asks the code of
+// an id it hasn't seen (getKeyCode) once, so its code → key table stays in C#.
+const HOST_MOVE = 1, HOST_GAMEPAD_BUTTON = 2, HOST_GAMEPAD_AXIS = 3, HOST_EVENT = 4, HOST_KEY = 5, HOST_RESIZE = 6;
+let hostQueue = new Float64Array(1024);
+let hostQueued = 0;
+let hostQueueOpen = false;
+const keyCodes = [];
+const keyIds = new Map();
+function queueHostEvent(kind, a, b, c) {
+	if (!hostQueueOpen) return;
+	if (hostQueued + 4 > hostQueue.length) {
+		const grown = new Float64Array(hostQueue.length * 2);
+		grown.set(hostQueue);
+		hostQueue = grown;
+	}
+	hostQueue[hostQueued++] = kind;
+	hostQueue[hostQueued++] = a;
+	hostQueue[hostQueued++] = b;
+	hostQueue[hostQueued++] = c;
+}
+function keyId(code) {
+	let id = keyIds.get(code);
+	if (id === undefined) {
+		id = keyCodes.length;
+		keyCodes.push(code);
+		keyIds.set(code, id);
+	}
+	return id;
+}
 export function startHostEventQueue() {
+	hostQueueOpen = true;
 	startInputHandlers(
-		(x, y, type) => hostEvents.push(`m ${x} ${y} ${type}`),
-		(pad, index, down) => hostEvents.push(`b ${pad} ${index} ${down}`),
-		(pad, index, value) => hostEvents.push(`a ${pad} ${index} ${value}`),
-		(kind, a, b) => hostEvents.push(`e ${kind} ${a} ${b}`),
-		(code, down) => hostEvents.push(`k ${code} ${down ? 1 : 0}`));
+		(x, y, type) => queueHostEvent(HOST_MOVE, x, y, type),
+		(pad, index, down) => queueHostEvent(HOST_GAMEPAD_BUTTON, pad, index, down),
+		(pad, index, value) => queueHostEvent(HOST_GAMEPAD_AXIS, pad, index, value),
+		(kind, a, b) => queueHostEvent(HOST_EVENT, kind, a, b),
+		(code, down) => queueHostEvent(HOST_KEY, keyId(code), down ? 1 : 0, 0));
 	let resized = false;
 	window.addEventListener("resize", () => {
 		if (resized) return;
 		resized = true;
-		requestAnimationFrame(() => { resized = false; hostEvents.push("r"); });
+		requestAnimationFrame(() => { resized = false; queueHostEvent(HOST_RESIZE, 0, 0, 0); });
 	});
 }
-export function takeHostEvents() {
-	if (hostEvents.length === 0) return "";
-	const text = hostEvents.join("\n");
-	hostEvents = [];
-	return text;
+// Moves as many whole events as fit into destination (a MemoryView over the host's array), oldest first, and returns
+// how many numbers it wrote; what didn't fit waits for the next call.
+export function takeHostEvents(destination) {
+	const n = Math.min(hostQueued, destination.length - destination.length % 4);
+	if (n === 0) return 0;
+	destination.set(hostQueue.subarray(0, n));
+	hostQueue.copyWithin(0, n, hostQueued);
+	hostQueued -= n;
+	return n;
+}
+export function getKeyCode(id) { return keyCodes[id] ?? ""; }
+// The host has stopped taking events (a fault, or the app's exit): what is queued is dropped and nothing more is queued,
+// or the queue would grow with every pointer move for as long as the page stays open.
+export function stopHostEventQueue() {
+	hostQueueOpen = false;
+	hostQueued = 0;
 }
 
 function align4(n) { return (n + 3) & ~3; }
