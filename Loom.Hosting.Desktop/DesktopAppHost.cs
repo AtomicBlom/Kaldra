@@ -133,9 +133,12 @@ public sealed class DesktopAppHost : IAppHost
 		// Where the desktop shows SDR white on the window's monitor, for an HDR frame's paper white, and the brightest it
 		// shows, for its highlights: asked once a second, on the thread pool, so moving the window to another monitor or
 		// moving Windows' "SDR content brightness" slider follows.
+		// Only Windows reports either, and only for a window it has a handle for; elsewhere they stay null and nothing is asked.
 		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
+		var askDisplay = OperatingSystem.IsWindows() && hwnd != 0;
 		var sinceWhite = double.MaxValue;
 		Task<(float? White, float? Peak)>? luminance = null;
+		var luminanceFailed = false;
 		var total = 0.0;
 		window.Render += delta =>
 		{
@@ -143,24 +146,34 @@ public sealed class DesktopAppHost : IAppHost
 				return;
 			total += delta;
 			// Asked off the frame's thread: a DXGI factory and the display configuration take milliseconds, which on the
-			// frame showed as a stall once a second. The answer is taken on the next frame after it arrives.
+			// frame showed as a stall once a second. The answer is taken on the next frame after it arrives. A query that
+			// throws costs only its answer, never the frame: the levels stay as they were and it is asked again next
+			// second, with the failure logged the first time.
 			if (luminance is { IsCompleted: true } asked)
 			{
-				var (nits, peak) = asked.Result;
 				luminance = null;
-				// A null answer goes through too: a monitor that can't say replaces one that could, rather than keeping its level.
-				if (nits != engine.DisplaySdrWhiteNits)
+				if (asked.IsCompletedSuccessfully)
 				{
-					engine.DisplaySdrWhiteNits = nits;
-					LoomLog.Info(nits is { } white ? $"SDR white on the window's monitor: {white:F0} nits" : "the window's monitor reports no SDR white");
+					var (nits, peak) = asked.Result;
+					// A null answer goes through too: a monitor that can't say replaces one that could, rather than keeping its level.
+					if (nits != engine.DisplaySdrWhiteNits)
+					{
+						engine.DisplaySdrWhiteNits = nits;
+						LoomLog.Info(nits is { } white ? $"SDR white on the window's monitor: {white:F0} nits" : "the window's monitor reports no SDR white");
+					}
+					if (peak != engine.DisplayPeakNits)
+					{
+						engine.DisplayPeakNits = peak;
+						LoomLog.Info(peak is { } brightest ? $"the window's monitor peaks at {brightest:F0} nits" : "the window's monitor reports no peak");
+					}
 				}
-				if (peak != engine.DisplayPeakNits)
+				else if (!luminanceFailed)
 				{
-					engine.DisplayPeakNits = peak;
-					LoomLog.Info(peak is { } brightest ? $"the window's monitor peaks at {brightest:F0} nits" : "the window's monitor reports no peak");
+					luminanceFailed = true;
+					LoomLog.Warning($"Asking the window's monitor for its SDR white and peak failed; keeping the last levels: {asked.Exception?.GetBaseException().Message}");
 				}
 			}
-			if ((sinceWhite += delta) >= 1.0 && luminance == null)
+			if (askDisplay && (sinceWhite += delta) >= 1.0 && luminance == null)
 			{
 				sinceWhite = 0.0;
 				luminance = Task.Run(() => (SdrWhiteLevel.Nits(hwnd), DisplayPeak.Nits(hwnd)));
