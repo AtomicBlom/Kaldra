@@ -528,11 +528,15 @@ public abstract class EngineBase : IEngine
 		var executed = graph;
 		if (ResourceInspectionEnabled)
 		{
-			// A multisampled depth target is left out: only a colour target is resolved for sampling, and the derivation
-			// refuses a sampled multisampled depth target.
+			// A multisampled target with no resolve is left out (a depth target, an integer or 32-bit float one), since the
+			// derivation refuses sampling it.
 			foreach (var resource in graph.Resources)
-				if (resource.Kind == ResourceKind.Color || (resource.Kind == ResourceKind.Depth && resource.Domain.Samples == 1))
+			{
+				var resolvable = resource.Domain.Samples == 1
+					|| (resource.Kind == ResourceKind.Color && resource.Format is not (Format.R32F or Format.R32Uint));
+				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth && resolvable)
 					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
+			}
 			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
 		}
 

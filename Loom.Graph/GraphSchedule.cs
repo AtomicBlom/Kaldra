@@ -237,6 +237,10 @@ public sealed class GraphSchedule
 				else if (access.Kind == AccessKind.Sample && resource.Kind == ResourceKind.Depth)
 					errors.Add(Refused(resource, $"is a depth target pass '{pass.Name}' samples",
 						"Only a colour target is resolved for sampling; write the depth you need to sample into a colour target, or declare it in a single-sample domain."));
+				// A resolve averages samples, which no backend does for an integer, and WebGPU does for no 32-bit float
+				else if (access.Kind == AccessKind.Sample && resource.Format is Format.R32F or Format.R32Uint)
+					errors.Add(Refused(resource, $"is {resource.Format}, which pass '{pass.Name}' samples",
+						$"{resource.Format} has no resolve on every backend (none resolves an integer, and WebGPU no 32-bit float); sample an R16F or Rgba16F target, or declare it in a single-sample domain."));
 			}
 		}
 
