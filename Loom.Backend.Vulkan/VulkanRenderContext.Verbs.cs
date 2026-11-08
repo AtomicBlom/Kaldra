@@ -86,7 +86,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			// Instances uploaded once: the stored buffer itself, from the draw's first instance.
 			stored.CheckInstanceStride(template.Instance?.Stride ?? 0, call.Technique);
 			var buffer = _meshes.BindPoseBuffer(stored.Storage.Id);
-			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, buffer, (ulong)(call.Instances.StaticFirst * stored.Stride),
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, buffer, (ulong)call.Instances.StaticFirst * (ulong)stored.Stride,
 				(uint)call.Instances.Count, call.Indices);
 		}
 		else

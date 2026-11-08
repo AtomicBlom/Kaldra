@@ -102,8 +102,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 			stored.CheckInstanceStride(baked.InstanceStride, call.Technique);
 			var instanceView = new VertexBufferView
 			{
-				BufferLocation = _meshes.BindPoseAddress(stored.Storage.Id) + (ulong)(call.Instances.StaticFirst * stored.Stride),
-				SizeInBytes = (uint)(call.Instances.Count * stored.Stride),
+				BufferLocation = _meshes.BindPoseAddress(stored.Storage.Id) + (ulong)call.Instances.StaticFirst * (ulong)stored.Stride,
+				SizeInBytes = checked((uint)((long)call.Instances.Count * stored.Stride)),
 				StrideInBytes = (uint)stored.Stride,
 			};
 			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, instanceView, (uint)call.Instances.Count, call.Indices);

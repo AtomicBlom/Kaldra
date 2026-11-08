@@ -215,7 +215,7 @@ internal sealed partial class WebGpuRenderContext
 			// Instances uploaded once: the stored buffer itself, from the draw's first instance
 			stored.CheckInstanceStride(instanceStride, call.Technique);
 			meshes.DrawInstanced(writer, _validate.RequireMesh(call).Id, meshes.BindPoseBuffer(stored.Storage.Id),
-				call.Instances.StaticFirst * stored.Stride, call.Instances.Count, call.Indices);
+				checked((int)((long)call.Instances.StaticFirst * stored.Stride)), call.Instances.Count, call.Indices);
 			return;
 		}
 
