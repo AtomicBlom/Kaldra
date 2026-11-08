@@ -31,6 +31,13 @@ public sealed class SUIseiInputLayer : IInputLayer
 	private Sui.PointerButtons _buttons;
 	private Sui.ModifierKeys _modifiers;
 
+	// A pad through the UI (PadNavigation): the direction held, from the d-pad or the left stick, and when it next repeats
+	private const float StickOn = 0.55f, StickOff = 0.35f;
+	private const long RepeatFirstMs = 400, RepeatMs = 90;
+	private Sui.VirtualKey _dpadHeld, _stickHeld;
+	private Vector2 _stick;
+	private long _repeatAt;
+
 	/// <summary>Creates a layer that feeds <paramref name="host"/>.</summary>
 	public SUIseiInputLayer(UIHost host)
 	{
@@ -38,11 +45,34 @@ public sealed class SUIseiInputLayer : IInputLayer
 		_host = host;
 	}
 
+	/// <summary>
+	/// Whether the UI has the pad: while true, any pad's face buttons go to the UI as <see cref="Sui.VirtualKey.GamepadA"/>
+	/// and the rest, and its d-pad and left stick as the d-pad's keys (moving focus by position), a held direction
+	/// repeating after 0.4 s every 0.09 s; and the pad is blocked from the layers below, so a press isn't also the game's.
+	/// The app sets it while a menu or page that a pad can work is open.
+	/// </summary>
+	public bool PadNavigation
+	{
+		get;
+		set
+		{
+			if (field == value)
+				return;
+			field = value;
+			ReleasePad();   // nothing held carries across: a direction or button held as it changes is let go
+		}
+	}
+
 	/// <inheritdoc/>
 	public void Process(ref InputContext ctx)
 	{
 		foreach (ref readonly var e in ctx.Incoming)
 		{
+			if (PadNavigation && e.Device == InputDevice.Gamepad)
+			{
+				PadToUi(in e);
+				continue;
+			}
 			switch (e.Kind)
 			{
 				case InputEventKind.PointerMove:
@@ -102,7 +132,108 @@ public sealed class SUIseiInputLayer : IInputLayer
 			ctx.Block(InputDevice.Pointer | InputDevice.Mouse);
 		if (_host.WantsKeyboard)
 			ctx.Block(InputDevice.Keyboard);
+		if (PadNavigation)
+		{
+			RepeatHeld();
+			ctx.Block(InputDevice.Gamepad);
+		}
 	}
+
+	// A pad's event as the UI's: face buttons as the gamepad's keys, the d-pad as its direction keys, the left stick past
+	// half way as the d-pad (back under a third, let go)
+	private void PadToUi(in InputEvent e)
+	{
+		switch (e.Kind)
+		{
+			case InputEventKind.GamepadButtonDown or InputEventKind.GamepadButtonUp:
+				{
+					bool down = e.Kind == InputEventKind.GamepadButtonDown;
+					var key = (GamepadButton)e.Code switch
+					{
+						GamepadButton.South => Sui.VirtualKey.GamepadA,
+						GamepadButton.East => Sui.VirtualKey.GamepadB,
+						GamepadButton.West => Sui.VirtualKey.GamepadX,
+						GamepadButton.North => Sui.VirtualKey.GamepadY,
+						GamepadButton.DPadUp => Sui.VirtualKey.GamepadDPadUp,
+						GamepadButton.DPadDown => Sui.VirtualKey.GamepadDPadDown,
+						GamepadButton.DPadLeft => Sui.VirtualKey.GamepadDPadLeft,
+						GamepadButton.DPadRight => Sui.VirtualKey.GamepadDPadRight,
+						_ => Sui.VirtualKey.None,
+					};
+					if (key == Sui.VirtualKey.None)
+						break;
+					if (IsDirection(key))
+					{
+						if (down)
+							Hold(ref _dpadHeld, key);
+						else if (_dpadHeld == key)
+							Hold(ref _dpadHeld, Sui.VirtualKey.None);
+					}
+					else
+						QueuePadKey(key, down, repeat: false);
+					break;
+				}
+			case InputEventKind.GamepadAxis when (GamepadAxis)e.Code is GamepadAxis.LeftX or GamepadAxis.LeftY:
+				{
+					if ((GamepadAxis)e.Code == GamepadAxis.LeftX) _stick.X = e.Value;
+					else _stick.Y = e.Value;
+					var dir = _stickHeld;
+					float along = dir switch
+					{
+						Sui.VirtualKey.GamepadDPadLeft => -_stick.X,
+						Sui.VirtualKey.GamepadDPadRight => _stick.X,
+						Sui.VirtualKey.GamepadDPadUp => -_stick.Y,
+						Sui.VirtualKey.GamepadDPadDown => _stick.Y,
+						_ => 0f,
+					};
+					if (dir != Sui.VirtualKey.None && along > StickOff)
+						break;   // still held that way
+					var next = Sui.VirtualKey.None;
+					if (MathF.Max(MathF.Abs(_stick.X), MathF.Abs(_stick.Y)) > StickOn)
+						next = MathF.Abs(_stick.X) > MathF.Abs(_stick.Y)
+							? _stick.X < 0f ? Sui.VirtualKey.GamepadDPadLeft : Sui.VirtualKey.GamepadDPadRight
+							: _stick.Y < 0f ? Sui.VirtualKey.GamepadDPadUp : Sui.VirtualKey.GamepadDPadDown;   // up is negative
+					Hold(ref _stickHeld, next);
+					break;
+				}
+		}
+	}
+
+	private static bool IsDirection(Sui.VirtualKey key) => key is Sui.VirtualKey.GamepadDPadUp or Sui.VirtualKey.GamepadDPadDown
+		or Sui.VirtualKey.GamepadDPadLeft or Sui.VirtualKey.GamepadDPadRight;
+
+	// A direction pressed (or let go, for None): its key goes down at once and repeats while held
+	private void Hold(ref Sui.VirtualKey held, Sui.VirtualKey key)
+	{
+		if (held == key)
+			return;
+		if (held != Sui.VirtualKey.None)
+			QueuePadKey(held, down: false, repeat: false);
+		held = key;
+		if (key == Sui.VirtualKey.None)
+			return;
+		QueuePadKey(key, down: true, repeat: false);
+		_repeatAt = Environment.TickCount64 + RepeatFirstMs;
+	}
+
+	private void RepeatHeld()
+	{
+		var held = _dpadHeld != Sui.VirtualKey.None ? _dpadHeld : _stickHeld;
+		if (held == Sui.VirtualKey.None || Environment.TickCount64 < _repeatAt)
+			return;
+		QueuePadKey(held, down: true, repeat: true);
+		_repeatAt = Environment.TickCount64 + RepeatMs;
+	}
+
+	private void ReleasePad()
+	{
+		Hold(ref _dpadHeld, Sui.VirtualKey.None);
+		Hold(ref _stickHeld, Sui.VirtualKey.None);
+		_stick = Vector2.Zero;
+	}
+
+	private void QueuePadKey(Sui.VirtualKey key, bool down, bool repeat)
+		=> _host.QueueKey(new Sui.KeyInput(key, down, repeat, _modifiers, 0));
 
 	private void QueueText(uint codePoint)
 	{
