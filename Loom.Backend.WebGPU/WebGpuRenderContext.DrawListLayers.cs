@@ -28,6 +28,7 @@ internal sealed partial class WebGpuRenderContext
 			return;
 
 		var baked = Bake(technique);
+		var drawing = baked; // the pipeline drawing now: the pass's, or inside a layer the layer target's
 		var template = baked.Template;
 		var writer = _engine.Writer;
 
@@ -75,7 +76,10 @@ internal sealed partial class WebGpuRenderContext
 				// alpha (so overlapping children blend against each other, not a faded backdrop).
 				writer.EndPass();
 				BeginColorScope([_engine.LayerTargets.Acquire(walker.Depth).View], WebGpuCommandWriter.LoadClear);
-				RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
+				// The layer target is one single-sample attachment with no depth, however the pass's are made, and a
+				// pipeline must be baked for the attachments it draws into.
+				drawing = BakeLayer(technique);
+				RebindList(writer, drawing.Pipeline, vtxOffset, idxOffset);
 				// A WebGPU render pass covers its whole attachment — there is no render area, so unlike the desktop
 				// backends the clear cannot be narrowed to the group (walker.LayerArea is ignored here). The composite
 				// still is.
@@ -88,8 +92,10 @@ internal sealed partial class WebGpuRenderContext
 				var closed = _engine.LayerTargets.Acquire(walker.Depth).View;
 				writer.EndPass();
 				ResumeParentScope(walker.Depth - 1);
-				RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
-				CompositeLayer(baked, sampler, closed, walker.Tint, push, walker.Bounds, surfaceWidth, surfaceHeight);
+				// Composited, and drawn on, by the parent's pipeline: a nested layer's parent is a layer target too
+				drawing = walker.Depth > 0 ? BakeLayer(technique) : baked;
+				RebindList(writer, drawing.Pipeline, vtxOffset, idxOffset);
+				CompositeLayer(drawing, sampler, closed, walker.Tint, push, walker.Bounds, surfaceWidth, surfaceHeight);
 				// Restore the list's geometry for the following commands — the composite bound its own quad buffer.
 				writer.SetVertexBuffer(0, _engine.ListVertexRing.Buffer, vtxOffset);
 				continue;
@@ -98,7 +104,7 @@ internal sealed partial class WebGpuRenderContext
 			// Bound unconditionally, so walker.TextureChanged has nothing to save here: the push block carries this
 			// command's tag at a fresh dynamic offset, so the bind group has to be set either way — and the group itself
 			// is already cached by the resources it names, which is what the desktop backends' memoisation buys them.
-			BindCommand(baked, sampler, ListTextureView(walker.TextureId), push, walker.Tag);
+			BindCommand(drawing, sampler, ListTextureView(walker.TextureId), push, walker.Tag);
 
 			var (clipX, clipY, clipW, clipH) = walker.Scissor;
 			writer.SetScissor(clipX, clipY, clipW, clipH);
@@ -114,7 +120,7 @@ internal sealed partial class WebGpuRenderContext
 		{
 			writer.EndPass();
 			ResumeParentScope(abandoned - 1);
-			RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
+			RebindList(writer, abandoned > 0 ? BakeLayer(technique).Pipeline : baked.Pipeline, vtxOffset, idxOffset);
 		}
 	}
 

@@ -365,13 +365,20 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// the attachment formats are the current pass's. So one template used in passes with different targets
 	// caches distinct pipelines, and the call site only needs the name. The local cache keeps the per-draw
 	// path off VulkanTechniqueCache's file read.
-	private VulkanTechnique Bake(string technique)
+	private VulkanTechnique Bake(string technique) =>
+		Bake(technique, ((ReadOnlySpan<VkFormat>)_colorFormats)[.._colorCount], _depthFormat, _depthReadOnly, _samples);
+
+	// The technique baked for a draw list's group-opacity layer target rather than the pass: its one colour attachment
+	// in the pass's first format, no depth, and one sample, whatever the pass has.
+	private VulkanTechnique BakeLayer(string technique) =>
+		Bake(technique, ((ReadOnlySpan<VkFormat>)_colorFormats)[..1], VkFormat.Undefined, depthReadOnly: false, samples: 1);
+
+	private VulkanTechnique Bake(string technique, ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, int samples)
 	{
 		if (!_registry.TryGetValue(technique, out var template))
 			throw new TechniqueNotDefinedException(technique);
 
-		var colorFormats = ((ReadOnlySpan<VkFormat>)_colorFormats)[.._colorCount];
-		var key = new PipelineKey(technique, colorFormats, _depthFormat, _depthReadOnly, _samples);
+		var key = new PipelineKey(technique, colorFormats, depthFormat, depthReadOnly, samples);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
@@ -380,11 +387,11 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		// is a one-time warmup allocation per unique pipeline, not per-frame churn.
 		var baked = _techniques.GetOrBake(new VulkanTechniqueDescription(
 			template.Spirv, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
-			template.Bindings, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
+			template.Bindings, template.HasVertexInput, depthFormat, template.Blend, DepthWrite: !depthReadOnly,
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute,
 			Layout: template.Layout, Instance: template.Instance,
 			HasListPush: template.HasListPush, Cull: template.Cull,
-			DepthTest: template.DepthTest, Bias: template.Bias, Samples: _samples,
+			DepthTest: template.DepthTest, Bias: template.Bias, Samples: samples,
 			AlphaToCoverage: template.AlphaToCoverage), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
 		// HasFragmentPush are folded into the VulkanTechniqueDescription hash, and LinearFilter only affects the
