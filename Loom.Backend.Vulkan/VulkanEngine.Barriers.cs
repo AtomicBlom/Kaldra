@@ -114,10 +114,27 @@ internal sealed unsafe partial class VulkanEngine
 		switch (transition.To)
 		{
 			case ResourceState.ColorAttachment:
-				// Drawn into again: it has rested as an attachment since it was last resolved, unless it is new
-				if (transition.From == ResourceState.Undefined)
-					QueueImageBarrier(image.Image, range, drawn.Layout, attachment.Layout, PipelineStageFlags2.AllCommandsBit,
-						AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit, attachment.Stage, attachment.Access);
+				switch (transition.From)
+				{
+					// New: from nothing, after whatever last used its memory
+					case ResourceState.Undefined:
+						QueueImageBarrier(image.Image, range, ImageLayout.Undefined, attachment.Layout, PipelineStageFlags2.AllCommandsBit,
+							AccessFlags2.MemoryReadBit | AccessFlags2.MemoryWriteBit, attachment.Stage, attachment.Access);
+						break;
+					// Drawn into by the pass before too: this pass's drawing, its load included, waits for that pass's, as
+					// it would between any two passes drawing into one target. Nothing orders two render passes' attachment
+					// accesses but a barrier.
+					case ResourceState.ColorAttachment:
+						QueueImageBarrier(image.Image, range, attachment.Layout, attachment.Layout, attachment.Stage, attachment.Access,
+							attachment.Stage, attachment.Access);
+						break;
+					// Sampled since: the resolve read it, and the barrier after the resolve (Resolve) already put it back to
+					// an attachment with this pass's drawing waiting on that read, so there is nothing left to order.
+					case ResourceState.ShaderRead:
+						break;
+					default:
+						throw new VulkanException($"'{transition.Resource.Name}' is multisampled and is resolved only to be sampled; the graph takes it from {transition.From}.");
+				}
 				return;
 			case ResourceState.ShaderRead:
 				QueueImageBarrier(image.Image, range, drawn.Layout, ImageLayout.TransferSrcOptimal, drawn.Stage, drawn.Access,
