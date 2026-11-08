@@ -47,8 +47,9 @@ public sealed class SUIseiInputLayer : IInputLayer
 
 	/// <summary>
 	/// Whether the UI has the pad: while true, any pad's face buttons go to the UI as <see cref="Sui.VirtualKey.GamepadA"/>
-	/// and the rest, and its d-pad and left stick as the d-pad's keys (moving focus by position), a held direction
-	/// repeating after 0.4 s every 0.09 s; and the pad is blocked from the layers below, so a press isn't also the game's.
+	/// and the rest (Start and Back as GamepadMenu and GamepadView), and its d-pad and left stick, and the keyboard's arrows,
+	/// as the d-pad's keys (moving focus by position), a held direction repeating after 0.4 s every 0.09 s; and the pad is
+	/// blocked from the layers below, so a press isn't also the game's.
 	/// The app sets it while a menu or page that a pad can work is open.
 	/// </summary>
 	public bool PadNavigation
@@ -100,6 +101,14 @@ public sealed class SUIseiInputLayer : IInputLayer
 
 				case InputEventKind.Wheel:
 					_host.QueuePointer(Sui.PointerInput.Scroll(_pointerPosition, new Vector2(e.X, e.Y), _buttons));
+					break;
+
+				// The arrows move focus as the d-pad does while the UI has navigation (the same key, so the same rules)
+				case InputEventKind.KeyDown or InputEventKind.KeyUp when PadNavigation && ArrowAsDPad(e.Key) is { } arrow:
+					if (e.Kind == InputEventKind.KeyDown)
+						Hold(ref _dpadHeld, arrow);
+					else if (_dpadHeld == arrow)
+						Hold(ref _dpadHeld, Sui.VirtualKey.None);
 					break;
 
 				case InputEventKind.KeyDown:
@@ -154,6 +163,8 @@ public sealed class SUIseiInputLayer : IInputLayer
 						GamepadButton.East => Sui.VirtualKey.GamepadB,
 						GamepadButton.West => Sui.VirtualKey.GamepadX,
 						GamepadButton.North => Sui.VirtualKey.GamepadY,
+						GamepadButton.Start => Sui.VirtualKey.GamepadMenu,
+						GamepadButton.Back => Sui.VirtualKey.GamepadView,
 						GamepadButton.DPadUp => Sui.VirtualKey.GamepadDPadUp,
 						GamepadButton.DPadDown => Sui.VirtualKey.GamepadDPadDown,
 						GamepadButton.DPadLeft => Sui.VirtualKey.GamepadDPadLeft,
@@ -198,6 +209,15 @@ public sealed class SUIseiInputLayer : IInputLayer
 				}
 		}
 	}
+
+	private static Sui.VirtualKey? ArrowAsDPad(Key key) => key switch
+	{
+		Key.Up => Sui.VirtualKey.GamepadDPadUp,
+		Key.Down => Sui.VirtualKey.GamepadDPadDown,
+		Key.Left => Sui.VirtualKey.GamepadDPadLeft,
+		Key.Right => Sui.VirtualKey.GamepadDPadRight,
+		_ => null,
+	};
 
 	private static bool IsDirection(Sui.VirtualKey key) => key is Sui.VirtualKey.GamepadDPadUp or Sui.VirtualKey.GamepadDPadDown
 		or Sui.VirtualKey.GamepadDPadLeft or Sui.VirtualKey.GamepadDPadRight;
