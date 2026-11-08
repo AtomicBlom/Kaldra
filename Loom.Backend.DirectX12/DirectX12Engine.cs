@@ -371,7 +371,7 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes,
 			[.. compared.ComparedTextures], descriptor.SampleCompare, descriptor.AlphaToCoverage));
 		return new TechniqueShape(
-			new MaterialLayout(inputCount, reflection.MaterialParameterBytes),
+			new MaterialLayout(inputCount, reflection.MaterialParameterBytes, compared.ComparedCount),
 			reflection.UniformBufferBytes,
 			descriptor.HasFragmentPush ? DirectX12Technique.ScalarPushSize : 0,
 			descriptor.HasListPush ? DirectX12Technique.ListPushSize : 0);

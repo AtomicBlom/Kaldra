@@ -151,22 +151,27 @@ internal sealed partial class WebGpuRenderContext
 	// Reuse or create the bind group for a set of entries. Keyed by the layout, the sampler and each entry's binding,
 	// kind and handle: entry offsets are always 0 and sizes are deterministic per technique, so the bound handles fully
 	// identify the group — and since the buffers/views/samplers are stable per graph, the steady state creates no bind
-	// groups. The sampler rides the key's header rather than an entry per texture, because every sampled entry of a group
-	// pairs with its technique's one sampler; a group that paired two different ones would need them as entries, so it
-	// is refused rather than keyed by the first.
+	// groups. The samplers ride the key's header rather than an entry per texture, because every sampled entry of a group
+	// pairs with one of at most two: its technique's plain sampler and its comparison one. Which entries take which is
+	// fixed by the shader, and so by the layout, so the two distinct samplers in the order the entries name them identify
+	// the pairing. A group that named a third would need them as entries, so it is refused rather than keyed by two.
 	private int GetOrCreateBindGroup(int layout, Span<int> entries)
 	{
-		var sampler = -1;
+		int first = -1, second = -1;
 		for (var i = 0; i < entries.Length; i += 5)
 		{
 			if (entries[i + 1] != EntrySampler)
 				continue;
-			if (sampler >= 0 && entries[i + 2] != sampler)
-				throw new WebGpuException("A bind group pairs its textures with two different samplers; its cache key holds one.");
-			sampler = entries[i + 2];
+			var sampler = entries[i + 2];
+			if (first < 0 || sampler == first)
+				first = sampler;
+			else if (second < 0 || sampler == second)
+				second = sampler;
+			else
+				throw new WebGpuException("A bind group pairs its textures with three different samplers; its cache key holds two.");
 		}
 
-		var key = new BindingKey(BindingHandle(layout), sampler >= 0 ? BindingHandle(sampler) : 0);
+		var key = new BindingKey(BindingHandle(layout), first >= 0 ? BindingHandle(first) : 0, second >= 0 ? BindingHandle(second) : 0);
 		for (var i = 0; i < entries.Length; i += 5)
 		{
 			switch (entries[i + 1])

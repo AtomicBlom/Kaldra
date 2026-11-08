@@ -15,7 +15,11 @@ namespace Loom.Core.Materials;
 /// </summary>
 /// <param name="TextureCount">Sampled textures the technique binds — its reflected sampler-slot count.</param>
 /// <param name="ParameterByteSize">Bytes of per-material parameters the technique reads, as the shader lays the block out (padded to its constant-buffer alignment). 0 when the technique declares no material block.</param>
-public readonly record struct MaterialLayout(int TextureCount, int ParameterByteSize)
+/// <param name="ComparedTextureCount">How many of those textures the shader reads by comparison (a shadow sampler). No
+/// material can drive such a technique: a material's textures are <see cref="TextureFormat"/>s, colour encodings, and
+/// every backend compares only a depth format, so the comparison would read undefined results (and fail validation on
+/// WebGPU). A depth texture reaches a comparing technique as a pass input, through <c>.Samples</c>.</param>
+public readonly record struct MaterialLayout(int TextureCount, int ParameterByteSize, int ComparedTextureCount = 0)
 {
 	/// <summary>Whether the technique reads a per-material parameter block at all.</summary>
 	public bool HasParameters => ParameterByteSize > 0;
@@ -25,8 +29,9 @@ public readonly record struct MaterialLayout(int TextureCount, int ParameterByte
 	/// bytes of parameters can drive a technique with this layout. Extra textures are allowed — a material may carry
 	/// more than a given technique samples, which is how one material feeds both a G-buffer pass and a
 	/// depth-only pass that reflects no samplers at all. Parameter bytes must match exactly: a short block would let
-	/// the shader read past it, and a long one means the two disagree about the struct.
+	/// the shader read past it, and a long one means the two disagree about the struct. A technique that compares
+	/// accepts no material (see <see cref="ComparedTextureCount"/>).
 	/// </summary>
 	public bool Accepts(int textureCount, int parameterByteSize) =>
-		textureCount >= TextureCount && parameterByteSize == ParameterByteSize;
+		ComparedTextureCount == 0 && textureCount >= TextureCount && parameterByteSize == ParameterByteSize;
 }

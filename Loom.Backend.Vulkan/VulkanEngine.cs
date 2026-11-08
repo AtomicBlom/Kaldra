@@ -270,7 +270,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.SampleCompare,
 			descriptor.AlphaToCoverage);
 		return new TechniqueShape(
-			new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes),
+			new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes, bindings.ComparedCount),
 			reflection.UniformBufferBytes,
 			descriptor.HasFragmentPush ? VulkanTechnique.FragmentPushSize : 0,
 			descriptor.HasListPush ? VulkanTechnique.ListPushSize : 0);

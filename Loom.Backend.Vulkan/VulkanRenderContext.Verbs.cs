@@ -133,7 +133,8 @@ internal sealed unsafe partial class VulkanRenderContext
 		if (total > 0)
 		{
 			// Sampled inputs use the technique's declared filter (matching the Draw/FullScreen path and DirectX12's
-			// static sampler) — not a hardcoded nearest, which silently diverged from DirectX12 for a LinearFilter pass.
+			// static sampler) — not a hardcoded nearest, which silently diverged from DirectX12 for a LinearFilter pass —
+			// and a slot the shader reads by comparison takes the technique's comparison sampler, as a draw's does.
 			var sampler = template.LinearFilter ? _linearSampler : _nearestSampler;
 			// Each descriptor's slot and its type come from the same reflected binding, so they cannot disagree.
 			// They could before: the slot was this loop's index while the type was chosen from the runtime handle's
@@ -150,7 +151,8 @@ internal sealed unsafe partial class VulkanRenderContext
 			for (var i = 0; i < sampled.Length; i++, count++)
 			{
 				ref var image = ref _resources.Get(_frameSlot, sampled[i].Id);
-				imageInfos[count] = new DescriptorImageInfo { Sampler = sampler, ImageView = image.SampledView, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
+				var slotSampler = map.ComparedTextures[i] ? CompareSampler(template.SampleCompare!.Value) : sampler;
+				imageInfos[count] = new DescriptorImageInfo { Sampler = slotSampler, ImageView = image.SampledView, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
 				writes[count] = Write((uint)map.SampledTextures[i].Index, DescriptorType.CombinedImageSampler);
 				writes[count].PImageInfo = &imageInfos[count];
 			}

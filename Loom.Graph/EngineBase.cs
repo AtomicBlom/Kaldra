@@ -149,6 +149,10 @@ public abstract class EngineBase : IEngine
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		ArgumentException.ThrowIfNullOrEmpty(name);
+		// A draw list's textures are loaded images and UI layers, colour formats all, and its one sampler slot is plain on
+		// every backend; a list technique that compared would read undefined results.
+		if (descriptor.HasListPush && descriptor.SampleCompare is not null)
+			throw new InvalidOperationException($"Technique '{name}' is a draw-list technique (HasListPush) and names SampleCompare; a draw list samples colour textures, which no backend can compare.");
 		var shape = BakeTechnique(name, descriptor);
 		// Recording what the shader expects of a material is what lets a mismatch be caught at *definition* — and
 		// because a hot reload replays this, at reload too, against every material already built for the name.

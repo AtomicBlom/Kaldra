@@ -147,7 +147,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 
 		_templates[name] = template;
 		return new TechniqueShape(
-			new MaterialLayout(template.SampleCount, template.MaterialParameterBytes),
+			new MaterialLayout(template.SampleCount, template.MaterialParameterBytes, template.Bindings.ComparedCount),
 			[.. template.Bindings.UniformBufferBytes],
 			// WGSL has no push constants, so a LOOM_PUSH_CONSTANT block lowers to an ordinary uniform buffer; the
 			// binding model reports its size, and 0 when the technique declares none.

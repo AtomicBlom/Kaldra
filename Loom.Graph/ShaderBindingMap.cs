@@ -26,6 +26,11 @@ public readonly record struct ShaderBindingMap
 	{
 		SampledTextures = sampledTextures;
 		ComparedTextures = comparedTextures;
+		foreach (var compared in comparedTextures)
+		{
+			if (compared)
+				ComparedCount++;
+		}
 		StorageImages = storageImages;
 		StorageBuffers = storageBuffers;
 		UniformBuffers = uniformBuffers;
@@ -42,8 +47,8 @@ public readonly record struct ShaderBindingMap
 	/// </summary>
 	public ImmutableArray<bool> ComparedTextures { get; }
 
-	/// <summary>How many sampled textures are read by comparison.</summary>
-	public int ComparedCount => ComparedTextures.IsDefault ? 0 : ComparedTextures.Count(c => c);
+	/// <summary>How many sampled textures are read by comparison. Counted once, so a draw can ask it without allocating.</summary>
+	public int ComparedCount { get; }
 
 	/// <summary>Read-write textures, ascending by index.</summary>
 	public ImmutableArray<ShaderBinding> StorageImages { get; }
