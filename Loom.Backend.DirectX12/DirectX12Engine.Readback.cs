@@ -10,10 +10,10 @@ namespace Loom.Backend.DirectX12;
 
 public sealed unsafe partial class DirectX12Engine
 {
-	// Whether the capture path can decode this present format. It always can today — the swapchain is created 8-bit SDR
-	// and HDR colour-space negotiation is a later slice — but the copy below unpacks at a fixed four bytes per pixel, so
-	// the moment that changes an unguarded capture writes a plausible-looking corrupt PNG rather than failing. This is
-	// the one place that has to notice.
+	// Whether the capture path can decode this present format: the 8-bit SDR swapchain formats only. The copy below
+	// unpacks at a fixed four bytes per pixel, so an HDR swapchain's half floats (eight bytes per pixel) would come out
+	// as a plausible-looking corrupt PNG rather than failing; an HDR frame is refused here instead. This is the one
+	// place that has to notice a present format the copy cannot read.
 	private bool CaptureSupported() =>
 		_presentTarget.Format is DxgiFormat.FormatR8G8B8A8Unorm or DxgiFormat.FormatB8G8R8A8Unorm
 			or DxgiFormat.FormatR8G8B8A8UnormSrgb or DxgiFormat.FormatB8G8R8A8UnormSrgb;

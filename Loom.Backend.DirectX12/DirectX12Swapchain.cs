@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Loom.Core.Diagnostics;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
@@ -30,9 +31,12 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 	/// </summary>
 	public Format RenderTargetFormat { get; private set; }
 
-	/// <summary>True when the swapchain presents scRGB: R16G16B16A16_FLOAT in the linear Rec.709 colour space (G10, 1.0 =
-	/// 80 nits), which DXGI composes for an HDR display and clips for an SDR one. Asked for with <c>hdr</c>, and granted
-	/// when the swapchain supports presenting in that colour space; otherwise the swapchain is SDR and this is false.</summary>
+	/// <summary>
+	/// True when the swapchain presents scRGB: R16G16B16A16_FLOAT in the linear Rec.709 colour space (G10, 1.0 = 80
+	/// nits). Asked for with <c>hdr</c>, and granted only when the display the window is on is in HDR and the swapchain can
+	/// present in that colour space; otherwise the swapchain is SDR, this is false, and a warning says why. DXGI would
+	/// compose scRGB for an SDR display too, clipping everything past paper white, so that is never granted.
+	/// </summary>
 	public bool HdrActive { get; private set; }
 
 	public ComPtr<IDXGISwapChain1> SwapChain;
@@ -67,11 +71,8 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 		_rtvStart = _rtvHeap.GetCPUDescriptorHandleForHeapStart();
 
 		CreateSwapChain(width, height);
-		if (hdr && !TryHdr())
-		{
-			// Not granted: keep the SDR swapchain this was made as, and say so, as Vulkan's surface negotiation does
-			LoomLog.Info("DirectX12: HDR output was asked for, but the swapchain cannot present scRGB; presenting SDR.");
-		}
+		if (hdr)
+			TryHdr();
 		LoomLog.Info($"DirectX12 swapchain format={Format}, hdr={HdrActive}");
 		CreateBackBuffers();
 	}
@@ -84,9 +85,15 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 	}
 
 	// Turn the swapchain over to scRGB: half-float buffers presented in the linear Rec.709 colour space. The RTV writes
-	// the shader's output as it is, linear, with no encode. False, leaving it SDR, where DXGI cannot present that space.
+	// the shader's output as it is, linear, with no encode. False, leaving it SDR and saying why, where the window's
+	// display is not in HDR or DXGI cannot present that space.
 	private bool TryHdr()
 	{
+		if (!WindowOnHdrOutput())
+		{
+			LoomLog.Warning("DirectX12: HDR output was asked for, but the window's display is not in HDR; presenting SDR.");
+			return false;
+		}
 		const Format hdrFormat = Format.FormatR16G16B16A16Float;
 		const ColorSpaceType scRgb = ColorSpaceType.RgbFullG10NoneP709;
 		using var swapChain3 = SwapChain.QueryInterface<IDXGISwapChain3>();
@@ -96,6 +103,7 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 		if ((support & (uint)SwapChainColorSpaceSupportFlag.Present) == 0)
 		{
 			SilkMarshal.ThrowHResult(SwapChain.ResizeBuffers(_bufferCount, Width, Height, Format, 0));
+			LoomLog.Warning("DirectX12: HDR output was asked for, but the swapchain cannot present scRGB; presenting SDR.");
 			return false;
 		}
 		SilkMarshal.ThrowHResult(swapChain3.SetColorSpace1(scRgb));
@@ -103,6 +111,65 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 		HdrActive = true;
 		return true;
 	}
+
+	// Whether the display the window is on is in HDR (Windows' "Use HDR" switched on): its output's colour space is
+	// HDR10's (G2084, P2020). DXGI composes an scRGB swapchain on an SDR display too, clipping past paper white, so a
+	// swapchain able to present scRGB says nothing about the display. The window's output is the one whose desktop
+	// rectangle overlaps the window's most, asked through a factory made now so its outputs are current.
+	private bool WindowOnHdrOutput()
+	{
+		WindowRect window;
+		if (GetWindowRect(_hwnd, &window) == 0)
+			return false;
+		if (_ctx.DXGI.CreateDXGIFactory1(out ComPtr<IDXGIFactory1> factory) < 0)
+			return false;
+		using (factory)
+		{
+			var mostOverlap = 0L;
+			var hdr = false;
+			ComPtr<IDXGIAdapter1> adapter = default;
+			for (uint a = 0; factory.EnumAdapters1(a, ref adapter) >= 0; a++)
+			{
+				using (adapter)
+				{
+					ComPtr<IDXGIOutput> output = default;
+					for (uint o = 0; adapter.EnumOutputs(o, ref output) >= 0; o++)
+					{
+						using (output)
+						{
+							if (output.QueryInterface(out ComPtr<IDXGIOutput6> output6) < 0)
+								continue;
+							using (output6)
+							{
+								OutputDesc1 desc = default;
+								if (output6.GetDesc1(ref desc) < 0)
+									continue;
+								var bounds = desc.DesktopCoordinates;
+								long across = Math.Min(window.Right, bounds.Max.X) - Math.Max(window.Left, bounds.Min.X);
+								long down = Math.Min(window.Bottom, bounds.Max.Y) - Math.Max(window.Top, bounds.Min.Y);
+								if (across <= 0 || down <= 0 || across * down <= mostOverlap)
+									continue;
+								mostOverlap = across * down;
+								hdr = desc.ColorSpace == ColorSpaceType.RgbFullG2084NoneP2020;
+							}
+						}
+					}
+				}
+			}
+			return hdr;
+		}
+	}
+
+	private struct WindowRect
+	{
+		public int Left;
+		public int Top;
+		public int Right;
+		public int Bottom;
+	}
+
+	[DllImport("user32.dll")]
+	private static extern int GetWindowRect(nint hwnd, WindowRect* rect);
 
 	private void CreateSwapChain(int width, int height)
 	{
