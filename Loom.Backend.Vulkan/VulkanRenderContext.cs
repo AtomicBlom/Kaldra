@@ -58,8 +58,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// Kept geometry for draw-list streams that carry a stable identity. The rings above stay: a transient list still
 	// uses them, and so does the group-opacity composite quad, which is pushed through _listVtx mid-list.
 	private readonly VulkanDrawListStore _listStore;
-	// Monotonic across the engine's life, unlike _frameSlot which cycles. The draw-list store uses it to notice a
-	// stream submitted twice in one frame, which would silently serve one submission the other's geometry.
+	// Monotonic across the engine's life, unlike _frameSlot which cycles: IRenderContext.Frame. The draw-list store uses
+	// it to notice a stream submitted again in one frame at another revision, which would silently serve one submission
+	// the other's geometry.
 	private long _frameIndex = -1;
 	// Renderer-private offscreen targets backing UI group-opacity layers (BeginLayer/EndLayer), below the graph seam.
 	private readonly VulkanLayerTargets _layerTargets;
@@ -107,6 +108,8 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	public double DeltaTime { get; private set; }
 
 	public double Time { get; private set; }
+
+	public long Frame => _frameIndex;
 
 	public bool HdrOutput { get; private set; }
 

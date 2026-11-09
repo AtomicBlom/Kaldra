@@ -145,6 +145,26 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	void ReleaseTexture(Texture texture);
 
 	/// <summary>
+	/// Write new texels into <paramref name="texture"/> in place: the counterpart of <see cref="CreateTexture"/> for an image
+	/// whose content changes while its handle, size and format stay (a UI bitmap redrawn every frame, a video frame, a
+	/// trace). The handle, every material holding it and every cached binding naming it stay as they are, so nothing is
+	/// rebuilt, and after the first update of a texture none allocates: the backend keeps one staging buffer for it.
+	/// <para>
+	/// <paramref name="texels"/> is the whole image, rows tightly packed, in the format the texture was created with
+	/// (<see cref="TextureData.Format"/>), so exactly width × height × bytes per texel. Only a texture of one mip level and
+	/// one layer can be updated: a mip chain would need regenerating from the new texels, and a cube has six faces, so
+	/// either throws, as does a length that does not fit.
+	/// </para>
+	/// <para>
+	/// The texels reach the GPU ahead of the next frame, and the frames already submitted keep sampling what they had: the
+	/// copy is ordered after them on the GPU, so nothing waits on the CPU. Call it between frames on the render thread,
+	/// as <see cref="CreateTexture"/>: from a pass callback it throws, since the frame being recorded would already sample
+	/// the texture.
+	/// </para>
+	/// </summary>
+	void UpdateTexture(Texture texture, ReadOnlySpan<byte> texels);
+
+	/// <summary>
 	/// Run every GPU creation call queued by a <c>*Async</c> method (<see cref="CreateMeshAsync"/>,
 	/// <see cref="CreateSkinnedMeshAsync"/>, <see cref="CreateTextureAsync"/>, <see cref="CreateMaterialAsync(Texture[])"/>)
 	/// since the last call, completing each one's <see cref="Task"/>. Every backend calls this once per frame from

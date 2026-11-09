@@ -72,6 +72,8 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 
 	public double DeltaTime { get; private set; }
 	public double Time { get; private set; }
+	// -1 until the first BeginFrame, which makes it 0.
+	public long Frame { get; private set; } = -1;
 	public bool HdrOutput => false; // browser output is the SDR canvas; HDR canvas negotiation is a later concern
 
 	/// <summary>Set the per-frame inputs before the graph records.</summary>
@@ -79,6 +81,8 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	{
 		DeltaTime = deltaTime;
 		Time = time;
+
+		Frame++;
 	}
 
 	/// <summary>

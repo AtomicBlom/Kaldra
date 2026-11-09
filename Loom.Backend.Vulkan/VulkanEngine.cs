@@ -320,6 +320,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_context.EvictBindings(BoundObject.View, view.Handle, lastReadingFrame);
 	}
 
+	// Recorded into the upload batch, which is submitted ahead of the next frame, as a new texture's upload is.
+	protected override void WriteTexels(Texture texture, ReadOnlySpan<byte> texels) => _textures.Write(texture.Id, texels);
+
 	// Free what was released once the frames that could read it are done: meshes, textures, and the cached sets their
 	// release evicted.
 	private void CollectReleased()

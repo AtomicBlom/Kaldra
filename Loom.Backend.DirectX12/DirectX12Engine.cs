@@ -522,6 +522,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	// draw list writes its SRVs into this frame's ring slot, which outlives the texture by exactly the frames that read it.
 	protected override void RetireTexture(Texture texture) => _textures.Release(texture.Id, _fenceValue + 1);
 
+	// Recorded into the upload batch, which executes ahead of the next frame, as a new texture's upload does. A release
+	// that follows still waits for the next fence value, which covers the batch.
+	protected override void WriteTexels(Texture texture, ReadOnlySpan<byte> texels) => _textures.Write(texture.Id, texels);
+
 	[DllImport("kernel32", SetLastError = true)]
 	private static extern nint CreateEventW(nint lpEventAttributes, int bManualReset, int bInitialState, nint lpName);
 

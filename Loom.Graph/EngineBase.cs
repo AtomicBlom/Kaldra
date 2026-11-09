@@ -817,6 +817,14 @@ public abstract class EngineBase : IEngine
 		RetireTexture(texture);
 	}
 
+	/// <inheritdoc/>
+	public void UpdateTexture(Texture texture, ReadOnlySpan<byte> texels)
+	{
+		AssertRenderThread(nameof(UpdateTexture));
+		ThrowIfRecording(nameof(UpdateTexture));
+		WriteTexels(texture, texels);
+	}
+
 	/// <summary>Upload canonical-layout geometry and mint its handle — the backend half of <see cref="CreateMesh(ReadOnlySpan{Vertex}, ReadOnlySpan{uint})"/>.</summary>
 	protected abstract Mesh UploadMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
 
@@ -842,6 +850,14 @@ public abstract class EngineBase : IEngine
 	/// it. Every cached binding object that names its view is evicted before the view's handle can be reused.
 	/// </summary>
 	protected abstract void RetireTexture(Texture texture);
+
+	/// <summary>
+	/// Copy new texels into a texture's existing image ahead of the next frame — the backend half of
+	/// <see cref="UpdateTexture"/>. Called between frames. The copy must be ordered after every frame already submitted
+	/// that may sample the image, and it must allocate nothing after the texture's first update. Every backend holds the
+	/// texture to the same shape first, through <see cref="TextureUpdates.Check"/>.
+	/// </summary>
+	protected abstract void WriteTexels(Texture texture, ReadOnlySpan<byte> texels);
 
 	// The pass whose callback is running, or null between passes and between frames. Set by RecordFrame; read by
 	// ThrowIfRecording on the render thread only, so it needs no synchronisation.

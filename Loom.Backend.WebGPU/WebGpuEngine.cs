@@ -261,6 +261,9 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_textures.Release(texture.Id);
 	}
 
+	// queue.writeTexture, ordered after the frames already submitted; the view and its bind groups stay.
+	protected override void WriteTexels(Texture texture, ReadOnlySpan<byte> texels) => _textures.Write(texture.Id, texels);
+
 	public override void Dispose()
 	{
 		_transients?.Dispose();
