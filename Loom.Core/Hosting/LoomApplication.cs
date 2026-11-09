@@ -152,8 +152,11 @@ public abstract class LoomApplication : IHostedApplication
 	/// <summary>The text on the system clipboard, or null when it holds none or the host has no clipboard.</summary>
 	protected string? GetClipboardText() => _host.GetClipboardText();
 
-	/// <summary>Put <paramref name="text"/> on the system clipboard; nothing happens on a host without one.</summary>
-	protected void SetClipboardText(string text) => _host.SetClipboardText(text);
+	/// <summary>
+	/// Put <paramref name="text"/> on the system clipboard. False when the host has no clipboard, so the app can say the
+	/// copy did not happen (see <see cref="IHostControl.SetClipboardText"/>).
+	/// </summary>
+	protected bool SetClipboardText(string text) => _host.SetClipboardText(text);
 
 	/// <summary>
 	/// Offer the user a file to keep (see <see cref="IHostControl.SaveFile"/>): in the browser, its save dialog or a

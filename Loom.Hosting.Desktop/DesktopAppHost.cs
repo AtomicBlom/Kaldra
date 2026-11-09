@@ -286,11 +286,13 @@ public sealed class DesktopAppHost : IAppHost
 			return input.Keyboards.Count > 0 ? input.Keyboards[0].ClipboardText : null;
 		}
 
-		public void SetClipboardText(string text)
+		public bool SetClipboardText(string text)
 		{
 			ThrowIfNotMainThread(nameof(SetClipboardText));
-			if (input.Keyboards.Count > 0)
-				input.Keyboards[0].ClipboardText = text;
+			if (input.Keyboards.Count == 0)
+				return false;
+			input.Keyboards[0].ClipboardText = text;
+			return true;
 		}
 
 		// GLFW's clipboard calls are main-thread only; from another thread they fail or corrupt its state without a word.

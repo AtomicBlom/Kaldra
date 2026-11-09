@@ -34,10 +34,12 @@ public interface IHostControl
 	string? GetClipboardText() => null;
 
 	/// <summary>
-	/// Put <paramref name="text"/> on the system clipboard. Defaults to a no-op so a host without a clipboard need not
-	/// implement it. Main thread only, as <see cref="GetClipboardText"/> is.
+	/// Put <paramref name="text"/> on the system clipboard. Returns false when the host has no clipboard to put it on, so
+	/// an app can say the copy did not happen rather than let the player paste nothing; defaults to that, so a host without
+	/// a clipboard need not implement it. True means the host took the text: the browser host writes it asynchronously,
+	/// and the browser can still refuse it there. Main thread only, as <see cref="GetClipboardText"/> is.
 	/// </summary>
-	void SetClipboardText(string text) { }
+	bool SetClipboardText(string text) => false;
 
 	/// <summary>
 	/// Offer the user a file to keep, for a host whose app can't write files where the user can reach them: the web host

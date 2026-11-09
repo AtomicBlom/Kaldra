@@ -278,8 +278,13 @@ public sealed partial class WebAppHost : IAppHost
 		/// </summary>
 		public string? GetClipboardText() => _pastedText;
 
+		// Taken, not done: the page writes it asynchronously, and the browser may still refuse it there.
 		[SupportedOSPlatform("browser")]
-		public void SetClipboardText(string text) => WriteClipboardText(text);
+		public bool SetClipboardText(string text)
+		{
+			WriteClipboardText(text);
+			return true;
+		}
 
 		[SupportedOSPlatform("browser")]
 		public bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents)

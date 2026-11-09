@@ -79,7 +79,9 @@ A browser asks the player before a page may read the clipboard, and refuses outr
 paste event carries its text without asking. So `GetClipboardText` here is not the clipboard as it stands, as it is on
 the desktop: it is the text of a paste into the page in this frame, and null in any other. Ctrl+V's paste comes in the
 same frame as its keydown, so an app that reads the clipboard when it sees Ctrl+V gets what was pasted.
-`SetClipboardText` writes the clipboard as the desktop's does, while the input that asked for it is recent.
+`SetClipboardText` writes the clipboard as the desktop's does, while the input that asked for it is recent. It returns
+true once the page has the text, as the desktop's does once the clipboard has it; the write itself is asynchronous here,
+and the browser can still refuse it.
 
 ## Trying it locally
 
