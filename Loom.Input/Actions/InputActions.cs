@@ -18,6 +18,8 @@ public sealed class InputActions
 	private readonly ActionDefinition[] _definitions;
 	private readonly Dictionary<string, int> _byName;
 	private readonly ActionState[] _states;
+	// Button actions pressed from outside their bindings (Press), held for the next Resolve
+	private readonly bool[] _pressedNext;
 	private readonly bool[] _previousDown;
 
 	internal InputActions(ActionDefinition[] definitions, Dictionary<string, int> byName)
@@ -25,6 +27,7 @@ public sealed class InputActions
 		_definitions = definitions;
 		_byName = byName;
 		_states = new ActionState[definitions.Length];
+		_pressedNext = new bool[definitions.Length];
 		_previousDown = new bool[definitions.Length];
 		foreach (var definition in definitions)
 			definition.KeepAsDefault();
@@ -111,6 +114,14 @@ public sealed class InputActions
 	/// <summary>Whether a button action transitioned to released this frame.</summary>
 	public bool Released(ButtonAction action) => _states[action.Id].Released;
 
+	/// <summary>
+	/// Presses <paramref name="action"/> from outside its bindings, as an on-screen button or a tap does: the next
+	/// <see cref="Resolve"/> finds it held whatever its controls are doing, so it is pressed that frame (if it wasn't held
+	/// already) and released the one after, like a key tapped. Its bindings are untouched, so rebinding it moves its
+	/// controls and leaves this alone.
+	/// </summary>
+	public void Press(ButtonAction action) => _pressedNext[action.Id] = true;
+
 	/// <summary>The resolved scalar of an axis action.</summary>
 	public float Value(AxisAction action) => _states[action.Id].Value;
 
@@ -193,6 +204,12 @@ public sealed class InputActions
 				down = true;
 				break;
 			}
+		}
+
+		if (_pressedNext[index])
+		{
+			down = true;
+			_pressedNext[index] = false;
 		}
 
 		var previous = _previousDown[index];

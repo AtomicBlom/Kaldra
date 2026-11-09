@@ -546,7 +546,7 @@ export function startPointerHandler(dotnetPointer) {
 // animation frame, so a high-rate device can't flood the frame's event capacity. Pointer coordinates are device
 // pixels (CSS position × the capped device-pixel ratio, matching getCanvasSize) so a hit-test lands on the
 // geometry the engine rendered.
-export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis, onEvent, onKey, onGamepadId) {
+export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis, onEvent, onKey, onGamepadId, onTouch) {
 	// onEvent kind codes — must match WebInputPump's Kind* constants.
 	const POINTER_BUTTON = 1, WHEEL = 2, TEXT = 3, GAMEPAD_CONNECTION = 4, FOCUS = 5;
 
@@ -568,18 +568,56 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 		onPointerMove(pendingMove[0], pendingMove[1], pendingMove[2]);
 		pendingMove = null;
 	};
+	// Touches are contacts, not a mouse: each finger goes to the host as its own touch (onTouch(id * 8 + phase, x, y),
+	// phase 0 began, 1 moved, 3 ended, 4 cancelled as TouchPhase), its moves coalesced per finger per frame like the
+	// mouse's, and never as a pointer move or a button. The page leaves the canvas alone under a finger (no scrolling,
+	// pinch-zooming, double-tap zoom or long-press menu), so every gesture is the app's.
+	const TOUCH_BEGAN = 0, TOUCH_MOVED = 1, TOUCH_ENDED = 3, TOUCH_CANCELED = 4;
+	const touchCode = (e, phase) => e.pointerId * 8 + phase;
+	const pendingTouches = new Map();
+	const flushTouches = () => {
+		for (const [id, [x, y]] of pendingTouches) onTouch?.(id * 8 + TOUCH_MOVED, x, y);
+		pendingTouches.clear();
+	};
+	let lastPointerWasTouch = false;
+	if (canvas) {
+		canvas.style.touchAction = "none";
+		canvas.style.webkitUserSelect = canvas.style.userSelect = "none";
+		canvas.style.webkitTouchCallout = "none";
+		canvas.addEventListener("contextmenu", e => { if (lastPointerWasTouch) e.preventDefault(); });
+	}
+	const isTouch = e => e.pointerType === "touch" && onTouch;
+
 	target.addEventListener("pointermove", e => {
 		const [x, y] = toDevice(e);
+		if (isTouch(e)) { pendingTouches.set(e.pointerId, [x, y]); return; }
 		pendingMove = [x, y, pointerKind(e.pointerType)];
 	});
 	const button = (e, down) => {
 		const [x, y] = toDevice(e);
+		lastPointerWasTouch = e.pointerType === "touch";
+		if (isTouch(e)) {
+			// A finger's moves so far go before its lift, so it lifts where it was
+			const pending = pendingTouches.get(e.pointerId);
+			if (pending) { onTouch(touchCode(e, TOUCH_MOVED), pending[0], pending[1]); pendingTouches.delete(e.pointerId); }
+			onTouch(touchCode(e, down ? TOUCH_BEGAN : TOUCH_ENDED), x, y);
+			if (down) e.target.setPointerCapture?.(e.pointerId);
+			e.preventDefault();
+			return;
+		}
 		pendingMove = [x, y, pointerKind(e.pointerType)];
 		flushMove();
 		onEvent(POINTER_BUTTON, e.button, down ? 1 : 0);
 	};
 	target.addEventListener("pointerdown", e => button(e, true));
 	target.addEventListener("pointerup", e => button(e, false));
+	// The browser took a finger back (a system gesture, the page losing focus): the contact is gone, not lifted
+	target.addEventListener("pointercancel", e => {
+		if (!isTouch(e)) return;
+		pendingTouches.delete(e.pointerId);
+		const [x, y] = toDevice(e);
+		onTouch(touchCode(e, TOUCH_CANCELED), x, y);
+	});
 	// Vertical scroll rides deltaY, a shift-scroll reports on deltaX; passive since the host doesn't cancel it.
 	target.addEventListener("wheel", e => onEvent(WHEEL, e.deltaX, e.deltaY), { passive: true });
 
@@ -654,7 +692,7 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 	};
 
 	// One maintenance tick per animation frame: flush the coalesced pointer move, then diff the gamepads.
-	const tick = () => { flushMove(); pollGamepads(); requestAnimationFrame(tick); };
+	const tick = () => { flushMove(); flushTouches(); pollGamepads(); requestAnimationFrame(tick); };
 	requestAnimationFrame(tick);
 }
 
@@ -666,6 +704,7 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 //   b pad index down  gamepad button        k code down      key
 //   a pad index value gamepad axis          r                the window resized
 //   g pad id...       a pad's Gamepad.id, the rest of the line, just before it connects
+//   t code x y        a touch: code = contact id × 8 + phase (TouchPhase)
 let hostEvents = [];
 export function startHostEventQueue() {
 	startInputHandlers(
@@ -674,7 +713,8 @@ export function startHostEventQueue() {
 		(pad, index, value) => hostEvents.push(`a ${pad} ${index} ${value}`),
 		(kind, a, b) => hostEvents.push(`e ${kind} ${a} ${b}`),
 		(code, down) => hostEvents.push(`k ${code} ${down ? 1 : 0}`),
-		(pad, id) => hostEvents.push(`g ${pad} ${id.replace(/[\r\n]+/g, " ")}`));
+		(pad, id) => hostEvents.push(`g ${pad} ${id.replace(/[\r\n]+/g, " ")}`),
+		(code, x, y) => hostEvents.push(`t ${code} ${x} ${y}`));
 	let resized = false;
 	window.addEventListener("resize", () => {
 		if (resized) return;

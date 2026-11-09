@@ -48,6 +48,7 @@ internal sealed class WebInputPump
 	private readonly bool[] _keysHeld = new bool[256];
 	private uint _mouseHeld;
 	private readonly uint[] _padButtonsHeld = new uint[4];
+	private readonly Dictionary<int, Vector2> _touchesHeld = [];
 	private readonly (GamepadType Type, ushort Vendor, ushort Product)[] _padIdentity = new (GamepadType, ushort, ushort)[4];
 
 	public WebInputPump(InputSink sink, Action<bool> onFocusChanged)
@@ -62,6 +63,23 @@ internal sealed class WebInputPump
 	/// </summary>
 	public void OnPointerMove(double x, double y, double type)
 		=> _sink(InputEvent.PointerMove((float)x, (float)y, 0, ToPointerType((int)type)));
+
+	/// <summary>
+	/// A touch contact: <paramref name="code"/> is the contact's <c>PointerEvent.pointerId</c> × 8 plus its
+	/// <see cref="TouchPhase"/> (began, moved, ended or cancelled), <paramref name="x"/>/<paramref name="y"/> in device
+	/// pixels. The live contacts are tracked so <see cref="ReleaseAllHeld"/> can cancel them.
+	/// </summary>
+	public void OnTouch(double code, double x, double y)
+	{
+		var packed = (long)code;
+		var id = (int)(packed >> 3);
+		var phase = (TouchPhase)(packed & 7);
+		if (phase is TouchPhase.Ended or TouchPhase.Canceled)
+			_touchesHeld.Remove(id);
+		else
+			_touchesHeld[id] = new Vector2((float)x, (float)y);
+		_sink(InputEvent.Touch(phase, id, (float)x, (float)y));
+	}
 
 	/// <summary>
 	/// Gamepad button change: <paramref name="pad"/> index, <paramref name="standardIndex"/> a Standard-Gamepad
@@ -159,6 +177,10 @@ internal sealed class WebInputPump
 			_mouseHeld &= _mouseHeld - 1;
 			_sink(InputEvent.MouseButtonUp((MouseButton)bit));
 		}
+
+		foreach (var (id, at) in _touchesHeld)
+			_sink(InputEvent.Touch(TouchPhase.Canceled, id, at.X, at.Y));
+		_touchesHeld.Clear();
 
 		for (var pad = 0; pad < _padButtonsHeld.Length; pad++)
 		{

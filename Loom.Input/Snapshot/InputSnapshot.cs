@@ -157,14 +157,14 @@ public sealed class InputSnapshot
 		Array.Copy(_padButtons, _padButtonsPrev, PadSlots);
 		Array.Copy(_padConnected, _padConnectedPrev, PadSlots);
 
-		// Drop contacts that ended or were cancelled last frame; keep live ones held at their last phase.
+		// Drop contacts that ended or were cancelled last frame; the live ones stand still until an event says otherwise.
 		var live = 0;
 		for (var i = 0; i < _touchCount; i++)
 		{
-			var phase = _touches[i].Phase;
-			if (phase is TouchPhase.Ended or TouchPhase.Canceled)
+			var t = _touches[i];
+			if (t.Gone)
 				continue;
-			_touches[live++] = _touches[i];
+			_touches[live++] = t with { Phase = TouchPhase.Stationary, Previous = t.Position, BeganThisFrame = false };
 		}
 
 		_touchCount = live;
@@ -259,18 +259,30 @@ public sealed class InputSnapshot
 
 	private void ApplyTouch(in InputEvent e)
 	{
-		var point = new TouchPoint(e.PointerId, new Vector2(e.X, e.Y), e.Phase);
+		var at = new Vector2(e.X, e.Y);
 		for (var i = 0; i < _touchCount; i++)
 		{
-			if (_touches[i].Id == e.PointerId)
+			ref var t = ref _touches[i];
+			if (t.Id != e.PointerId || t.Gone)
+				continue;
+			// A contact that came down this frame stays Began through its moves, so the frame still sees it begin;
+			// lifting it is reported whatever, with BeganThisFrame kept
+			var phase = e.Phase switch
 			{
-				_touches[i] = point;
-				return;
-			}
+				TouchPhase.Moved or TouchPhase.Stationary when t.BeganThisFrame => TouchPhase.Began,
+				TouchPhase.Stationary when at != t.Previous => TouchPhase.Moved,
+				var p => p,
+			};
+			t = t with { Position = at, Phase = phase };
+			return;
 		}
 
+		// A contact the snapshot hasn't seen: one coming down, or one whose down it missed (taken as coming down now). An
+		// up for a contact it never saw holds nothing, so it is dropped
+		if (e.Phase is TouchPhase.Ended or TouchPhase.Canceled)
+			return;
 		if (_touchCount < _touches.Length)
-			_touches[_touchCount++] = point;
+			_touches[_touchCount++] = new TouchPoint(e.PointerId, at, TouchPhase.Began, at, at, BeganThisFrame: true);
 	}
 
 	// A (dis)connecting pad holds nothing, so clear its buttons and axes. On disconnect this turns a button held at

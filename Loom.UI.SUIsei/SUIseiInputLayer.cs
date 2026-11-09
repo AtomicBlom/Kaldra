@@ -37,6 +37,8 @@ public sealed class SUIseiInputLayer : IInputLayer
 	private Sui.VirtualKey _dpadHeld, _stickHeld;
 	private Vector2 _stick;
 	private long _repeatAt;
+	// The touch contacts that came down on the UI and are its until they lift (TouchToUi)
+	private readonly HashSet<int> _uiTouches = [];
 
 	/// <summary>Creates a layer that feeds <paramref name="host"/>.</summary>
 	public SUIseiInputLayer(UIHost host)
@@ -103,6 +105,11 @@ public sealed class SUIseiInputLayer : IInputLayer
 					_host.QueuePointer(Sui.PointerInput.Scroll(_pointerPosition, new Vector2(e.X, e.Y), _buttons));
 					break;
 
+				case InputEventKind.Touch:
+					if (TouchToUi(in e))
+						ctx.Consume(in e);
+					break;
+
 				// The arrows move focus as the d-pad does while the UI has navigation (the same key, so the same rules)
 				case InputEventKind.KeyDown or InputEventKind.KeyUp when PadNavigation && ArrowAsDPad(e.Key) is { } arrow:
 					if (e.Kind == InputEventKind.KeyDown)
@@ -136,9 +143,15 @@ public sealed class SUIseiInputLayer : IInputLayer
 		}
 
 		// Block downstream on the host's last-tick capture report (see the type's remarks on the one-frame latency).
-		// Pointer covers pen/touch moves as well as the mouse; Mouse additionally covers button/wheel events.
+		// The mouse (its moves, buttons and wheel) and a pen's moves; never a touch, which is the UI's or not contact by
+		// contact (TouchToUi), so a finger on the UI doesn't take every other finger from the game.
 		if (_host.WantsPointer)
-			ctx.Block(InputDevice.Pointer | InputDevice.Mouse);
+		{
+			ctx.Block(InputDevice.Mouse);
+			foreach (ref readonly var e in ctx.Incoming)
+				if (e.Kind == InputEventKind.PointerMove && e.PointerType != PointerDeviceType.Touch)
+					ctx.Consume(in e);   // a pen's moves, which aren't the mouse's
+		}
 		if (_host.WantsKeyboard)
 			ctx.Block(InputDevice.Keyboard);
 		if (PadNavigation)
@@ -207,6 +220,38 @@ public sealed class SUIseiInputLayer : IInputLayer
 					Hold(ref _stickHeld, next);
 					break;
 				}
+		}
+	}
+
+	// A touch as the UI's, if it is the UI's: a contact that comes down on UI content (UIHost.HitsContent) is the UI's until
+	// it lifts, pressed, dragged and released there as a touch pointer, and true is returned so it is kept from the layers
+	// below; any other contact is theirs for its life, whatever it is dragged over, so a finger on a button and another on
+	// the game work at once. Ids are kept apart from the mouse's (0) by the top bit.
+	private bool TouchToUi(in InputEvent e)
+	{
+		var id = (uint)e.PointerId | 0x8000_0000u;
+		var at = new Vector2(e.X, e.Y);
+		switch (e.Phase)
+		{
+			case TouchPhase.Began:
+				if (!_host.HitsContent(at))
+					return false;
+				_uiTouches.Add(e.PointerId);
+				_host.QueuePointer(Sui.PointerInput.Move(at, Sui.PointerButtons.None, id, Sui.PointerDeviceType.Touch));
+				_host.QueuePointer(Sui.PointerInput.Press(at, Sui.PointerUpdateKind.LeftButtonPressed, Sui.PointerButtons.Left, id, Sui.PointerDeviceType.Touch));
+				return true;
+
+			case TouchPhase.Moved or TouchPhase.Stationary:
+				if (!_uiTouches.Contains(e.PointerId))
+					return false;
+				_host.QueuePointer(Sui.PointerInput.Move(at, Sui.PointerButtons.Left, id, Sui.PointerDeviceType.Touch));
+				return true;
+
+			default:   // Ended, Canceled
+				if (!_uiTouches.Remove(e.PointerId))
+					return false;
+				_host.QueuePointer(Sui.PointerInput.Release(at, Sui.PointerUpdateKind.LeftButtonReleased, Sui.PointerButtons.None, id, Sui.PointerDeviceType.Touch));
+				return true;
 		}
 	}
 

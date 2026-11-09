@@ -194,6 +194,7 @@ public sealed partial class WebAppHost : IAppHost
 			switch (f[0])
 			{
 				case "m" when f.Length == 4: input.OnPointerMove(D(f[1]), D(f[2]), D(f[3])); break;
+				case "t" when f.Length == 4: input.OnTouch(D(f[1]), D(f[2]), D(f[3])); break;
 				case "b" when f.Length == 4: input.OnGamepadButton(D(f[1]), D(f[2]), D(f[3])); break;
 				case "a" when f.Length == 4: input.OnGamepadAxis(D(f[1]), D(f[2]), D(f[3])); break;
 				case "e" when f.Length == 4: input.OnEvent(D(f[1]), D(f[2]), D(f[3])); break;

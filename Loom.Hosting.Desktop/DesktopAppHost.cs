@@ -109,12 +109,21 @@ public sealed class DesktopAppHost : IAppHost
 		// Pump the window's platform input devices into the app's neutral input queue. The pump takes the input
 		// context (not the window), so a host with its own window can reuse it against its own context.
 		var inputPump = new DesktopInputPump(inputContext, driver, gamepads: padPump is null);
+		// A touch screen, which GLFW doesn't read, from the window's own pointer messages, a finger a contact
+		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
+		Win32TouchPump? touchPump = null;
+		if (OperatingSystem.IsWindows())
+		{
+			touchPump = Win32TouchPump.TryCreate(hwnd, driver.QueueInput, out var noTouch);
+			LoomLog.Info(touchPump is null ? $"no touch: {noTouch}" : "touch through the window's pointer messages");
+		}
 		var inputClosed = false;
 		window.Closing += () =>
 		{
 			if (inputClosed)
 				return;
 			inputClosed = true;
+			touchPump?.Dispose();
 			inputPump.Dispose();
 			padPump?.Dispose();
 			inputContext.Dispose();
@@ -136,7 +145,10 @@ public sealed class DesktopAppHost : IAppHost
 			// The OS drops the ups for anything held across a focus loss (alt-tab), so synthesize releases to keep
 			// held keys/buttons from being stranded down.
 			if (!focused && !inputClosed)
+			{
 				inputPump.ReleaseAllHeld();
+				touchPump?.ReleaseAllHeld();
+			}
 			if (!inputClosed)
 				padPump?.SetFocus(focused);
 			driver.SetFocus(focused);
@@ -149,7 +161,6 @@ public sealed class DesktopAppHost : IAppHost
 		// Where the desktop shows SDR white on the window's monitor, for an HDR frame's paper white, and the brightest it
 		// shows, for its highlights: asked once a second, on the thread pool, so moving the window to another monitor or
 		// moving Windows' "SDR content brightness" slider follows.
-		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
 		var sinceWhite = double.MaxValue;
 		Task<(float? White, float? Peak)>? luminance = null;
 		var total = 0.0;
