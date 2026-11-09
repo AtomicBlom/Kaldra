@@ -21,12 +21,14 @@ internal sealed partial class WebGpuRenderContext
 	/// renders into a fresh transparent layer at full alpha, then one KIND_IMAGE quad multiplies it by the group
 	/// alpha back into the resumed parent — so the whole subtree fades once (overlaps stay a single colour).
 	/// </summary>
-	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<Texture> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
+	public void DrawList<TVertex>(string technique, DrawListIdentity identity, ReadOnlySpan<TextureRef> textures, ReadOnlySpan<TVertex> vertices, ReadOnlySpan<ushort> indices, ReadOnlySpan<DrawCommand> commands, ReadOnlySpan<float> push) where TVertex : unmanaged
 	{
+		_validate.DrawList(technique, identity, textures);
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
 
 		var baked = Bake(technique);
+		var drawing = baked; // the pipeline drawing now: the pass's, or inside a layer the layer target's
 		var template = baked.Template;
 		var writer = _engine.Writer;
 
@@ -74,7 +76,10 @@ internal sealed partial class WebGpuRenderContext
 				// alpha (so overlapping children blend against each other, not a faded backdrop).
 				writer.EndPass();
 				BeginColorScope([_engine.LayerTargets.Acquire(walker.Depth).View], WebGpuCommandWriter.LoadClear);
-				RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
+				// The layer target is one single-sample attachment with no depth, however the pass's are made, and a
+				// pipeline must be baked for the attachments it draws into.
+				drawing = BakeLayer(technique);
+				RebindList(writer, drawing.Pipeline, vtxOffset, idxOffset);
 				// A WebGPU render pass covers its whole attachment — there is no render area, so unlike the desktop
 				// backends the clear cannot be narrowed to the group (walker.LayerArea is ignored here). The composite
 				// still is.
@@ -87,8 +92,10 @@ internal sealed partial class WebGpuRenderContext
 				var closed = _engine.LayerTargets.Acquire(walker.Depth).View;
 				writer.EndPass();
 				ResumeParentScope(walker.Depth - 1);
-				RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
-				CompositeLayer(baked, sampler, closed, walker.Tint, push, walker.Bounds, surfaceWidth, surfaceHeight);
+				// Composited, and drawn on, by the parent's pipeline: a nested layer's parent is a layer target too
+				drawing = walker.Depth > 0 ? BakeLayer(technique) : baked;
+				RebindList(writer, drawing.Pipeline, vtxOffset, idxOffset);
+				CompositeLayer(drawing, sampler, closed, walker.Tint, push, walker.Bounds, surfaceWidth, surfaceHeight);
 				// Restore the list's geometry for the following commands — the composite bound its own quad buffer.
 				writer.SetVertexBuffer(0, _engine.ListVertexRing.Buffer, vtxOffset);
 				continue;
@@ -97,7 +104,7 @@ internal sealed partial class WebGpuRenderContext
 			// Bound unconditionally, so walker.TextureChanged has nothing to save here: the push block carries this
 			// command's tag at a fresh dynamic offset, so the bind group has to be set either way — and the group itself
 			// is already cached by the resources it names, which is what the desktop backends' memoisation buys them.
-			BindCommand(baked, sampler, _engine.TextureView(walker.TextureId), push, walker.Tag);
+			BindCommand(drawing, sampler, ListTextureView(walker.TextureId), push, walker.Tag);
 
 			var (clipX, clipY, clipW, clipH) = walker.Scissor;
 			writer.SetScissor(clipX, clipY, clipW, clipH);
@@ -113,12 +120,19 @@ internal sealed partial class WebGpuRenderContext
 		{
 			writer.EndPass();
 			ResumeParentScope(abandoned - 1);
-			RebindList(writer, baked.Pipeline, vtxOffset, idxOffset);
+			RebindList(writer, abandoned > 0 ? BakeLayer(technique).Pipeline : baked.Pipeline, vtxOffset, idxOffset);
 		}
 	}
 
 	// Index-buffer format id understood by the shim's OP_SET_INDEX_BUFFER: 0 = uint16.
 	private const int IndexFormatUint16 = 0;
+
+	// The view a draw-list texture id names: a loaded texture's, or — offset by DebugTextureBase — a graph resource's
+	// live view, for a TextureRef the pass declared with .Samples (the graph made it sampleable for this pass). The
+	// bind-group cache keys on the view handle, and graph views are dropped from it whenever they are recreated.
+	private int ListTextureView(int textureId) => textureId >= InspectableResource.DebugTextureBase
+		? _engine.Transients.SampledViewHandle(textureId - InspectableResource.DebugTextureBase)
+		: _engine.TextureView(textureId);
 
 	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.
 	private bool _warnedLayerNesting;

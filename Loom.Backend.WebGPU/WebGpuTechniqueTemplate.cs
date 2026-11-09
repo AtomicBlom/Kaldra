@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Materials;
+using Loom.Graph;
 
 namespace Loom.Backend.WebGPU;
 
@@ -22,6 +23,12 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 	private readonly WebGpuHandleAllocator _handles;
 
 	public required WebGpuBindingModel Bindings { get; init; }
+
+	/// <summary>The reflection's bindings in the neutral form, which a pass's <c>.Reads</c> storage buffers are held to at
+	/// the draw (<see cref="ShaderBindingMap.CheckPassStorage"/>); its storage buffers line up with
+	/// <see cref="WebGpuBindingModel.StorageBufferBindings"/>, both in binding order.</summary>
+	public ShaderBindingMap Reflected { get; init; }
+
 	public required string VertexEntry { get; init; }
 	public required string FragmentEntry { get; init; }
 	public required bool HasVertexInput { get; init; }
@@ -32,6 +39,12 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 	public required VertexLayout? Layout { get; init; }
 	public required VertexLayout? Instance { get; init; }
 	public required CullMode Cull { get; init; }
+
+	/// <summary>The function the comparison samplers on <see cref="WebGpuBindingModel.SampledCompared"/>'s slots compare by.</summary>
+	public DepthCompare? SampleCompare { get; init; }
+
+	/// <summary>Whether alpha decides the samples a fragment covers in a multisampled pass (TechniqueDescriptor.AlphaToCoverage).</summary>
+	public bool AlphaToCoverage { get; init; }
 
 	/// <summary>The depth comparison baked into the pipeline when the pass has a depth target.</summary>
 	public required DepthCompare DepthTest { get; init; }
@@ -77,6 +90,9 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 	public static WebGpuTechniqueTemplate Create(WebGpuHandleAllocator handles, string shaderName, string wgsl, byte[]? reflectionJson, in TechniqueDescriptor descriptor)
 	{
 		var bindings = WebGpuBindingModel.Parse(wgsl, reflectionJson, shaderName);
+		ShaderBindingMap.CheckCompare(shaderName, bindings.ComparedCount, descriptor.SampleCompare);
+		var reflected = reflectionJson is null ? default : ShaderBindingMap.From(ShaderReflection.FromBytes(reflectionJson, ShaderBindingTarget.Wgsl));
+		reflected.CheckDrawStorage(shaderName, descriptor.IsCompute);
 
 		var module = handles.Allocate(WebGpuHandleAllocator.ShaderModules);
 		WebGpuInterop.CreateShaderModule(module, wgsl, shaderName);
@@ -105,6 +121,7 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 		return new WebGpuTechniqueTemplate(handles)
 		{
 			Bindings = bindings,
+			Reflected = reflected,
 			VertexEntry = vertexEntry,
 			FragmentEntry = fragmentEntry,
 			VertexInputLocations = ParseVertexInputLocations(wgsl, vertexEntry),
@@ -118,6 +135,8 @@ internal sealed partial class WebGpuTechniqueTemplate : IDisposable
 			Cull = descriptor.Cull,
 			DepthTest = descriptor.DepthTest,
 			Bias = descriptor.Bias,
+			SampleCompare = descriptor.SampleCompare,
+			AlphaToCoverage = descriptor.AlphaToCoverage,
 			MaterialUniformSlot = bindings.MaterialUniformSlot,
 			MaterialParameterBytes = bindings.MaterialParameterBytes,
 			ShaderModule = module,

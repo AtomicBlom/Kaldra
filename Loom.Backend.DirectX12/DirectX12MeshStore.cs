@@ -13,10 +13,11 @@ namespace Loom.Backend.DirectX12;
 /// builds meshes up front through the engine and gets back an opaque <see cref="Mesh"/> handle; recording
 /// resolves the handle to its vertex/index buffer views and emits the indexed draw.
 /// <para>
-/// Each mesh's vertices + indices live in an <c>UPLOAD</c>-heap committed resource held in
-/// <c>GENERIC_READ</c> — directly GPU-readable, so no staging copy or extra synchronisation is needed. For the
-/// small, static, build-once demo geometry this is the simplest correct path; a device-local + copy-queue
-/// upload (the Vulkan store's staging path) is a later optimisation, not a correctness need.
+/// Each mesh's vertices + indices live in <c>DEFAULT</c>-heap (device-local) committed buffers, as the Vulkan store's
+/// do: written once into an <c>UPLOAD</c>-heap staging buffer, then copied across in the shared
+/// <see cref="DirectX12UploadBatch"/>, which executes ahead of the frame that draws them. Drawing straight out of an
+/// upload heap instead would read every vertex across the bus each frame, which with large meshes draws about fifteen
+/// times slower than Vulkan does.
 /// </para>
 /// </summary>
 internal sealed unsafe class DirectX12MeshStore : IDisposable
@@ -29,10 +30,15 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		public IndexBufferView IndexView;
 		public uint IndexCount;
 		public uint VertexCount; // skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
+		public bool Released;    // the id's slot after IEngine.ReleaseMesh: no buffers, and Slot refuses it
 	}
 
 	private readonly DirectX12Context _ctx;
+	private readonly DirectX12UploadBatch _uploads;
 	private readonly List<StoredMesh> _meshes = [];
+	// Released meshes whose buffers a frame in flight may still read, each with the fence value signalled after the
+	// last frame that can.
+	private readonly List<(StoredMesh Mesh, ulong LastReadingFence)> _releasing = [];
 
 	// Mesh ids are 1-based, so 0 is a value no mesh can have — "the command list's vertex/index bindings are not this
 	// store's doing".
@@ -42,19 +48,25 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	// Built on the first indirect draw and kept; one indexed-draw layout covers every indirect draw the engine issues.
 	private ComPtr<ID3D12CommandSignature> _indirectSignature;
 
-	public DirectX12MeshStore(DirectX12Context ctx) => _ctx = ctx;
+	public DirectX12MeshStore(DirectX12Context ctx, DirectX12UploadBatch uploads) => (_ctx, _uploads) = (ctx, uploads);
 
 	/// <summary>
 	/// Resolve a <see cref="Mesh.Id"/> to its slot in the store. Ids are 1-based so <c>default(Mesh)</c> (id 0) is
 	/// never a live handle: drawing an unassigned <see cref="Mesh"/> field fails here instead of silently rendering
-	/// whichever mesh was uploaded first.
+	/// whichever mesh was uploaded first. A released mesh keeps its slot, emptied, so its stale handle fails here too.
 	/// </summary>
-	private int Slot(int meshId) =>
-		meshId >= 1 && meshId <= _meshes.Count
-			? meshId - 1
-			: throw new InvalidOperationException(
+	private int Slot(int meshId)
+	{
+		if (meshId < 1 || meshId > _meshes.Count)
+		{
+			throw new InvalidOperationException(
 				$"DirectX12: mesh id {meshId} was not created by this engine ({(meshId == 0 ? "0 is default(Mesh), an unassigned handle" : $"only ids 1..{_meshes.Count} exist")}). " +
 				"Meshes come from IEngine.CreateMesh / CreateMesh<T> / CreateSkinnedMesh.");
+		}
+		if (_meshes[meshId - 1].Released)
+			throw new InvalidOperationException($"DirectX12: mesh id {meshId} was released by IEngine.ReleaseMesh; its handle can no longer be drawn or released.");
+		return meshId - 1;
+	}
 
 	/// <summary>Upload canonical <see cref="Vertex"/> geometry (the <see cref="VertexLayout.MeshStandard"/> layout) and return a handle.</summary>
 	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
@@ -71,8 +83,8 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		var vertexBytes = (uint)vertexData.Length;
 		var indexBytes = (uint)(indices.Length * sizeof(uint));
 
-		var vertexBuffer = CreateUploadBuffer(vertexData, vertexBytes);
-		var indexBuffer = CreateUploadBuffer(MemoryMarshal.AsBytes(indices), indexBytes);
+		var vertexBuffer = CreateDeviceBuffer(vertexData);
+		var indexBuffer = CreateDeviceBuffer(MemoryMarshal.AsBytes(indices));
 
 		_meshes.Add(new StoredMesh
 		{
@@ -96,9 +108,9 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	}
 
 	/// <summary>
-	/// Upload a skinned mesh's bind-pose vertices. The UPLOAD-heap buffer is already GPU-readable in
-	/// GENERIC_READ, so its GPU address binds directly as a structured-buffer root SRV for the compute pre-skin
-	/// pass (<see cref="BindPoseAddress"/>) — no extra usage flag is needed (unlike Vulkan). The vertex count is
+	/// Upload a skinned mesh's bind-pose vertices. A buffer is promoted to any read state on use, so the vertex buffer's GPU
+	/// address binds directly as a structured-buffer root SRV for the compute pre-skin pass
+	/// (<see cref="VertexAddress"/>) — no extra usage flag is needed (unlike Vulkan). The vertex count is
 	/// recorded for the dispatch's thread count; the index buffer is what <see cref="DrawSkinned"/> draws.
 	/// </summary>
 	public Mesh CreateSkinned(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices)
@@ -110,11 +122,47 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		return mesh;
 	}
 
-	/// <summary>The skinned mesh's bind-pose buffer GPU address, bound as a structured-buffer root SRV for the compute pre-skin pass.</summary>
-	public ulong BindPoseAddress(int meshId) => _meshes[Slot(meshId)].VertexBuffer.GetGPUVirtualAddress();
+	/// <summary>
+	/// A stored mesh's vertex buffer's GPU address: a skinned mesh's bind pose, bound as a structured-buffer root SRV for the compute pre-skin
+	/// pass, or a static instance buffer's instances, bound as a draw's per-instance stream.
+	/// </summary>
+	public ulong VertexAddress(int meshId) => _meshes[Slot(meshId)].VertexBuffer.GetGPUVirtualAddress();
 
 	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count.</summary>
 	public uint VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;
+
+	/// <summary>
+	/// Release a mesh: its id stops resolving at once, and its buffers wait until the frame fence reaches
+	/// <paramref name="lastReadingFence"/>, the value signalled after the last frame that may still draw it.
+	/// </summary>
+	public void Release(int meshId, ulong lastReadingFence)
+	{
+		var slot = Slot(meshId);
+		_releasing.Add((_meshes[slot], lastReadingFence));
+		_meshes[slot] = new StoredMesh { Released = true };
+		if (_bound == meshId)
+			_bound = NothingBound;
+	}
+
+	/// <summary>Free the buffers of every released mesh whose last reading frame the fence has passed (<paramref name="completedFence"/>).</summary>
+	public void CollectReleased(ulong completedFence)
+	{
+		for (var i = _releasing.Count - 1; i >= 0; i--)
+		{
+			if (_releasing[i].LastReadingFence > completedFence)
+				continue;
+			Destroy(_releasing[i].Mesh);
+			_releasing.RemoveAt(i);
+		}
+	}
+
+	private static void Destroy(StoredMesh mesh)
+	{
+		if (mesh.VertexBuffer.Handle is not null)
+			mesh.VertexBuffer.Dispose();
+		if (mesh.IndexBuffer.Handle is not null)
+			mesh.IndexBuffer.Dispose();
+	}
 
 	/// <summary>
 	/// Draw a mesh's index buffer with its per-vertex stream sourced from <paramref name="vertexView"/> instead of
@@ -235,13 +283,34 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 	/// </summary>
 	public void ResetBindings() => _bound = NothingBound;
 
-	// An UPLOAD-heap committed buffer holding the data, left in GENERIC_READ so the GPU can read it directly
-	// as a vertex/index buffer without a transition (upload-heap resources are created in GENERIC_READ).
-	private ComPtr<ID3D12Resource> CreateUploadBuffer(ReadOnlySpan<byte> data, uint size)
+	// A DEFAULT-heap buffer holding the data. The data goes into an UPLOAD-heap staging buffer now, and the copy across
+	// is recorded into the upload batch, which retires the staging buffer once it has run. No barriers: a buffer is
+	// always in COMMON between command lists, the copy promotes it to COPY_DEST, it decays back to COMMON when the
+	// batch completes, and the frame's draws promote it to whichever read state they use.
+	private ComPtr<ID3D12Resource> CreateDeviceBuffer(ReadOnlySpan<byte> data)
+	{
+		var size = (ulong)data.Length;
+		var buffer = CreateBuffer(HeapType.Default, size, ResourceStates.Common);
+		if (size == 0)
+			return buffer;
+
+		var staging = CreateBuffer(HeapType.Upload, size, ResourceStates.GenericRead);
+		void* mapped;
+		var noRead = new Silk.NET.Direct3D12.Range { Begin = 0, End = 0 };
+		SilkMarshal.ThrowHResult(staging.Map(0, &noRead, &mapped));
+		data.CopyTo(new Span<byte>(mapped, data.Length));
+		staging.Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+
+		_uploads.Recorder().CopyBufferRegion(buffer, 0, staging, 0, size);
+		_uploads.Retire(staging);
+		return buffer;
+	}
+
+	private ComPtr<ID3D12Resource> CreateBuffer(HeapType heap, ulong size, ResourceStates initial)
 	{
 		var heapProps = new HeapProperties
 		{
-			Type = HeapType.Upload,
+			Type = heap,
 			CPUPageProperty = CpuPageProperty.Unknown,
 			MemoryPoolPreference = MemoryPool.Unknown,
 			CreationNodeMask = 1,
@@ -251,7 +320,7 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 		{
 			Dimension = ResourceDimension.Buffer,
 			Alignment = 0,
-			Width = size,
+			Width = Math.Max(size, 1),
 			Height = 1,
 			DepthOrArraySize = 1,
 			MipLevels = 1,
@@ -263,27 +332,18 @@ internal sealed unsafe class DirectX12MeshStore : IDisposable
 
 		ComPtr<ID3D12Resource> buffer = default;
 		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommittedResource(
-			&heapProps, HeapFlags.None, &desc, ResourceStates.GenericRead, (ClearValue*)null, out buffer));
-
-		// Map (a buffer has one subresource, no read range), copy the geometry in, unmap.
-		void* mapped;
-		var noRead = new Silk.NET.Direct3D12.Range { Begin = 0, End = 0 };
-		SilkMarshal.ThrowHResult(buffer.Map(0, &noRead, &mapped));
-		data.CopyTo(new Span<byte>(mapped, (int)size));
-		buffer.Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+			&heapProps, HeapFlags.None, &desc, initial, (ClearValue*)null, out buffer));
 		return buffer;
 	}
 
 	public void Dispose()
 	{
 		foreach (var mesh in _meshes)
-		{
-			if (mesh.VertexBuffer.Handle is not null)
-				mesh.VertexBuffer.Dispose();
-			if (mesh.IndexBuffer.Handle is not null)
-				mesh.IndexBuffer.Dispose();
-		}
+			Destroy(mesh);
 		_meshes.Clear();
+		foreach (var (mesh, _) in _releasing)
+			Destroy(mesh);
+		_releasing.Clear();
 		if (_indirectSignature.Handle is not null)
 			_indirectSignature.Dispose();
 	}

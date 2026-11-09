@@ -104,10 +104,8 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		// within it rides pDynamicOffsets at bind time. That is what lets a material's set — its images, its
 		// sampler, its buffers — be written once and cached, with only the per-draw offsets changing.
 		//
-		// Unconditional, including compute, so one shader cannot get a different layout from another. No shipped
-		// compute shader declares a constant buffer, and the Dispatch path binds none; one that did would fail the
-		// validation layer at bind time for supplying no offsets, which is louder than the unbound descriptor it
-		// would have got before.
+		// Unconditional, including compute, so one shader cannot get a different layout from another: a dispatch binds
+		// its pass's .Reads Constants here as a draw does, with dynamic offsets of 0.
 		Append(bindings, ref next, map.UniformBuffers, DescriptorType.UniformBufferDynamic, stage);
 
 		DescriptorSetLayoutCreateInfo info = new()
@@ -261,7 +259,7 @@ public sealed unsafe class VulkanTechnique : IDisposable
 
 	// Exhaustive so a new DepthCompare member fails loud here instead of silently falling back to a test that
 	// happens to compile.
-	private static CompareOp ToCompareOp(DepthCompare compare) => compare switch
+	internal static CompareOp ToCompareOp(DepthCompare compare) => compare switch
 	{
 		DepthCompare.Never => CompareOp.Never,
 		DepthCompare.Less => CompareOp.Less,
@@ -338,7 +336,16 @@ public sealed unsafe class VulkanTechnique : IDisposable
 		var multisample = arena.Write(new PipelineMultisampleStateCreateInfo
 		{
 			SType = StructureType.PipelineMultisampleStateCreateInfo,
-			RasterizationSamples = SampleCountFlags.Count1Bit,
+			RasterizationSamples = description.Samples switch
+			{
+				1 => SampleCountFlags.Count1Bit,
+				2 => SampleCountFlags.Count2Bit,
+				4 => SampleCountFlags.Count4Bit,
+				8 => SampleCountFlags.Count8Bit,
+				16 => SampleCountFlags.Count16Bit,
+				_ => throw new VulkanException($"A pass of {description.Samples} samples; a pipeline takes 1, 2, 4, 8 or 16."),
+			},
+			AlphaToCoverageEnable = description.AlphaToCoverage && description.Samples > 1,
 		});
 		// One blend attachment per colour target (a g-buffer writes several). The blend equation is technique
 		// state: None writes opaquely, AlphaOver does src-alpha over-blend (transparency),

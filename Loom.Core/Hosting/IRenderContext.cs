@@ -29,6 +29,14 @@ public interface IRenderContext
 	bool HdrOutput { get; }
 
 	/// <summary>
+	/// The frame being recorded: 0 for the engine's first <see cref="IEngine.Render"/>, one more for each after it, the
+	/// same for every pass of one frame. A stable producer that does work once per frame on its first call, or checks that
+	/// a step ran before the frame (as <c>UIPainter.Draw</c> checks <c>Prepare</c>), tells one frame from the next by it,
+	/// since a pass may call it any number of times. Pulled, not captured, like <see cref="Time"/>.
+	/// </summary>
+	long Frame { get; }
+
+	/// <summary>
 	/// Draw a fullscreen triangle with the named technique, sampling zero or more <paramref name="inputs"/>
 	/// (each bound, in the order given, as the technique's 0..N-1 sampled input — the backend maps that ordinal
 	/// to its own binding model). With no inputs it's a from-scratch pass (a gradient); with
@@ -91,6 +99,14 @@ public interface IRenderContext
 	/// (a list-push technique, <see cref="Materials.TechniqueDescriptor.HasListPush"/>). Several calls in one pass
 	/// each draw, rather than one overwriting another.
 	/// <para>
+	/// A <see cref="TextureRef"/> names an engine <see cref="Texture"/> or a graph texture an earlier pass rendered.
+	/// A graph texture is an ordinary sampled input: this pass must declare it with <c>.Samples</c> — which is what
+	/// orders it after its producer and puts it in a sampleable layout — or the submission throws
+	/// <see cref="PassBindingException"/>; and its format must sample as a filterable float
+	/// (<see cref="Graph.FormatExtensions"/>), so a depth or integer target is refused. Each submission resolves it to
+	/// the resource's live image, so a resize or a graph swap that keeps the handle needs nothing from the caller.
+	/// </para>
+	/// <para>
 	/// <paramref name="identity"/> names the geometry stream. A stable identity lets the backend keep the uploaded
 	/// vertices and indices and skip re-staging them while the revision holds — the spans are then read only when
 	/// the revision moves. <see cref="DrawListIdentity.Transient"/> stages fresh every frame, which a producer whose
@@ -100,7 +116,7 @@ public interface IRenderContext
 	void DrawList<TVertex>(
 		string technique,
 		DrawListIdentity identity,
-		ReadOnlySpan<Texture> textures,
+		ReadOnlySpan<TextureRef> textures,
 		ReadOnlySpan<TVertex> vertices,
 		ReadOnlySpan<ushort> indices,
 		ReadOnlySpan<DrawCommand> commands,

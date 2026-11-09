@@ -12,6 +12,10 @@ namespace Loom.Backend.Vulkan;
 /// </summary>
 internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 {
+	// The pool each live persistent set came from, by the set's handle: freeing one set on its own needs both, and the
+	// cache that holds the set keeps only its handle.
+	private readonly Dictionary<ulong, DescriptorPool> _setPools = [];
+
 	private readonly VulkanContext _ctx;
 	private readonly Vk _vk;
 	private readonly List<DescriptorPool>[] _framePools;
@@ -20,6 +24,9 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 	private int _frameIndex;
 	private int _poolIndex;
 	private int _persistentIndex;
+	// Persistent sets dropped from the cache that a frame in flight may still bind, each with its pool and the last frame
+	// that can.
+	private readonly List<(DescriptorSet Set, DescriptorPool Pool, ulong LastReadingFrame)> _retiring = [];
 
 	public VulkanDescriptorAllocator(VulkanContext ctx, int framesInFlight, uint maxSetsPerFrame = 64)
 	{
@@ -28,11 +35,13 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 		_maxSetsPerFrame = maxSetsPerFrame;
 		_framePools = new List<DescriptorPool>[framesInFlight];
 		for (var i = 0; i < framesInFlight; i++)
-			_framePools[i] = [CreatePool()];
-		_persistentPools = [CreatePool()];
+			_framePools[i] = [CreatePool(freeable: false)];
+		_persistentPools = [CreatePool(freeable: true)];
 	}
 
-	private DescriptorPool CreatePool()
+	// A persistent pool is created freeable because a cached set is occasionally evicted on its own — when something it
+	// names is released between frames — rather than only ever with the whole chain at a reset.
+	private DescriptorPool CreatePool(bool freeable)
 	{
 		var poolSizes = stackalloc DescriptorPoolSize[4];
 		poolSizes[0] = new DescriptorPoolSize
@@ -60,6 +69,7 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 		DescriptorPoolCreateInfo info = new()
 		{
 			SType = StructureType.DescriptorPoolCreateInfo,
+			Flags = freeable ? DescriptorPoolCreateFlags.FreeDescriptorSetBit : DescriptorPoolCreateFlags.None,
 			MaxSets = _maxSetsPerFrame,
 			PoolSizeCount = 4,
 			PPoolSizes = poolSizes,
@@ -73,44 +83,75 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 	/// descriptor-set cache: a material's images and samplers do not change between draws or between frames, so the
 	/// set describing them is written once and re-bound with only its dynamic uniform offsets varying.
 	/// <para>
-	/// The caller is responsible for calling <see cref="ResetPersistent"/> whenever anything a cached set names can
-	/// die — see the cache's own invariant comment.
+	/// The caller is responsible for calling <see cref="ResetPersistent"/> whenever a whole generation of what cached
+	/// sets name dies, and <see cref="RetirePersistent"/> for each set evicted on its own — see
+	/// <see cref="Loom.Graph.BindingCache"/>'s invariant.
 	/// </para>
 	/// </summary>
 	public DescriptorSet AllocatePersistent(DescriptorSetLayout layout)
 	{
 		while (true)
 		{
+			var pool = _persistentPools[_persistentIndex];
 			DescriptorSetAllocateInfo info = new()
 			{
 				SType = StructureType.DescriptorSetAllocateInfo,
-				DescriptorPool = _persistentPools[_persistentIndex],
+				DescriptorPool = pool,
 				DescriptorSetCount = 1,
 				PSetLayouts = &layout,
 			};
 			var result = _vk.AllocateDescriptorSets(_ctx.Device, in info, out var set);
-			if (result != Result.ErrorOutOfPoolMemory)
+			// A freeable pool can also refuse for fragmentation once sets have been freed from it; either way the next
+			// pool is the answer.
+			if (result is not (Result.ErrorOutOfPoolMemory or Result.ErrorFragmentedPool))
 			{
 				result.Check("vkAllocateDescriptorSets");
+				_setPools.Add(set.Handle, pool);
 				return set;
 			}
 			_persistentIndex++;
 			if (_persistentIndex >= _persistentPools.Count)
 			{
-				_persistentPools.Add(CreatePool());
+				_persistentPools.Add(CreatePool(freeable: true));
 				LoomLog.Info($"Vulkan persistent descriptor pool chain grew to {_persistentPools.Count} pools " +
 					$"({_maxSetsPerFrame} sets each).");
 			}
 		}
 	}
 
+	/// <summary>
+	/// Free a persistent set evicted from the cache once frame <paramref name="lastReadingFrame"/> has completed. A frame
+	/// already submitted may bind it, so it is freed on the same schedule as the object whose release evicted it.
+	/// </summary>
+	public void RetirePersistent(DescriptorSet set, ulong lastReadingFrame)
+	{
+		if (!_setPools.Remove(set.Handle, out var pool))
+			throw new VulkanException($"Descriptor set 0x{set.Handle:X} is not a live persistent set, so it cannot be retired.");
+		_retiring.Add((set, pool, lastReadingFrame));
+	}
+
+	/// <summary>Free every retired persistent set whose last reading frame is <paramref name="completedFrame"/> or earlier.</summary>
+	public void CollectRetired(ulong completedFrame)
+	{
+		for (var i = _retiring.Count - 1; i >= 0; i--)
+		{
+			if (_retiring[i].LastReadingFrame > completedFrame)
+				continue;
+			var (set, pool, _) = _retiring[i];
+			_vk.FreeDescriptorSets(_ctx.Device, pool, 1, in set).Check("vkFreeDescriptorSets");
+			_retiring.RemoveAt(i);
+		}
+	}
+
 	/// <summary>Free every persistently-allocated set by resetting the chain. The caller must have drained the GPU
-	/// and dropped its cache first — resetting a pool invalidates the sets allocated from it.</summary>
+	/// and dropped its cache first — resetting a pool invalidates the sets allocated from it, retired ones included.</summary>
 	public void ResetPersistent()
 	{
 		foreach (var pool in _persistentPools)
 			_vk.ResetDescriptorPool(_ctx.Device, pool, 0).Check("vkResetDescriptorPool");
 		_persistentIndex = 0;
+		_setPools.Clear();
+		_retiring.Clear();
 	}
 
 	/// <summary>Recycle this frame slot's pool chain before recording. The frame's fence guarantees its sets are idle.</summary>
@@ -143,7 +184,7 @@ internal sealed unsafe class VulkanDescriptorAllocator : IDisposable
 			_poolIndex++;
 			if (_poolIndex >= _framePools[_frameIndex].Count)
 			{
-				_framePools[_frameIndex].Add(CreatePool());
+				_framePools[_frameIndex].Add(CreatePool(freeable: false));
 				// Reported for the same reason DirectX12 reports its heap growth: growing is the right answer to a
 				// scene that got bigger, and the wrong answer to a leak, and only a number distinguishes them.
 				LoomLog.Info($"Vulkan descriptor pool chain grew to {_framePools[_frameIndex].Count} pools " +

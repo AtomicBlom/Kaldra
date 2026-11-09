@@ -29,7 +29,7 @@ namespace Loom.Graph;
 /// on a <em>rule</em> rather than on an API call, the rule moves here instead of the code moving anywhere.
 /// </para>
 /// </summary>
-public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques)
+public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques, DrawListStreams streams)
 {
 	private GraphPass? _pass;
 
@@ -119,6 +119,54 @@ public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques)
 			"procedural draw (VertexCount plus an instance source).");
 
 	/// <summary>
+	/// Validate a draw list's identity and its textures. All of it is <strong>always checked</strong>, validation on or
+	/// off, because every mistake it catches is silent: nothing else reports it, and the frame draws something wrong.
+	/// <para>
+	/// A stable identity must name a stream <see cref="IEngine.AllocateDrawListStream"/> minted. A backend keeps a stable
+	/// stream's geometry and skips the upload while the revision holds, so two producers sharing a number at matching
+	/// revisions would draw each other's geometry. It is one comparison.
+	/// </para>
+	/// <para>
+	/// A graph texture must sample as a filterable float: a draw-list technique reads one <c>Texture2D</c> through a
+	/// filtering sampler, and binding a depth or integer image there is a device error on one backend and garbage on
+	/// another. And it must be declared with <c>.Samples</c> on the recording pass, like every other sampled input, because
+	/// that edge is what orders the list after the texture's producer and moves the image into a sampleable layout. A
+	/// <see cref="TextureRef"/> sits in a producer's array, where it outlives the graph it came from, so an undeclared or
+	/// stale one is likelier here than in a pass's own bindings; and the backend resolves it by id, so a stale one would
+	/// bind whatever the new graph has under that id. The check is a scan of the pass's declarations per graph texture,
+	/// and engine textures need none of it: they are not graph resources and are always sampleable.
+	/// </para>
+	/// </summary>
+	public void DrawList(string technique, in DrawListIdentity identity, ReadOnlySpan<TextureRef> textures)
+	{
+		if (identity.IsStable && !streams.IsMinted(identity.Stream))
+		{
+			throw new InvalidDrawCallException(
+				PassName,
+				technique,
+				$"a draw list on technique '{technique}' names stable stream {identity.Stream}, which this engine's " +
+				"AllocateDrawListStream did not mint. Allocate a stream per stable list from IEngine.AllocateDrawListStream, " +
+				"or pass DrawListIdentity.Transient for a list that is rebuilt every frame.");
+		}
+
+		for (var i = 0; i < textures.Length; i++)
+		{
+			if (textures[i].Resource is not { } resource)
+				continue;
+			if (!resource.Format.IsFilterableFloat)
+			{
+				throw new InvalidDrawCallException(
+					PassName,
+					technique,
+					$"a draw list on technique '{technique}' samples graph texture '{resource.Name}' ({resource.Format}), " +
+					"but a draw list reads its textures as filterable floats, which a depth, integer or 32-bit float target " +
+					"cannot be on every backend. Copy it into a colour target the list can sample.");
+			}
+			RequireDeclared(technique, resource, AccessKind.Sample, ".Samples", sameName: true, always: true);
+		}
+	}
+
+	/// <summary>
 	/// Validate that a push has somewhere to go and fits it. <strong>Always checked</strong>, because the alternative
 	/// is what this replaces: the bytes silently truncated, or dropped entirely.
 	/// <para>
@@ -193,21 +241,30 @@ public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques)
 			RequireDeclared(technique, handles[i], kind, verb);
 	}
 
-	private void RequireDeclared(string technique, ResourceHandle handle, AccessKind kind, string verb)
+	// `sameName` also requires the declared resource's name to match. A draw list's TextureRef sits in a producer's
+	// array and can outlive the graph whose handle it holds; ids are only unique within one graph, so after a swap the
+	// stale id can name an unrelated resource the new pass happens to declare. Names are unique within a graph too, and
+	// a rebuilt graph that keeps the resource keeps both, so the pair tells "the same resource" from "a coincidence".
+	// `always` runs the check with validation off, for a binding whose mistake nothing else would report.
+	private void RequireDeclared(string technique, ResourceHandle handle, AccessKind kind, string verb, bool sameName = false, bool always = false)
 	{
-		if (!Enabled || _pass is null)
+		if ((!Enabled && !always) || _pass is null)
 			return;
 
 		var accesses = _pass.Accesses;
 		for (var j = 0; j < accesses.Length; j++)
-			if (accesses[j].Kind == kind && accesses[j].Resource.Id == handle.Id)
+		{
+			var declared = accesses[j].Resource;
+			if (accesses[j].Kind == kind && declared.Id == handle.Id && (!sameName || string.Equals(declared.Name, handle.Name, StringComparison.Ordinal)))
 				return;
+		}
 
 		throw new PassBindingException(
 			_pass.Name,
 			handle.Name,
 			$"technique '{technique}' binds '{handle.Name}', but the pass never declared it — add " +
 			$"{verb}({handle.Name}) to the pass. Ordering, barriers and image layouts are all derived from the " +
-			"declared edges, so an undeclared binding is read in whatever layout the last pass left it in.");
+			"declared edges, so an undeclared binding is read in whatever layout the last pass left it in." +
+			(sameName ? " A handle kept from an earlier graph names that graph's resource: refresh it when the graph is rebuilt." : ""));
 	}
 }

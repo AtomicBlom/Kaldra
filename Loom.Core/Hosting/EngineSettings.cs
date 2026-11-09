@@ -47,8 +47,11 @@ public class EngineSettings
 	public double MaxFramesPerSecond { get; set; }
 
 	/// <summary>
-	/// Request true HDR display output: negotiate an HDR-capable swapchain colour space and apply the HDR output
-	/// transform on the terminal pass when the display supports it, falling back to SDR otherwise.
+	/// Request true HDR display output: negotiate an HDR-capable swapchain colour space (scRGB) and apply the
+	/// HDR output transform on the terminal pass, falling back to SDR where the surface can't present it.
+	/// Whether the monitor is in HDR is the host's to know: the desktop host turns this off before creating the
+	/// engine where the window's monitor isn't, on every backend alike, since a surface able to present scRGB
+	/// says nothing about the monitor.
 	/// </summary>
 	public bool HdrOutput { get; set; }
 

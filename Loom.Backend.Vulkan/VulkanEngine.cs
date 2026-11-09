@@ -54,6 +54,11 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private readonly VulkanPipelineCache _pipelineCache;
 	private readonly VulkanUploadBatch _uploads;
 	private readonly VulkanMeshStore _meshes;
+	// Frames numbered from 1 as they are submitted: the newest submitted, the one each in-flight slot last carried,
+	// and the newest known complete. A released mesh is freed once the last frame that could read it completes.
+	private ulong _submittedFrames;
+	private readonly ulong[] _slotFrame = new ulong[MaxFramesInFlight];
+	private ulong _completedFrame;
 	private readonly VulkanTextureStore _textures;
 	private readonly VulkanDescriptorAllocator _descriptors;
 	private readonly VulkanRenderContext _context;
@@ -241,11 +246,14 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.IsCompute ? descriptor.ComputeEntry : descriptor.FragmentEntry,
 			descriptor.IsCompute ? SpirvEntryPoints.Stage.Compute : SpirvEntryPoints.Stage.Fragment,
 			descriptor.Shader);
+		var bindings = ShaderBindingMap.From(reflection, SpirvDepthTextures.Bindings(spirv, descriptor.Shader));
+		ShaderBindingMap.CheckCompare(name, bindings.ComparedCount, descriptor.SampleCompare);
+		bindings.CheckDrawStorage(name, descriptor.IsCompute);
 		_registry[name] = new VulkanTechniqueTemplate(
 			spirv,
 			vertexEntry,
 			fragmentEntry,
-			ShaderBindingMap.From(reflection),
+			bindings,
 			descriptor.HasVertexInput,
 			descriptor.Blend,
 			descriptor.LinearFilter,
@@ -259,9 +267,11 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.DepthTest,
 			descriptor.Bias,
 			reflection.MaterialUniformSlot,
-			reflection.MaterialParameterBytes);
+			reflection.MaterialParameterBytes,
+			descriptor.SampleCompare,
+			descriptor.AlphaToCoverage);
 		return new TechniqueShape(
-			new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes),
+			new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes, bindings.ComparedCount),
 			reflection.UniformBufferBytes,
 			descriptor.HasFragmentPush ? VulkanTechnique.FragmentPushSize : 0,
 			descriptor.HasListPush ? VulkanTechnique.ListPushSize : 0);
@@ -276,9 +286,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_techniques.Reset();   // dispose the stale VkPipelines; next Bake rebuilds from the new templates
 	}
 
-	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+	protected override Mesh UploadMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
-	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
+	protected override Mesh UploadMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
 	{
 		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
 		if (stride != layout.Stride)
@@ -286,9 +296,41 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
-	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
+	protected override Mesh UploadSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
-	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
+	// The next frame is the last that can read the mesh: it is the one the upload batch filling a just-created mesh
+	// is submitted ahead of. Cached sets naming its buffers go now, while the handles are still the mesh's own.
+	protected override void RetireMesh(Mesh mesh)
+	{
+		var lastReadingFrame = _submittedFrames + 1;
+		var (vertex, index) = _meshes.Release(mesh.Id, lastReadingFrame);
+		_context.EvictBindings(BoundObject.Buffer, vertex.Handle, lastReadingFrame);
+		_context.EvictBindings(BoundObject.Buffer, index.Handle, lastReadingFrame);
+	}
+
+	protected override Texture UploadTexture(TextureData data) => _textures.Create(data);
+
+	// The same schedule as a mesh: the next frame is the last that can read the texture, because the upload batch
+	// filling a just-created one is submitted ahead of it. Cached sets naming its view go now, while the handle is
+	// still the view's own.
+	protected override void RetireTexture(Texture texture)
+	{
+		var lastReadingFrame = _submittedFrames + 1;
+		var view = _textures.Release(texture.Id, lastReadingFrame);
+		_context.EvictBindings(BoundObject.View, view.Handle, lastReadingFrame);
+	}
+
+	// Recorded into the upload batch, which is submitted ahead of the next frame, as a new texture's upload is.
+	protected override void WriteTexels(Texture texture, ReadOnlySpan<byte> texels) => _textures.Write(texture.Id, texels);
+
+	// Free what was released once the frames that could read it are done: meshes, textures, and the cached sets their
+	// release evicted.
+	private void CollectReleased()
+	{
+		_meshes.CollectReleased(_completedFrame);
+		_textures.CollectReleased(_completedFrame);
+		_descriptors.CollectRetired(_completedFrame);
+	}
 
 	// Tear down the previous graph's transients/readback/timing pools before the base binds a new graph; the device
 	// and caches survive. The base has already drained the GPU when a prior graph existed.
@@ -352,7 +394,21 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_framebufferResized = true;
 	}
 
-	public override void WaitIdle() => _vk.DeviceWaitIdle(_ctx.Device);
+	public override void WaitIdle()
+	{
+		// Submit any recorded uploads first, so idle covers them too: a mesh or texture released while its copy was still
+		// pending in the batch is then read by nothing.
+		_uploads.Flush();
+		_vk.DeviceWaitIdle(_ctx.Device);
+		_completedFrame = _submittedFrames;
+
+		// A release waits for the frame after the newest submitted (the one the upload batch rides ahead of). With that batch
+		// run and the device idle, nothing can read anything released so far, so all of it goes now rather than a frame later.
+		var everythingReleased = _submittedFrames + 1;
+		_meshes.CollectReleased(everythingReleased);
+		_textures.CollectReleased(everythingReleased);
+		_descriptors.CollectRetired(everythingReleased);
+	}
 
 	// Resolve a logical shader name (TechniqueDescriptor.Shader) + asset extension (".spv" or its ".json"
 	// reflection sidecar) to bytes. Engine shaders are embedded in this assembly; app shaders are loose
@@ -458,6 +514,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		// The DeviceWaitIdle above is what makes freeing those sets safe here.
 		_context.FlushDescriptorCache();
 		RecreateSwapchainSizedReadback();
+		ForgetUploadedShadows();   // in case the recreation replaced a Constants or Storage buffer: upload each again
 
 		if (_presentTarget.ImageCount != oldImageCount)
 		{

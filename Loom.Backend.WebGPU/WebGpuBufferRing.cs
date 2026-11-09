@@ -45,18 +45,26 @@ internal sealed class WebGpuBufferRing
 	/// Stage <paramref name="data"/> into the ring and return its offset. <paramref name="paddedSize"/> reserves at
 	/// least that many bytes (a push block is written padded so the shader always reads defined memory even when a
 	/// pass pushes fewer values than the block holds); pass <c>data.Length</c> for an exact reservation.
+	/// <para>
+	/// <c>queue.writeBuffer</c> refuses a size that is not a whole number of 4-byte words, and staged data need not be
+	/// one: a draw list of 16-bit indices holding an odd number of triangles is two bytes short. So the write is padded
+	/// with zeros to the next word, inside a reservation that covers it, and the padding is never drawn.
+	/// </para>
 	/// </summary>
 	public int Reserve(ReadOnlySpan<byte> data, int paddedSize)
 	{
-		var size = Math.Max(data.Length, paddedSize);
+		var writeSize = Align(data.Length, 4);
+		var size = Math.Max(writeSize, paddedSize);
 		var offset = Align(_cursor, _alignment);
 		if (offset + size > Capacity)
 			throw new WebGpuException($"Buffer ring overflow: {offset + size} bytes needed, {Capacity} available in a frame.");
 
 		if (data.Length > 0)
 		{
-			var arenaOffset = _arena.Append(data);
-			_writer.WriteBufferFromArena(_buffer, offset, arenaOffset, data.Length);
+			var arenaOffset = _arena.Reserve(writeSize, out var staged);
+			data.CopyTo(staged);
+			staged[data.Length..].Clear();
+			_writer.WriteBufferFromArena(_buffer, offset, arenaOffset, writeSize);
 		}
 		_cursor = offset + size;
 		return offset;

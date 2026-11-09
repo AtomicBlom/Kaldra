@@ -44,10 +44,13 @@ internal sealed unsafe class DirectX12UploadBatch : IDisposable
 	public DirectX12UploadBatch(DirectX12Context ctx)
 	{
 		_ctx = ctx;
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandAllocator(CommandListType.Direct, out _allocator));
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandList(0, CommandListType.Direct, _allocator, default(ComPtr<ID3D12PipelineState>), out _cmd));
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandAllocator(CommandListType.Direct, out ComPtr<ID3D12CommandAllocator> madeAllocator));
+		_allocator = madeAllocator;
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandList(0, CommandListType.Direct, _allocator, default(ComPtr<ID3D12PipelineState>), out ComPtr<ID3D12GraphicsCommandList> madeCmd));
+		_cmd = madeCmd;
 		SilkMarshal.ThrowHResult(_cmd.Close());
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out _fence));
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out ComPtr<ID3D12Fence> madeFence));
+		_fence = madeFence;
 		_fenceEvent = CreateEventW(0, 0, 0, 0);
 		if (_fenceEvent == 0)
 			throw new InvalidOperationException("DirectX12: CreateEvent failed for the upload-batch fence.");

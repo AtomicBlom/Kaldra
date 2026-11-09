@@ -18,6 +18,12 @@ public readonly record struct InspectableResource(int Id, string Name, ResourceK
 	/// or above this base refers to a live transient graph image (the resource viewer) instead of a loaded
 	/// texture-store entry, so a debug overlay can preview graph contents. Single-sourced here so the backends
 	/// agree on the encoding.
+	/// <para>
+	/// It is also the ceiling on loaded-texture ids, which are never reused (a released texture's stale handle fails
+	/// rather than naming its successor), so an app that replaces a texture every frame keeps minting new ones. The
+	/// base sits high enough that doing so for years is fine, and a texture store refuses to mint an id that would
+	/// reach it rather than let the two encodings overlap.
+	/// </para>
 	/// </summary>
-	public const int DebugTextureBase = 0x10000;
+	public const int DebugTextureBase = 1 << 30;
 }

@@ -30,7 +30,7 @@ Add the SDK package to your `.csproj`:
 </PropertyGroup>
 ```
 
-Setting a flag to `true` adds the matching `PackageReference` automatically — you never reference `Loom.Backend.Vulkan` or `Loom.UI.SUIsei` directly, and `Loom.Core` / `Loom.Graph` / `Loom.Assets` arrive transitively. To compile your app's Slang shaders at build time, add:
+Setting a flag to `true` adds the matching `PackageReference` automatically — you never reference `Loom.Backend.Vulkan` or `Loom.UI.SUIsei` directly, and `Loom.Core` / `Loom.Graph` / `Loom.Assets` arrive transitively. `UseSUIsei` also brings SUIsei's XAML generator: every `.xaml` view in the project compiles into its partial `x:Class`, XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. To compile your app's Slang shaders at build time, add:
 
 ```xml
 <PropertyGroup>

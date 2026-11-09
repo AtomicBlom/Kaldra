@@ -1,6 +1,7 @@
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+
+using Loom.Graph;
 
 namespace Loom.Backend.WebGPU;
 
@@ -61,11 +62,21 @@ internal sealed partial class WebGpuRenderContext
 		var sampler = sampledViews.Length > 0 ? _engine.Samplers.Get(baked.Template.LinearFilter, baked.Template.Address) : 0;
 		for (var i = 0; i < sampledViews.Length; i++)
 		{
+			// A slot the shader reads by comparison takes a comparison sampler with the technique's function
+			var slotSampler = i < bindings.SampledCompared.Length && bindings.SampledCompared[i]
+				? _engine.Samplers.GetComparison(baked.Template.SampleCompare!.Value)
+				: sampler;
 			AddEntry(entries, ref e, bindings.SampledTextureBindings[i], EntryView, sampledViews[i], 0, 0);
-			AddEntry(entries, ref e, bindings.SampledSamplerBindings[i], EntrySampler, sampler, 0, 0);
+			AddEntry(entries, ref e, bindings.SampledSamplerBindings[i], EntrySampler, slotSampler, 0, 0);
 		}
 
-		for (var j = 0; j < _activeStorageCount && j < bindings.StorageBufferBindings.Length; j++)
+		// The pass's .Reads storage buffers: the first as many as the technique declares, in the order the pass read them.
+		// One that declares more than the pass reads would bind a group missing an entry, so it throws here instead.
+		if (bindings.StorageBufferBindings.Length > _activeStorageCount)
+			throw new InvalidOperationException($"WebGPU: technique '{technique}' declares {bindings.StorageBufferBindings.Length} storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		if (bindings.StorageBufferBindings.Length > 0)
+			baked.Template.Reflected.CheckPassStorage(technique, _pass!);
+		for (var j = 0; j < bindings.StorageBufferBindings.Length; j++)
 			AddEntry(entries, ref e, bindings.StorageBufferBindings[j], EntryBuffer, transients.BufferHandle(_activeStorageIds[j]), 0, 0);
 
 		// Uniform slots in the shader's order: the slot reflection named as the per-material block takes the material's
@@ -112,22 +123,26 @@ internal sealed partial class WebGpuRenderContext
 		}
 
 		var bindGroup = GetOrCreateBindGroup(baked.Template.BindGroupLayout, entries[..e]);
+		SortDynamicOffsets(dynBinding[..dynCount], dynOffset[..dynCount]);
+		_engine.Writer.SetBindGroup(0, bindGroup, dynOffset[..dynCount]);
+	}
 
-		// WebGPU wants dynamic offsets in ascending binding order — sort the (binding, offset) pairs together.
-		for (var i = 1; i < dynCount; i++)
+	// WebGPU wants a bind group's dynamic offsets in ascending binding order: sort the (binding, offset) pairs together,
+	// in place. An insertion sort, since there are only a handful and the draw path must not allocate.
+	private static void SortDynamicOffsets(Span<int> bindings, Span<int> offsets)
+	{
+		for (var i = 1; i < bindings.Length; i++)
 		{
-			int b = dynBinding[i], o = dynOffset[i], k = i - 1;
-			while (k >= 0 && dynBinding[k] > b)
+			int binding = bindings[i], offset = offsets[i], k = i - 1;
+			while (k >= 0 && bindings[k] > binding)
 			{
-				dynBinding[k + 1] = dynBinding[k];
-				dynOffset[k + 1] = dynOffset[k];
+				bindings[k + 1] = bindings[k];
+				offsets[k + 1] = offsets[k];
 				k--;
 			}
-			dynBinding[k + 1] = b;
-			dynOffset[k + 1] = o;
+			bindings[k + 1] = binding;
+			offsets[k + 1] = offset;
 		}
-
-		_engine.Writer.SetBindGroup(0, bindGroup, dynOffset[..dynCount]);
 	}
 
 	private static void AddEntry(Span<int> entries, ref int e, int binding, int kind, int handle, int offset, int size)
@@ -139,69 +154,71 @@ internal sealed partial class WebGpuRenderContext
 		entries[e++] = size;
 	}
 
-	// Reuse or create the bind group for a set of entries. Keyed by the layout plus each entry's (binding, handle):
-	// entry offsets are always 0 and sizes are deterministic per technique, so the bound handles fully identify the
-	// group — and since the buffers/views/samplers are stable per graph, the steady state creates no bind groups.
+	// Reuse or create the bind group for a set of entries. Keyed by the layout, the sampler and each entry's binding,
+	// kind and handle: entry offsets are always 0 and sizes are deterministic per technique, so the bound handles fully
+	// identify the group — and since the buffers/views/samplers are stable per graph, the steady state creates no bind
+	// groups. The samplers ride the key's header rather than an entry per texture, because every sampled entry of a group
+	// pairs with one of at most two: its technique's plain sampler and its comparison one. Which entries take which is
+	// fixed by the shader, and so by the layout, so the two distinct samplers in the order the entries name them identify
+	// the pairing. A group that named a third would need them as entries, so it is refused rather than keyed by two.
 	private int GetOrCreateBindGroup(int layout, Span<int> entries)
 	{
-		var key = new BindGroupKey(layout);
+		int first = -1, second = -1;
 		for (var i = 0; i < entries.Length; i += 5)
 		{
-			key.Add(entries[i]);     // binding
-			key.Add(entries[i + 2]); // resource handle
+			if (entries[i + 1] != EntrySampler)
+				continue;
+			var sampler = entries[i + 2];
+			if (first < 0 || sampler == first)
+				first = sampler;
+			else if (second < 0 || sampler == second)
+				second = sampler;
+			else
+				throw new WebGpuException("A bind group pairs its textures with three different samplers; its cache key holds two.");
+		}
+
+		var key = new BindingKey(BindingHandle(layout), first >= 0 ? BindingHandle(first) : 0, second >= 0 ? BindingHandle(second) : 0);
+		for (var i = 0; i < entries.Length; i += 5)
+		{
+			switch (entries[i + 1])
+			{
+				case EntryView:
+					key.Add(entries[i], BoundObject.View, BindingHandle(entries[i + 2]));
+					break;
+				case EntryBuffer:
+					key.Add(entries[i], BoundObject.Buffer, BindingHandle(entries[i + 2]));
+					break;
+				case EntrySampler:
+					break;
+				default:
+					throw new WebGpuException($"Bind group entry kind {entries[i + 1]} is not mapped to a cache key.");
+			}
 		}
 		if (_bindGroups.TryGetValue(key, out var cached))
-			return cached;
+			return (int)cached;
 
 		var handle = _engine.Handles.Allocate(WebGpuHandleAllocator.BindGroups);
 		WebGpuInterop.CreateBindGroup(handle, layout, entries);
-		_bindGroups[key] = handle;
+		_bindGroups.Add(key, BindingHandle(handle));
 		return handle;
 	}
 
-	// Allocation-free bind-group cache key: the layout handle plus the ordered (binding, handle) ints. Full-value
-	// equality — a hash-only collapse could alias a group onto the wrong resources after handle recycling.
-	private const int MaxBindGroupInts = 64;
-
-	[InlineArray(MaxBindGroupInts)]
-	private struct IntBuffer
+	/// <summary>
+	/// Release every cached bind group that names the <paramref name="kind"/> object <paramref name="handle"/>, which the
+	/// app is releasing. Called before the object's handle goes back to the allocator: the next object created of that
+	/// kind is given the same number, and a group still keyed by it would bind the destroyed object in its place — the
+	/// view of a released UI image drawn where its replacement belongs. Dropping a group the last frame bound is safe,
+	/// because that frame's commands were encoded and submitted before this call could be made.
+	/// </summary>
+	public void EvictBindGroups(BoundObject kind, int handle)
 	{
-		private int _element0;
+		_bindGroups.Evict(kind, BindingHandle(handle), _evictedGroups);
+		foreach (var group in _evictedGroups)
+			_engine.Handles.Release(WebGpuHandleAllocator.BindGroups, (int)group);
+		_evictedGroups.Clear();
 	}
 
-	private struct BindGroupKey(int layout) : IEquatable<BindGroupKey>
-	{
-		private readonly int _layout = layout;
-		private IntBuffer _values;
-		private int _count;
-
-		public void Add(int value)
-		{
-			if (_count >= MaxBindGroupInts)
-				throw new WebGpuException($"A bind group's key exceeds {MaxBindGroupInts} ints.");
-			_values[_count++] = value;
-		}
-
-		public bool Equals(BindGroupKey other)
-		{
-			if (_layout != other._layout || _count != other._count)
-				return false;
-			for (var i = 0; i < _count; i++)
-				if (_values[i] != other._values[i])
-					return false;
-			return true;
-		}
-
-		public override bool Equals(object? obj) => obj is BindGroupKey other && Equals(other);
-
-		public override int GetHashCode()
-		{
-			var hash = new HashCode();
-			hash.Add(_layout);
-			hash.Add(_count);
-			for (var i = 0; i < _count; i++)
-				hash.Add(_values[i]);
-			return hash.ToHashCode();
-		}
-	}
+	// A table handle as a cache-key value. Handles are non-negative table indices, so widening through uint keeps every
+	// one distinct.
+	private static ulong BindingHandle(int handle) => (uint)handle;
 }

@@ -25,9 +25,9 @@ public class RecordValidationTests
 		return graph.Passes.Single(p => p.Name == name);
 	}
 
-	private static RecordValidator ValidatorOn(GraphPass pass, TechniqueRegistry? techniques = null, bool enabled = true)
+	private static RecordValidator ValidatorOn(GraphPass pass, TechniqueRegistry? techniques = null, bool enabled = true, DrawListStreams? streams = null)
 	{
-		var validator = new RecordValidator(enabled, techniques ?? new TechniqueRegistry());
+		var validator = new RecordValidator(enabled, techniques ?? new TechniqueRegistry(), streams ?? new DrawListStreams());
 		validator.BeginPass(pass);
 		return validator;
 	}
@@ -53,6 +53,129 @@ public class RecordValidationTests
 		var registry = new TechniqueRegistry();
 		registry.Register(name, descriptor, shape);
 		return registry;
+	}
+
+	[Test]
+	public void A_stable_draw_list_must_name_a_stream_the_engine_minted()
+	{
+		// A backend keeps one set of buffers per stable stream and skips the upload while the revision holds, so two
+		// producers that picked the same number — every UI host numbers its surfaces from zero — would draw each other's
+		// geometry without a word. Only minted ids are accepted, which is what makes the numbers unique.
+		var streams = new DrawListStreams();
+		var validator = ValidatorOn(PassOf(g => g.Pass("p").Writes(g.Domain("world", 64, 64).Color("out", Format.Rgba8Srgb))), enabled: false, streams: streams);
+
+		var unminted = Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", new DrawListIdentity(Stream: 1, Revision: 4), default));
+		unminted.Message.ShouldContain("AllocateDrawListStream");
+		Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", new DrawListIdentity(Stream: 0, Revision: 4), default));
+
+		var first = streams.Allocate();
+		var second = streams.Allocate();
+		second.ShouldNotBe(first);
+		validator.DrawList("ui", new DrawListIdentity(first, Revision: 4), default);
+		validator.DrawList("ui", new DrawListIdentity(second, Revision: 9), default);
+
+		// A transient list keeps nothing, so it names no stream at all.
+		validator.DrawList("ui", DrawListIdentity.Transient, default);
+		validator.DrawList("ui", new DrawListIdentity(Stream: 12345, Revision: 0), default);
+	}
+
+	[Test]
+	public void A_draw_list_sampling_a_graph_texture_the_pass_never_declared_throws()
+	{
+		// A draw list is a sampled input like any other: the .Samples edge is what orders it after the target's producer
+		// and puts the image in a sampleable layout, so a list that names an undeclared target would read whatever the
+		// previous pass left behind.
+		var (pass, declared, undeclared) = SamplingPass();
+		var validator = ValidatorOn(pass);
+
+		var ex = Should.Throw<PassBindingException>(() =>
+			validator.DrawList("ui", DrawListIdentity.Transient, [new Texture(3, 4, 4), new TextureRef((ColorHandle)undeclared)]));
+
+		ex.Pass.ShouldBe("p");
+		ex.Resource.ShouldBe("undeclared");
+		ex.Message.ShouldContain(".Samples(undeclared)");
+
+		// Declared, it is accepted beside an engine texture, which is no graph resource and needs no declaration.
+		Should.NotThrow(() => validator.DrawList("ui", DrawListIdentity.Transient, [new Texture(3, 4, 4), new TextureRef((ColorHandle)declared)]));
+	}
+
+	[Test]
+	public void A_draw_list_texture_kept_from_an_earlier_graph_is_not_mistaken_for_one_the_pass_declared()
+	{
+		// A TextureRef lives in a producer's array, so it can outlive the graph that minted its handle. Ids restart in
+		// every graph: here the old "minimap" and the new pass's "shadow" share one, and matching on the id alone
+		// would sample the shadow map where the list meant the minimap.
+		ColorHandle stale = null!;
+		RenderGraph.Define(g =>
+		{
+			stale = g.Domain("map", 64, 64).Color("minimap", Format.Rgba8Srgb);
+			g.Pass("map").Writes(stale);
+		});
+		ColorHandle shadow = null!;
+		var pass = PassOf(g =>
+		{
+			var world = g.Domain("world", 64, 64);
+			shadow = world.Color("shadow", Format.Rgba8Srgb);
+			g.Pass("seed").Writes(shadow);
+			g.Pass("p").Samples(shadow).Writes(world.Color("out", Format.Rgba8Srgb));
+		});
+		stale.Id.ShouldBe(shadow.Id, "the test needs the two graphs' resources to share an id");
+		var validator = ValidatorOn(pass);
+
+		Should.Throw<PassBindingException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [stale]))
+			.Message.ShouldContain("earlier graph");
+		Should.NotThrow(() => validator.DrawList("ui", DrawListIdentity.Transient, [shadow]));
+	}
+
+	[Test]
+	public void A_draw_list_graph_texture_is_held_to_its_declaration_even_with_validation_off()
+	{
+		// The backend resolves a draw list's graph texture by id. Undeclared, it is read in whatever layout the last pass
+		// left it in; kept from an earlier graph, it binds whatever the new graph has under that id. Neither shows as an
+		// error anywhere else, so the draw list checks them with the per-draw scans off, as it does its format.
+		var (pass, declared, undeclared) = SamplingPass();
+		var validator = ValidatorOn(pass, enabled: false);
+
+		Should.Throw<PassBindingException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [new TextureRef((ColorHandle)undeclared)]))
+			.Message.ShouldContain(".Samples(undeclared)");
+		Should.NotThrow(() => validator.DrawList("ui", DrawListIdentity.Transient, [new TextureRef((ColorHandle)declared)]));
+
+		ColorHandle stale = null!;
+		RenderGraph.Define(g =>
+		{
+			stale = g.Domain("map", 64, 64).Color("minimap", Format.Rgba8Srgb);
+			g.Pass("map").Writes(stale);
+		});
+		stale.Id.ShouldBe(declared.Id, "the test needs the two graphs' resources to share an id");
+		Should.Throw<PassBindingException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [stale]))
+			.Message.ShouldContain("earlier graph");
+
+		// The pass's own sampled inputs keep to the switch: off, an undeclared one passes as it always has.
+		Should.NotThrow(() => validator.FullScreen("blit", [undeclared]));
+	}
+
+	[Test]
+	public void A_draw_list_refuses_a_graph_texture_it_cannot_sample_as_a_filterable_float_even_with_validation_off()
+	{
+		// A draw-list technique reads one Texture2D through a filtering sampler. A depth, integer or 32-bit float target
+		// cannot be bound there on every backend, and the failure would otherwise be a device error on one and garbage on
+		// another — so this is checked whether or not the declaration scans run.
+		DepthHandle depth = null!;
+		ColorHandle ids = null!;
+		var pass = PassOf(g =>
+		{
+			var world = g.Domain("world", 64, 64);
+			depth = world.Depth("depth", Format.Depth32F);
+			ids = world.Color("ids", Format.R32Uint);
+			g.Pass("seed").WritesDepth(depth).Writes(ids);
+			g.Pass("p").Samples(depth, ids).Writes(world.Color("out", Format.Rgba8Srgb));
+		});
+		var validator = ValidatorOn(pass, enabled: false);
+
+		Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [depth]))
+			.Message.ShouldContain("Depth32F");
+		Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [ids]))
+			.Message.ShouldContain("R32Uint");
 	}
 
 	[Test]

@@ -33,6 +33,7 @@ internal sealed class WebGpuCommandWriter
 	public const int OpWriteBuffer = 14;
 	public const int OpCopyTextureToBuffer = 15;
 	public const int OpDrawIndexedIndirect = 16;
+	public const int OpResolve = 17;
 
 	// Load/store action encodings (match LOAD_OPS/STORE_OPS in the shim).
 	public const int LoadClear = 0;
@@ -90,6 +91,15 @@ internal sealed class WebGpuCommandWriter
 	}
 
 	public void EndPass() => WriteInt(OpEndPass);
+
+	/// <summary>Resolve a multisampled view into a single-sample one, between passes: a pass that loads it, draws nothing,
+	/// and resolves it, which is the only resolve WebGPU has.</summary>
+	public void Resolve(int sourceView, int targetView)
+	{
+		WriteInt(OpResolve);
+		WriteInt(sourceView);
+		WriteInt(targetView);
+	}
 
 	public void SetRenderPipeline(int pipelineHandle)
 	{

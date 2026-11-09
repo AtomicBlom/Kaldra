@@ -13,10 +13,12 @@
     html, body { margin: 0; height: 100%; background: #14141a; color: #d8d8e0;
                  font-family: system-ui, sans-serif; overflow: hidden; }
     #loom-canvas { display: block; width: 100vw; height: 100vh; }
-    #status { position: fixed; left: 10px; bottom: 8px; font-size: 12px; opacity: 0.65;
+    /* The status line lets the pointer through to the canvas: faded out once the app runs, it still sits over the
+       corner, where an app's own UI may be. An error can be selected, to copy it. */
+    #status { position: fixed; left: 10px; bottom: 8px; font-size: 12px; opacity: 0.65; pointer-events: none;
                white-space: pre-wrap; max-width: 90vw; max-height: 40vh; overflow-y: auto; }
     #status.status-error { background: rgba(20, 12, 14, 0.9); border: 1px solid rgba(255, 100, 100, 0.5);
-               border-radius: 4px; padding: 8px 10px; color: #ffb0b0; }
+               border-radius: 4px; padding: 8px 10px; color: #ffb0b0; pointer-events: auto; }
   </style>
   <script type="module" src="main.js"></script>
 </head>

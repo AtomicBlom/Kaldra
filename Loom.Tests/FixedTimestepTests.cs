@@ -129,6 +129,11 @@ public class FixedTimestepTests
 		public Task<Mesh> CreateMeshAsync(Vertex[] vertices, uint[] indices) => throw new NotSupportedException();
 		public Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices) where T : unmanaged => throw new NotSupportedException();
 		public Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => throw new NotSupportedException();
+
+		public void ReleaseMesh(Mesh mesh) => throw new NotSupportedException();
+		public InstanceBuffer CreateInstances<T>(ReadOnlySpan<T> instances, VertexLayout layout) where T : unmanaged => throw new NotSupportedException();
+		public void ReleaseInstances(InstanceBuffer instances) => throw new NotSupportedException();
+
 		public Task<Mesh> CreateSkinnedMeshAsync(SkinnedVertex[] vertices, uint[] indices) => throw new NotSupportedException();
 		public Texture CreateTexture(TextureData data) => throw new NotSupportedException();
 		public Task<Texture> CreateTextureAsync(TextureData data) => throw new NotSupportedException();
@@ -140,6 +145,13 @@ public class FixedTimestepTests
 		public Material CreateMaterial<T>(string technique, in T parameters, params ReadOnlySpan<Texture> textures) where T : unmanaged => throw new NotSupportedException();
 		public void Write<T>(Material material, in T parameters) where T : unmanaged => throw new NotSupportedException();
 		public MaterialLayout MaterialLayoutOf(string technique) => throw new NotSupportedException();
+
+		public void ReleaseTexture(Texture texture) => throw new NotSupportedException();
+
+		public void UpdateTexture(Texture texture, ReadOnlySpan<byte> texels) => throw new NotSupportedException();
+
+		public int AllocateDrawListStream() => throw new NotSupportedException();
+
 		public void Write<T>(ConstantsHandle handle, in T value) where T : unmanaged => throw new NotSupportedException();
 		public void Write<T>(StorageBufferHandle handle, ReadOnlySpan<T> values) where T : unmanaged => throw new NotSupportedException();
 		public ReadOnlySpan<byte> Read(ResourceHandle handle) => throw new NotSupportedException();

@@ -42,9 +42,10 @@ public sealed class GraphSchedule
 	/// <summary>
 	/// Derive the schedule. Throws <see cref="GraphValidationException"/> if a non-persistent resource is
 	/// read before any pass writes it (it would sample undefined contents), if the present target is never
-	/// written, or if a pass samples or read-writes the backbuffer (a write/present target only). Every such
-	/// problem in the graph is reported together rather than one per attempt. Also emits a console warning for
-	/// any dead pass (writes nothing consumed/presented/read back).
+	/// written, if a pass samples or read-writes the backbuffer (a write/present target only), or if a multisampled
+	/// target is used in a way that has no resolve (read back, presented, read-written, persistent, or a sampled
+	/// multisampled depth target). Every such problem in the graph is reported together rather than one per
+	/// attempt. Also emits a console warning for any dead pass (writes nothing consumed/presented/read back).
 	/// </summary>
 	public static GraphSchedule Derive(RenderGraph graph)
 	{
@@ -193,6 +194,8 @@ public sealed class GraphSchedule
 				: $"Pass '{writer}' writes the backbuffer '{resource.Name}', but the graph presents nothing — call g.Present(...) on it, or the window stays blank.");
 		}
 
+		ValidateMultisampled(graph, errors);
+
 		if (errors.Count > 0)
 			throw new GraphValidationException(string.Join(Environment.NewLine, errors));
 
@@ -208,6 +211,52 @@ public sealed class GraphSchedule
 		}
 
 		return new GraphSchedule(graph, scheduled.ToImmutable());
+	}
+
+	// A multisampled target is drawn into, and a colour one is also sampled, which every backend resolves into a
+	// single-sample copy for its samplers. Nothing else is: no backend can copy a multisampled image out to the CPU or
+	// present it, a storage image is single-sample, a persistent history has no resolve carried across frames, and a
+	// multisampled depth target has no resolve at all. Refused here, in one wording, before any backend allocates it.
+	private static void ValidateMultisampled(RenderGraph graph, List<string> errors)
+	{
+		static string Refused(ResourceHandle resource, string what, string instead) =>
+			$"'{resource.Name}' is multisampled ({resource.Domain.Samples}x, domain '{resource.Domain.Name}') and {what}. "
+			+ "A multisampled target can only be drawn into (.Writes, .Blends, .WritesDepth, .ReadsDepth), and a colour one sampled (.Samples), which resolves it. "
+			+ instead;
+
+		foreach (var pass in graph.Passes)
+		{
+			foreach (var access in pass.Accesses)
+			{
+				var resource = access.Resource;
+				if (resource.Domain.Samples <= 1)
+					continue;
+				if (access.Kind == AccessKind.ReadWrite)
+					errors.Add(Refused(resource, $"pass '{pass.Name}' declares .ReadWrites on it, as a storage image",
+						"Resolve it by sampling it into a single-sample target, and read-write that."));
+				else if (access.Kind == AccessKind.Sample && resource.Kind == ResourceKind.Depth)
+					errors.Add(Refused(resource, $"is a depth target pass '{pass.Name}' samples",
+						"Only a colour target is resolved for sampling; write the depth you need to sample into a colour target, or declare it in a single-sample domain."));
+				// A resolve averages samples, which no backend does for an integer, and WebGPU does for no 32-bit float
+				else if (access.Kind == AccessKind.Sample && resource.Format is Format.R32F or Format.R32Uint)
+					errors.Add(Refused(resource, $"is {resource.Format}, which pass '{pass.Name}' samples",
+						$"{resource.Format} has no resolve on every backend (none resolves an integer, and WebGPU no 32-bit float); sample an R16F or Rgba16F target, or declare it in a single-sample domain."));
+			}
+		}
+
+		foreach (var resource in graph.Resources)
+			if (resource.Kind == ResourceKind.Persistent && resource.Domain.Samples > 1)
+				errors.Add(Refused(resource, "is persistent",
+					"Cross-frame history is single-sample; declare it in a single-sample domain."));
+
+		foreach (var target in graph.ReadbackTargets)
+			if (target.Domain.Samples > 1)
+				errors.Add(Refused(target, "is read back (g.Readback)",
+					"Sample it into a single-sample target and read that back instead."));
+
+		if (graph.PresentTarget is { } present && present.Domain.Samples > 1)
+			errors.Add(Refused(present, "is presented (g.Present)",
+				"Sample it into the backbuffer instead."));
 	}
 
 	// The three things every backend needs to be true of a raster pass's attachments before it can begin a render

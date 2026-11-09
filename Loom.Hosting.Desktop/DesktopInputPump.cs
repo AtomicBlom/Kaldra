@@ -354,7 +354,9 @@ public sealed class DesktopInputPump : IDisposable
 			return;
 		FlushPendingMove();
 		var axis = trigger.Index == 0 ? GamepadAxis.LeftTrigger : GamepadAxis.RightTrigger;
-		Queue(InputEvent.GamepadAxisMoved(gamepad.Index, axis, trigger.Position));
+		// GLFW reports a gamepad trigger from -1 at rest to 1 fully pressed, and Silk.NET passes that on; a GamepadAxis
+		// trigger runs from 0 to 1, so the first half of its travel would otherwise read as nothing
+		Queue(InputEvent.GamepadAxisMoved(gamepad.Index, axis, Math.Clamp((trigger.Position + 1f) * 0.5f, 0f, 1f)));
 	}
 
 	private void DrainRumble(double deltaSeconds)

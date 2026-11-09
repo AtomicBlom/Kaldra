@@ -20,6 +20,11 @@ internal sealed unsafe partial class VulkanEngine
 
 		_vk.WaitForFences(_ctx.Device, 1, in _inFlight[_currentFrame], true, ulong.MaxValue);
 
+		// Frames finish in submission order, so the frame this slot last carried being done means every earlier one
+		// is too: free the released meshes and textures nothing can still read.
+		_completedFrame = Math.Max(_completedFrame, _slotFrame[_currentFrame]);
+		CollectReleased();
+
 		// The fence just signalled, so this slot's readback buffers hold the copies from when it last ran (~2
 		// frames ago). Hand them to StoreReadback before this frame overwrites them — that's the readback
 		// latency the design is upfront about. (Done before recording, so IEngine.Read always sees the freshest available.)
@@ -98,6 +103,7 @@ internal sealed unsafe partial class VulkanEngine
 			SignalSemaphoreInfoCount = _offscreen ? 0u : 1u,
 			PSignalSemaphoreInfos = _offscreen ? null : &signalInfo,
 		};
+		_slotFrame[_currentFrame] = ++_submittedFrames;
 		_vk.QueueSubmit2(_ctx.GraphicsQueue, 1, in submit, _inFlight[_currentFrame]).Check("vkQueueSubmit2");
 
 		if (capturePath is not null)
@@ -173,6 +179,11 @@ internal sealed unsafe partial class VulkanEngine
 	// bits and the graph has passes to time.
 	private bool TimingActive => GpuTimingEnabled && _timingPools.Length > 0;
 
+	// A host-visible copy of each Constants and Storage buffer per frame in flight
+	protected override int ShadowSlot => _currentFrame;
+
+	protected override int ShadowSlotCount => MaxFramesInFlight;
+
 	protected override void WriteConstantsShadow(int id, ReadOnlySpan<byte> bytes) =>
 		_transients!.WriteConstants(_currentFrame, id, bytes);
 
@@ -247,6 +258,7 @@ internal sealed unsafe partial class VulkanEngine
 		var hasDepth = false;
 		var depthReadOnly = false;
 		Extent2D area = default;
+		var samples = 1;   // all of a pass's attachments share a domain, and so its multisample count
 		var colorFormats = stackalloc VkFormat[attachments.Length];
 		VkFormat depthFormat = default;
 
@@ -255,6 +267,7 @@ internal sealed unsafe partial class VulkanEngine
 			ref var image = ref _transients!.Get(_currentFrame, attachment.Resource.Id);
 			if (area.Width == 0)
 				area = image.Extent; // all of a pass's attachments share a domain → one render area
+			samples = attachment.Resource.Domain.Samples;
 
 			if (attachment.State == ResourceState.ColorAttachment)
 			{
@@ -312,7 +325,7 @@ internal sealed unsafe partial class VulkanEngine
 		Rect2D scissor = new(new Offset2D(0, 0), area);
 		_vk.CmdSetScissor(cmd, 0, 1, in scissor);
 
-		_context.BeginPass(pass.Pass, new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount]);
+		_context.BeginPass(pass.Pass, new ReadOnlySpan<VkFormat>(colorFormats, colorCount), depthFormat, depthReadOnly, uniformIds[..uniformCount], storageIds[..storageCount], samples);
 
 		// Hand the context this pass's colour attachment views + area so a draw-list group-opacity layer can suspend
 		// and resume the dynamic-rendering scope around its offscreen target.

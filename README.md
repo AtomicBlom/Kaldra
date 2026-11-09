@@ -23,7 +23,7 @@ You declare *what* each render pass reads and writes; Loom derives ordering, bar
 
 **Post & HDR** — bloom pyramid (Karis-averaged downsample, tent upsample); auto-exposure (cross-frame `Persistent` + compute) + tonemap; HDR (scRGB) display output; JFA world-space outlines + GPU→CPU cursor picking.
 
-**Assets & materials** — image decode (StbImageSharp) with gamma-correct CPU-generated mips, including cube and `Rgba16F` HDR sources; glTF loading (SharpGLTF) that walks the node graph, bakes world transforms, and imports skins + animation clips; a `Material` multi-texture binding abstraction that fills a technique's reflected sampler slots.
+**Assets & materials** — image decode (StbImageSharp) with gamma-correct CPU-generated mips, including cube and `Rgba16F` HDR sources; glTF loading (SharpGLTF) that walks the node graph, bakes world transforms, and imports skins + animation clips; a `Material` multi-texture binding abstraction that fills a technique's reflected sampler slots. Meshes and textures can be released when the app is done with them: the handle dies at once and the GPU memory is freed once no frame in flight can read it.
 
 **Geometry & instancing** — explicit packed vertex layouts (`MeshStandard`/`MeshSkinned`/`Overlay`/`Transform`); CPU-uploaded **and** GPU-compute-filled instancing; an optional `Scene` draw-list with CPU frustum culling.
 
@@ -37,7 +37,7 @@ You declare *what* each render pass reads and writes; Loom derives ordering, bar
 
 **Draw throughput** — 10,000 *discrete* draws (own model matrix, own material — not one instanced call) render on both backends with **zero managed allocations per frame**. Materials keep their descriptor tables rather than rewriting them per draw, redundant pipeline/geometry re-binds are elided, each pass's barriers go in one submission, resource uploads batch into the frame instead of draining the GPU per resource, and compiled pipelines persist between runs. The `Draw Scale` demo is the workload; `DrawScaleTests` is the headless gate and prints µs/draw — reported, never asserted, since it moves with machine and driver.
 
-**Game UI** — [`SUIsei`](external/SUIsei), a standalone WinUI-3-compatible, NativeAOT-clean XAML UI runtime, rendered through Loom's neutral draw-list path (the same one ImGui uses).
+**Game UI** — [`SUIsei`](external/SUIsei), a standalone WinUI-3-compatible, NativeAOT-clean XAML UI runtime, rendered through Loom's neutral draw-list path (the same one ImGui uses). Beyond controls and text it draws WinUI's shapes (`Rectangle`, `Ellipse`, `Line`, `Polyline`, `Polygon`, `Path` with path markup) with every stroke join, cap and dash, linear gradients on fills and strokes, `UIElement.Clip` and image brushes, as tessellated vector triangles antialiased over one pixel at any angle; a translucent stroke stays one colour where it crosses itself, and SUIsei's `suisei:StrokeTrim` and along-length stroke gradients animate draw-on reveals. Text is MTSDF glyphs, sharp at any scale, with `suisei:TextEffects` outlines and soft or hard shadows drawn from the same atlas in the same draw, and tabular figures through `Typography.NumeralAlignment`. The `Vector UI` demo shows them all from one XAML page, and the GPU is held to SUIsei's CPU rasterizer on that page and on text with every effect. The UI demos are held to the same golden-image and cross-backend parity tests as the rest of the gallery, with a check that their UI actually reaches the frame, and the vertex and command structs SUIsei hands Loom without a copy are guarded field by field.
 
 ## How to use it
 
@@ -143,6 +143,70 @@ Shaders are authored in **Slang** and compiled offline by the Loom shader SDK to
 
 `.Instances = DrawCall.Indirect(buffer, offset)` takes the counts from a buffer instead of the CPU — the pass declares it `.ReadsIndirect`, and the engine derives the compute→draw hand-off exactly as it does for a compute-filled instance stream. (Count buffers, multi-draw, and GPU culling are not built; this is the verb they would need.)
 
+### Create and release resources between frames
+
+`engine.CreateMesh` / `CreateTexture` upload once and hand back a stable handle; `engine.ReleaseMesh` / `ReleaseTexture` give it back. A release kills the handle at once — drawing, sampling or releasing it again throws and says it was released — and frees the GPU memory once every frame that may still read it has finished, so you can release a texture the frame after its last draw without waiting for the GPU. Ids are never reused, so a stale handle always fails loudly instead of naming whatever came next.
+
+```csharp
+// between frames: swap the image a pass samples (the pass reads _image live, as graph closures do)
+var previous = _image;
+_image = engine.CreateTexture(TextureData.FromRgba8(w, h, pixels, TextureFormat.Rgba8Srgb));
+engine.ReleaseTexture(previous); // safe while frames that sampled it are still in flight
+```
+
+An image whose content changes but whose size and format don't (a bitmap redrawn every frame, a video frame) is better updated in place: `engine.UpdateTexture(texture, texels)` writes the whole image into the texture it already is, ahead of the next frame, while the frames in flight keep sampling what they had. The handle, every material holding it and every cached binding stay, and after a texture's first update nothing allocates: the backend keeps one staging buffer for it. Only a texture of one mip level and one layer can be updated (create it with `generateMips: false`), and the texels must be exactly its size.
+
+Two rules keep this honest:
+- **Create, update and release between frames, never inside a pass.** A pass callback runs while the frame's commands are recorded; an upload made there only reaches the GPU ahead of the *next* frame, and a release could free what this frame already draws with. All three throw when called from a pass on the render thread (the `*Async` creators stay callable from other threads at any time). A producer that discovers what it needs while drawing resolves it in a step of its own before `engine.Render` — see `UIPainter.Prepare` below.
+- **A texture a `Material` holds cannot be released.** A material keeps its textures for as long as it lives — the engine's lifetime — so `ReleaseTexture` throws and names the material. Sample a texture you mean to replace through a draw list, or update it in place.
+
+### Draw a game UI
+
+`Loom.UI.SUIsei`'s `UIPainter` draws a SUIsei host's composited surfaces through `ctx.DrawList`. Each frame, composite the host, then `Prepare` the painter — it uploads any image or glyph-atlas page the UI newly shows, before the frame that samples it, shares it between surfaces, and releases what the UI stopped showing — and draw from a pass:
+
+```csharp
+var ui = UIPainter.Create(engine, host);
+g.Pass("hud").Blends(screen).Draw(ctx => ui.Draw(ctx, UISurface.Hud));
+
+// each frame, before engine.Render:
+host.Tick(dt, time, size);
+host.Render();
+ui.Prepare();
+```
+
+Several hosts can draw in one frame (a HUD plus an in-world panel): each painter keeps its surfaces' geometry under draw-list streams it mints with `engine.AllocateDrawListStream()`, so their surface ids, which every host numbers from zero, never collide. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
+
+Turning SUIsei on in the SDK (`<UseSUIsei>true</UseSUIsei>`) gives an app SUIsei's XAML as well as its runtime: every `.xaml` view in the project compiles into its partial `x:Class`, with typed `x:Name` fields and `InitializeComponent()`. XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. Folders the project keeps out of its items through `DefaultItemExcludes` (a submodule beneath it, say) stay out of its XAML too.
+
+UI can follow the world two ways. `InWorldPanel` draws a UI tree into a texture on a quad in the scene. `ScreenAnchors` keeps screen-space elements — labels, markers — pinned to world points: each frame it moves them to where the frame's view-projection puts their points, and fades out the ones whose points leave the viewport or go behind the eye. Give the anchors a view of their own, since they change every frame and SUIsei recomposites a whole view when anything in it changes:
+
+```csharp
+var anchors = ScreenAnchors.Create(engine, host.CreateRoot(new UILayer(1)));
+anchors.Add(new TextBlock { Text = "Start" }, startLine, alignment: new(0.5f, 1f), pixelOffset: new(0f, -8f));
+g.Pass("labels").Blends(screen).Draw(ctx => ui.Draw(ctx, anchors.View.Surface));
+
+// each frame: lay out, place, composite
+host.Tick(dt, time, size);
+anchors.Update(camera.ViewProjection, size, dt);
+host.Render();
+ui.Prepare();
+```
+
+The projection under it is plain matrix maths in `Loom.Core.Geometry` — `viewProjection.TryProjectToScreen(world, size, engine.ClipSpaceCorrection, out var pixel, out var depth)` — which reads the engine's clip-space correction to put a point on the same pixel on every backend.
+
+### Show a render target in a draw list
+
+A draw list's textures are `TextureRef`s: an engine `Texture`, or a graph texture another pass rendered this frame — a minimap, a portal view, a preview. The pass that submits the list declares the target with `.Samples` like any sampled input, which orders it after the target's producer and makes it readable; a list naming an undeclared target throws `PassBindingException`, and a depth or integer target is refused because a list samples through a filtering float sampler.
+
+```csharp
+var map = g.Domain("map", 256, 256).Color("map.color", Format.Rgba8Srgb);
+g.Pass("map").Reads(mapViewProj).Writes(map).Draw(ctx => DrawTopDown(ctx));
+panel.Textures[1] = map;                                   // TextureRef[], rewritten in place
+g.Pass("minimap").Samples(map).Blends(screen).Draw(panel, static (ctx, p) => p.Draw(ctx));
+```
+
+A SUIsei page shows one the same way: a `HostImageSource` names it by tag, `UIPainter.SetExternalTexture(tag, handle)` binds the tag to the graph texture, and the pass that draws the UI declares it with `.Samples`. The gallery's *UI Live Texture* demo shows a minimap this way, beside a `WriteableBitmap` it redraws on the CPU every frame. The painter writes each change into that bitmap's one texture in place (`engine.UpdateTexture`), so redrawing it every frame allocates nothing. Images read as their sources declare — sRGB decoded before filtering, straight alpha premultiplied after it — exactly as SUIsei's software rasterizer reads them. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
+
 ### Build & run
 
 ```bash
@@ -181,6 +245,7 @@ Consuming Loom selects backends through the SDK:
 ```xml
 <UseVulkan>true</UseVulkan>
 <UseDirectX12>false</UseDirectX12>
+<UseSUIsei>true</UseSUIsei>   <!-- SUIsei's runtime, its Loom bridge, and XAML views -->
 ```
 
 ## Architecture
@@ -197,6 +262,6 @@ Three layers, kept strictly separate — `Sandbox → {backends} → Graph → C
 
 - [GitHub](https://github.com/AtomicBlom/Loom)
 - [Design bible & roadmap](Planning.md) · [UI track](external/SUIsei/Planning.md)
-- Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [effect cookbook](docs/effect-cookbook.md) · [architecture](docs/architecture.md)
+- Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [effect cookbook](docs/effect-cookbook.md) · [architecture](docs/architecture.md) · [porting from OpenGL](docs/porting-from-opengl.md)
 - [CI with a software rasterizer (WARP, no GPU)](docs/ci-software-rasterizer.md)
 - [WebGPU pixel parity](docs/webgpu-parity.md)

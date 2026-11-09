@@ -13,7 +13,7 @@ namespace Loom.Backend.Vulkan;
 /// staging copy. The app builds meshes up front through the engine and gets back an
 /// opaque <see cref="Mesh"/> handle (a small id); recording resolves the handle to its buffers and emits the
 /// indexed draw. Buffers are allocated through the shared VMA allocator. No per-frame churn — meshes are
-/// long-lived resources, freed only on teardown.
+/// long-lived resources, freed on teardown or, when the app releases one, once no frame in flight can read it.
 /// </summary>
 internal sealed unsafe class VulkanMeshStore : IDisposable
 {
@@ -25,6 +25,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		public Allocation IndexAllocation;
 		public uint IndexCount;
 		public uint VertexCount; // skinned-mesh bind-pose vertex count (the pre-skin dispatch's thread count)
+		public bool Released;    // the id's slot after IEngine.ReleaseMesh: no buffers, and Slot refuses it
 	}
 
 	private readonly VulkanContext _ctx;
@@ -32,6 +33,9 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly VulkanUploadBatch _uploads;
 	private readonly List<StoredMesh> _meshes = [];
+	// Released meshes whose buffers a frame in flight (or a pending upload) may still read, each with the last frame
+	// that can.
+	private readonly List<(StoredMesh Mesh, ulong LastReadingFrame)> _releasing = [];
 
 	// Mesh ids are 1-based, so 0 is a value no mesh can have — "the command buffer's vertex/index bindings are not
 	// this store's doing".
@@ -49,14 +53,20 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// <summary>
 	/// Resolve a <see cref="Mesh.Id"/> to its slot in the store. Ids are 1-based so <c>default(Mesh)</c> (id 0) is
 	/// never a live handle: drawing an unassigned <see cref="Mesh"/> field fails here instead of silently rendering
-	/// whichever mesh was uploaded first.
+	/// whichever mesh was uploaded first. A released mesh keeps its slot, emptied, so its stale handle fails here too.
 	/// </summary>
-	private int Slot(int meshId) =>
-		meshId >= 1 && meshId <= _meshes.Count
-			? meshId - 1
-			: throw new VulkanException(
+	private int Slot(int meshId)
+	{
+		if (meshId < 1 || meshId > _meshes.Count)
+		{
+			throw new VulkanException(
 				$"Mesh id {meshId} was not created by this engine ({(meshId == 0 ? "0 is default(Mesh), an unassigned handle" : $"only ids 1..{_meshes.Count} exist")}). " +
 				"Meshes come from IEngine.CreateMesh / CreateMesh<T> / CreateSkinnedMesh.");
+		}
+		if (_meshes[meshId - 1].Released)
+			throw new VulkanException($"Mesh id {meshId} was released by IEngine.ReleaseMesh; its handle can no longer be drawn or released.");
+		return meshId - 1;
+	}
 
 	/// <summary>Upload canonical <see cref="Vertex"/> geometry (the <see cref="VertexLayout.MeshStandard"/> layout) and return a handle.</summary>
 	public Mesh Create(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) =>
@@ -87,7 +97,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// <summary>
 	/// Upload a skinned mesh's bind-pose vertices — like the byte-stride <see cref="Create(ReadOnlySpan{byte}, int, ReadOnlySpan{uint})"/>,
 	/// but the vertex buffer also carries <see cref="BufferUsageFlags.StorageBufferBit"/> so the compute pre-skin
-	/// pass can read it as a structured buffer (<see cref="BindPoseBuffer"/>). The vertex count is recorded for the
+	/// pass can read it as a structured buffer (<see cref="VertexBuffer"/>). The vertex count is recorded for the
 	/// dispatch's thread count.
 	/// </summary>
 	public Mesh CreateSkinned(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices)
@@ -108,11 +118,51 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		return new Mesh(_meshes.Count);
 	}
 
-	/// <summary>The skinned mesh's bind-pose vertex buffer, for the compute pre-skin pass to read as a structured buffer.</summary>
-	public Buffer BindPoseBuffer(int meshId) => _meshes[Slot(meshId)].VertexBuffer;
+	/// <summary>
+	/// A stored mesh's vertex buffer: a skinned mesh's bind pose, read by the compute pre-skin pass as a structured buffer, or a
+	/// static instance buffer's instances, bound as a draw's per-instance stream.
+	/// </summary>
+	public Buffer VertexBuffer(int meshId) => _meshes[Slot(meshId)].VertexBuffer;
 
 	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count.</summary>
 	public uint VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;
+
+	/// <summary>
+	/// Release a mesh: its id stops resolving at once, and its buffers wait until frame
+	/// <paramref name="lastReadingFrame"/> has completed — a frame already submitted may still draw it, and the upload
+	/// batch that fills it rides ahead of the next frame, so the caller names that next frame. Returns the buffers, which
+	/// live until then, so the caller can evict whatever is keyed by their handles before the driver can reuse them.
+	/// </summary>
+	public (Buffer Vertex, Buffer Index) Release(int meshId, ulong lastReadingFrame)
+	{
+		var slot = Slot(meshId);
+		var mesh = _meshes[slot];
+		_releasing.Add((mesh, lastReadingFrame));
+		_meshes[slot] = new StoredMesh { Released = true };
+		if (_bound == meshId)
+			_bound = NothingBound;
+		return (mesh.VertexBuffer, mesh.IndexBuffer);
+	}
+
+	/// <summary>Free the buffers of every released mesh whose last reading frame is <paramref name="completedFrame"/> or earlier.</summary>
+	public void CollectReleased(ulong completedFrame)
+	{
+		for (var i = _releasing.Count - 1; i >= 0; i--)
+		{
+			if (_releasing[i].LastReadingFrame > completedFrame)
+				continue;
+			Destroy(_releasing[i].Mesh);
+			_releasing.RemoveAt(i);
+		}
+	}
+
+	private void Destroy(in StoredMesh mesh)
+	{
+		_vk.DestroyBuffer(_ctx.Device, mesh.VertexBuffer, null);
+		mesh.VertexAllocation.Dispose();
+		_vk.DestroyBuffer(_ctx.Device, mesh.IndexBuffer, null);
+		mesh.IndexAllocation.Dispose();
+	}
 
 	/// <summary>
 	/// Draw a mesh's index buffer with its per-vertex stream sourced from <paramref name="vertexBuffer"/> instead
@@ -277,11 +327,12 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	{
 		foreach (var mesh in _meshes)
 		{
-			_vk.DestroyBuffer(_ctx.Device, mesh.VertexBuffer, null);
-			mesh.VertexAllocation.Dispose();
-			_vk.DestroyBuffer(_ctx.Device, mesh.IndexBuffer, null);
-			mesh.IndexAllocation.Dispose();
+			if (!mesh.Released)
+				Destroy(mesh);
 		}
 		_meshes.Clear();
+		foreach (var (mesh, _) in _releasing)
+			Destroy(mesh);
+		_releasing.Clear();
 	}
 }

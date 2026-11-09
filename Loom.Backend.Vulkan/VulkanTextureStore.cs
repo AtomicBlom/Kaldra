@@ -1,6 +1,9 @@
+using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Vulkan;
 using VMASharp;
+using Buffer = Silk.NET.Vulkan.Buffer;
 using VkFormat = Silk.NET.Vulkan.Format;
 
 namespace Loom.Backend.Vulkan;
@@ -11,7 +14,8 @@ namespace Loom.Backend.Vulkan;
 /// app builds textures up front through the engine and gets back an opaque <see cref="Texture"/> handle; a
 /// material draw resolves the handle to its image view and binds it as a combined image sampler. Mip levels
 /// arrive pre-built on the CPU in <see cref="TextureData"/>, so the store just uploads each level — no GPU
-/// blit/mip-gen, and byte-identical mips across backends. Images are long-lived; freed only on teardown.
+/// blit/mip-gen, and byte-identical mips across backends. Images are freed on teardown or, when the app releases one,
+/// once no frame in flight can read it.
 /// </summary>
 internal sealed unsafe class VulkanTextureStore : IDisposable
 {
@@ -20,6 +24,16 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 		public Image Image;
 		public Allocation Allocation;
 		public ImageView View;
+		public bool Released; // the id's slot after IEngine.ReleaseTexture: no image, and Slot refuses it
+
+		// Its shape, which an update is held to (TextureUpdates.Check).
+		public int Width, Height, BytesPerTexel;
+		public uint MipLevels, Layers;
+
+		// The host-visible buffer its updates are staged in, made by the first one and kept until the image goes, so an
+		// update every frame allocates nothing. Null until then.
+		public Buffer Staging;
+		public Allocation? StagingAllocation;
 	}
 
 	private readonly VulkanContext _ctx;
@@ -27,6 +41,9 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly VulkanUploadBatch _uploads;
 	private readonly List<StoredTexture> _textures = [];
+	// Released textures whose images a frame in flight (or a pending upload) may still read, each with the last frame
+	// that can.
+	private readonly List<(StoredTexture Texture, ulong LastReadingFrame)> _releasing = [];
 
 	public VulkanTextureStore(VulkanContext ctx, VulkanMemoryAllocator allocator, VulkanUploadBatch uploads)
 	{
@@ -36,9 +53,37 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 		_uploads = uploads;
 	}
 
+	/// <summary>
+	/// Resolve a <see cref="Texture.Id"/> to its slot in the store. Ids are 1-based so <c>default(Texture)</c> (id 0) is
+	/// never a live handle: sampling an unassigned <see cref="Texture"/> field fails here instead of silently binding
+	/// whichever texture was uploaded first. A released texture keeps its slot, emptied, so its stale handle fails here
+	/// too.
+	/// </summary>
+	private int Slot(int textureId)
+	{
+		if (textureId < 1 || textureId > _textures.Count)
+		{
+			throw new VulkanException(
+				$"Texture id {textureId} was not created by this engine ({(textureId == 0 ? "0 is default(Texture), an unassigned handle" : $"only ids 1..{_textures.Count} exist")}). " +
+				"Textures come from IEngine.CreateTexture / CreateTextureAsync.");
+		}
+		if (_textures[textureId - 1].Released)
+			throw new VulkanException($"Texture id {textureId} was released by IEngine.ReleaseTexture; its handle can no longer be sampled or released.");
+		return textureId - 1;
+	}
+
 	/// <summary>Upload a texture + its mip chain and return a handle a material can bundle.</summary>
 	public Texture Create(TextureData data)
 	{
+		// Ids are never reused, and from DebugTextureBase up they name graph resources instead; refuse before allocating.
+		if (_textures.Count + 1 >= InspectableResource.DebugTextureBase)
+		{
+			throw new VulkanException(
+				$"This engine has minted {_textures.Count} texture ids, the most it can: ids are never reused, so that a released " +
+				$"texture's stale handle fails rather than naming its successor, and ids from {InspectableResource.DebugTextureBase} " +
+				"up name graph resources for the resource viewer.");
+		}
+
 		var format = data.Format switch
 		{
 			TextureFormat.Rgba8Srgb => VkFormat.R8G8B8A8Srgb,
@@ -85,13 +130,119 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 
 		UploadLevels(image, data);
 
-		var id = _textures.Count;
-		_textures.Add(new StoredTexture { Image = image, Allocation = allocation, View = view });
-		return new Texture(id, data.Width, data.Height);
+		_textures.Add(new StoredTexture
+		{
+			Image = image,
+			Allocation = allocation,
+			View = view,
+			Width = data.Width,
+			Height = data.Height,
+			BytesPerTexel = data.Levels[0].Pixels.Length / (data.Width * data.Height),
+			MipLevels = mipLevels,
+			Layers = layerCount,
+		});
+		return new Texture(_textures.Count, data.Width, data.Height);
 	}
 
 	/// <summary>The sampled image view a material binding points at.</summary>
-	public ImageView View(int textureId) => _textures[textureId].View;
+	public ImageView View(int textureId) => _textures[Slot(textureId)].View;
+
+	/// <summary>
+	/// Copy <paramref name="texels"/> into a texture's image in place, through the upload batch, ahead of the next frame.
+	/// The image is not replaced, so its view, and every set naming it, stays. Its staging buffer is made by the first
+	/// update and kept, so later ones allocate nothing.
+	/// <para>
+	/// Two hazards, both answered by queue order rather than a wait. The staging buffer is rewritten while the last batch
+	/// may still be copying from it, so the batch is opened first: opening one waits out the one before, which was
+	/// submitted a frame ago and has long finished. And frames already submitted may still sample the image, so the copy
+	/// starts with a barrier whose first scope is every earlier command on the queue: the write waits for those reads on
+	/// the GPU.
+	/// </para>
+	/// </summary>
+	public void Write(int textureId, ReadOnlySpan<byte> texels)
+	{
+		var slot = Slot(textureId);
+		var texture = _textures[slot];
+		TextureUpdates.Check(textureId, texture.Width, texture.Height, texture.BytesPerTexel, (int)texture.MipLevels, (int)texture.Layers, texels.Length);
+
+		var cmd = _uploads.Recorder();
+		if (texture.StagingAllocation is null)
+		{
+			BufferCreateInfo stagingInfo = new()
+			{
+				SType = StructureType.BufferCreateInfo,
+				Size = (ulong)texels.Length,
+				Usage = BufferUsageFlags.TransferSrcBit,
+				SharingMode = SharingMode.Exclusive,
+			};
+			texture.Staging = _allocator.CreateBuffer(in stagingInfo, new AllocationCreateInfo { Usage = MemoryUsage.CPU_Only }, out var made);
+			texture.StagingAllocation = made;
+			_textures[slot] = texture;
+		}
+
+		var mapped = (byte*)texture.StagingAllocation.Map();
+		texels.CopyTo(new Span<byte>(mapped, texels.Length));
+		texture.StagingAllocation.Unmap();
+
+		// The whole of the one level is rewritten, so its old contents are discarded (Undefined) rather than kept.
+		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
+		TransitionImage(cmd, texture.Image, range,
+			ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
+			PipelineStageFlags2.AllCommandsBit, AccessFlags2.None,
+			PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferWriteBit);
+		BufferImageCopy copy = new()
+		{
+			BufferOffset = 0,
+			ImageSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.ColorBit, MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1 },
+			ImageExtent = new Extent3D((uint)texture.Width, (uint)texture.Height, 1),
+		};
+		_vk.CmdCopyBufferToImage(cmd, texture.Staging, texture.Image, ImageLayout.TransferDstOptimal, 1, in copy);
+		TransitionImage(cmd, texture.Image, range,
+			ImageLayout.TransferDstOptimal, ImageLayout.ShaderReadOnlyOptimal,
+			PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferWriteBit,
+			PipelineStageFlags2.AllCommandsBit, AccessFlags2.ShaderSampledReadBit);
+	}
+
+	/// <summary>
+	/// Release a texture: its id stops resolving at once, and its image waits until frame
+	/// <paramref name="lastReadingFrame"/> has completed — a frame already submitted may still sample it, and the upload
+	/// batch that fills it rides ahead of the next frame, so the caller names that next frame. Returns the view, which
+	/// lives until then, so the caller can evict whatever is keyed by its handle before the driver can reuse it.
+	/// </summary>
+	public ImageView Release(int textureId, ulong lastReadingFrame)
+	{
+		var slot = Slot(textureId);
+		var texture = _textures[slot];
+		_releasing.Add((texture, lastReadingFrame));
+		_textures[slot] = new StoredTexture { Released = true };
+		return texture.View;
+	}
+
+	/// <summary>Destroy the image of every released texture whose last reading frame is <paramref name="completedFrame"/> or earlier.</summary>
+	public void CollectReleased(ulong completedFrame)
+	{
+		for (var i = _releasing.Count - 1; i >= 0; i--)
+		{
+			if (_releasing[i].LastReadingFrame > completedFrame)
+				continue;
+			Destroy(_releasing[i].Texture);
+			_releasing.RemoveAt(i);
+		}
+	}
+
+	private void Destroy(in StoredTexture texture)
+	{
+		if (texture.View.Handle != 0)
+			_vk.DestroyImageView(_ctx.Device, texture.View, null);
+		if (texture.Image.Handle != 0)
+			_vk.DestroyImage(_ctx.Device, texture.Image, null);
+		texture.Allocation.Dispose();
+		if (texture.StagingAllocation is { } staging)
+		{
+			_vk.DestroyBuffer(_ctx.Device, texture.Staging, null);
+			staging.Dispose();
+		}
+	}
 
 	// Stage every level (tightly packed, concatenated) in one host-visible buffer, transition the whole
 	// mip/layer range Undefined→TransferDst, copy each level, then transition the whole range to ShaderReadOnly.
@@ -190,12 +341,12 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 	{
 		foreach (var texture in _textures)
 		{
-			if (texture.View.Handle != 0)
-				_vk.DestroyImageView(_ctx.Device, texture.View, null);
-			if (texture.Image.Handle != 0)
-				_vk.DestroyImage(_ctx.Device, texture.Image, null);
-			texture.Allocation.Dispose();
+			if (!texture.Released)
+				Destroy(texture);
 		}
 		_textures.Clear();
+		foreach (var (texture, _) in _releasing)
+			Destroy(texture);
+		_releasing.Clear();
 	}
 }

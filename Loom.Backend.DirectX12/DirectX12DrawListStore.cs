@@ -50,13 +50,14 @@ internal sealed unsafe class DirectX12DrawListStore : IDisposable
 		if (!_kept.TryGetValue(key, out var kept))
 			_kept[key] = kept = new Kept();
 
-		// One kept buffer per stream per slot, so a second submission in the same frame would overwrite the first
-		// before it draws. Report it rather than rendering one submission's geometry for both.
-		if (kept.LastFrame == frameIndex)
+		// A stream submitted again in one frame at the revision it holds re-binds the same bytes, as one UI drawn on the
+		// frame and again into an inset does. One kept buffer per stream per slot, so at another revision the second
+		// submission would overwrite the first before it draws: report it rather than render its geometry for both.
+		if (kept.LastFrame == frameIndex && kept.Revision != revision)
 			throw new InvalidOperationException(
-				$"DirectX12: draw-list stream {stream} was submitted twice in one frame. A stable stream holds one kept buffer " +
-				"per frame slot, so the second submission would overwrite the first before it draws. Give the " +
-				"submissions distinct stream ids, or pass DrawListIdentity.Transient.");
+				$"DirectX12: draw-list stream {stream} was submitted twice in one frame, at revisions {kept.Revision} and " +
+				$"{revision}. A stable stream holds one kept buffer per frame slot, so the second submission would overwrite " +
+				"the first before it draws. Give the submissions distinct stream ids, or pass DrawListIdentity.Transient.");
 		kept.LastFrame = frameIndex;
 
 		if (kept.Revision == revision && kept.VertexCapacity >= (ulong)vertices.Length && kept.IndexCapacity >= (ulong)indices.Length)

@@ -83,7 +83,8 @@ internal sealed unsafe class DirectX12Context : IDisposable
 			}
 		}
 
-		SilkMarshal.ThrowHResult(DXGI.CreateDXGIFactory2(factoryFlags, out Factory));
+		SilkMarshal.ThrowHResult(DXGI.CreateDXGIFactory2(factoryFlags, out ComPtr<IDXGIFactory4> madeFactory));
+		Factory = madeFactory;
 
 		// A null adapter lets D3D12 pick the system default. When a software adapter is requested instead,
 		// resolve WARP explicitly; a failure to enumerate it (WARP is normally always present on Windows) falls
@@ -105,7 +106,8 @@ internal sealed unsafe class DirectX12Context : IDisposable
 
 		// The device requires at least feature level 11_0; the Adreno X1-85 reports 12_1. Tightening the floor
 		// to 12_0 (Vulkan-1.3-baseline parity) lands with real techniques.
-		SilkMarshal.ThrowHResult(D3D12.CreateDevice(adapter, D3DFeatureLevel.Level110, out Device));
+		SilkMarshal.ThrowHResult(D3D12.CreateDevice(adapter, D3DFeatureLevel.Level110, out ComPtr<ID3D12Device> madeDevice));
+		Device = madeDevice;
 		if (adapter.Handle is not null)
 			adapter.Dispose();
 
@@ -121,7 +123,8 @@ internal sealed unsafe class DirectX12Context : IDisposable
 			Priority = 0,
 			NodeMask = 0,
 		};
-		SilkMarshal.ThrowHResult(Device.CreateCommandQueue(&queueDesc, out GraphicsQueue));
+		SilkMarshal.ThrowHResult(Device.CreateCommandQueue(&queueDesc, out ComPtr<ID3D12CommandQueue> madeGraphicsQueue));
+		GraphicsQueue = madeGraphicsQueue;
 
 		ProbeCapabilities();
 

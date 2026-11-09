@@ -36,5 +36,20 @@ Place Slang source files under your project and set `LoomShaderOutputMode=Conten
 | `UseVulkan=true` | `Loom.Backend.Vulkan` |
 | `UseDirectX12=true` | `Loom.Backend.DirectX12` |
 | `UseWebGPU=true` | `Loom.Backend.WebGPU` |
-| `UseSUIsei=true` | `Loom.UI.SUIsei` (brings `SUIsei` transitively) |
+| `UseSUIsei=true` | `Loom.UI.SUIsei` + `SUIsei`, with SUIsei's XAML generator |
 | `UseImGui=true` | `Loom.UI.ImGui` + `ImGui.NET` |
+
+## XAML views
+
+`UseSUIsei=true` also gives the app SUIsei's XAML:
+- Every `*.xaml` under the project compiles into its partial `x:Class`, with typed `x:Name` fields and `InitializeComponent()`.
+- XAML errors fail the build at the view's file and line.
+- `dotnet watch` hot-reloads an edited view.
+
+Two settings shape it:
+- `SUIseiXamlSourceDir` narrows the search to one folder.
+- `SUIseiXamlEnable=false` turns the generator off.
+
+Folders kept out of the project's items through `DefaultItemExcludes` are kept out of its XAML too. For example, a game that holds Loom as a submodule beneath it, and excludes `Loom/**`, does not compile Loom's own views.
+
+The `SUIsei` package is referenced directly because the generator travels in it. A package's analyzers and build files do not reach an app through `Loom.UI.SUIsei`'s dependency on it. The version is `LoomSUIseiVersion`.

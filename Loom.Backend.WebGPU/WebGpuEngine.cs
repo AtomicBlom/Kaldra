@@ -147,7 +147,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 
 		_templates[name] = template;
 		return new TechniqueShape(
-			new MaterialLayout(template.SampleCount, template.MaterialParameterBytes),
+			new MaterialLayout(template.SampleCount, template.MaterialParameterBytes, template.Bindings.ComparedCount),
 			[.. template.Bindings.UniformBufferBytes],
 			// WGSL has no push constants, so a LOOM_PUSH_CONSTANT block lowers to an ordinary uniform buffer; the
 			// binding model reports its size, and 0 when the technique declares none.
@@ -216,7 +216,12 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_width = Math.Max(1, width);
 		_height = Math.Max(1, height);
 		WebGpuInterop.ConfigureCanvas(_width, _height);
+		// A resize recreates the screen-sized transients and releases their old view handles for reuse, so a cached bind
+		// group naming one would bind a destroyed view — or, once the handle is reissued, an unrelated one. Same reason
+		// as ReleaseGraphResources; a resize is rare enough that rebuilding every group costs nothing worth keeping.
+		_context.ClearBindGroups();
 		_transients?.Resize(_width, _height);
+
 	}
 
 	// WebGPU has no host-side GPU idle wait, and it defers destruction of in-flight resources internally, so
@@ -224,9 +229,9 @@ internal sealed partial class WebGpuEngine : EngineBase
 	// without an explicit wait.
 	public override void WaitIdle() { }
 
-	public override Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
+	protected override Mesh UploadMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices) => _meshes.Create(vertices, indices);
 
-	public override Mesh CreateMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
+	protected override Mesh UploadMesh<T>(ReadOnlySpan<T> vertices, VertexLayout layout, ReadOnlySpan<uint> indices)
 	{
 		var stride = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
 		if (stride != layout.Stride)
@@ -234,9 +239,30 @@ internal sealed partial class WebGpuEngine : EngineBase
 		return _meshes.Create(System.Runtime.InteropServices.MemoryMarshal.AsBytes(vertices), stride, indices);
 	}
 
-	public override Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
+	protected override Mesh UploadSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
-	public override Texture CreateTexture(TextureData data) => _textures.Create(data);
+	// The buffers' handles go back to the allocator on release and are handed to the next buffers created, so the bind
+	// groups naming them go first — the skinning dispatch caches one naming a mesh's bind-pose buffer.
+	protected override void RetireMesh(Mesh mesh)
+	{
+		var (vertex, index) = _meshes.Buffers(mesh.Id);
+		_context.EvictBindGroups(BoundObject.Buffer, vertex);
+		_context.EvictBindGroups(BoundObject.Buffer, index);
+		_meshes.Release(mesh.Id);
+	}
+
+	protected override Texture UploadTexture(TextureData data) => _textures.Create(data);
+
+	// The view's handle goes back to the allocator on release and is handed to the next view created, so the bind groups
+	// naming it go first — a draw list caches one per texture it samples.
+	protected override void RetireTexture(Texture texture)
+	{
+		_context.EvictBindGroups(BoundObject.View, _textures.View(texture.Id));
+		_textures.Release(texture.Id);
+	}
+
+	// queue.writeTexture, ordered after the frames already submitted; the view and its bind groups stay.
+	protected override void WriteTexels(Texture texture, ReadOnlySpan<byte> texels) => _textures.Write(texture.Id, texels);
 
 	public override void Dispose()
 	{

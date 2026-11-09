@@ -1,6 +1,7 @@
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
@@ -70,6 +71,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// <summary>Which uniform slot carries the per-material parameter block, or null when the shader declares none.</summary>
 	public int? MaterialUniformSlot { get; }
 
+	/// <summary>The shader's reflected bindings, which a pass's <c>.Reads</c> storage buffers are held to at the draw.</summary>
+	public ShaderBindingMap Bindings { get; }
+
 	// The on-disk blob cache and this pipeline's key in it. Null cache = this run does not persist pipelines.
 	private readonly DirectX12PipelineBlobCache? _blobs;
 	private readonly string _blobKey = "";
@@ -79,40 +83,56 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// compile when it refuses it. A refusal is the expected outcome after a driver update — every blob goes stale at
 	/// once — so it is a fall-through, not an error.
 	/// </summary>
+	/// <remarks>
+	/// Every object here is created into a local and only then stored. Silk's <c>out ComPtr</c> overloads hand the
+	/// driver the raw address of the destination, unpinned: given a field of this (movable) object, a GC on another
+	/// thread during a long compile moves it, the driver writes the old address, and the field reads back null with
+	/// the call reporting success. A local on the stack never moves.
+	/// </remarks>
 	private void CreateGraphicsPipeline(DirectX12Context ctx, GraphicsPipelineStateDesc* pso)
 	{
+		ComPtr<ID3D12PipelineState> made;
 		if (_blobs?.TryGet(_blobKey) is { } cached)
 		{
 			fixed (byte* p = cached)
 			{
 				pso->CachedPSO = new CachedPipelineState { PCachedBlob = p, CachedBlobSizeInBytes = (nuint)cached.Length };
-				if (ctx.Device.CreateGraphicsPipelineState(pso, out Pipeline) >= 0)
+				if (ctx.Device.CreateGraphicsPipelineState(pso, out made) >= 0)
+				{
+					Pipeline = made;
 					return;
+				}
 			}
 			pso->CachedPSO = default;
 		}
-		SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(pso, out Pipeline));
+		SilkMarshal.ThrowHResult(ctx.Device.CreateGraphicsPipelineState(pso, out made));
+		Pipeline = made;
 		_blobs?.Capture(_blobKey, Pipeline);
 	}
 
 	/// <summary>The compute counterpart of <see cref="CreateGraphicsPipeline"/>.</summary>
 	private void CreateComputePipeline(DirectX12Context ctx, ComputePipelineStateDesc* pso)
 	{
+		ComPtr<ID3D12PipelineState> made;
 		if (_blobs?.TryGet(_blobKey) is { } cached)
 		{
 			fixed (byte* p = cached)
 			{
 				pso->CachedPSO = new CachedPipelineState { PCachedBlob = p, CachedBlobSizeInBytes = (nuint)cached.Length };
-				if (ctx.Device.CreateComputePipelineState(pso, out Pipeline) >= 0)
+				if (ctx.Device.CreateComputePipelineState(pso, out made) >= 0)
+				{
+					Pipeline = made;
 					return;
+				}
 			}
 			pso->CachedPSO = default;
 		}
-		SilkMarshal.ThrowHResult(ctx.Device.CreateComputePipelineState(pso, out Pipeline));
+		SilkMarshal.ThrowHResult(ctx.Device.CreateComputePipelineState(pso, out made));
+		Pipeline = made;
 		_blobs?.Capture(_blobKey, Pipeline);
 	}
 
-	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, DirectX12PipelineBlobCache? blobs = null, string blobKey = "")
+	public DirectX12Technique(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, DirectX12PipelineBlobCache? blobs = null, string blobKey = "", int samples = 1)
 	{
 		_blobs = blobs;
 		_blobKey = blobKey;
@@ -123,17 +143,18 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		UniformBufferCount = template.UniformBufferCount;
 		InstanceStride = template.Instance?.Stride ?? 0;
 		MaterialUniformSlot = template.MaterialUniformSlot;
+		Bindings = template.Bindings;
 
 		if (template.IsCompute)
 		{
 			BakeCompute(ctx, template);
 			return;
 		}
-		BakeGraphics(ctx, template, colorFormats, depthFormat, depthReadOnly);
+		BakeGraphics(ctx, template, colorFormats, depthFormat, depthReadOnly, samples);
 	}
 
-	// A compute root signature shaped to the technique: a 16-float scalar root constant at b0 (always) + an
-	// optional t0.. SRV table for sampled inputs (e.g. the auto-exposure compute metering the lit scene) + the
+	// A compute root signature shaped to the technique: a 16-float scalar root constant at b0 (always) + a root CBV
+	// per constant buffer it declares at b1.. (the pass's .Reads Constants) + an optional t0.. SRV table for sampled inputs (e.g. the auto-exposure compute metering the lit scene) + the
 	// storage binding — a RW texture (the 1×1 exposure image) OR a RW STRUCTURED buffer (the GPU-particle stream)
 	// via a u0 UAV descriptor TABLE, since both need a real descriptor (a structured buffer's StructureByteStride/
 	// NumElements is what makes the shader's GetDimensions return a non-zero count; a root UAV is a raw GPU address
@@ -143,8 +164,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	// (compute isn't covered by the per-stage VERTEX/PIXEL visibilities). Static samplers s0.. pair with the SRV table.
 	private void BakeCompute(DirectX12Context ctx, DirectX12TechniqueTemplate template)
 	{
-		// root constants (b0) + N read-only structured-buffer root SRVs (t0..) + optional SRV table + storage.
-		var parameters = stackalloc RootParameter[3 + template.InputBufferCount];
+		// root constants (b0) + N uniform CBVs (b1..) + M read-only structured-buffer root SRVs (t0..) + optional SRV
+		// table + storage.
+		var parameters = stackalloc RootParameter[3 + template.UniformBufferCount + template.InputBufferCount];
 		var paramCount = 0;
 		var uavTableCount = template.StorageImages > 0 ? template.StorageImages : template.StorageBuffers;
 		var srvRange = new DescriptorRange { RangeType = DescriptorRangeType.Srv, NumDescriptors = (uint)template.InputCount, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
@@ -160,8 +182,22 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			ShaderVisibility = ShaderVisibility.All,
 			Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = 16 } },
 		};
-		// Read-only structured-buffer inputs (skin: bind-pose verts t0, bone palette t1) as root SRVs by
-		// GPU address — no descriptor heap. The shader's StructuredBuffer<T>s land at t0..t(N-1) in declaration order.
+		// The pass's .Reads Constants as root CBVs at b1..bN, as a graphics technique takes them: the root constants
+		// own b0.
+		if (template.UniformBufferCount > 0)
+		{
+			CbvRootParam = paramCount;
+			for (var u = 0; u < template.UniformBufferCount; u++)
+				parameters[paramCount++] = new RootParameter
+				{
+					ParameterType = RootParameterType.TypeCbv,
+					ShaderVisibility = ShaderVisibility.All,
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(1 + u), RegisterSpace = 0 } },
+				};
+		}
+		// Read-only structured-buffer inputs (skin: bind-pose verts t0, bone palette t1; a pass's .Reads Storage) as
+		// root SRVs by GPU address — no descriptor heap. The shader's StructuredBuffer<T>s land after its sampled
+		// textures, at t(S)..t(S+N-1) in declaration order, as a graphics technique's do.
 		if (template.InputBufferCount > 0)
 		{
 			InputBufferBaseParam = paramCount;
@@ -170,7 +206,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				{
 					ParameterType = RootParameterType.TypeSrv,
 					ShaderVisibility = ShaderVisibility.All,
-					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)b, RegisterSpace = 0 } },
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(template.InputCount + b), RegisterSpace = 0 } },
 				};
 		}
 		if (template.InputCount > 0)
@@ -206,13 +242,16 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 
 		var samplers = stackalloc StaticSamplerDesc[template.InputCount > 0 ? template.InputCount : 1];
 		for (var i = 0; i < template.InputCount; i++)
+		{
+			// A slot the shader samples by comparison takes a comparison sampler, as a graphics technique's does
+			var compare = template.ComparedInputs is { } c && i < c.Length && c[i];
 			samplers[i] = new StaticSamplerDesc
 			{
-				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-				AddressU = ToTextureAddress(template.Address),
-				AddressV = ToTextureAddress(template.Address),
-				AddressW = ToTextureAddress(template.Address),
-				ComparisonFunc = ComparisonFunc.Never,
+				Filter = compare ? Filter.ComparisonMinMagLinearMipPoint : template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
+				AddressU = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressV = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressW = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				ComparisonFunc = compare ? ToD3DCompare(template.SampleCompare!.Value) : ComparisonFunc.Never,
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
 				MaxLOD = float.MaxValue,
@@ -220,6 +259,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				RegisterSpace = 0,
 				ShaderVisibility = ShaderVisibility.All,
 			};
+		}
 
 		var rootDesc = new RootSignatureDesc
 		{
@@ -246,7 +286,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		}
 	}
 
-	private void BakeGraphics(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	private void BakeGraphics(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, int samples)
 	{
 		// Root signature: optionally a 32-bit root-constants block (the MVP at b0/vertex for a mesh or particle
 		// technique, or a 16-float scalar block at b0/pixel for a post pass — one or the other, mirroring the
@@ -327,16 +367,20 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		// (bloom composite, SSAO, deferred lighting) references s1.. — absent from the root signature, the PS would
 		// reference a sampler the root signature doesn't declare and CreateGraphicsPipelineState fails. Static
 		// samplers don't count against the 64-DWORD root budget, so N of them is free.
+		// A slot the shader samples by comparison (SampleCmp) takes a filtered comparison sampler, clamped to the edge,
+		// comparing by the technique's SampleCompare: the hardware's 2×2 PCF.
 		var samplerCount = template.InputCount;
 		var samplers = stackalloc StaticSamplerDesc[samplerCount > 0 ? samplerCount : 1];
 		for (var i = 0; i < samplerCount; i++)
+		{
+			var compare = template.ComparedInputs is { } c && i < c.Length && c[i];
 			samplers[i] = new StaticSamplerDesc
 			{
-				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-				AddressU = ToTextureAddress(template.Address),
-				AddressV = ToTextureAddress(template.Address),
-				AddressW = ToTextureAddress(template.Address),
-				ComparisonFunc = ComparisonFunc.Never,
+				Filter = compare ? Filter.ComparisonMinMagLinearMipPoint : template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
+				AddressU = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressV = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressW = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				ComparisonFunc = compare ? ToD3DCompare(template.SampleCompare!.Value) : ComparisonFunc.Never,
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
 				MaxLOD = float.MaxValue,
@@ -344,6 +388,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				RegisterSpace = 0,
 				ShaderVisibility = ShaderVisibility.Pixel,
 			};
+		}
 		// A pass that reads any vertex stream (mesh, instanced, or particle) needs the input-assembler layout flag.
 		var flags = template.Layout is not null || template.Instance is not null ? RootSignatureFlags.AllowInputAssemblerInputLayout : RootSignatureFlags.None;
 		var rootDesc = new RootSignatureDesc
@@ -367,15 +412,16 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			BlendMode.None => (Blend.One, Blend.Zero),
 			_ => throw new NotSupportedException($"DirectX12: BlendMode '{template.Blend}' is not mapped to blend factors."),
 		};
-		var blend = new BlendDesc { AlphaToCoverageEnable = false, IndependentBlendEnable = false };
+		var blend = new BlendDesc { AlphaToCoverageEnable = template.AlphaToCoverage && samples > 1, IndependentBlendEnable = false };
 		blend.RenderTarget[0] = new RenderTargetBlendDesc
 		{
 			BlendEnable = template.Blend != BlendMode.None,
 			SrcBlend = srcBlend,
 			DestBlend = dstBlend,
 			BlendOp = BlendOp.Add,
-			SrcBlendAlpha = srcBlend,
-			DestBlendAlpha = dstBlend,
+			// D3D12 refuses a *_COLOR factor in the alpha equation (Multiply's DestColor): alpha takes its alpha twin
+			SrcBlendAlpha = AlphaFactor(srcBlend),
+			DestBlendAlpha = AlphaFactor(dstBlend),
 			BlendOpAlpha = BlendOp.Add,
 			LogicOpEnable = false,
 			LogicOp = LogicOp.Noop,
@@ -421,7 +467,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				DSVFormat = hasDepth ? depthFormat : Format.FormatUnknown,
 				PrimitiveTopologyType = PrimitiveTopologyType.Triangle,
 				NumRenderTargets = (uint)colorFormats.Length,
-				SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
+				SampleDesc = new SampleDesc { Count = (uint)samples, Quality = 0 },   // the pass's targets' multisample count
 				Flags = PipelineStateFlags.None,
 			};
 			for (var i = 0; i < colorFormats.Length && i < 8; i++)
@@ -520,6 +566,17 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		_ => throw new NotSupportedException($"DirectX12: DepthCompare '{compare}' is not mapped to a comparison func."),
 	};
 
+	// A blend factor as the alpha equation may take it: D3D12 allows no *_COLOR factor there, so a colour factor becomes
+	// the alpha factor of the same source (Vulkan and WebGPU take either, reading the alpha channel the same way)
+	private static Blend AlphaFactor(Blend factor) => factor switch
+	{
+		Blend.SrcColor => Blend.SrcAlpha,
+		Blend.InvSrcColor => Blend.InvSrcAlpha,
+		Blend.DestColor => Blend.DestAlpha,
+		Blend.InvDestColor => Blend.InvDestAlpha,
+		_ => factor,
+	};
+
 	// Exhaustive so a new SamplerAddress member fails loud here instead of silently mapping to Clamp.
 	private static TextureAddressMode ToTextureAddress(SamplerAddress address) => address switch
 	{
@@ -548,7 +605,8 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		ComPtr<ID3D10Blob> blob = default;
 		ComPtr<ID3D10Blob> error = default;
 		SilkMarshal.ThrowHResult(ctx.D3D12.SerializeRootSignature(rootDesc, D3DRootSignatureVersion.Version1, ref blob, ref error));
-		SilkMarshal.ThrowHResult(ctx.Device.CreateRootSignature(0, blob.GetBufferPointer(), blob.GetBufferSize(), out RootSignature));
+		SilkMarshal.ThrowHResult(ctx.Device.CreateRootSignature(0, blob.GetBufferPointer(), blob.GetBufferSize(), out ComPtr<ID3D12RootSignature> madeRootSignature));
+		RootSignature = madeRootSignature;
 		blob.Dispose();
 		if (error.Handle is not null)
 			error.Dispose();

@@ -26,6 +26,13 @@
     <Content Include="Goldens\**\*.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Apps SdkXamlTests builds through the Loom SDK, each its own project (in no solution): none of their sources,
+       nor what their builds leave under them, are this project's. -->
+  <ItemGroup>
+    <Compile Remove="SdkFixtures\**" />
+    <None Remove="SdkFixtures\**" />
+  </ItemGroup>
+
   <!-- The committed rigged-bar glTF (one source of truth in the gallery's assets), linked beside the test
        assembly so GltfSkinningLoadTests can load it through GltfLoader. -->
   <ItemGroup>
@@ -45,6 +52,12 @@
        compiled shaders (+ signed DXIL) flow beside the test assembly under shaders\ through this reference. -->
   <ItemGroup>
     <ProjectReference Include="..\Loom.Gallery\Loom.Gallery.csproj" />
+  </ItemGroup>
+
+  <!-- SUIsei's software rasterizer, the CPU oracle for every UI prim: the vector prim's GPU render is diffed against
+       it (VectorPrimRenderTests), which is what holds ui.slang to the same maths. -->
+  <ItemGroup>
+    <ProjectReference Include="..\external\SUIsei\SUIsei.Rasterizer\SUIsei.Rasterizer.csproj" />
   </ItemGroup>
 
   <!-- The desktop host, for the backend-neutral host-machinery tests (HostOptions launch-option parsing). No GPU

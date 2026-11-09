@@ -37,7 +37,8 @@ public interface IEngine : IEngineClipSpace, IDisposable
 
 	/// <summary>
 	/// Upload geometry once and get a stable <see cref="Mesh"/> handle that passes draw via <c>ctx.Draw</c>.
-	/// Call after creation, before the first <see cref="Render"/>; the handle lives for the engine's lifetime
+	/// Call between frames — after creation, or before any <see cref="Render"/> — never from a pass callback, where it
+	/// throws (see <see cref="CreateTexture"/>). The handle lives until <see cref="ReleaseMesh"/> or the engine's end
 	/// (it survives graph swaps). Uses the canonical <see cref="VertexLayout.MeshStandard"/> layout.
 	/// </summary>
 	Mesh CreateMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
@@ -67,10 +68,50 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	Task<Mesh> CreateSkinnedMeshAsync(SkinnedVertex[] vertices, uint[] indices);
 
 	/// <summary>
+	/// Free a mesh's GPU geometry — the counterpart of <see cref="CreateMesh(ReadOnlySpan{Vertex}, ReadOnlySpan{uint})"/>
+	/// for an app whose geometry does not live as long as the engine (a level, a generated world, a streamed chunk). The
+	/// handle is dead from this call: drawing it, or releasing it again, throws rather than drawing whatever happens to
+	/// occupy the memory. The buffers themselves are freed once every frame that may still read them has finished on the
+	/// GPU, so a mesh can be released the frame after its last draw without waiting for the GPU first. Ids are not
+	/// reused, so a stale handle always fails loudly. Call it between frames: from inside a pass callback it throws,
+	/// because the frame being recorded may already have drawn the mesh.
+	/// <para>
+	/// Render thread only: the thread that created the engine and calls <see cref="Render"/>. The meshes being retired are
+	/// kept without locks, as the frame's own state is, so a call from any other thread throws
+	/// <see cref="InvalidOperationException"/> rather than racing the frame. A mesh built on a worker
+	/// (<see cref="CreateMeshAsync"/>) is released from the render thread once the worker hands it back. The same holds for
+	/// <see cref="ReleaseInstances"/> and <see cref="ReleaseTexture"/>.
+	/// </para>
+	/// </summary>
+	void ReleaseMesh(Mesh mesh);
+
+	/// <summary>
+	/// Upload per-instance data once, to GPU-resident memory, and get an <see cref="InstanceBuffer"/> that draws take
+	/// ranges of (<see cref="DrawCall.Static(InstanceBuffer, int, int)"/>) — for instances that don't change from frame to frame, which a CPU
+	/// span (<see cref="DrawCall.From{T}"/>) would upload again every frame. <typeparamref name="T"/> must be laid out to
+	/// match <paramref name="layout"/>, the per-instance layout of the techniques that draw it
+	/// (<c>sizeof(T) == layout.Stride</c>). Created and released as a mesh is: between frames, and the handle lives
+	/// until <see cref="ReleaseInstances"/> or the engine's end.
+	/// </summary>
+	InstanceBuffer CreateInstances<T>(ReadOnlySpan<T> instances, VertexLayout layout) where T : unmanaged;
+
+	/// <summary>
+	/// Free an <see cref="InstanceBuffer"/> — under the same rules as <see cref="ReleaseMesh"/>: dead from this call,
+	/// freed once every frame that may still read it has finished on the GPU, never from inside a pass callback.
+	/// </summary>
+	void ReleaseInstances(InstanceBuffer instances);
+
+	/// <summary>
 	/// Upload a texture (and its mip chain) once and get a stable <see cref="Texture"/> handle to bundle into a
-	/// <see cref="Material"/>. Takes neutral <see cref="TextureData"/> — no graphics-API type crosses the
-	/// boundary; the backend's texture store decodes nothing and just uploads the levels. Call after creation,
-	/// before the first <see cref="Render"/>; the handle lives for the engine's lifetime (survives graph swaps).
+	/// <see cref="Material"/> or sample from a draw list. Takes neutral <see cref="TextureData"/> — no graphics-API
+	/// type crosses the boundary; the backend's texture store decodes nothing and just uploads the levels. The handle
+	/// lives until <see cref="ReleaseTexture"/> or the engine's end (it survives graph swaps).
+	/// <para>
+	/// Call it between frames, never from a pass callback, where it throws. An upload is submitted ahead of the next
+	/// frame, so a texture created while a frame is recording would be sampled by that frame before its pixels arrive.
+	/// A producer that discovers what it needs while drawing — a UI painter meeting a new image — resolves it in a step
+	/// of its own before <see cref="Render"/>.
+	/// </para>
 	/// </summary>
 	Texture CreateTexture(TextureData data);
 
@@ -82,9 +123,46 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// <see cref="ServicePendingUploads"/>; this only decouples requesting an upload from performing it. Use for
 	/// bytes fetched/decoded off the calling thread; keep using <see cref="CreateTexture"/> directly for
 	/// already-in-memory data (e.g. a procedurally generated texture) created from code that's already on the one
-	/// thread driving <see cref="ServicePendingUploads"/> (e.g. a demo's synchronous <c>Build</c>).
+	/// thread driving <see cref="ServicePendingUploads"/> (e.g. a demo's synchronous <c>Build</c>). Like
+	/// <see cref="CreateTexture"/>, it throws when called from a pass callback on the render thread; another thread
+	/// may queue an upload while a frame records.
 	/// </summary>
 	Task<Texture> CreateTextureAsync(TextureData data);
+
+	/// <summary>
+	/// Free a texture's GPU image — the counterpart of <see cref="CreateTexture"/> for a texture that does not live as
+	/// long as the engine (an image replaced when its source changes, a level's art). The handle is dead from this call:
+	/// a draw list that samples it, a material built from it afterwards, or releasing it again throws rather than
+	/// sampling whatever happens to occupy the memory. The image is destroyed once every frame that may still read it
+	/// has finished on the GPU, so a texture can be released the frame after its last draw without waiting for the GPU
+	/// first. Ids are not reused, so a stale handle always fails loudly.
+	/// <para>
+	/// A texture bundled into a <see cref="Material"/> cannot be released: a material keeps its textures for as long as
+	/// it lives, which is the engine's lifetime, so releasing one of them throws and names the material. Call it between
+	/// frames: from inside a pass callback it throws, because the frame being recorded may already sample it.
+	/// </para>
+	/// </summary>
+	void ReleaseTexture(Texture texture);
+
+	/// <summary>
+	/// Write new texels into <paramref name="texture"/> in place: the counterpart of <see cref="CreateTexture"/> for an image
+	/// whose content changes while its handle, size and format stay (a UI bitmap redrawn every frame, a video frame, a
+	/// trace). The handle, every material holding it and every cached binding naming it stay as they are, so nothing is
+	/// rebuilt, and after the first update of a texture none allocates: the backend keeps one staging buffer for it.
+	/// <para>
+	/// <paramref name="texels"/> is the whole image, rows tightly packed, in the format the texture was created with
+	/// (<see cref="TextureData.Format"/>), so exactly width × height × bytes per texel. Only a texture of one mip level and
+	/// one layer can be updated: a mip chain would need regenerating from the new texels, and a cube has six faces, so
+	/// either throws, as does a length that does not fit.
+	/// </para>
+	/// <para>
+	/// The texels reach the GPU ahead of the next frame, and the frames already submitted keep sampling what they had: the
+	/// copy is ordered after them on the GPU, so nothing waits on the CPU. Call it between frames on the render thread,
+	/// as <see cref="CreateTexture"/>: from a pass callback it throws, since the frame being recorded would already sample
+	/// the texture.
+	/// </para>
+	/// </summary>
+	void UpdateTexture(Texture texture, ReadOnlySpan<byte> texels);
 
 	/// <summary>
 	/// Run every GPU creation call queued by a <c>*Async</c> method (<see cref="CreateMeshAsync"/>,
@@ -161,6 +239,16 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	MaterialLayout MaterialLayoutOf(string technique);
 
 	/// <summary>
+	/// Mint a draw-list stream id, unique on this engine, for a producer that submits a stable
+	/// <see cref="DrawListIdentity"/> — one whose geometry a backend keeps across frames. Each producer allocates its
+	/// own, so no two can submit the same stream: two UI hosts that each number their surfaces from zero would otherwise
+	/// both claim stream 0, and either fail as one stream submitted twice in a frame or, drawn on alternate frames at
+	/// matching revisions, show each other's geometry. A stable identity whose stream was not minted here is refused by
+	/// <see cref="IRenderContext.DrawList{TVertex}"/>. Safe to call from any thread.
+	/// </summary>
+	int AllocateDrawListStream();
+
+	/// <summary>
 	/// Make <paramref name="graph"/> the active graph: derive its schedule, barriers, and transient-memory plan
 	/// and prepare per-graph GPU resources, reusing the device and pipeline cache. Call once before the first
 	/// frame; calling it again swaps the active graph at runtime (the engine drains the GPU, releases the old
@@ -220,6 +308,36 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// off, <see cref="LastFrameTimings"/> stays empty and the per-frame cost is nil.
 	/// </summary>
 	bool GpuTimingEnabled { get; set; }
+
+	/// <summary>
+	/// What the display the frame goes to reports, in nits: where the OS shows SDR white on it (Windows' "SDR content
+	/// brightness") and the brightest it shows. The desktop host keeps both current for the window's monitor; null where
+	/// it can't tell. Reports only: what a frame uses is <see cref="HdrPaperWhiteNits"/> and <see cref="HdrPeakNits"/>.
+	/// </summary>
+	float? DisplaySdrWhiteNits { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(DisplaySdrWhiteNits)}; setting it would be dropped."); }
+
+	/// <inheritdoc cref="DisplaySdrWhiteNits"/>
+	float? DisplayPeakNits { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(DisplayPeakNits)}; setting it would be dropped."); }
+
+	/// <summary>The app's own choice of paper white and peak (a player's setting), in nits, or null to follow the display.</summary>
+	/// <exception cref="ArgumentOutOfRangeException">Set to zero, a negative, an infinite or a NaN level (<see cref="HdrLevels.Choice"/>).</exception>
+	float? HdrPaperWhiteChoice { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(HdrPaperWhiteChoice)}; setting it would be dropped."); }
+
+	/// <inheritdoc cref="HdrPaperWhiteChoice"/>
+	float? HdrPeakChoice { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(HdrPeakChoice)}; setting it would be dropped."); }
+
+	/// <summary>
+	/// Where white paper sits on an HDR output, in nits: the luminance SDR-referred white (a UI, an app's paper white) is
+	/// written at, so it matches the rest of the desktop. The app's choice, else the display's SDR white, else 200
+	/// (<see cref="HdrLevels.PaperWhite"/>). Unused on SDR output, where white is simply 1.
+	/// </summary>
+	float HdrPaperWhiteNits => HdrLevels.PaperWhite(HdrPaperWhiteChoice, DisplaySdrWhiteNits);
+
+	/// <summary>
+	/// The brightest an HDR output shows, in nits: what highlights roll off toward rather than clip at. The app's choice,
+	/// else the display's peak, else 1000; never below paper white (<see cref="HdrLevels.Peak"/>). Unused on SDR output.
+	/// </summary>
+	float HdrPeakNits => HdrLevels.Peak(HdrPeakChoice, DisplayPeakNits, HdrPaperWhiteNits);
 
 	/// <summary>
 	/// Per-pass GPU timings from the most recently <em>completed</em> frame (a frame or two stale, like

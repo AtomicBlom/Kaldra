@@ -30,6 +30,10 @@ public sealed class MaterialStore
 	private readonly List<Entry> _materials = [];
 	private readonly Dictionary<string, MaterialLayout> _layouts = [];
 
+	// The first material to bundle each texture id, so a release of a texture a material holds can name the material.
+	// Materials live as long as the engine, so an entry is never removed.
+	private readonly Dictionary<int, int> _holders = [];
+
 	/// <summary>Record a material's ordered texture ids (slot 0 → the shader's binding 0, …) and return its handle.</summary>
 	public Material Create(ReadOnlySpan<Texture> textures) => Create(technique: null, textures, default);
 
@@ -47,6 +51,8 @@ public sealed class MaterialStore
 		var entry = new Entry { Textures = ids, Parameters = parameters.ToArray(), Technique = technique };
 		var id = _materials.Count;
 		_materials.Add(entry);
+		foreach (var texture in ids)
+			_holders.TryAdd(texture, id);
 		var material = new Material(id);
 
 		if (technique is not null && _layouts.TryGetValue(technique, out var layout))
@@ -56,6 +62,21 @@ public sealed class MaterialStore
 
 	/// <summary>The ordered texture ids a material binds, for the draw path to resolve to bound texture views.</summary>
 	public ReadOnlySpan<int> TexturesOf(int materialId) => _materials[materialId].Textures;
+
+	/// <summary>
+	/// Refuse to let <paramref name="texture"/> go while a material holds it. A material's textures are fixed when it is
+	/// created and the material lives as long as the engine, so a texture bundled into one must too: releasing it would
+	/// leave the material binding a destroyed image, behind the binding caches every backend keeps for materials.
+	/// </summary>
+	public void ThrowIfHeld(Texture texture)
+	{
+		if (!_holders.TryGetValue(texture.Id, out var material))
+			return;
+		throw new InvalidOperationException(
+			$"Texture {texture.Id} cannot be released: material {material} holds it. A material keeps its textures for as " +
+			"long as it lives, which is the engine's lifetime, so a texture bundled into a material lives as long as the " +
+			"engine. Release only textures that no material was built from.");
+	}
 
 	/// <summary>A material's per-material parameter bytes, for a backend to stage into its per-frame uniform ring. Empty when it carries none.</summary>
 	public ReadOnlySpan<byte> ParametersOf(int materialId) => _materials[materialId].Parameters;
@@ -126,6 +147,14 @@ public sealed class MaterialStore
 		{
 			entry.Validated.Add(technique);
 			return;
+		}
+
+		if (layout.ComparedTextureCount > 0)
+		{
+			throw new TechniqueMismatchException(
+				$"Material {material.Id} cannot drive technique '{technique}': its shader reads {layout.ComparedTextureCount} " +
+				"texture(s) by comparison, and a material's textures are colour formats, which no backend can compare. Give the " +
+				"depth texture to the pass with .Samples and draw it as a sampled input, without a material.", technique);
 		}
 
 		var problem = entry.Textures.Length < layout.TextureCount

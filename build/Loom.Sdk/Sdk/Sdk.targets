@@ -24,16 +24,38 @@
     <_LoomFromSource Condition="Exists('$(_LoomRepoRoot)Loom.Core\Loom.Core.csproj')">true</_LoomFromSource>
     <!-- Version for sibling Loom package references in packaged mode (matches Version.props / the pack version). -->
     <LoomPackageVersion Condition="'$(LoomPackageVersion)' == ''">0.1.0-preview.1</LoomPackageVersion>
-    <!-- slangc version for packaged mode (matches Directory.Packages.props). -->
+    <!-- slangc version for any consumer that does not take it from the Loom repo's Directory.Packages.props, which
+         pins the same version; _LoomCheckSlangVersion below fails the repo's own builds if the two drift apart. -->
     <LoomSlangVersion Condition="'$(LoomSlangVersion)' == ''">0.5.1</LoomSlangVersion>
+    <!-- SUIsei package version for packaged mode (matches external/SUIsei/SUIsei/SUIsei.csproj's Version). -->
+    <LoomSUIseiVersion Condition="'$(LoomSUIseiVersion)' == ''">0.1.0-preview.1</LoomSUIseiVersion>
   </PropertyGroup>
 
-  <!-- slangc, to compile this app's own shaders. Source mode rides the repo's central package management
-       (version-less); packaged mode pins the version so an external consumer needs no Slang reference of its own. -->
+  <!-- slangc, to compile this app's own shaders. Only the Loom repo's own apps, whose central package management is
+       the repo's Directory.Packages.props, take the version from there. Any other consumer gets the pinned version,
+       so it needs no Slang reference of its own: as a VersionOverride under central package management of its own
+       (a packaged consumer, or a game with Loom as a submodule), where a version-less reference would fail restore
+       with NU1010 unless the game listed Slang.Sdk itself, and as a plain Version without it. -->
+  <PropertyGroup>
+    <_LoomPackageVersionsFile>$([MSBuild]::NormalizePath('$(_LoomRepoRoot)', 'Directory.Packages.props'))</_LoomPackageVersionsFile>
+    <_LoomOwnPackageVersions Condition="'$(_LoomFromSource)' == 'true' and '$(ManagePackageVersionsCentrally)' == 'true' and '$(DirectoryPackagesPropsPath)' == '$(_LoomPackageVersionsFile)'">true</_LoomOwnPackageVersions>
+  </PropertyGroup>
   <ItemGroup>
-    <PackageReference Condition="'$(_LoomFromSource)' == 'true'" Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
-    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Slang.Sdk" Version="$(LoomSlangVersion)" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Condition="'$(_LoomOwnPackageVersions)' == 'true'" Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Condition="'$(_LoomOwnPackageVersions)' != 'true' and '$(ManagePackageVersionsCentrally)' == 'true'" Include="Slang.Sdk" VersionOverride="$(LoomSlangVersion)" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Condition="'$(ManagePackageVersionsCentrally)' != 'true'" Include="Slang.Sdk" Version="$(LoomSlangVersion)" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>
+
+  <!-- The repo's own builds hold LoomSlangVersion to the Slang.Sdk version in Directory.Packages.props, so a bump to
+       one that misses the other fails here rather than giving a packaged consumer a different slangc than Loom's own
+       shaders were built with. -->
+  <Target Name="_LoomCheckSlangVersion" BeforeTargets="CollectPackageReferences" Condition="'$(_LoomOwnPackageVersions)' == 'true'">
+    <ItemGroup>
+      <_LoomSlangPackageVersion Include="@(PackageVersion)" Condition="'%(Identity)' == 'Slang.Sdk'" />
+    </ItemGroup>
+    <Error Condition="'@(_LoomSlangPackageVersion->'%(Version)')' != '$(LoomSlangVersion)'"
+           Text="Directory.Packages.props pins Slang.Sdk at '@(_LoomSlangPackageVersion->'%(Version)')', but build/Loom.Sdk/Sdk/Sdk.targets pins LoomSlangVersion at '$(LoomSlangVersion)'. Keep the two the same." />
+  </Target>
 
   <!-- Backends by RID/flags: ProjectReference in the repo, versioned PackageReference when packaged. -->
   <ItemGroup Condition="'$(UseVulkan)' == 'true' and '$(_LoomTargetsBrowser)' != 'true'">
@@ -50,11 +72,27 @@
   </ItemGroup>
 
   <!-- UI bridges, same shape as the backends. Both reach the GPU only through the neutral draw-list verb, so
-       neither drags a UI library into a backend. SUIsei brings the XAML runtime (and its source generator)
-       transitively; ImGui brings ImGui.NET. -->
+       neither drags a UI library into a backend. SUIsei brings the XAML runtime transitively (and its generator,
+       below); ImGui brings ImGui.NET. -->
   <ItemGroup Condition="'$(UseSUIsei)' == 'true'">
     <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.UI.SUIsei\Loom.UI.SUIsei.csproj" />
     <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.UI.SUIsei" Version="$(LoomPackageVersion)" />
+  </ItemGroup>
+
+  <!--
+    SUIsei's XAML. Turning SUIsei on also gives the app SUIsei's XAML → typed control-tree generator, so it can
+    author .xaml views: every *.xaml under the project (or under SUIseiXamlSourceDir) becomes an input the generator
+    compiles into its partial x:Class, with XAML errors reported at the .xaml's file and line, and a dotnet watch
+    input, so an edit hot-reloads. SUIseiXamlEnable=false keeps the runtime without the generator.
+    From source this imports SUIsei's own build files, which reference the generator project as an analyzer. This
+    file is imported after the project body, so UseSUIsei is already final here. Packaged, the SUIsei package carries
+    the generator and the same .xaml registration, but a package's analyzers and build files do not flow to an app
+    through Loom.UI.SUIsei's dependency on it, so the app references the SUIsei package itself.
+  -->
+  <Import Project="$(_LoomRepoRoot)external\SUIsei\build\SUIsei.props" Condition="'$(UseSUIsei)' == 'true' and '$(_LoomFromSource)' == 'true'" />
+  <Import Project="$(_LoomRepoRoot)external\SUIsei\build\SUIsei.targets" Condition="'$(UseSUIsei)' == 'true' and '$(_LoomFromSource)' == 'true'" />
+  <ItemGroup Condition="'$(UseSUIsei)' == 'true' and '$(_LoomFromSource)' != 'true'">
+    <PackageReference Include="SUIsei" Version="$(LoomSUIseiVersion)" />
   </ItemGroup>
   <ItemGroup Condition="'$(UseImGui)' == 'true'">
     <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.UI.ImGui\Loom.UI.ImGui.csproj" />

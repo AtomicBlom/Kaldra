@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using Loom.Core.Diagnostics;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
@@ -17,8 +19,9 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 	private readonly nint _hwnd;
 	private readonly uint _bufferCount;
 
-	/// <summary>The swapchain buffer format — must be a plain UNORM under the flip model (no _SRGB swapchain).</summary>
-	public Format Format { get; }
+	/// <summary>The swapchain buffer format — a plain UNORM under the flip model (no _SRGB swapchain), or half floats
+	/// for HDR.</summary>
+	public Format Format { get; private set; }
 
 	/// <summary>
 	/// The format the backbuffer RTV is created with — the _SRGB variant of <see cref="Format"/>. Writing through
@@ -26,7 +29,15 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 	/// backend's sRGB swapchain. Flip-model swapchains can't BE _SRGB, but a UNORM buffer can carry an _SRGB RTV
 	/// (same cast family). PSOs that render to the backbuffer must bake against this format, not <see cref="Format"/>.
 	/// </summary>
-	public Format RenderTargetFormat { get; }
+	public Format RenderTargetFormat { get; private set; }
+
+	/// <summary>
+	/// True when the swapchain presents scRGB: R16G16B16A16_FLOAT in the linear Rec.709 colour space (G10, 1.0 = 80
+	/// nits). Asked for with <c>hdr</c>, and granted only when the display the window is on is in HDR and the swapchain can
+	/// present in that colour space; otherwise the swapchain is SDR, this is false, and a warning says why. DXGI would
+	/// compose scRGB for an SDR display too, clipping everything past paper white, so that is never granted.
+	/// </summary>
+	public bool HdrActive { get; private set; }
 
 	public ComPtr<IDXGISwapChain1> SwapChain;
 	private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
@@ -40,14 +51,13 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 	/// <summary>The backbuffer to render into this frame (the flip model's current index).</summary>
 	public uint CurrentIndex => _index;
 
-	public DirectX12Swapchain(DirectX12Context ctx, nint hwnd, int width, int height, uint bufferCount)
+	public DirectX12Swapchain(DirectX12Context ctx, nint hwnd, int width, int height, uint bufferCount, bool hdr = false)
 	{
 		_ctx = ctx;
 		_hwnd = hwnd;
 		_bufferCount = bufferCount;
 		_backBuffers = new ComPtr<ID3D12Resource>[bufferCount];
-		Format = Format.FormatR8G8B8A8Unorm; // SDR; HDR colour-space negotiation is a later slice
-		RenderTargetFormat = Format.FormatR8G8B8A8UnormSrgb; // sRGB-encode the linear shader output on present (matches Vulkan)
+		UseSdr();
 
 		var heapDesc = new DescriptorHeapDesc
 		{
@@ -56,11 +66,47 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 			Flags = DescriptorHeapFlags.None,
 			NodeMask = 0
 		};
-		SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&heapDesc, out _rtvHeap));
+		SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&heapDesc, out ComPtr<ID3D12DescriptorHeap> madeRtvHeap));
+		_rtvHeap = madeRtvHeap;
 		_rtvStart = _rtvHeap.GetCPUDescriptorHandleForHeapStart();
 
 		CreateSwapChain(width, height);
+		if (hdr)
+			TryHdr();
+		LoomLog.Info($"DirectX12 swapchain format={Format}, hdr={HdrActive}");
 		CreateBackBuffers();
+	}
+
+	private void UseSdr()
+	{
+		Format = Format.FormatR8G8B8A8Unorm;
+		RenderTargetFormat = Format.FormatR8G8B8A8UnormSrgb; // sRGB-encode the linear shader output on present (matches Vulkan)
+		HdrActive = false;
+	}
+
+	// Turn the swapchain over to scRGB: half-float buffers presented in the linear Rec.709 colour space. The RTV writes
+	// the shader's output as it is, linear, with no encode. False, leaving it SDR and saying why, where DXGI cannot
+	// present that space. Whether the window's monitor is in HDR is the host's to ask before it asks for HDR, as it is
+	// for every backend.
+	private bool TryHdr()
+	{
+
+		const Format hdrFormat = Format.FormatR16G16B16A16Float;
+		const ColorSpaceType scRgb = ColorSpaceType.RgbFullG10NoneP709;
+		using var swapChain3 = SwapChain.QueryInterface<IDXGISwapChain3>();
+		SilkMarshal.ThrowHResult(SwapChain.ResizeBuffers(_bufferCount, Width, Height, hdrFormat, 0));
+		uint support = 0;
+		SilkMarshal.ThrowHResult(swapChain3.CheckColorSpaceSupport(scRgb, ref support));
+		if ((support & (uint)SwapChainColorSpaceSupportFlag.Present) == 0)
+		{
+			SilkMarshal.ThrowHResult(SwapChain.ResizeBuffers(_bufferCount, Width, Height, Format, 0));
+			LoomLog.Warning("DirectX12: HDR output was asked for, but the swapchain cannot present scRGB; presenting SDR.");
+			return false;
+		}
+		SilkMarshal.ThrowHResult(swapChain3.SetColorSpace1(scRgb));
+		Format = RenderTargetFormat = hdrFormat;
+		HdrActive = true;
+		return true;
 	}
 
 	private void CreateSwapChain(int width, int height)
@@ -81,8 +127,10 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 			AlphaMode = AlphaMode.Unspecified,
 			Flags = 0
 		};
+		ComPtr<IDXGISwapChain1> madeSwapChain = default;
 		SilkMarshal.ThrowHResult(_ctx.Factory.CreateSwapChainForHwnd(
-			_ctx.GraphicsQueue, _hwnd, &desc, (SwapChainFullscreenDesc*)null, default(ComPtr<IDXGIOutput>), ref SwapChain));
+			_ctx.GraphicsQueue, _hwnd, &desc, (SwapChainFullscreenDesc*)null, default(ComPtr<IDXGIOutput>), ref madeSwapChain));
+		SwapChain = madeSwapChain;
 		_ctx.Factory.MakeWindowAssociation(_hwnd, 1u << 1); // DXGI_MWA_NO_ALT_ENTER — don't let DXGI hijack Alt+Enter
 		_index = 0;
 	}
@@ -95,7 +143,8 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 		var rtvDesc = new RenderTargetViewDesc { Format = RenderTargetFormat, ViewDimension = RtvDimension.Texture2D };
 		for (uint i = 0; i < _bufferCount; i++)
 		{
-			SilkMarshal.ThrowHResult(SwapChain.GetBuffer(i, out _backBuffers[i]));
+			SilkMarshal.ThrowHResult(SwapChain.GetBuffer(i, out ComPtr<ID3D12Resource> madeBackBuffer));
+			_backBuffers[i] = madeBackBuffer;
 			_ctx.Device.CreateRenderTargetView(_backBuffers[i], &rtvDesc, RtvHandle(i));
 		}
 	}

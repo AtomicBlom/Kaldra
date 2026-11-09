@@ -31,6 +31,12 @@ internal sealed class WebGpuTransientResources : IDisposable
 		public bool IsBackbuffer;
 		public bool SwapchainSized;
 		public int Usage;
+
+		// A multisampled colour target that a pass samples is resolved into a single-sample texture of its own where
+		// the graph takes it from being drawn to being sampled (WebGpuEngine.EmitTransitions); a sampler reads that one
+		public int ResolveTexture;
+		public int ResolveView;
+		public readonly bool Resolves => ResolveView >= 0;
 	}
 
 	private readonly WebGpuHandleAllocator _handles;
@@ -62,6 +68,8 @@ internal sealed class WebGpuTransientResources : IDisposable
 		ref var tex = ref _textures[resource.Id];
 		tex.TextureHandle = -1;
 		tex.ViewHandle = -1;
+		tex.ResolveTexture = -1;
+		tex.ResolveView = -1;
 
 		switch (resource.Kind)
 		{
@@ -109,9 +117,22 @@ internal sealed class WebGpuTransientResources : IDisposable
 		tex.Height = h;
 		tex.TextureHandle = _handles.Allocate(WebGpuHandleAllocator.Textures);
 		var formatId = WebGpuFormatMapping.ToWebGpu(resource.Format);
-		WebGpuInterop.CreateTexture(tex.TextureHandle, w, h, mipCount: 1, formatId, tex.Usage, sampleCount: 1, resource.Name);
+		var samples = resource.Kind == ResourceKind.Persistent ? 1 : resource.Domain.Samples;
+		var resolves = samples > 1 && (tex.Usage & WebGpuStateMapping.TextureBinding) != 0;
+		if (resolves && resource.Kind == ResourceKind.Depth)
+			throw new WebGpuException($"'{resource.Name}' is a multisampled depth target and a pass samples it; only a multisampled colour target is resolved for sampling.");
+		// Multisampled and sampled: drawn into here, resolved out of it into a texture a shader can sample
+		var usage = resolves ? WebGpuStateMapping.RenderAttachment : tex.Usage;
+		WebGpuInterop.CreateTexture(tex.TextureHandle, w, h, mipCount: 1, formatId, usage, sampleCount: samples, resource.Name);
 		tex.ViewHandle = _handles.Allocate(WebGpuHandleAllocator.Views);
 		WebGpuInterop.CreateTextureView(tex.ViewHandle, tex.TextureHandle, formatId, baseMip: 0, mipCount: 1, resource.Name);
+		if (!resolves)
+			return;
+		tex.ResolveTexture = _handles.Allocate(WebGpuHandleAllocator.Textures);
+		WebGpuInterop.CreateTexture(tex.ResolveTexture, w, h, mipCount: 1, formatId, WebGpuStateMapping.RenderAttachment | WebGpuStateMapping.TextureBinding,
+			sampleCount: 1, resource.Name + ".resolve");
+		tex.ResolveView = _handles.Allocate(WebGpuHandleAllocator.Views);
+		WebGpuInterop.CreateTextureView(tex.ResolveView, tex.ResolveTexture, formatId, baseMip: 0, mipCount: 1, resource.Name + ".resolve");
 	}
 
 	private int CreateBuffer(int byteSize, int usage, string label)
@@ -123,6 +144,9 @@ internal sealed class WebGpuTransientResources : IDisposable
 
 	/// <summary>The WebGPU view handle for a colour/depth resource (or the backbuffer sentinel).</summary>
 	public int ViewHandle(int id) => _textures[id].ViewHandle;
+
+	/// <summary>The view a shader samples: the resolve's, for a multisampled target, else the texture's own.</summary>
+	public int SampledViewHandle(int id) => _textures[id].Resolves ? _textures[id].ResolveView : _textures[id].ViewHandle;
 
 	/// <summary>The backing texture handle (or -1 for the backbuffer).</summary>
 	public int TextureHandle(int id) => _textures[id].TextureHandle;
@@ -158,8 +182,18 @@ internal sealed class WebGpuTransientResources : IDisposable
 				continue;
 			_handles.Release(WebGpuHandleAllocator.Views, tex.ViewHandle);
 			_handles.Release(WebGpuHandleAllocator.Textures, tex.TextureHandle);
+			ReleaseResolve(ref tex);
 			CreateTexture(resource, ref tex);
 		}
+	}
+
+	private void ReleaseResolve(ref ResourceTexture tex)
+	{
+		if (!tex.Resolves)
+			return;
+		_handles.Release(WebGpuHandleAllocator.Views, tex.ResolveView);
+		_handles.Release(WebGpuHandleAllocator.Textures, tex.ResolveTexture);
+		(tex.ResolveView, tex.ResolveTexture) = (-1, -1);
 	}
 
 	public void Dispose()
@@ -170,6 +204,7 @@ internal sealed class WebGpuTransientResources : IDisposable
 				_handles.Release(WebGpuHandleAllocator.Views, tex.ViewHandle);
 			if (tex.TextureHandle >= 0)
 				_handles.Release(WebGpuHandleAllocator.Textures, tex.TextureHandle);
+			ReleaseResolve(ref tex);
 		}
 		foreach (var buffer in _buffers)
 			if (buffer >= 0)

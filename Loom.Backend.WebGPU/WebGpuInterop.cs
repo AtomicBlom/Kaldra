@@ -34,7 +34,7 @@ internal static partial class WebGpuInterop
 	public static partial void CreateTextureView(int handle, int textureHandle, int formatId, int baseMip, int mipCount, string label);
 
 	[JSImport("createSampler", Module)]
-	public static partial void CreateSampler(int handle, bool linear, int addressMode, bool compare);
+	public static partial void CreateSampler(int handle, bool linear, int addressMode, int compare);
 
 	[JSImport("createShaderModule", Module)]
 	public static partial void CreateShaderModule(int handle, string wgsl, string label);

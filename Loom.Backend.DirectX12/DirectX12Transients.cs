@@ -33,6 +33,12 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		public DxgiFormat SrvFormat;     // the format to sample it through — R32_FLOAT for depth, == Format for colour
 		public ResourceStates State;
 		public bool IsDepth;
+
+		// A multisampled colour target that a pass samples is resolved into a single-sample resource of its own where
+		// the graph takes it from being drawn to being sampled (DirectX12Engine.Barriers); a sampler reads that one
+		public ComPtr<ID3D12Resource> Resolve;
+		public ResourceStates ResolveState;
+		public readonly bool Resolves => Resolve.Handle is not null;
 	}
 
 	private readonly Target[][] _targets; // [slot][resourceId]
@@ -48,6 +54,7 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 	private readonly bool[] _swapchainSized; // by resourceId — its extent follows the swapchain, so a resize reallocates it
 	private readonly List<ComPtr<ID3D12Heap>> _heaps = []; // per-bucket-per-slot placed-resource heaps
 	private ComPtr<ID3D12DescriptorHeap> _rtvHeap;
+	private readonly HashSet<int> _sampled; // the resources some pass samples: a multisampled one of them is resolved
 	private ComPtr<ID3D12DescriptorHeap> _dsvHeap;
 
 	// `previous` is the instance this one replaces on a window resize (null when building a graph's resources from
@@ -56,6 +63,7 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 	public DirectX12Transients(DirectX12Context ctx, RenderGraph graph, AliasPlan aliasPlan, uint bufferCount, uint swapWidth, uint swapHeight, DirectX12Transients? previous = null)
 	{
 		var count = graph.Resources.Length;
+		_sampled = [.. graph.Passes.SelectMany(p => p.Accesses).Where(a => a.Kind == AccessKind.Sample).Select(a => a.Resource.Id)];
 		_isTransient = new bool[count];
 		_isPersistent = new bool[count];
 		_swapchainSized = new bool[count];
@@ -129,13 +137,15 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 		if (colorCount > 0)
 		{
 			var d = new DescriptorHeapDesc { Type = DescriptorHeapType.Rtv, NumDescriptors = (uint)(bufferCount * colorCount), Flags = DescriptorHeapFlags.None, NodeMask = 0 };
-			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out _rtvHeap));
+			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out ComPtr<ID3D12DescriptorHeap> madeRtvHeap));
+			_rtvHeap = madeRtvHeap;
 			rtvStart = _rtvHeap.GetCPUDescriptorHandleForHeapStart();
 		}
 		if (depthCount > 0)
 		{
 			var d = new DescriptorHeapDesc { Type = DescriptorHeapType.Dsv, NumDescriptors = (uint)(bufferCount * depthCount), Flags = DescriptorHeapFlags.None, NodeMask = 0 };
-			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out _dsvHeap));
+			SilkMarshal.ThrowHResult(ctx.Device.CreateDescriptorHeap(&d, out ComPtr<ID3D12DescriptorHeap> madeDsvHeap));
+			_dsvHeap = madeDsvHeap;
 			dsvStart = _dsvHeap.GetCPUDescriptorHandleForHeapStart();
 		}
 
@@ -202,7 +212,7 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 				{
 					view = new CpuDescriptorHandle { Ptr = dsvStart.Ptr + (nuint)(dsvCursor++ * dsvInc) };
 					// A typeless resource can't infer its DSV format — pass an explicit typed (D32_FLOAT) DSV desc.
-					var dsvDesc = new DepthStencilViewDesc { Format = viewFormat, ViewDimension = DsvDimension.Texture2D };
+					var dsvDesc = new DepthStencilViewDesc { Format = viewFormat, ViewDimension = resource.Domain.Samples > 1 ? DsvDimension.Texture2Dms : DsvDimension.Texture2D };
 					ctx.Device.CreateDepthStencilView(texture, &dsvDesc, view);
 				}
 				else
@@ -211,6 +221,13 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 					ctx.Device.CreateRenderTargetView(texture, (RenderTargetViewDesc*)null, view);
 				}
 				_targets[slot][resource.Id] = new Target { Resource = texture, View = view, Format = viewFormat, SrvFormat = srvFormat, State = ResourceStates.Common, IsDepth = isDepth };
+				if (resource.Domain.Samples > 1 && _sampled.Contains(resource.Id))
+				{
+					if (isDepth)
+						throw new NotSupportedException($"DirectX12: '{resource.Name}' is a multisampled depth target and a pass samples it; only a multisampled colour target is resolved for sampling.");
+					_targets[slot][resource.Id].Resolve = CreateResolve(ctx, resource, desc, slot);
+					_targets[slot][resource.Id].ResolveState = ResourceStates.Common;
+				}
 			}
 		}
 	}
@@ -368,6 +385,27 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 	public DxgiFormat SrvFormat(uint slot, int id) => _targets[SlotOf(slot, id)][id].SrvFormat;
 	public CpuDescriptorHandle View(uint slot, int id) => _targets[SlotOf(slot, id)][id].View;
 	public ComPtr<ID3D12Resource> Resource(uint slot, int id) => _targets[SlotOf(slot, id)][id].Resource;
+
+	/// <summary>What a shader samples for a resource: the single-sample resolve of a multisampled target, else the resource.</summary>
+	public ComPtr<ID3D12Resource> SampledResource(uint slot, int id) =>
+		_targets[SlotOf(slot, id)][id] is { Resolves: true } target ? target.Resolve : _targets[SlotOf(slot, id)][id].Resource;
+
+	public bool Resolves(uint slot, int id) => _targets[SlotOf(slot, id)][id].Resolves;
+	public ComPtr<ID3D12Resource> ResolveOf(uint slot, int id) => _targets[SlotOf(slot, id)][id].Resolve;
+	public ResourceStates ResolveState(uint slot, int id) => _targets[SlotOf(slot, id)][id].ResolveState;
+	public void SetResolveState(uint slot, int id, ResourceStates state) => _targets[SlotOf(slot, id)][id].ResolveState = state;
+
+	// The single-sample resource a multisampled target resolves into: the same size and format, committed, since it
+	// lives as long as the target does and is never drawn into
+	private static ComPtr<ID3D12Resource> CreateResolve(DirectX12Context ctx, ResourceHandle resource, ResourceDesc target, uint slot)
+	{
+		var desc = target with { SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = 1, Quality = 0 }, Flags = ResourceFlags.None };
+		var heapProps = new HeapProperties { Type = HeapType.Default, CPUPageProperty = CpuPageProperty.Unknown, MemoryPoolPreference = MemoryPool.Unknown, CreationNodeMask = 1, VisibleNodeMask = 1 };
+		ComPtr<ID3D12Resource> resolve = default;
+		SilkMarshal.ThrowHResult(ctx.Device.CreateCommittedResource(&heapProps, HeapFlags.None, &desc, ResourceStates.Common, (ClearValue*)null, out resolve));
+		ctx.SetObjectName((ID3D12Object*)resolve.Handle, $"{resource.Name}.resolve#{slot}");
+		return resolve;
+	}
 	public ResourceStates State(uint slot, int id) => _targets[SlotOf(slot, id)][id].State;
 	public void SetState(uint slot, int id, ResourceStates state) => _targets[SlotOf(slot, id)][id].State = state;
 
@@ -387,7 +425,7 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 			DepthOrArraySize = 1,
 			MipLevels = 1,
 			Format = format,
-			SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = 1, Quality = 0 },
+			SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = (uint)resource.Domain.Samples, Quality = 0 },   // the domain's multisample count
 			Layout = TextureLayout.LayoutUnknown,
 			Flags = flags,
 		};
@@ -473,8 +511,12 @@ internal sealed unsafe class DirectX12Transients : IDisposable
 	{
 		foreach (var slot in _targets)
 			foreach (var target in slot)
+			{
 				if (target.Resource.Handle is not null)
 					target.Resource.Dispose();
+				if (target.Resolve.Handle is not null)
+					target.Resolve.Dispose();
+			}
 		foreach (var heap in _heaps)
 			if (heap.Handle is not null)
 				heap.Dispose();
