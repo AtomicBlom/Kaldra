@@ -58,6 +58,14 @@ Beside the engine tiers, all backend-neutral and free of graphics-API references
 | `Loom.Input` | actions, bindings, layered event routing |
 | `Loom.UI.SUIsei` / `Loom.UI.ImGui` | UI bridges; both reach the GPU only through the neutral draw-list verb, so no backend references a UI library |
 
+In the browser, the host (`Loom.Backend.WebGPU/wwwroot/loom-webgpu.js`) keeps from the browser the keys it would also act
+on but which mean nothing to an app being played in its canvas: F1, F3, F7, F9 and F10 (help, find, caret browsing,
+reader view, the menu), Tab (focus leaving the canvas) and a lone Alt. Only while the key's target is the canvas, or the
+page with nothing else focused: in the page's own text fields, buttons and links the browser keeps every key. Shift+Tab
+(the way out of an embedding iframe by keyboard), F6, Shift+F10, F5, F11, F12 and anything with Ctrl or Meta held
+(paste) stay the browser's, and `runLoom({ captureKeys: false })` leaves it every key. The app is sent every key either
+way.
+
 ## Shader pipeline
 
 Shaders are written in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) by the `Loom.Sdk` MSBuild targets at build time. Reflection JSON is emitted alongside each compiled shader; the backend reads it at `DefineTechnique` time to derive descriptor-binding layouts without you specifying them. The Slang-side contract — the platform macros and the binding rules — is [`shader-authoring.md`](shader-authoring.md).

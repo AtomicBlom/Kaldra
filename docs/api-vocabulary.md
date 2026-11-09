@@ -18,7 +18,7 @@ A graph is built once with `RenderGraph.Define(g => { … })` and set on the eng
 | `g.Buffer("name", count, layout)` | The same, sized by a `VertexLayout`'s stride — the spelling for a buffer a compute fills and a draw consumes as its per-instance stream. Naming the layout the technique names lets the draw path reject a stride mismatch. |
 | `g.Buffer("name", byteSize)` | The same as an opaque block of `byteSize` bytes. Declares no element contract, so neither draw-path guard applies — prefer one of the two above. |
 | `g.Constants<T>("name")` | An app-written uniform/constant block of `sizeof(T)` bytes → `ConstantsHandle`. Fill with `engine.Write`. |
-| `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. |
+| `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. A `Constants` or `Storage` buffer is uploaded only into the frame slots behind its last `Write`, so one written once costs nothing per frame however large it is; the last `Write` persists either way. |
 | `g.Persistent("name", format, size=1)` | A screen-sized cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. A window resize reallocates it at the new extent, so its contents are lost (there is no resample) — use `domain.Persistent` on a fixed-size domain for history that must outlive a resize. |
 
 ### Pass access declarations (`PassBuilder`, all chainable)
@@ -34,8 +34,8 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `.ReadWrites(params IStorageHandle[])` | Read-modify-write storage images or buffers (compute UAV). |
 | `.ReadsVertex(BufferHandle)` | Bind a buffer as a vertex / instance stream (a compute pass filled it). |
 | `.ReadsIndirect(BufferHandle)` | Bind a buffer as draw arguments — the counts the command processor reads instead of the CPU supplying them. |
-| `.Reads(IUniformHandle)` | Read a `g.Constants` block as the technique's uniform input. |
-| `.Reads(IStorageBufferHandle)` | Read a `g.Storage` SSBO read-only (an overload of `.Reads`). |
+| `.Reads(IUniformHandle)` | Read a `g.Constants` block as the technique's uniform input, in a raster pass or a compute pass alike: a technique's constant buffers take the pass's blocks in the order read, and a compute technique declaring more than its pass reads throws at dispatch. |
+| `.Reads(IStorageBufferHandle)` | Read a `g.Storage` SSBO read-only (an overload of `.Reads`). Bound to every draw in the pass, mesh or fullscreen, **by position**: a technique's first storage buffer takes the first the pass reads, its second the second, and so on, as many as it declares (vertex or fragment stage) — never by name. So a technique that reads only some of a pass's storage buffers must declare them in the order the pass reads them, from its first: one that declares only the pass's second gets its first. Where the element sizes show it (a slot's reflected element against the buffer's `sizeof(T)`, packed or padded to its std430 alignment), that throws at the draw, naming both; one declaring more than the pass reads throws too. A material draw whose technique reads storage throws, on every backend. In a compute pass the technique's read-only storage buffers (`StructuredBuffer<T>`) take them by the same rule, and its read-write ones the dispatch's own storage; one declaring more read-only buffers than its pass reads, or more read-write ones than the dispatch supplies, throws at dispatch. A read-only slot binds only the pass's `.Reads` storage, so a GPU-produced `g.Buffer` a dispatch supplies must be declared `RWStructuredBuffer` in the shader even when it is only read. |
 | `.Queue(Queue)` | Assign the pass to a queue (see `Queue` below). |
 | `.Draw(Action<IRenderContext>)` / `.Dispatch(Action<IRenderContext>)` | The per-frame record callback (raster / compute). Pull from `ctx`; never capture per-frame data. |
 
@@ -47,7 +47,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 |---|---|
 | `g.Backbuffer` | The swapchain colour target (`ColorHandle`) — *is* the present surface. Hand it to `.Writes`/`.Blends` and `g.Present`. |
 | `g.Screen` | The native-resolution `Domain` (alias for `g.Backbuffer.Domain`); declare full-res sibling targets here. |
-| `g.Domain("name", width, height, samples=1)` | A fixed-size `Domain` (a constant-size pixel-art world); `samples` is the MSAA count (power of two). |
+| `g.Domain("name", width, height, samples=1)` | A fixed-size `Domain` (a constant-size pixel-art world); `samples` is the MSAA count (power of two, within `Capabilities.SampleCounts`: WebGPU has 1 and 4). Every target in a multisampled domain is multisampled, and so is every pipeline drawing into it. A pass that `.Samples` a multisampled colour target reads its *resolve*: the engine resolves it into a single-sample image of its own wherever the graph takes it from being drawn to being sampled, so nothing in the graph names the resolve. Anything else is refused when the graph is derived, the same on every backend: sampling a multisampled depth target, `.ReadWrites` on a multisampled target (a storage image is single-sample), `g.Readback` or `g.Present` of one, and a `Persistent` target in a multisampled domain. Group-opacity UI layers drawn in a multisampled pass render single-sample and composite back at the pass's count. |
 | `g.Domain("name", scale, samples=1)` | A backbuffer-relative `Domain` — `scale × native`, re-resolved on resize (e.g. `0.5f` for half-res). |
 | `domain.Color("name", format, clearValue?=null, noClear?=false)` | A colour target in this domain → `ColorHandle`. `noClear: true` skips the clear (only when the first pass covers every pixel). |
 | `domain.Color("name", format, scale, …)` | A colour target at a fraction of the domain's resolution (mip chains, bloom pyramid). |
@@ -157,9 +157,12 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 | `CreateMesh<T>(ReadOnlySpan<T>, VertexLayout, ReadOnlySpan<uint>)` | Upload geometry with an explicit layout (`sizeof(T) == layout.Stride`). |
 | `CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex>, ReadOnlySpan<uint>)` | Upload a skinned bind-pose mesh (readable by the compute pre-skin) → `Mesh`. |
 | `ReleaseMesh(Mesh)` | Kill a mesh's handle at once; its buffers are freed once no frame in flight can read them. Between frames only. |
+| `CreateInstances<T>(span, layout)` | Upload per-instance data once, to GPU-resident memory, for draws to take ranges of (`DrawCall.Static`): instances that don't change from frame to frame, which a CPU span would upload every frame. `sizeof(T)` must be the layout's stride. |
+| `ReleaseInstances(InstanceBuffer)` | Free one, under `ReleaseMesh`'s rules. |
 | `CreateTexture(TextureData)` | Upload an image + mip chain → `Texture`. Between frames only: an upload made inside a pass would miss the frame that samples it, so it throws there. |
 | `CreateTextureAsync(TextureData)` | Queue an upload from any thread; completes when `ServicePendingUploads` (called by `Render`) drains it. |
 | `ReleaseTexture(Texture)` | Kill a texture's handle at once; its image is destroyed once no frame in flight can read it. Throws for a texture a `Material` holds, and inside a pass. |
+| `UpdateTexture(Texture, ReadOnlySpan<byte>)` | Write a whole new image into a texture in place, ahead of the next frame; frames in flight keep what they had. The handle, materials and bindings stay, and nothing allocates after a texture's first update. One mip level and one layer only, texels exactly its size; between frames only. |
 | `CreateMaterial(params ReadOnlySpan<Texture>)` | Bundle textures (in the shader's binding order) → `Material`. A material holds its textures for the engine's lifetime. |
 | `AllocateDrawListStream()` | Mint an engine-unique stream id for a stable `DrawListIdentity`, so draw-list producers never share kept geometry. |
 | `SetGraph(RenderGraph)` | Make a graph active — derive its schedule/barriers/aliasing, reusing device + pipeline cache. Safe to call again to swap graphs. |
@@ -180,6 +183,7 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 |---|---|
 | `Time` / `DeltaTime` | Elapsed seconds since startup / since the previous frame. |
 | `HdrOutput` | `true` when the engine negotiated an HDR display output. |
+| `Frame` | The frame being recorded: 0 for the engine's first `Render`, one more for each after, the same in every pass of a frame. |
 | `FullScreen(technique, params ReadOnlySpan<ResourceHandle> inputs)` | Draw a fullscreen triangle, binding `inputs` as the technique's sampled inputs 0..N-1. |
 | `FullScreen(technique, ReadOnlySpan<float> push, params ReadOnlySpan<ResourceHandle> inputs)` | As above, plus a small inline fragment-stage scalar block. |
 | `Dispatch(technique, (uint X, uint Y, uint Z) groups, ReadOnlySpan<float> push, ReadOnlySpan<ResourceHandle> sampled, ReadOnlySpan<ResourceHandle> storage)` | Dispatch a compute technique over a workgroup grid. |
@@ -229,6 +233,8 @@ engine.DefineTechnique("foliage", new TechniqueDescriptor("foliage",
 | `Cull` (`CullMode.None`) | Which faces the rasterizer discards — front faces are counter-clockwise. |
 | `DepthTest` (`DepthCompare.LessOrEqual`) | The depth comparison a fragment must pass, when the pass has a depth target. |
 | `Bias` (`null`) | A constant + slope-scaled depth offset (`DepthBias`) — the shadow-acne knob. |
+| `AlphaToCoverage` (`false`) | In a multisampled pass, the fragment's alpha decides how many of its samples it covers, so a cut-out (a leaf, a fence's wire) is edged as smoothly as geometry rather than stepped by a discard. How alpha becomes a sample mask is the driver's choice and differs between APIs on one GPU, so such edges aren't at pixel parity across backends. No effect in a pass of one sample. |
+| `SampleCompare` (`null`) | The compare function of the shader's comparison samplers: a `Sampler2DShadow` read with `SampleCmp` passes where `reference [compare] stored` (a reversed-depth shadow map takes `GreaterOrEqual`). Which inputs compare is found in the shader (its SPIR-V's depth-comparison samples; WebGPU's `sampler_comparison`); they get a filtered (2×2 PCF), edge-clamped comparison sampler and the rest keep `LinearFilter`'s. A shader that compares without it, or a technique naming it whose shader doesn't, throws at `DefineTechnique`, as does a comparison the SPIR-V can't trace to its texture (one through a local, a phi or a function parameter). The compared texture is a depth target the pass `.Samples`: a material's textures are colour formats, which no backend compares, so a material for a comparing technique throws at `CreateMaterial` or at the draw, and so does a draw-list technique naming `SampleCompare`. |
 
 Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) with reflection JSON. The Slang-side half of the contract — the platform macros, the two independent numbering schemes, and where a push block actually lands — is [`shader-authoring.md`](shader-authoring.md).
 
@@ -274,16 +280,18 @@ Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projec
 | `Sampled` (`ReadOnlySpan<ResourceHandle>`) | Graph resources bound as sampled inputs (each declared via `.Samples`). |
 | `DrawCall.From<T>(ReadOnlySpan<T>)` | Build an `InstanceSource` from a CPU instance span (uploaded per frame). |
 | `DrawCall.Gpu(BufferHandle, count)` | Build an `InstanceSource` from a GPU-resident buffer a compute pass filled. |
+| `DrawCall.Static(InstanceBuffer, first, count)` | Build an `InstanceSource` from a range of instances uploaded once (`IEngine.CreateInstances`); nothing is uploaded per frame. The range is checked against the buffer, and the technique's instance stride against its stride. |
 | `DrawCall.Indirect(BufferHandle, byteOffset)` | Build an `InstanceSource` whose counts come from a buffer (declared `.ReadsIndirect`); `Indices` is ignored — the range comes from the buffer. |
 | `DrawCall.Range(firstIndex, indexCount, baseVertex)` | Build an `IndexRange`, so one mesh can hold several primitives. |
 
-`InstanceSource` (a nested `ref struct`) exposes `IsEmpty` and `Count`; construct it only via `DrawCall.From` / `DrawCall.Gpu` / `DrawCall.Indirect`. An indirect draw has no CPU-known `Count` — it reports zero, because only the GPU knows. Skinning is `ctx.DispatchSkin(...)` (a compute pre-skin into a `.ReadsVertex` buffer) followed by an ordinary `ctx.Draw` of that buffer.
+`InstanceSource` (a nested `ref struct`) exposes `IsEmpty` and `Count`; construct it only via `DrawCall.From` / `DrawCall.Gpu` / `DrawCall.Static` / `DrawCall.Indirect`. An indirect draw has no CPU-known `Count` — it reports zero, because only the GPU knows. Skinning is `ctx.DispatchSkin(...)` (a compute pre-skin into a `.ReadsVertex` buffer) followed by an ordinary `ctx.Draw` of that buffer.
 
 ## Geometry & materials
 
 | Type (`namespace`) | Role |
 |---|---|
 | `Mesh` (`Loom.Core.Geometry`) | An opaque handle to uploaded geometry from `IEngine.CreateMesh` / `CreateSkinnedMesh`. Survives graph swaps; dies at `IEngine.ReleaseMesh`. |
+| `InstanceBuffer` (`Loom.Core.Geometry`) | A handle to instances uploaded once by `IEngine.CreateInstances`: its count and stride, stored as a mesh is. Dies at `IEngine.ReleaseInstances`. |
 | `Vertex` (`Loom.Core.Geometry`) | The canonical interleaved vertex — `record struct (Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Tangent)`, 48 bytes. |
 | `SkinnedVertex` (`Loom.Core.Animation`) | The skinned bind-pose vertex — `Vertex` fields plus four bone indices (`Joint0..3`) + `Vector4 Weights`, 80 bytes. |
 | `OverlayVertex` (`Loom.Core.Geometry`) | The 2D overlay vertex (position, uv, premultiplied RGBA16F colour, custom) used by draw lists. |
@@ -336,7 +344,7 @@ The UI libraries reach the GPU only through `DrawList`; each bridge is a stable 
 
 | Type (`namespace`) | Role |
 |---|---|
-| `UIPainter` (`Loom.UI.SUIsei`) | `UIPainter.Create(engine, host)` registers the `ui` technique and returns the painter for a SUIsei `UIHost`. Call `Prepare()` once per frame after the host composites and before `engine.Render`: it uploads the images the frame's slot tables newly name, replaces a source whose pixels changed and releases one nothing references any more (after the frames in flight, through `IEngine.ReleaseTexture`). `Draw(ctx, surface)` inside a pass only binds and submits, and throws if `Prepare` did not run since that surface's last draw. `SetExternalTexture(tag, ITextureHandle)` binds a graph texture to every SUIsei `HostImageSource` with that tag; the UI pass declares it with `.Samples`, and a tag with no texture, or a colour space its format does not decode, fails `Prepare`. A source uploads as `Rgba8Srgb` or `Rgba8Unorm` by its colour space, and a straight-alpha one is premultiplied after filtering, as SUIsei's rasterizer does. Textures the host reports released (`UIHost.ReleasedTextures`) are released in `Prepare`; a `WriteableBitmap`'s texture is replaced on each `Invalidate`. |
+| `UIPainter` (`Loom.UI.SUIsei`) | `UIPainter.Create(engine, host)` registers the `ui` technique and returns the painter for a SUIsei `UIHost`. Call `Prepare()` once per frame after the host composites and before `engine.Render`: it uploads the images the frame's slot tables newly name, writes the new pixels of a source whose pixels changed into its texture in place (`IEngine.UpdateTexture`) and releases one nothing references any more (after the frames in flight, through `IEngine.ReleaseTexture`). `Draw(ctx, surface)` inside a pass only binds and submits, as many times in the frame as it likes, and throws if `Prepare` did not run before the frame. `SetExternalTexture(tag, ITextureHandle)` binds a graph texture to every SUIsei `HostImageSource` with that tag; the UI pass declares it with `.Samples`, and a tag with no texture, or a colour space its format does not decode, fails `Prepare`. A source uploads as `Rgba8Srgb` or `Rgba8Unorm` by its colour space, and a straight-alpha one is premultiplied after filtering, as SUIsei's rasterizer does. Textures the host reports released (`UIHost.ReleasedTextures`) are released in `Prepare`; a `WriteableBitmap`'s texture is updated in place on each `Invalidate`. |
 | `InWorldPanel` (`Loom.UI.SUIsei`) | A SUIsei surface rendered into its own texture and placed in the world: `Create(engine, width, height, worldTransform, billboard, layoutScale)`, then per frame `QueueScreenPointer`, `Tick`, `Render` (composite + prepare) and `Draw(ctx)` in the pass that renders the panel's target. |
 | `ImGuiPainter` (`Loom.UI.ImGui`) | `ImGuiPainter.Create(engine)` registers the `imgui` technique and uploads the font atlas; `Draw(ctx)` submits the frame's Dear ImGui draw data, plus the resource viewer's thumbnails (`SetThumbnails`, through `ResolveInspectable`) and debug lines (`SetDebugLines`). Desktop only. |
 

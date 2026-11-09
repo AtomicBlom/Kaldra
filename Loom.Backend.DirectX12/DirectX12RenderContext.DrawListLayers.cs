@@ -18,7 +18,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 		_validate.DrawList(technique, identity, textures);
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
-		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		var baked = _techniques.GetOrBake(technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly, _samples);
+		var drawing = baked; // the pipeline drawing now: the pass's, or inside a layer the layer target's
 		BindGraphicsState(baked);
 		// The list brings its own geometry, so whatever mesh the store thought was bound no longer is.
 		_meshes.ResetBindings();
@@ -92,6 +93,10 @@ internal sealed unsafe partial class DirectX12RenderContext
 				// of tiles.
 				var clearRect = ToBox(walker.LayerArea);
 				_cmd.ClearRenderTargetView(rtv, layerClear, 1u, &clearRect);
+				// The layer target is one single-sample render target with no depth, however the pass's are made, and a
+				// pipeline state must be made for the targets it draws into.
+				drawing = BakeLayer(technique);
+				BindGraphicsState(drawing);
 				continue;
 			}
 
@@ -112,7 +117,10 @@ internal sealed unsafe partial class DirectX12RenderContext
 						_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
 				}
 
-				CompositeLayer(baked, closed.Resource, walker.Tint, block, pushLen, walker.Bounds, surfaceWidth, surfaceHeight);
+				// Composited, and drawn on, by the parent's pipeline state: a nested layer's parent is a layer target too
+				drawing = walker.Depth > 0 ? BakeLayer(technique) : baked;
+				BindGraphicsState(drawing);
+				CompositeLayer(drawing, closed.Resource, walker.Tint, block, pushLen, walker.Bounds, surfaceWidth, surfaceHeight);
 
 				// Restore the list's geometry for the following commands — the composite bound its own quad buffer.
 				_cmd.IASetVertexBuffers(0, 1, &vbv);
@@ -121,11 +129,11 @@ internal sealed unsafe partial class DirectX12RenderContext
 			}
 
 			*(uint*)(block + pushLen) = walker.Tag;
-			if (baked.RootConstantParam >= 0)
-				_cmd.SetGraphicsRoot32BitConstants((uint)baked.RootConstantParam, (uint)(pushLen + 1), block, 0);
+			if (drawing.RootConstantParam >= 0)
+				_cmd.SetGraphicsRoot32BitConstants((uint)drawing.RootConstantParam, (uint)(pushLen + 1), block, 0);
 
 			// Write the bound texture's SRV (real format + full mip chain) into a fresh ring slot, then bind the table.
-			if (baked.TableParam >= 0)
+			if (drawing.TableParam >= 0)
 			{
 				if (walker.TextureChanged)
 				{
@@ -133,7 +141,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 					WriteListTextureSrv(walker.TextureId, cpu);
 					listTable = gpu;
 				}
-				_cmd.SetGraphicsRootDescriptorTable((uint)baked.TableParam, listTable);
+				_cmd.SetGraphicsRootDescriptorTable((uint)drawing.TableParam, listTable);
 			}
 
 			var scissor = ToBox(walker.Scissor);
@@ -152,8 +160,14 @@ internal sealed unsafe partial class DirectX12RenderContext
 			while (walker.TryUnwind(out _)) { }
 			fixed (CpuDescriptorHandle* pRtv = _scopeRtvs)
 				_cmd.OMSetRenderTargets((uint)_scopeRtvCount, pRtv, false, (CpuDescriptorHandle*)null);
+			BindGraphicsState(baked);
 		}
 	}
+
+	// The technique baked for a draw list's group-opacity layer target rather than the pass: its one render target in the
+	// pass's first format, no depth, and one sample, whatever the pass has.
+	private DirectX12Technique BakeLayer(string technique) =>
+		_techniques.GetOrBake(technique, _colorFormats.AsSpan(0, 1), DxgiFormat.FormatUnknown, depthReadOnly: false, samples: 1);
 
 	// Set once a list has nested layers past the cap, so the diagnostic is one line per context rather than per frame.
 	private bool _warnedLayerNesting;

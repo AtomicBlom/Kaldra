@@ -97,7 +97,7 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 	/// <summary>
 	/// Upload a skinned mesh's bind-pose vertices — like the byte-stride <see cref="Create(ReadOnlySpan{byte}, int, ReadOnlySpan{uint})"/>,
 	/// but the vertex buffer also carries <see cref="BufferUsageFlags.StorageBufferBit"/> so the compute pre-skin
-	/// pass can read it as a structured buffer (<see cref="BindPoseBuffer"/>). The vertex count is recorded for the
+	/// pass can read it as a structured buffer (<see cref="VertexBuffer"/>). The vertex count is recorded for the
 	/// dispatch's thread count.
 	/// </summary>
 	public Mesh CreateSkinned(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices)
@@ -118,8 +118,11 @@ internal sealed unsafe class VulkanMeshStore : IDisposable
 		return new Mesh(_meshes.Count);
 	}
 
-	/// <summary>The skinned mesh's bind-pose vertex buffer, for the compute pre-skin pass to read as a structured buffer.</summary>
-	public Buffer BindPoseBuffer(int meshId) => _meshes[Slot(meshId)].VertexBuffer;
+	/// <summary>
+	/// A stored mesh's vertex buffer: a skinned mesh's bind pose, read by the compute pre-skin pass as a structured buffer, or a
+	/// static instance buffer's instances, bound as a draw's per-instance stream.
+	/// </summary>
+	public Buffer VertexBuffer(int meshId) => _meshes[Slot(meshId)].VertexBuffer;
 
 	/// <summary>The skinned mesh's bind-pose vertex count — the pre-skin dispatch's thread count.</summary>
 	public uint VertexCount(int meshId) => _meshes[Slot(meshId)].VertexCount;

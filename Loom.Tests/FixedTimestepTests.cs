@@ -131,6 +131,8 @@ public class FixedTimestepTests
 		public Mesh CreateSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => throw new NotSupportedException();
 
 		public void ReleaseMesh(Mesh mesh) => throw new NotSupportedException();
+		public InstanceBuffer CreateInstances<T>(ReadOnlySpan<T> instances, VertexLayout layout) where T : unmanaged => throw new NotSupportedException();
+		public void ReleaseInstances(InstanceBuffer instances) => throw new NotSupportedException();
 
 		public Task<Mesh> CreateSkinnedMeshAsync(SkinnedVertex[] vertices, uint[] indices) => throw new NotSupportedException();
 		public Texture CreateTexture(TextureData data) => throw new NotSupportedException();
@@ -145,6 +147,8 @@ public class FixedTimestepTests
 		public MaterialLayout MaterialLayoutOf(string technique) => throw new NotSupportedException();
 
 		public void ReleaseTexture(Texture texture) => throw new NotSupportedException();
+
+		public void UpdateTexture(Texture texture, ReadOnlySpan<byte> texels) => throw new NotSupportedException();
 
 		public int AllocateDrawListStream() => throw new NotSupportedException();
 

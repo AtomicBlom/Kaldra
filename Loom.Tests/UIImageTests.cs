@@ -188,9 +188,10 @@ public class UIImageTests
 					engine.Render(Inputs); // a capture lands once its frame retires
 
 					var texture = painter.ResidentTexture(bitmap).ShouldNotBeNull();
-					texture.ShouldNotBe(previous ?? default, $"{backend.Name}: frame {frame}'s texels should be a new upload");
+					if (previous is { } first)
+						texture.ShouldBe(first, $"{backend.Name}: frame {frame}'s texels should be written into the bitmap's one texture");
 					previous = texture;
-					painter.ResidentSourceCount.ShouldBe(2, $"{backend.Name}: white and the bitmap, the replaced texture released");
+					painter.ResidentSourceCount.ShouldBe(2, $"{backend.Name}: white and the bitmap");
 
 					var (w, _, rgba) = PngReader.Read(path);
 					var i = (16 * w + 16) * 4;
@@ -205,17 +206,14 @@ public class UIImageTests
 	}
 
 	/// <summary>
-	/// A bitmap rewritten every frame costs the managed heap only the copy of its texels that each replacement uploads.
-	/// SUIsei's invalidate and composite allocate nothing, and the engine's frame allocates nothing; <see cref="UIPainter.Prepare"/>
-	/// replaces the texture, and the upload copies the texels into a new <see cref="TextureData"/> each time (plus a few
-	/// hundred bytes of the engine's per-texture bookkeeping). Updating a texture in place is the labelled gap that would
-	/// take that to zero; until then this pins everything else at zero and the replacement at its texels.
+	/// A bitmap rewritten every frame allocates nothing. SUIsei's invalidate and composite allocate nothing, the engine's
+	/// frame allocates nothing, and <see cref="UIPainter.Prepare"/> writes the new texels into the bitmap's one texture
+	/// through <see cref="IEngine.UpdateTexture"/>, whose staging buffer the backend made at the first update.
 	/// </summary>
 	[Test]
-	public void A_WriteableBitmap_rewritten_every_frame_allocates_only_the_copy_of_its_texels()
+	public void A_WriteableBitmap_rewritten_every_frame_allocates_nothing()
 	{
 		const int WarmupFrames = 20, MeasuredFrames = 30, Side = 64;
-		const long TexelBytes = Side * Side * 4, Bookkeeping = 1024;
 		foreach (var backend in AvailableBackends())
 		{
 			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
@@ -252,9 +250,8 @@ public class UIImageTests
 			}
 
 			hostBytes.ShouldBe(0L, $"{backend.Name}: invalidating and compositing the bitmap allocated {hostBytes} bytes over {MeasuredFrames} frames.");
+			prepareBytes.ShouldBe(0L, $"{backend.Name}: updating the bitmap's texture allocated {prepareBytes} bytes over {MeasuredFrames} frames.");
 			renderBytes.ShouldBe(0L, $"{backend.Name}: the frame drawing the bitmap allocated {renderBytes} bytes over {MeasuredFrames} frames.");
-			(prepareBytes / MeasuredFrames).ShouldBeLessThanOrEqualTo(TexelBytes + Bookkeeping,
-				$"{backend.Name}: replacing the bitmap's texture allocated {prepareBytes / MeasuredFrames} bytes a frame, more than the copy of its {TexelBytes} bytes of texels.");
 		}
 	}
 

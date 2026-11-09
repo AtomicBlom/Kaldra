@@ -20,6 +20,10 @@ internal unsafe interface IDirectX12PresentTarget : IDisposable
 	/// <summary>The format the backbuffer RTV is created with (the sRGB-encoding view over <see cref="Format"/>).</summary>
 	Format RenderTargetFormat { get; }
 
+	/// <summary>True when the target presents HDR (scRGB: half floats, linear, 1.0 = 80 nits) — asked for with
+	/// <c>EngineSettings.HdrOutput</c> and granted by the display. What a frame's <c>IRenderContext.HdrOutput</c> reports.</summary>
+	bool HdrActive { get; }
+
 	/// <summary>The render targets' pixel width.</summary>
 	uint Width { get; }
 

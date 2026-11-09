@@ -142,6 +142,28 @@ public ref struct DrawCall
 	}
 
 	/// <summary>
+	/// Draw <paramref name="count"/> instances of <paramref name="buffer"/> starting at <paramref name="first"/> — a range
+	/// of instances uploaded once (<see cref="IEngine.CreateInstances{T}"/>), so nothing is uploaded for this draw. The
+	/// technique's per-instance layout must have the buffer's stride. The range is checked against what the buffer holds:
+	/// a draw past its end would read whatever lies beyond, which no backend reports.
+	/// </summary>
+	public static InstanceSource Static(InstanceBuffer buffer, int first, int count)
+	{
+		ArgumentOutOfRangeException.ThrowIfNegative(first);
+		ArgumentOutOfRangeException.ThrowIfNegative(count);
+		// Subtracted rather than summed, so a first and a count each in range can't overflow past the check
+		if (first > buffer.Count || count > buffer.Count - first)
+		{
+			throw new ArgumentOutOfRangeException(nameof(count),
+				$"Draw asks for instances {first}..{(long)first + count} of an instance buffer that holds {buffer.Count}.");
+		}
+		return InstanceSource.FromStatic(buffer, first, count);
+	}
+
+	/// <summary>Every instance of <paramref name="buffer"/>; see <see cref="Static(InstanceBuffer, int, int)"/>.</summary>
+	public static InstanceSource Static(InstanceBuffer buffer) => Static(buffer, 0, buffer.Count);
+
+	/// <summary>
 	/// Take the draw's counts from <paramref name="buffer"/> at <paramref name="byteOffset"/> instead of from the
 	/// CPU — five 32-bit values (index count, instance count, first index, base vertex, first instance), the layout
 	/// every graphics API uses for an indexed indirect draw. The buffer must be declared <c>.ReadsIndirect</c> by
@@ -207,8 +229,14 @@ public ref struct DrawCall
 		/// <summary>Byte offset of the argument block within <see cref="IndirectBuffer"/>.</summary>
 		public int IndirectOffset { get; private set; }
 
+		/// <summary>Instances uploaded once (null otherwise). Set by <see cref="DrawCall.Static(InstanceBuffer, int, int)"/>.</summary>
+		public InstanceBuffer? StaticBuffer { get; private set; }
+
+		/// <summary>The first of <see cref="StaticBuffer"/>'s instances this draw reads.</summary>
+		public int StaticFirst { get; private set; }
+
 		/// <summary><c>true</c> when no instance data is set — the draw executes once.</summary>
-		public bool IsEmpty => CpuData.IsEmpty && GpuBuffer is null && IndirectBuffer is null;
+		public bool IsEmpty => CpuData.IsEmpty && GpuBuffer is null && IndirectBuffer is null && StaticBuffer is null;
 
 		/// <summary>Total instance count: CPU data bytes / stride, or the explicit GPU count. Zero for an indirect
 		/// draw, whose count only the GPU knows.</summary>
@@ -216,6 +244,8 @@ public ref struct DrawCall
 
 		internal static InstanceSource Cpu(ReadOnlySpan<byte> data, int stride) => new() { CpuData = data, Stride = stride };
 		internal static InstanceSource FromGpu(BufferHandle buffer, int count) => new() { GpuBuffer = buffer, _gpuCount = count };
+		internal static InstanceSource FromStatic(InstanceBuffer buffer, int first, int count) =>
+			new() { StaticBuffer = buffer, StaticFirst = first, _gpuCount = count, Stride = buffer.Stride };
 		internal static InstanceSource FromIndirect(BufferHandle buffer, int byteOffset) =>
 			new() { IndirectBuffer = buffer, IndirectOffset = byteOffset };
 	}

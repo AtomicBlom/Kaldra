@@ -27,10 +27,10 @@ internal sealed class WebGpuTechnique : IDisposable
 	private WebGpuTechnique(WebGpuHandleAllocator handles) => _handles = handles;
 
 	/// <summary>Bake the render pipeline for a technique against a pass's attachment formats.</summary>
-	public static WebGpuTechnique Bake(WebGpuHandleAllocator handles, WebGpuTechniqueTemplate template, string name, ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthWrite)
+	public static WebGpuTechnique Bake(WebGpuHandleAllocator handles, WebGpuTechniqueTemplate template, string name, ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthWrite, int samples = 1)
 	{
 		var pipeline = handles.Allocate(WebGpuHandleAllocator.RenderPipelines);
-		var json = BuildDescriptor(template, name, colorFormatIds, depthFormatId, depthWrite);
+		var json = BuildDescriptor(template, name, colorFormatIds, depthFormatId, depthWrite, samples);
 		WebGpuInterop.CreateRenderPipeline(pipeline, json);
 		return new WebGpuTechnique(handles) { Pipeline = pipeline, Template = template, IsCompute = false };
 	}
@@ -44,7 +44,7 @@ internal sealed class WebGpuTechnique : IDisposable
 	}
 
 	// depthFormatId < 0 means the pass has no depth attachment.
-	private static string BuildDescriptor(WebGpuTechniqueTemplate template, string name, ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthWrite)
+	private static string BuildDescriptor(WebGpuTechniqueTemplate template, string name, ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthWrite, int samples)
 	{
 		var sb = new StringBuilder(512);
 		sb.Append('{');
@@ -88,6 +88,10 @@ internal sealed class WebGpuTechnique : IDisposable
 		{
 			sb.Append("null");
 		}
+
+		// The pass's multisample count, and whether alpha decides the samples a fragment covers
+		sb.Append(",\"multisample\":{\"count\":").Append(samples)
+			.Append(",\"alphaToCoverage\":").Append(template.AlphaToCoverage && samples > 1 ? "true" : "false").Append('}');
 
 		sb.Append('}');
 		return sb.ToString();

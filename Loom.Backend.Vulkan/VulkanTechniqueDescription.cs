@@ -12,7 +12,8 @@ namespace Loom.Backend.Vulkan;
 /// <para>
 /// <see cref="ColorFormats"/> are filled in at record time from the formats of the targets the pass writes,
 /// in attachment order (dynamic rendering requires the pipeline's attachment formats to match; a g-buffer
-/// pass has several), so one shader baked against different targets yields different cached pipelines.
+/// pass has several), so one shader baked against different targets yields different cached pipelines. So is
+/// <see cref="Samples"/>, the pass's multisample count, which the pipeline's rasterizer must match.
 /// <see cref="Bindings"/> is the descriptor set layout: each entry carries the slot the shader declared, its kind,
 /// and how many slots it spans, so the layout is what the shader asked for rather than a category order the author
 /// had to hand-number to match.
@@ -39,7 +40,9 @@ public readonly record struct VulkanTechniqueDescription(
 	bool HasListPush = false,
 	CullMode Cull = CullMode.None,
 	DepthCompare DepthTest = DepthCompare.LessOrEqual,
-	DepthBias? Bias = null)
+	DepthBias? Bias = null,
+	int Samples = 1,
+	bool AlphaToCoverage = false)
 {
 	/// <summary>Sampled inputs the shader reads, bound as combined image samplers.</summary>
 	public int SampleCount => Bindings.SampledTextures.Length;

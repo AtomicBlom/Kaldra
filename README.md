@@ -154,9 +154,11 @@ _image = engine.CreateTexture(TextureData.FromRgba8(w, h, pixels, TextureFormat.
 engine.ReleaseTexture(previous); // safe while frames that sampled it are still in flight
 ```
 
+An image whose content changes but whose size and format don't (a bitmap redrawn every frame, a video frame) is better updated in place: `engine.UpdateTexture(texture, texels)` writes the whole image into the texture it already is, ahead of the next frame, while the frames in flight keep sampling what they had. The handle, every material holding it and every cached binding stay, and after a texture's first update nothing allocates: the backend keeps one staging buffer for it. Only a texture of one mip level and one layer can be updated (create it with `generateMips: false`), and the texels must be exactly its size.
+
 Two rules keep this honest:
-- **Create and release between frames, never inside a pass.** A pass callback runs while the frame's commands are recorded; an upload made there only reaches the GPU ahead of the *next* frame, and a release could free what this frame already draws with. Both throw when called from a pass on the render thread (the `*Async` creators stay callable from other threads at any time). A producer that discovers what it needs while drawing resolves it in a step of its own before `engine.Render` — see `UIPainter.Prepare` below.
-- **A texture a `Material` holds cannot be released.** A material keeps its textures for as long as it lives — the engine's lifetime — so `ReleaseTexture` throws and names the material. Sample a texture you mean to replace through a draw list.
+- **Create, update and release between frames, never inside a pass.** A pass callback runs while the frame's commands are recorded; an upload made there only reaches the GPU ahead of the *next* frame, and a release could free what this frame already draws with. All three throw when called from a pass on the render thread (the `*Async` creators stay callable from other threads at any time). A producer that discovers what it needs while drawing resolves it in a step of its own before `engine.Render` — see `UIPainter.Prepare` below.
+- **A texture a `Material` holds cannot be released.** A material keeps its textures for as long as it lives — the engine's lifetime — so `ReleaseTexture` throws and names the material. Sample a texture you mean to replace through a draw list, or update it in place.
 
 ### Draw a game UI
 
@@ -203,7 +205,7 @@ panel.Textures[1] = map;                                   // TextureRef[], rewr
 g.Pass("minimap").Samples(map).Blends(screen).Draw(panel, static (ctx, p) => p.Draw(ctx));
 ```
 
-A SUIsei page shows one the same way: a `HostImageSource` names it by tag, `UIPainter.SetExternalTexture(tag, handle)` binds the tag to the graph texture, and the pass that draws the UI declares it with `.Samples`. The gallery's *UI Live Texture* demo shows a minimap this way, beside a `WriteableBitmap` it redraws on the CPU every frame. The painter replaces that bitmap's texture on each change and releases the old one past the frames in flight; updating a texture in place is a labelled gap. Images read as their sources declare — sRGB decoded before filtering, straight alpha premultiplied after it — exactly as SUIsei's software rasterizer reads them. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
+A SUIsei page shows one the same way: a `HostImageSource` names it by tag, `UIPainter.SetExternalTexture(tag, handle)` binds the tag to the graph texture, and the pass that draws the UI declares it with `.Samples`. The gallery's *UI Live Texture* demo shows a minimap this way, beside a `WriteableBitmap` it redraws on the CPU every frame. The painter writes each change into that bitmap's one texture in place (`engine.UpdateTexture`), so redrawing it every frame allocates nothing. Images read as their sources declare — sRGB decoded before filtering, straight alpha premultiplied after it — exactly as SUIsei's software rasterizer reads them. See [`Loom.UI.SUIsei/README.md`](Loom.UI.SUIsei/README.md).
 
 ### Build & run
 

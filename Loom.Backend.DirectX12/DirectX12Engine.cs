@@ -108,21 +108,24 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		_ctx = ctx;
 		_presentTarget = offscreen
 			? new DirectX12OffscreenTarget(_ctx, width, height, BufferCount)
-			: new DirectX12Swapchain(_ctx, hwnd, width, height, BufferCount);
+			: new DirectX12Swapchain(_ctx, hwnd, width, height, BufferCount, settings.HdrOutput);
 
 		for (uint i = 0; i < BufferCount; i++)
 		{
-			SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandAllocator(CommandListType.Direct, out _allocators[i]));
+			SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandAllocator(CommandListType.Direct, out ComPtr<ID3D12CommandAllocator> madeAllocator));
+			_allocators[i] = madeAllocator;
 			_ctx.SetObjectName((ID3D12Object*)_allocators[i].Handle, $"frame-alloc#{i}");
 		}
 
 		// Created in the recording state, then immediately closed — Render() resets it at the top of each frame.
 		SilkMarshal.ThrowHResult(_ctx.Device.CreateCommandList(
-			0, CommandListType.Direct, _allocators[0], default(ComPtr<ID3D12PipelineState>), out _commandList));
+			0, CommandListType.Direct, _allocators[0], default(ComPtr<ID3D12PipelineState>), out ComPtr<ID3D12GraphicsCommandList> madeCommandList));
+		_commandList = madeCommandList;
 		SilkMarshal.ThrowHResult(_commandList.Close());
 		_ctx.SetObjectName((ID3D12Object*)_commandList.Handle, "graph-cmdlist");
 
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out _fence));
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateFence(0, FenceFlags.None, out ComPtr<ID3D12Fence> madeFence));
+		_fence = madeFence;
 		_fenceEvent = CreateEventW(0, 0, 0, 0);
 		if (_fenceEvent == 0)
 			throw new InvalidOperationException("CreateEvent failed for the DirectX12 frame-pacing fence.");
@@ -137,8 +140,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		// Starting sizes, not budgets — the heap grows when a scene wants more. The persistent region holds one table
 		// per (material, technique) and the transient region a frame's per-pass SRVs plus the resource viewer's debug SRVs.
 		_ring = new DirectX12DescriptorHeap(_ctx, persistentCapacity: 256, transientPerFrame: 256, BufferCount);
-		_meshes = new DirectX12MeshStore(_ctx);
 		_uploads = new DirectX12UploadBatch(_ctx);
+		_meshes = new DirectX12MeshStore(_ctx, _uploads);
 		_textures = new DirectX12TextureStore(_ctx, _uploads);
 		_context = new DirectX12RenderContext(_ctx, _techniques, _ring, _meshes, _textures, Materials, (int)BufferCount, Validation);
 		for (uint i = 0; i < BufferCount; i++)
@@ -221,12 +224,13 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size). The replacement is
 		// built before the old one is released so it can adopt the persistents that survive a resize — their contents
 		// are cross-frame history, and rebuilding them would throw it away.
-		if (Graph is not null)
+		if (_executed is not null)
 		{
 			var previous = _transients;
-			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height, previous);
+			_transients = new DirectX12Transients(_ctx, _executed, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height, previous);
 			previous?.Dispose();
 			_context.SetTransients(_transients);
+			ForgetUploadedShadows();   // the new transients' Constants and Storage buffers hold nothing yet
 			RecreateSwapchainSizedReadback();
 			for (uint i = 0; i < BufferCount; i++)
 				_backbufferState[i] = ResourceStates.Present;
@@ -283,9 +287,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 				buffer.Dispose();
 		_transients?.Dispose();
 		_context.Dispose();
-		_meshes.Dispose();
 		_pipelineBlobs.Save(); // write back whatever this run compiled, before the device goes away
 		_uploads.Dispose(); // before the stores — it holds their staging resources until the last execute retires
+		_meshes.Dispose();
 		_textures.Dispose();
 		_ring.Dispose();
 		_techniques.Dispose();
@@ -315,6 +319,13 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		// The bytecode is compiled offline and shipped, like the Vulkan .spv — no runtime compiler is involved.
 		byte[] vertexBytecode, fragmentBytecode;
 		var inputCount = reflection.SampleCount;
+		// Which inputs the shader samples by comparison, from its SPIR-V: the DXIL can't say, and the reflection describes
+		// a shadow sampler as it does any single-channel texture. A shader that samples nothing compares nothing, so
+		// needs no SPIR-V; one that samples throws without it rather than reading as comparing nothing.
+		var compared = ShaderBindingMap.From(reflection,
+			inputCount > 0 ? SpirvDepthTextures.Bindings(DirectX12Shaders.ResolveSpirv(dir, shader), shader) : null);
+		ShaderBindingMap.CheckCompare(name, compared.ComparedCount, descriptor.SampleCompare);
+		compared.CheckDrawStorage(name, descriptor.IsCompute);
 		var storageImages = 0;
 		var storageBuffers = 0;
 		var storageBufferStride = 0;
@@ -358,9 +369,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			descriptor.IsCompute, descriptor.Blend, storageImages, storageBuffers, storageBufferStride,
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
 			descriptor.Cull, descriptor.DepthTest, descriptor.Bias,
-			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes));
+			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes,
+			[.. compared.ComparedTextures], descriptor.SampleCompare, descriptor.AlphaToCoverage, compared));
 		return new TechniqueShape(
-			new MaterialLayout(inputCount, reflection.MaterialParameterBytes),
+			new MaterialLayout(inputCount, reflection.MaterialParameterBytes, compared.ComparedCount),
 			reflection.UniformBufferBytes,
 			descriptor.HasFragmentPush ? DirectX12Technique.ScalarPushSize : 0,
 			descriptor.HasListPush ? DirectX12Technique.ListPushSize : 0);
@@ -375,6 +387,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 	protected override void GrowStorage(int id, int newByteSize) => _transients!.GrowStorage(_ctx, id, newByteSize, Graph!.Resources[id].Name);
 
+	// The graph the transients are built from: the active graph with the resource viewer's sample edges, which decide
+	// what a multisampled target keeps a resolve for. A resize rebuilds from it, not from the graph as authored.
+	private RenderGraph? _executed;
+
 	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed)
 	{
 		// Members after a bucket's first reuse an earlier member's memory mid-frame and need an aliasing barrier on
@@ -383,9 +399,11 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present;
 
-		// Build transients from `executed` (same resources/ids; the injected edges only affect derived state). The
+		// Build transients from `executed` (same resources/ids; its debug-sample edges give an inspected multisampled
+		// target the resolve copy its viewer reads). The
 		// AliasPlan (the transient-memory partition) is the SAME backend-neutral product the Vulkan engine consumes;
 		// this backend turns each bucket into a placed-resource heap shared by its members.
+		_executed = executed;
 		_transients = new DirectX12Transients(_ctx, executed, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height);
 		_context.SetTransients(_transients);
 		SetupReadback(authored);
@@ -409,7 +427,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 		var perSlot = (uint)(2 * _timingPassCount);
 		var desc = new QueryHeapDesc { Type = QueryHeapType.Timestamp, Count = perSlot * BufferCount, NodeMask = 0 };
-		SilkMarshal.ThrowHResult(_ctx.Device.CreateQueryHeap(&desc, out _timingHeap));
+		SilkMarshal.ThrowHResult(_ctx.Device.CreateQueryHeap(&desc, out ComPtr<ID3D12QueryHeap> madeTimingHeap));
+		_timingHeap = madeTimingHeap;
 		for (uint i = 0; i < BufferCount; i++)
 			_timingReadback[i] = CreateReadbackBuffer((ulong)perSlot * sizeof(ulong));
 	}
@@ -490,9 +509,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 	protected override Mesh UploadSkinnedMesh(ReadOnlySpan<SkinnedVertex> vertices, ReadOnlySpan<uint> indices) => _meshes.CreateSkinned(vertices, indices);
 
-	// Every frame that may draw the mesh has been submitted, and signals at most the current fence value. Mesh buffers
-	// live in an upload heap, so there is no pending copy into them to wait for.
-	protected override void RetireMesh(Mesh mesh) => _meshes.Release(mesh.Id, _fenceValue);
+	// As a texture's: the mesh's copy into its default-heap buffers may still be pending in the upload batch, which
+	// executes ahead of the next frame. So its buffers wait for the next value the frame fence signals.
+	protected override void RetireMesh(Mesh mesh) => _meshes.Release(mesh.Id, _fenceValue + 1);
 
 	protected override Texture UploadTexture(TextureData data) => _textures.Create(data);
 
@@ -502,6 +521,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	// it: a material's SRV table can only name a texture no release can reach (a material holds its textures), and a
 	// draw list writes its SRVs into this frame's ring slot, which outlives the texture by exactly the frames that read it.
 	protected override void RetireTexture(Texture texture) => _textures.Release(texture.Id, _fenceValue + 1);
+
+	// Recorded into the upload batch, which executes ahead of the next frame, as a new texture's upload does. A release
+	// that follows still waits for the next fence value, which covers the batch.
+	protected override void WriteTexels(Texture texture, ReadOnlySpan<byte> texels) => _textures.Write(texture.Id, texels);
 
 	[DllImport("kernel32", SetLastError = true)]
 	private static extern nint CreateEventW(nint lpEventAttributes, int bManualReset, int bInitialState, nint lpName);

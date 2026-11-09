@@ -63,6 +63,24 @@ public abstract class EngineBase : IEngine
 		set => _gpuTimingEnabled = value && Capabilities.GpuTiming;
 	}
 
+	/// <inheritdoc/>
+	public float? DisplaySdrWhiteNits { get; set; }
+
+	/// <inheritdoc/>
+	public float? DisplayPeakNits { get; set; }
+
+	/// <inheritdoc/>
+	public float? HdrPaperWhiteChoice { get; set => field = HdrLevels.Choice(value, nameof(HdrPaperWhiteChoice)); }
+
+	/// <inheritdoc/>
+	public float? HdrPeakChoice { get; set => field = HdrLevels.Choice(value, nameof(HdrPeakChoice)); }
+
+	/// <inheritdoc/>
+	public float HdrPaperWhiteNits => HdrLevels.PaperWhite(HdrPaperWhiteChoice, DisplaySdrWhiteNits);
+
+	/// <inheritdoc/>
+	public float HdrPeakNits => HdrLevels.Peak(HdrPeakChoice, DisplayPeakNits, HdrPaperWhiteNits);
+
 	/// <summary>Per-pass GPU timings from the most recently completed frame (empty when timing is disabled).</summary>
 	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
 
@@ -131,6 +149,10 @@ public abstract class EngineBase : IEngine
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		ArgumentException.ThrowIfNullOrEmpty(name);
+		// A draw list's textures are loaded images and UI layers, colour formats all, and its one sampler slot is plain on
+		// every backend; a list technique that compared would read undefined results.
+		if (descriptor.HasListPush && descriptor.SampleCompare is not null)
+			throw new InvalidOperationException($"Technique '{name}' is a draw-list technique (HasListPush) and names SampleCompare; a draw list samples colour textures, which no backend can compare.");
 		var shape = BakeTechnique(name, descriptor);
 		// Recording what the shader expects of a material is what lets a mismatch be caught at *definition* — and
 		// because a hot reload replays this, at reload too, against every material already built for the name.
@@ -276,6 +298,40 @@ public abstract class EngineBase : IEngine
 			throw new ArgumentException(
 				$"Constants '{handle.Name}' is {shadow.Length} bytes but the written {typeof(T).Name} is {size} bytes — the type must match the declared parameter-buffer size.", nameof(value));
 		MemoryMarshal.Write(shadow, in value);
+		Written(handle.Id);
+	}
+
+	// How many times each app-writable buffer has been written (id → count), and per frame slot the count its GPU copy
+	// holds (-1: none yet). A frame uploads only the buffers its slot's copy is behind on, so a buffer written once
+	// costs nothing per frame after every slot has caught up, however large it is; and the last Write still persists.
+	private readonly Dictionary<int, int> _writes = [];
+	private readonly Dictionary<int, int[]> _uploadedWrites = [];
+
+	private void Written(int id) => CollectionsMarshal.GetValueRefOrNullRef(_writes, id)++;
+
+	// Whether this slot's copy of a buffer is behind its last Write
+	private bool Behind(int id, int slot) => _uploadedWrites[id][slot] != _writes[id];
+
+	// This slot's copy of a buffer now holds its last Write. Marked after the backend's write rather than before, so a write
+	// that throws leaves the slot behind and the next frame tries again.
+	private void CaughtUp(int id, int slot) => _uploadedWrites[id][slot] = _writes[id];
+
+	/// <summary>Which of the per-frame-slot copies of each Constants and Storage buffer the frame being recorded reads.</summary>
+	protected abstract int ShadowSlot { get; }
+
+	/// <summary>How many per-frame-slot copies of each Constants and Storage buffer the backend keeps (1 where the API
+	/// orders a buffer write before the next frame's reads itself).</summary>
+	protected abstract int ShadowSlotCount { get; }
+
+	/// <summary>
+	/// Every Constants and Storage buffer's GPU copies are new (a resize rebuilt them, say): upload each again into
+	/// every slot, whether or not it has been written since. A backend calls this wherever it replaces those buffers
+	/// outside <see cref="SetGraph"/>.
+	/// </summary>
+	protected void ForgetUploadedShadows()
+	{
+		foreach (var uploaded in _uploadedWrites.Values)
+			Array.Fill(uploaded, -1);
 	}
 
 	// CPU shadow of each active-graph Storage resource (id → its bytes), like _constants but an array; the backend
@@ -317,6 +373,7 @@ public abstract class EngineBase : IEngine
 			shadow = GrowStorageBuffer(handle.Id, bytes.Length, shadow);
 		}
 		bytes.CopyTo(shadow);
+		Written(handle.Id);
 	}
 
 	// Grow a growable storage buffer to hold at least requiredBytes: enlarge the CPU shadow (geometric — at least
@@ -332,6 +389,7 @@ public abstract class EngineBase : IEngine
 		_storage[id] = grown;
 		WaitIdle();
 		GrowStorage(id, newCapacity);
+		Array.Fill(_uploadedWrites[id], -1);   // new buffers in every slot
 		return grown;
 	}
 
@@ -430,12 +488,20 @@ public abstract class EngineBase : IEngine
 		// starts zero-filled, so a technique that reads a buffer the app hasn't written yet sees a defined value.
 		_constants.Clear();
 		_storage.Clear();
+		_writes.Clear();
+		_uploadedWrites.Clear();
 		foreach (var resource in graph.Resources)
 		{
 			if (resource.Kind == ResourceKind.Constants)
 				_constants[resource.Id] = new byte[resource.ByteSize];
 			else if (resource.Kind == ResourceKind.Storage)
 				_storage[resource.Id] = new byte[resource.ByteSize];
+			else
+				continue;
+			_writes[resource.Id] = 0;
+			var uploaded = new int[ShadowSlotCount];
+			Array.Fill(uploaded, -1);
+			_uploadedWrites[resource.Id] = uploaded;
 		}
 
 		// Drop the previous graph's readback bytes; the backend refills per target as frames retire.
@@ -462,9 +528,15 @@ public abstract class EngineBase : IEngine
 		var executed = graph;
 		if (ResourceInspectionEnabled)
 		{
+			// A multisampled target with no resolve is left out (a depth target, an integer or 32-bit float one), since the
+			// derivation refuses sampling it.
 			foreach (var resource in graph.Resources)
-				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
+			{
+				var resolvable = resource.Domain.Samples == 1
+					|| (resource.Kind == ResourceKind.Color && resource.Format is not (Format.R32F or Format.R32Uint));
+				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth && resolvable)
 					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
+			}
 			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
 		}
 
@@ -555,13 +627,25 @@ public abstract class EngineBase : IEngine
 	/// </summary>
 	protected void RecordFrame()
 	{
-		// Flush each app-writable buffer's CPU shadow into what this frame will read. Re-uploading every frame (these
-		// are tiny) is what makes the last IEngine.Write persist: a static parameter is written once and an animated one
-		// per frame, and either way what the GPU reads this frame is current.
+		// Bring this frame slot's copy of each app-writable buffer up to its last IEngine.Write, which is what makes that
+		// write persist: a static parameter is written once and an animated one per frame, and either way what the GPU
+		// reads this frame is current. A copy already up to date is left alone, so a large buffer written once (a table
+		// of thousands of elements filled at load) costs nothing per frame once every slot holds it.
+		var slot = ShadowSlot;
 		foreach (var (id, bytes) in ConstantsShadows)
+		{
+			if (!Behind(id, slot))
+				continue;
 			WriteConstantsShadow(id, bytes);
+			CaughtUp(id, slot);
+		}
 		foreach (var (id, bytes) in StorageShadows)
+		{
+			if (!Behind(id, slot))
+				continue;
 			WriteStorageShadow(id, bytes);
+			CaughtUp(id, slot);
+		}
 
 		BeginFrameTimestamps();
 
@@ -697,6 +781,27 @@ public abstract class EngineBase : IEngine
 	}
 
 	/// <inheritdoc/>
+	public InstanceBuffer CreateInstances<T>(ReadOnlySpan<T> instances, VertexLayout layout) where T : unmanaged
+	{
+		ThrowIfRecording(nameof(CreateInstances));
+		ArgumentNullException.ThrowIfNull(layout);
+		if (instances.IsEmpty)
+			throw new ArgumentException("An instance buffer holds at least one instance.", nameof(instances));
+		// Stored as a mesh whose vertices are the instances: every backend already uploads those to GPU-resident memory,
+		// resolves them at draw time and frees them after the frames in flight. The one index is never drawn.
+		var storage = UploadMesh(instances, layout, [0u]);
+		return new InstanceBuffer(storage, instances.Length, layout.Stride);
+	}
+
+	/// <inheritdoc/>
+	public void ReleaseInstances(InstanceBuffer instances)
+	{
+		AssertRenderThread(nameof(ReleaseInstances));
+		ThrowIfRecording(nameof(ReleaseInstances));
+		RetireMesh(instances.Storage);
+	}
+
+	/// <inheritdoc/>
 	public Texture CreateTexture(TextureData data)
 	{
 		ThrowIfRecording(nameof(CreateTexture));
@@ -710,6 +815,14 @@ public abstract class EngineBase : IEngine
 		ThrowIfRecording(nameof(ReleaseTexture));
 		Materials.ThrowIfHeld(texture);
 		RetireTexture(texture);
+	}
+
+	/// <inheritdoc/>
+	public void UpdateTexture(Texture texture, ReadOnlySpan<byte> texels)
+	{
+		AssertRenderThread(nameof(UpdateTexture));
+		ThrowIfRecording(nameof(UpdateTexture));
+		WriteTexels(texture, texels);
 	}
 
 	/// <summary>Upload canonical-layout geometry and mint its handle — the backend half of <see cref="CreateMesh(ReadOnlySpan{Vertex}, ReadOnlySpan{uint})"/>.</summary>
@@ -737,6 +850,14 @@ public abstract class EngineBase : IEngine
 	/// it. Every cached binding object that names its view is evicted before the view's handle can be reused.
 	/// </summary>
 	protected abstract void RetireTexture(Texture texture);
+
+	/// <summary>
+	/// Copy new texels into a texture's existing image ahead of the next frame — the backend half of
+	/// <see cref="UpdateTexture"/>. Called between frames. The copy must be ordered after every frame already submitted
+	/// that may sample the image, and it must allocate nothing after the texture's first update. Every backend holds the
+	/// texture to the same shape first, through <see cref="TextureUpdates.Check"/>.
+	/// </summary>
+	protected abstract void WriteTexels(Texture texture, ReadOnlySpan<byte> texels);
 
 	// The pass whose callback is running, or null between passes and between frames. Set by RecordFrame; read by
 	// ThrowIfRecording on the render thread only, so it needs no synchronisation.

@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 
+using Loom.Core.Graph;
 using Loom.Core.Materials;
 
 namespace Loom.Backend.WebGPU;
@@ -19,15 +20,17 @@ internal sealed class WebGpuSamplerCache(WebGpuHandleAllocator handles) : IDispo
 	public const int Repeat = 1;
 	public const int MirrorRepeat = 2;
 
-	private readonly Dictionary<(bool Linear, int Address, bool Compare), int> _cache = [];
+	// Compare: 0 for none, else 1 + the DepthCompare (the shim's COMPARE_FUNCTIONS order)
+	private readonly Dictionary<(bool Linear, int Address, int Compare), int> _cache = [];
 
 	/// <summary>The sampler handle for a technique's filter + wrap mode (a filtering, non-comparison sampler).</summary>
-	public int Get(bool linear, SamplerAddress address) => Get(linear, ToAddressId(address), compare: false);
+	public int Get(bool linear, SamplerAddress address) => Get(linear, ToAddressId(address), compare: 0);
 
-	/// <summary>A comparison sampler (shadow-map depth compare); always clamp-to-edge, filter selects PCF.</summary>
-	public int GetComparison(bool linear) => Get(linear, ClampToEdge, compare: true);
+	/// <summary>A comparison sampler (a shadow map read with SampleCmp) comparing by <paramref name="compare"/>: always
+	/// filtered (the hardware's 2×2 PCF) and clamped to the edge, as on the desktop backends.</summary>
+	public int GetComparison(DepthCompare compare) => Get(linear: true, ClampToEdge, compare: 1 + (int)compare);
 
-	private int Get(bool linear, int address, bool compare)
+	private int Get(bool linear, int address, int compare)
 	{
 		var key = (linear, address, compare);
 		if (_cache.TryGetValue(key, out var handle))

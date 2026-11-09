@@ -187,4 +187,18 @@ public class MaterialContractTests
 		store.RegisterTechnique("yep", new MaterialLayout(2, 16));
 		store.LayoutOf("yep").ShouldBe(new MaterialLayout(2, 16));
 	}
+
+	[Test]
+	public void A_technique_that_compares_accepts_no_material_at_creation_or_at_draw()
+	{
+		// A material's textures are colour formats, which no backend can compare, so the same refusal on every backend
+		var store = new MaterialStore();
+		store.RegisterTechnique("shadowed", new MaterialLayout(TextureCount: 1, ParameterByteSize: 0, ComparedTextureCount: 1));
+
+		Should.Throw<TechniqueMismatchException>(() => store.Create("shadowed", [new Texture(1, 1, 1)], default))
+			.Message.ShouldContain("by comparison");
+		var untyped = store.Create([new Texture(1, 1, 1)]);
+		Should.Throw<TechniqueMismatchException>(() => store.ValidateAgainst(untyped, "shadowed"))
+			.Message.ShouldContain(".Samples");
+	}
 }

@@ -67,6 +67,8 @@ public sealed class VulkanTechniqueCache(VulkanContext ctx, PipelineCache pipeli
 		hash.AppendData(BitConverter.GetBytes(bias.Clamp));
 		AppendLayout(hash, description.Layout);
 		AppendLayout(hash, description.Instance);
+		hash.AppendData(BitConverter.GetBytes(description.Samples));
+		hash.AppendData(BitConverter.GetBytes(description.AlphaToCoverage));
 		return Convert.ToHexString(hash.GetHashAndReset());
 	}
 

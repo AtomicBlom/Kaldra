@@ -16,6 +16,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		if (commands.IsEmpty || vertices.IsEmpty || indices.IsEmpty || textures.IsEmpty)
 			return;
 		var baked = Bake(technique);
+		var drawing = baked; // the pipeline drawing now: the pass's, or inside a layer the layer target's
 		var template = _registry[technique];
 
 		// A stream with a stable identity keeps its own buffers and re-uploads only when its revision moves; anything
@@ -102,6 +103,10 @@ internal sealed unsafe partial class VulkanRenderContext
 				// screen's worth of tiles.
 				BeginColorScope(opened.View, AttachmentLoadOp.Clear, ToRect(walker.LayerArea));
 				_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
+				// The layer target is one single-sample attachment with no depth, however the pass's are made, and a
+				// pipeline must be baked for the attachments it draws into.
+				drawing = BakeLayer(technique);
+				BindPipeline(PipelineBindPoint.Graphics, drawing.Pipeline);
 				continue;
 			}
 
@@ -122,7 +127,10 @@ internal sealed unsafe partial class VulkanRenderContext
 					BeginColorScope(_scopeColorViews.AsSpan(0, _scopeColorCount), AttachmentLoadOp.Load, new Rect2D(default, layerArea));
 				_vk.CmdSetViewport(_cmd, 0, 1, in viewport);
 
-				CompositeLayer(baked, closed.View, walker.Tint, sampler, block, pushLen, walker.Bounds, surfaceWidth, surfaceHeight, layerArea);
+				// Composited, and drawn on, by the parent's pipeline: a nested layer's parent is a layer target too
+				drawing = walker.Depth > 0 ? BakeLayer(technique) : baked;
+				BindPipeline(PipelineBindPoint.Graphics, drawing.Pipeline);
+				CompositeLayer(drawing, closed.View, walker.Tint, sampler, block, pushLen, walker.Bounds, surfaceWidth, surfaceHeight, layerArea);
 
 				// Restore the list's geometry for the following commands — the composite bound its own quad buffer.
 				_vk.CmdBindVertexBuffers(_cmd, 0, 1, in vtxBuffer, in vtxOffset);
@@ -131,7 +139,7 @@ internal sealed unsafe partial class VulkanRenderContext
 			}
 
 			*(uint*)(block + pushLen) = walker.Tag;
-			_vk.CmdPushConstants(_cmd, baked.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, block);
+			_vk.CmdPushConstants(_cmd, drawing.Layout, ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit, 0, (uint)VulkanTechnique.ListPushSize, block);
 
 			if (walker.TextureChanged)
 			{
@@ -139,9 +147,9 @@ internal sealed unsafe partial class VulkanRenderContext
 				// an inspectable one (the resource viewer): sample this frame's live image instead of a loaded
 				// texture-store entry. The graph has already put a declared one in ShaderReadOnlyOptimal for this pass.
 				var view = walker.TextureId >= InspectableResource.DebugTextureBase
-					? _resources.Get(_frameSlot, walker.TextureId - InspectableResource.DebugTextureBase).View
+					? _resources.Get(_frameSlot, walker.TextureId - InspectableResource.DebugTextureBase).SampledView
 					: _textures.View(walker.TextureId);
-				var set = _descriptors.Allocate(baked.DescriptorSetLayout);
+				var set = _descriptors.Allocate(drawing.DescriptorSetLayout);
 				var imageInfo = new DescriptorImageInfo { Sampler = sampler, ImageView = view, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
 				var write = new WriteDescriptorSet
 				{
@@ -156,7 +164,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				// No dynamic offsets: a draw-list technique's layout is one combined image sampler plus a push block,
 				// so it declares no uniform buffer — the only descriptor type Loom binds dynamically. One that did
 				// would fail validation here for supplying none, which is the loud failure that should follow.
-				_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, baked.Layout, 0, 1, in set, 0, null);
+				_vk.CmdBindDescriptorSets(_cmd, PipelineBindPoint.Graphics, drawing.Layout, 0, 1, in set, 0, null);
 			}
 
 			var scissor = ToRect(walker.Scissor);
@@ -174,6 +182,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		{
 			_vk.CmdEndRendering(_cmd);
 			BeginColorScope(((ReadOnlySpan<ImageView>)_scopeColorViews)[.._scopeColorCount], AttachmentLoadOp.Load, new Rect2D(default, layerArea));
+			BindPipeline(PipelineBindPoint.Graphics, baked.Pipeline);
 		}
 	}
 

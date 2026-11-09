@@ -29,6 +29,14 @@ public interface IRenderContext
 	bool HdrOutput { get; }
 
 	/// <summary>
+	/// The frame being recorded: 0 for the engine's first <see cref="IEngine.Render"/>, one more for each after it, the
+	/// same for every pass of one frame. A stable producer that does work once per frame on its first call, or checks that
+	/// a step ran before the frame (as <c>UIPainter.Draw</c> checks <c>Prepare</c>), tells one frame from the next by it,
+	/// since a pass may call it any number of times. Pulled, not captured, like <see cref="Time"/>.
+	/// </summary>
+	long Frame { get; }
+
+	/// <summary>
 	/// Draw a fullscreen triangle with the named technique, sampling zero or more <paramref name="inputs"/>
 	/// (each bound, in the order given, as the technique's 0..N-1 sampled input — the backend maps that ordinal
 	/// to its own binding model). With no inputs it's a from-scratch pass (a gradient); with

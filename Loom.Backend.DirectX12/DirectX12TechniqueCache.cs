@@ -37,7 +37,7 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 	// a name with new bytecode bakes fresh instead of returning the stale PSO), and the exact target formats the PSO
 	// is compiled against. A struct key, because looking one up happens once per draw and must not allocate — and the
 	// version stands in for the digest so the lookup hashes an int rather than 64 hex characters.
-	private readonly record struct BakeKey(string Name, int Version, ulong ColorFormats, int ColorCount, Format DepthFormat, bool DepthReadOnly);
+	private readonly record struct BakeKey(string Name, int Version, ulong ColorFormats, int ColorCount, Format DepthFormat, bool DepthReadOnly, int Samples);
 
 	// Handed out on registration, never reused. Monotonic across all templates rather than per name, so a version
 	// alone identifies one bytecode revision of one technique.
@@ -63,19 +63,19 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 		_templates[name] = new RegisteredTemplate(template, digest, version);
 	}
 
-	public DirectX12Technique GetOrBake(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly)
+	public DirectX12Technique GetOrBake(string name, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, int samples = 1)
 	{
 		if (!_templates.TryGetValue(name, out var registered))
 			throw new TechniqueNotDefinedException(name);
 
-		var key = new BakeKey(name, registered.Version, PackFormats(colorFormats), colorFormats.Length, depthFormat, depthReadOnly);
+		var key = new BakeKey(name, registered.Version, PackFormats(colorFormats), colorFormats.Length, depthFormat, depthReadOnly, samples);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
 		// The disk key is the content digest rather than the version, because a version is only meaningful within one
 		// run — the next process would hand out the same numbers to different bytecode.
-		var blobKey = $"{registered.Digest}|{key.ColorFormats:x}|{key.ColorCount}|{(int)depthFormat}|{(depthReadOnly ? 1 : 0)}";
-		var technique = new DirectX12Technique(_ctx, registered.Template, colorFormats, depthFormat, depthReadOnly, _blobs, blobKey);
+		var blobKey = $"{registered.Digest}|{key.ColorFormats:x}|{key.ColorCount}|{(int)depthFormat}|{(depthReadOnly ? 1 : 0)}|{samples}";
+		var technique = new DirectX12Technique(_ctx, registered.Template, colorFormats, depthFormat, depthReadOnly, _blobs, blobKey, samples);
 		// Name the baked PSO + root signature for GPU debuggers (DirectX12 has no separate shader objects — the DXIL
 		// lives in the PSO, so naming the PSO is the shader-naming equivalent). [Conditional]: stripped without
 		// UseNamedGPUObjects. Distinct target-format variants of one technique share the logical name.
@@ -134,6 +134,10 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 		hash.AppendData(BitConverter.GetBytes(bias.Constant));
 		hash.AppendData(BitConverter.GetBytes(bias.SlopeScale));
 		hash.AppendData(BitConverter.GetBytes(bias.Clamp));
+		hash.AppendData(BitConverter.GetBytes(t.SampleCompare.HasValue ? (int)t.SampleCompare.Value : -1));
+		foreach (var compared in t.ComparedInputs ?? [])
+			hash.AppendData(BitConverter.GetBytes(compared));
+		hash.AppendData(BitConverter.GetBytes(t.AlphaToCoverage));
 		AppendLayout(hash, t.Layout);
 		AppendLayout(hash, t.Instance);
 		return Convert.ToHexString(hash.GetHashAndReset());

@@ -147,7 +147,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 
 		_templates[name] = template;
 		return new TechniqueShape(
-			new MaterialLayout(template.SampleCount, template.MaterialParameterBytes),
+			new MaterialLayout(template.SampleCount, template.MaterialParameterBytes, template.Bindings.ComparedCount),
 			[.. template.Bindings.UniformBufferBytes],
 			// WGSL has no push constants, so a LOOM_PUSH_CONSTANT block lowers to an ordinary uniform buffer; the
 			// binding model reports its size, and 0 when the technique declares none.
@@ -221,6 +221,7 @@ internal sealed partial class WebGpuEngine : EngineBase
 		// as ReleaseGraphResources; a resize is rare enough that rebuilding every group costs nothing worth keeping.
 		_context.ClearBindGroups();
 		_transients?.Resize(_width, _height);
+
 	}
 
 	// WebGPU has no host-side GPU idle wait, and it defers destruction of in-flight resources internally, so
@@ -259,6 +260,9 @@ internal sealed partial class WebGpuEngine : EngineBase
 		_context.EvictBindGroups(BoundObject.View, _textures.View(texture.Id));
 		_textures.Release(texture.Id);
 	}
+
+	// queue.writeTexture, ordered after the frames already submitted; the view and its bind groups stay.
+	protected override void WriteTexels(Texture texture, ReadOnlySpan<byte> texels) => _textures.Write(texture.Id, texels);
 
 	public override void Dispose()
 	{

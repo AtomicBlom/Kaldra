@@ -135,6 +135,74 @@ public class TextureReleaseTests
 	}
 
 	[Test]
+	public void An_updated_texture_draws_its_new_texels_while_frames_are_in_flight()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			var errors = CaptureErrors(out var restore);
+			byte[] centre;
+			try
+			{
+				using (var scene = new Scene(backend))
+				{
+					// One texture, rewritten every round while the frames before still sample it: the copy has to wait for
+					// their reads on the GPU, and the staging the last round filled has to be free before it is refilled.
+					var texture = scene.Upload(Red);
+					scene.Drawn = texture;
+					for (var round = 0; round < 12; round++)
+					{
+						scene.Engine.UpdateTexture(texture, Texels(round % 2 == 0 ? Green : Red));
+						scene.Render(frames: 1 + (round % 2));
+					}
+
+					// Updated before any frame drew it, its upload still waiting, and twice before one frame: the last wins.
+					var fresh = scene.Upload(Red);
+					scene.Engine.UpdateTexture(fresh, Texels(Green));
+					scene.Engine.UpdateTexture(fresh, Texels(Blue));
+					scene.Drawn = fresh;
+					centre = scene.CaptureCentre();
+
+					// The handle is the one it was: a material built from it binds the new texels too, and may be updated.
+					scene.Engine.CreateMaterial(texture);
+					Should.NotThrow(() => scene.Engine.UpdateTexture(texture, Texels(Blue)), $"{backend.Name}: a texture a material holds may still be updated.");
+				}
+			}
+			finally
+			{
+				restore();
+			}
+
+			centre.ShouldBe(Blue, $"{backend.Name}: the frame should show the last texels written (blue).");
+			errors.ShouldBeEmpty($"{backend.Name}: updating a texture across frames in flight should leave the validation layer silent.");
+		}
+	}
+
+	[Test]
+	public void A_texture_is_updated_only_whole_and_in_its_one_level()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			using var scene = new Scene(backend);
+			var engine = scene.Engine;
+
+			// A mip chain's smaller levels would go on showing the old image.
+			var mipped = engine.CreateTexture(TextureData.FromRgba8(4, 4, [.. Enumerable.Repeat(Red, 16).SelectMany(texel => texel)], TextureFormat.Rgba8Unorm, generateMips: true));
+			Should.Throw<InvalidOperationException>(() => engine.UpdateTexture(mipped, Texels(Green)))
+				.Message.ShouldContain("mip level", customMessage: $"{backend.Name}: updating a mipped texture should say why not.");
+
+			// The texels are the whole image, rows tightly packed.
+			var texture = scene.Upload(Red);
+			Should.Throw<ArgumentException>(() => engine.UpdateTexture(texture, Green))
+				.Message.ShouldContain("64", customMessage: $"{backend.Name}: a short update should give the size it needs.");
+
+			// A released handle is dead for updates as for everything else.
+			engine.ReleaseTexture(texture);
+			Should.Throw<Exception>(() => engine.UpdateTexture(texture, Texels(Green)))
+				.Message.ShouldContain("released", customMessage: $"{backend.Name}: updating a released texture should say it was released.");
+		}
+	}
+
+	[Test]
 	public void Creating_or_releasing_inside_a_pass_throws()
 	{
 		foreach (var backend in AvailableBackends())
@@ -158,6 +226,7 @@ public class TextureReleaseTests
 				refusals.Add(("CreateTexture", Catch(() => engine.CreateTexture(data))));
 				refusals.Add(("CreateTextureAsync", Catch(() => engine.CreateTextureAsync(data))));
 				refusals.Add(("ReleaseTexture", Catch(() => engine.ReleaseTexture(spareTexture))));
+				refusals.Add(("UpdateTexture", Catch(() => engine.UpdateTexture(drawn, Texels(Red)))));
 				refusals.Add(("CreateMesh", Catch(() => engine.CreateMesh([default, default, default], [0, 1, 2]))));
 				refusals.Add(("ReleaseMesh", Catch(() => engine.ReleaseMesh(spareMesh))));
 				var background = new Thread(() => queuedOffThread = engine.CreateTextureAsync(data));
@@ -221,6 +290,9 @@ public class TextureReleaseTests
 
 	private static TextureData Solid(byte[] rgba) =>
 		TextureData.FromRgba8(4, 4, [.. Enumerable.Repeat(rgba, 16).SelectMany(texel => texel)], TextureFormat.Rgba8Unorm, generateMips: false);
+
+	// The 4×4 texels of Solid's image, for IEngine.UpdateTexture.
+	private static byte[] Texels(byte[] rgba) => [.. Enumerable.Repeat(rgba, 16).SelectMany(texel => texel)];
 
 	// An offscreen engine whose one pass draws a quad sampling whichever texture Drawn names this frame, through the
 	// draw-list verb the UI painter uses — the pass reads it live, the way a painter holds the image it currently shows.

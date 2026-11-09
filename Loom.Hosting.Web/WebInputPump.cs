@@ -19,7 +19,7 @@ namespace Loom.Hosting.Web;
 /// values (the ceiling the source-generated JS interop marshals for a function). The
 /// three-value events get their own callback — <see cref="OnPointerMove"/>, <see cref="OnGamepadButton"/>,
 /// <see cref="OnGamepadAxis"/>; the rest share a discriminated low-rate channel, <see cref="OnEvent"/>; and
-/// <see cref="OnKey"/> carries the physical <c>KeyboardEvent.code</c> string this side maps to a neutral key.
+/// <see cref="OnKey"/> carries an id for the physical <c>KeyboardEvent.code</c>, which this side maps to a neutral key.
 /// The shim coalesces pointer moves and diffs the poll-only Gamepad API once per animation frame, so a
 /// high-rate device cannot flood the frame's event capacity.
 /// </para>
@@ -48,11 +48,16 @@ internal sealed class WebInputPump
 	private readonly bool[] _keysHeld = new bool[256];
 	private uint _mouseHeld;
 	private readonly uint[] _padButtonsHeld = new uint[4];
+	// The neutral key for each key id the shim has sent, indexed by id (ids are dense, numbered from 0 in the order the
+	// page first meets each KeyboardEvent.code), and how to ask the page for an id's code the first time it comes
+	private readonly List<Key> _keysById = new(128);
+	private readonly Func<int, string> _keyCodeOf;
 
-	public WebInputPump(InputSink sink, Action<bool> onFocusChanged)
+	public WebInputPump(InputSink sink, Action<bool> onFocusChanged, Func<int, string> keyCodeOf)
 	{
 		_sink = sink ?? throw new ArgumentNullException(nameof(sink));
 		_onFocusChanged = onFocusChanged ?? throw new ArgumentNullException(nameof(onFocusChanged));
+		_keyCodeOf = keyCodeOf ?? throw new ArgumentNullException(nameof(keyCodeOf));
 	}
 
 	/// <summary>
@@ -125,13 +130,18 @@ internal sealed class WebInputPump
 	}
 
 	/// <summary>
-	/// The key channel: the physical <c>KeyboardEvent.code</c> string plus its down/up state. Marshaled from JS
-	/// as an <c>Action&lt;string, bool&gt;</c>. The code → neutral table lives here — the web counterpart to the
-	/// desktop pump's Silk table.
+	/// The key channel: a key's id (the shim numbers each <c>KeyboardEvent.code</c> in the order it first meets it) plus
+	/// its down/up state. An id not seen before is resolved once, by asking the page for its <c>KeyboardEvent.code</c>
+	/// string, and kept; so the code → neutral table stays here, the web counterpart to the desktop pump's Silk table, and
+	/// a key after its first press allocates nothing.
 	/// </summary>
-	public void OnKey(string code, bool down)
+	public void OnKey(int codeId, bool down)
 	{
-		var key = ToKey(code);
+		if (codeId < 0)
+			return;
+		while (_keysById.Count <= codeId)
+			_keysById.Add(ToKey(_keyCodeOf(_keysById.Count)));
+		var key = _keysById[codeId];
 		if (key == Key.Unknown)
 			return;
 		_keysHeld[(int)key] = down;

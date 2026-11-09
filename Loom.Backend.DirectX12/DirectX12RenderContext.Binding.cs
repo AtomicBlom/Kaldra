@@ -73,7 +73,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 
 	// Bind a draw-list texture: a loaded texture (full mip chain) by id, or — for a graph resource (id offset by
 	// DebugTextureBase: a TextureRef the pass declared with .Samples, or an inspectable one for the resource viewer) — a
-	// single-mip SRV over this frame's live image, through the resource's sampleable format (R32_FLOAT for depth). The
+	// single-mip SRV over this frame's image (its resolve, where multisampled), through the resource's sampleable format
+	// (R32_FLOAT for depth). The
 	// graph has already moved a declared one to a shader-resource state for this pass.
 	private void WriteListTextureSrv(int id, CpuDescriptorHandle dest)
 	{
@@ -82,18 +83,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 			WriteTextureSrv(id, dest);
 			return;
 		}
-		var rid = id - InspectableResource.DebugTextureBase;
-		var srv = new ShaderResourceViewDesc
-		{
-			Format = _transients.SrvFormat(_slot, rid),
-			Shader4ComponentMapping = DefaultShader4ComponentMapping,
-			ViewDimension = SrvDimension.Texture2D,
-			Anonymous = new ShaderResourceViewDescUnion
-			{
-				Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f },
-			},
-		};
-		_ctx.Device.CreateShaderResourceView(_transients.Resource(_slot, rid), &srv, dest);
+		// A graph resource is sampled as a pass input is, through its resolve where it is multisampled
+		WriteSrv(id - InspectableResource.DebugTextureBase, dest);
 	}
 
 	// Push a scalar block to the pass's root constants (the per-pass channel: JFA step, exposure rate, a
@@ -145,7 +136,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 				Texture2D = new Tex2DSrv { MostDetailedMip = 0, MipLevels = 1, PlaneSlice = 0, ResourceMinLODClamp = 0f }
 			}
 		};
-		_ctx.Device.CreateShaderResourceView(_transients.Resource(_slot, id), &srv, dest);
+		_ctx.Device.CreateShaderResourceView(_transients.SampledResource(_slot, id), &srv, dest);
 	}
 
 	/// <summary>

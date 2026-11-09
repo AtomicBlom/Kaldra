@@ -29,9 +29,35 @@ public sealed unsafe partial class DirectX12Engine
 	{
 		_aliasingBarrierCount = 0;
 		_transitionBarrierCount = 0;
+		_resolveCount = 0;
 		foreach (var transition in transitions)
 			QueueGraphTransition(index, transition);
 		FlushBarriers(_aliasingBarriers, ref _aliasingBarrierCount);
+		FlushTransitions();
+		if (_resolveCount > 0)
+			Resolve(index);
+	}
+
+	// The multisampled targets this batch resolves for sampling (their ids), between its barriers and the ones after
+	private int[] _resolveIds = new int[8];
+	private int _resolveCount;
+
+	// Each target queued for resolving resolved into its sampled resource, then that made readable and the target a
+	// render target again
+	private void Resolve(uint index)
+	{
+		var transients = _transients!;
+		var read = DirectX12StateMapping.For(ResourceState.ShaderRead);
+		for (var k = 0; k < _resolveCount; k++)
+		{
+			var id = _resolveIds[k];
+			_commandList.ResolveSubresource(transients.ResolveOf(index, id), 0, transients.Resource(index, id), 0, transients.Format(index, id));
+			QueueTransition(transients.ResolveOf(index, id), ResourceStates.ResolveDest, read);
+			transients.SetResolveState(index, id, read);
+			QueueTransition(transients.Resource(index, id), ResourceStates.ResolveSource, ResourceStates.RenderTarget);
+			transients.SetState(index, id, ResourceStates.RenderTarget);
+		}
+		_resolveCount = 0;
 		FlushTransitions();
 	}
 
@@ -64,6 +90,30 @@ public sealed unsafe partial class DirectX12Engine
 		if (_aliasedHandoffIds.Contains(id) && _aliasBarriered.Add(id))
 			QueueAliasingBarrier(transients.Resource(index, id));
 
+		// A multisampled colour target that a pass samples: the graph taking it to ShaderRead is where it is resolved, into
+		// the resource samplers read (DirectX12Transients.SampledResource). Its other transitions are its own, as any
+		// target's: it is only ever drawn into.
+		if (transients.Resolves(index, id))
+		{
+			if (transition.To == ResourceState.ShaderRead)
+			{
+				QueueTo(transients.Resource(index, id), transients.State(index, id), ResourceStates.ResolveSource);
+				transients.SetState(index, id, ResourceStates.ResolveSource);
+				QueueTo(transients.ResolveOf(index, id), transients.ResolveState(index, id), ResourceStates.ResolveDest);
+				transients.SetResolveState(index, id, ResourceStates.ResolveDest);
+				if (_resolveCount == _resolveIds.Length)
+					Array.Resize(ref _resolveIds, _resolveIds.Length * 2);
+				_resolveIds[_resolveCount++] = id;
+				return;
+			}
+			if (transition.To != ResourceState.ColorAttachment)
+				throw new NotSupportedException($"DirectX12: '{transition.Resource.Name}' is multisampled and is resolved only to be sampled; the graph takes it to {transition.To}.");
+			// Drawn into from nothing, after drawing, or after its resolve was sampled: anything else would be a use the
+			// derivation refuses, so one slipping past it throws here as it does on Vulkan
+			if (transition.From is not (ResourceState.Undefined or ResourceState.ColorAttachment or ResourceState.ShaderRead))
+				throw new NotSupportedException($"DirectX12: '{transition.Resource.Name}' is multisampled and is resolved only to be sampled; the graph takes it from {transition.From}.");
+		}
+
 		var current = transients.State(index, id);
 		if (current == target)
 			return;
@@ -87,6 +137,12 @@ public sealed unsafe partial class DirectX12Engine
 				Aliasing = new ResourceAliasingBarrier { PResourceBefore = (ID3D12Resource*)null, PResourceAfter = after.Handle }
 			}
 		};
+	}
+
+	private void QueueTo(ComPtr<ID3D12Resource> resource, ResourceStates before, ResourceStates after)
+	{
+		if (before != after)
+			QueueTransition(resource, before, after);
 	}
 
 	private void QueueTransition(ComPtr<ID3D12Resource> resource, ResourceStates before, ResourceStates after)

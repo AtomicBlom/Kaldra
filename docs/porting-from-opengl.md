@@ -391,10 +391,13 @@ build, not just against what the code says (§12), and expect to make a few such
 
 ## 10. 2D overlays and text
 
-Loom's clip space is **y-down** on every backend: y = -1 is the top of the screen. GL-style overlay coordinates
-(NDC, y up) come out upside down. Lay overlays out in pixels from the top-left, the space SUIsei lays out in, and
-convert with `LOOM_OVERLAY_POS(pixel, 2.0 / viewport, float2(-1, -1))`. Overlay and UI then line up without any
-conversion between them.
+On Vulkan and DirectX 12, clip space is **y-down** (DirectX 12 through a negative-height viewport): y = -1 is the
+top of the screen, so GL-style overlay coordinates (NDC, y up) come out upside down. WebGPU's clip space is y-up, so
+no one hand-written convention is right on all three. Lay overlays out in pixels from the top-left, the space SUIsei
+lays out in, and always go through the platform macros, which flip y where the backend needs it:
+`LOOM_OVERLAY_POS(pixel, 2.0 / viewport, float2(-1, -1))` for pixels, `LOOM_CLIP_POS(ndc)` for a position already in
+y-down clip space, and `LOOM_FULLSCREEN_POS(uv)` for a fullscreen triangle (all in `loom_platform.module.slang`).
+Overlay and UI then line up without any conversion between them, on every backend.
 
 A GL game without text can have it now. SUIsei, drawn by `Loom.UI.SUIsei`'s `UIPainter` in a pass of its own, sets
 labels on a `Canvas` of `TextBlock`s in a few lines:
@@ -464,5 +467,3 @@ Worth knowing before you start, each with the workaround used above:
 - **No mesh-less draw from CPU instances** — instance a unit quad.
 - **No primitive topology** — lines, strips and fans become triangle instances.
 - **No headless desktop host** — drive the app on an offscreen engine.
-- DirectX 12 keeps every mesh in an upload heap, which suits small geometry; a large mesh, such as a terrain grid, is
-  read across the bus each frame.

@@ -14,22 +14,26 @@ internal sealed unsafe partial class VulkanRenderContext
 	// declared whatever number that is. (The slots used to be counted out here as 0..N-1, then the storage buffers
 	// and UBOs offset past `inputs.Length` — the count the *pass* supplied, not the count the *shader* declares, so
 	// a pass supplying fewer inputs than the shader reflects shifted every following descriptor onto a wrong slot.)
-	private void BindSampledInputs(VulkanTechnique baked, in ShaderBindingMap map, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<Silk.NET.Vulkan.Buffer> storageBuffers = default, ReadOnlySpan<UniformBinding> ubos = default)
+	private void BindSampledInputs(VulkanTechnique baked, in ShaderBindingMap map, ReadOnlySpan<ResourceHandle> inputs, bool linear, ReadOnlySpan<Silk.NET.Vulkan.Buffer> storageBuffers = default, ReadOnlySpan<UniformBinding> ubos = default, DepthCompare? compare = null)
 	{
 		var sampler = linear ? _linearSampler : _nearestSampler;
+		// A slot the shader reads by comparison takes a comparison sampler, filtered (the hardware's 2×2 PCF). Which
+		// slots compare is fixed by the shader, and so by the layout; the compare function is the technique's, so the key
+		// names that sampler too.
+		var compareSampler = map.ComparedCount > 0 ? CompareSampler(compare!.Value) : default;
 		var count = inputs.Length + storageBuffers.Length + ubos.Length;
 		var imageInfos = stackalloc DescriptorImageInfo[inputs.Length];
 		var bufferInfos = stackalloc DescriptorBufferInfo[storageBuffers.Length + ubos.Length];
 		var writes = stackalloc WriteDescriptorSet[count];
-		var key = new BindingKey(baked.DescriptorSetLayout.Handle, sampler.Handle);
+		var key = new BindingKey(baked.DescriptorSetLayout.Handle, sampler.Handle, compareSampler.Handle);
 		var w = 0;
 		for (var i = 0; i < inputs.Length; i++)
 		{
 			ref var image = ref _resources.Get(_frameSlot, inputs[i].Id);
 			imageInfos[i] = new DescriptorImageInfo
 			{
-				Sampler = sampler,
-				ImageView = image.View,
+				Sampler = map.ComparedTextures[i] ? compareSampler : sampler,
+				ImageView = image.SampledView,
 				ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
 			};
 			writes[w++] = new WriteDescriptorSet
@@ -40,7 +44,7 @@ internal sealed unsafe partial class VulkanRenderContext
 				DescriptorType = DescriptorType.CombinedImageSampler,
 				PImageInfo = &imageInfos[i],
 			};
-			key.Add(map.SampledTextures[i].Index, BoundObject.View, image.View.Handle);
+			key.Add(map.SampledTextures[i].Index, BoundObject.View, image.SampledView.Handle);
 		}
 		// Read-only storage buffers (SSBOs), at the slots the shader gave them.
 		for (var s = 0; s < storageBuffers.Length; s++)
@@ -80,7 +84,8 @@ internal sealed unsafe partial class VulkanRenderContext
 	// the technique's address mode + filter. Shared by Draw(mesh, material), textured instancing, and textured
 	// particles. The caller checks SampleCount > 0 (or any UBOs). The technique's uniform buffers go to their own
 	// declared slots, in slot order (a pass's .Reads constants, then the per-draw block — e.g. a view-projection then
-	// the model, or foliage's wind, read in the vertex stage).
+	// the model, or foliage's wind, read in the vertex stage). Every slot takes the plain sampler: a technique whose shader
+	// compares accepts no material (ValidateAgainst throws first), since a material's textures are colour formats.
 	private void BindMaterialTextures(VulkanTechnique baked, VulkanTechniqueTemplate template, Material material, string technique, ReadOnlySpan<UniformBinding> ubos = default)
 	{
 		_materials.ValidateAgainst(material, technique);

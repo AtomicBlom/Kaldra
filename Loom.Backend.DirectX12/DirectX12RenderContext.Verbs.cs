@@ -13,7 +13,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 {
 	public void Draw(in DrawCall call)
 	{
-		var baked = _techniques.GetOrBake(call.Technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly);
+		var baked = _techniques.GetOrBake(call.Technique, _colorFormats.AsSpan(0, _colorCount), _depthFormat, _depthReadOnly, _samples);
 		_validate.Draw(call);
 		BindGraphicsState(baked);
 
@@ -26,12 +26,16 @@ internal sealed unsafe partial class DirectX12RenderContext
 		// Material textures or sampled graph resources fill the SRV table — mutually exclusive texture source.
 		if (call.Material is { } material)
 		{
+			if (baked.InputBufferCount > 0)
+				throw new InvalidOperationException($"DirectX12: technique '{call.Technique}' reads a storage buffer and draws with a material; a material draw binds no storage buffers.");
 			if (baked.TableParam >= 0 && baked.InputCount > 0)
 				BindMaterialTable(baked, material, call.Technique);
 		}
-		else if (!call.Sampled.IsEmpty)
+		else
 		{
-			BindInputs(baked, call.Sampled);
+			if (!call.Sampled.IsEmpty)
+				BindInputs(baked, call.Sampled);
+			BindPassStorage(baked, call.Technique);
 		}
 
 		BindTopology(D3DPrimitiveTopology.D3DPrimitiveTopologyTrianglelist);
@@ -92,6 +96,18 @@ internal sealed unsafe partial class DirectX12RenderContext
 				_cmd.DrawInstanced((uint)call.VertexCount, (uint)call.Instances.Count, 0, 0);
 			}
 		}
+		else if (call.Instances.StaticBuffer is { } stored)
+		{
+			// Instances uploaded once: a view over the stored buffer's range, from the draw's first instance
+			stored.CheckInstanceStride(baked.InstanceStride, call.Technique);
+			var instanceView = new VertexBufferView
+			{
+				BufferLocation = _meshes.VertexAddress(stored.Storage.Id) + (ulong)call.Instances.StaticFirst * (ulong)stored.Stride,
+				SizeInBytes = checked((uint)((long)call.Instances.Count * stored.Stride)),
+				StrideInBytes = (uint)stored.Stride,
+			};
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, instanceView, (uint)call.Instances.Count, call.Indices);
+		}
 		else
 		{
 			// CPU-driven instances: upload the type-erased span to the per-frame ring.
@@ -129,6 +145,23 @@ internal sealed unsafe partial class DirectX12RenderContext
 			push.CopyTo(new Span<float>(block, push.Length));
 			_cmd.SetComputeRoot32BitConstants((uint)baked.RootConstantParam, 16, block, 0);
 		}
+
+		// The constant buffers the technique declares take the pass's .Reads Constants, in order, as root CBVs (b1..),
+		// as a draw's do. One that declares more than the pass reads would dispatch with a slot unbound, so it throws.
+		if (baked.UniformBufferCount > _activeConstantsCount)
+			throw new InvalidOperationException($"DirectX12: compute technique '{technique}' declares {baked.UniformBufferCount} constant buffer(s) but its pass .Reads {_activeConstantsCount}; the pass must .Reads each one the technique reads.");
+		for (var u = 0; u < baked.UniformBufferCount; u++)
+			_cmd.SetComputeRootConstantBufferView((uint)(baked.CbvRootParam + u), _transients.Resource(_slot, _activeConstantsIds[u]).GetGPUVirtualAddress());
+
+		// The read-only storage buffers it declares take the pass's .Reads Storage, in order, as root SRVs after its
+		// sampled textures, as a draw's do; one that declares more than the pass reads throws.
+		if (baked.InputBufferCount > _activeStorageCount)
+			throw new InvalidOperationException($"DirectX12: compute technique '{technique}' declares {baked.InputBufferCount} read-only storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		if (baked.InputBufferCount > 0)
+			baked.Bindings.CheckPassStorage(technique, _pass!, readOnlyOnly: true);
+		baked.Bindings.CheckDispatchStorage(technique, storage);
+		for (var s = 0; s < baked.InputBufferCount; s++)
+			_cmd.SetComputeRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
 
 		// A dispatch can bind two descriptor tables — sampled SRVs and storage UAVs — so the descriptors for both are
 		// reserved before either is bound. Growing the heap between them would leave the first table addressing the
@@ -217,7 +250,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 		// (stride 0): t0 = bind-pose verts, t1 = bone palette, u0 = output.
 		var paletteBytes = MemoryMarshal.AsBytes(palette);
 		var paletteAddress = _storageUpload.Upload(_slot, paletteBytes);
-		_cmd.SetComputeRootShaderResourceView((uint)baked.InputBufferBaseParam, _meshes.BindPoseAddress(skinnedMesh.Id));
+		_cmd.SetComputeRootShaderResourceView((uint)baked.InputBufferBaseParam, _meshes.VertexAddress(skinnedMesh.Id));
 		_cmd.SetComputeRootShaderResourceView((uint)(baked.InputBufferBaseParam + 1), paletteAddress);
 		_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, output.Id).GetGPUVirtualAddress());
 
