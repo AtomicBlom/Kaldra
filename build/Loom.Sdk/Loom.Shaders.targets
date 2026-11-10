@@ -40,7 +40,29 @@
       <ComputeEntry>computeMain</ComputeEntry>
       <Stages></Stages>
     </LoomSlangEntry>
+    <!-- Every shader compiled, the entries and their variants (_LoomCollectShaders): a variant takes these defaults, an
+         entry keeps its own -->
+    <_LoomShader>
+      <VertexEntry>vertexMain</VertexEntry>
+      <FragmentEntry>fragmentMain</FragmentEntry>
+      <ComputeEntry>computeMain</ComputeEntry>
+      <Stages></Stages>
+      <DefineArgs></DefineArgs>
+    </_LoomShader>
   </ItemDefinitionGroup>
+
+  <!-- A variant is an entry compiled again under another name with macros defined, as a shadow caster is its lit shader
+       compiled with CAST:
+
+         <ItemGroup>
+           <LoomSlangVariant Include="Shaders\terrain.slang;Shaders\car.slang" Suffix="_cast" Defines="CAST" />
+         </ItemGroup>
+
+       makes terrain_cast and car_cast beside terrain and car, each a shader of its own to a backend. Defines is a list
+       (A;B=2). The stages are found in the source as an entry's are; VertexEntry, FragmentEntry, ComputeEntry and Stages
+       may be set on the variant as on an entry. Declare variants before this file is imported, so the IDE's up-to-date
+       check below sees their outputs; the build finds them wherever they are. -->
+
 
   <ItemGroup Condition="'$(LoomShaderOutputMode)' != 'None'">
     <LoomSlangEntry  Include="$(LoomShaderSourceDir)\**\*.slang" Exclude="$(LoomShaderSourceDir)\**\*.module.slang;$(LoomShaderExclude)" />
@@ -58,18 +80,34 @@
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'" />
     <UpToDateCheckBuilt Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true'" />
-
-    <!-- What the compile must have produced for it to count as up to date: the SPIR-V, and the WGSL when it is
-         emitted. With the SPIR-V alone, an output folder that already held another build's SPIR-V (a desktop build
-         of the same project) skipped the compile, and the WGSL was never made. -->
-    <_LoomShaderOutput Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')" />
-    <_LoomShaderOutput Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'" />
+    <UpToDateCheckBuilt Include="@(LoomSlangVariant->'$(LoomShaderOutDir)%(Filename)%(Suffix).spv')" />
+    <UpToDateCheckBuilt Include="@(LoomSlangVariant->'$(LoomShaderOutDir)%(Filename)%(Suffix).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'" />
   </ItemGroup>
+
+  <!-- Every shader to compile, by the name a backend looks it up by (ShaderName): each entry under its own, and each
+       variant under its entry's with its suffix, with its macros as slangc's arguments (DefineArgs). In a target, so the
+       Updates a project makes after the import, and its variants wherever they are, are all seen. -->
+  <Target Name="_LoomCollectShaders" Condition="'$(LoomShaderOutputMode)' != 'None'">
+    <ItemGroup>
+      <_LoomShader Remove="@(_LoomShader)" />
+      <_LoomShader Include="@(LoomSlangEntry)" ShaderName="%(LoomSlangEntry.Filename)" />
+      <_LoomShader Include="@(LoomSlangVariant)" ShaderName="%(LoomSlangVariant.Filename)%(LoomSlangVariant.Suffix)"
+                   DefineArgs="$([System.String]::Copy(';%(LoomSlangVariant.Defines)').Replace(';', ' -D').Trim())" />
+      <!-- What the compile must have produced for it to count as up to date: the SPIR-V, and the WGSL when it is
+           emitted. With the SPIR-V alone, an output folder that already held another build's SPIR-V (a desktop build
+           of the same project) skipped the compile, and the WGSL was never made. -->
+      <_LoomShaderOutput Remove="@(_LoomShaderOutput)" />
+      <_LoomShaderOutput Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).spv')" />
+      <_LoomShaderOutput Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'" />
+    </ItemGroup>
+    <Error Condition="'@(LoomSlangVariant)' != '' And '%(LoomSlangVariant.Suffix)' == ''" Text="The variant of %(LoomSlangVariant.Identity) has no Suffix, so it would be compiled under its entry's own name." />
+  </Target>
 
   <!-- Incremental: recompile when ANY .slang (entry OR shared module) is newer than ANY .spv. Listing every
        source as an input means editing a shared *.module.slang rebuilds the shaders that import it. -->
   <Target Name="LoomCompileShaders"
           Condition="'$(LoomShaderOutputMode)' != 'None'"
+          DependsOnTargets="_LoomCollectShaders"
           Inputs="@(LoomSlangSource)"
           Outputs="@(_LoomShaderOutput)">
     <Error Condition="'$(PkgSlang_Sdk)' == ''"
@@ -77,10 +115,10 @@
     <Error Condition="!Exists('$(SlangCompiler)')"
            Text="slangc not found at '$(SlangCompiler)'. Is Slang.Sdk restored for RID '$(SlangRid)'? (Only win-x64 / win-arm64 are packaged.)" />
     <MakeDir Directories="$(LoomShaderOutDir)" />
-    <Message Importance="high" Text="Slang -&gt; SPIR-V (+reflection): %(LoomSlangEntry.Filename).slang" />
+    <Message Importance="high" Text="Slang -&gt; SPIR-V (+reflection): %(_LoomShader.ShaderName)" />
     <!-- Emit reflection JSON beside the SPIR-V (M7-B4): the backend reads it at DefineTechnique to derive
          the descriptor-binding layout, so the app states only pipeline intent. -->
-    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target spirv -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).spv&quot; -reflection-json &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).json&quot;" />
+    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomShader.FullPath)&quot; -target spirv %(_LoomShader.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).spv&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).json&quot;" />
 
     <!-- DirectX12: also emit SIGNED DXIL here (same target as SPIR-V, so the single LoomCompileShaders dependency
          covers BOTH and the registration below always sees every produced stage — a separate emit target
@@ -106,7 +144,7 @@
     </PropertyGroup>
     <Warning Condition="'$(LoomEmitDxil)' == 'true' And '$(LoomDxcPath)' == ''"
              Text="LoomEmitDxil is on but no DXC found (neither Microsoft.Direct3D.DXC NuGet package nor Windows SDK '$(LoomDxcArch)' bin). Add a Microsoft.Direct3D.DXC PackageReference with GeneratePathProperty=true to this project, or set $(LoomDxcPath)." />
-    <Message Condition="'$(LoomEmitDxil)' == 'true'" Importance="high" Text="Slang -&gt; signed DXIL (per stage): %(LoomSlangEntry.Filename).slang" />
+    <Message Condition="'$(LoomEmitDxil)' == 'true'" Importance="high" Text="Slang -&gt; signed DXIL (per stage): %(_LoomShader.ShaderName)" />
     <!-- Which stages to emit comes from the [shader("...")] attributes the source declares, and the entry-point name
          for each comes from item metadata defaulting to the conventional name. Matching the attribute rather than
          searching for the entry name keeps a mention in a comment (or a substring of another identifier) from
@@ -117,9 +155,9 @@
          here. That is caught by the entry-presence check below rather than silently dropping the stage, unless the
          item names its stages itself (Stages, below). -->
     <ItemGroup Condition="'$(LoomEmitDxil)' == 'true'">
-      <!-- VertexEntry/FragmentEntry/ComputeEntry ride along from LoomSlangEntry (the ItemDefinitionGroup default,
+      <!-- VertexEntry/FragmentEntry/ComputeEntry ride along from LoomSlangEntry or LoomSlangVariant (the ItemDefinitionGroup default,
            or a per-shader override) — a transform copies the source item's metadata. -->
-      <_LoomDxilEntry Include="@(LoomSlangEntry)">
+      <_LoomDxilEntry Include="@(_LoomShader)">
         <HasVertex>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\[\s*shader\s*\(\s*"vertex"\s*\)\s*\]'))</HasVertex>
         <HasFragment>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\[\s*shader\s*\(\s*"fragment"\s*\)\s*\]'))</HasFragment>
         <HasCompute>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\[\s*shader\s*\(\s*"compute"\s*\)\s*\]'))</HasCompute>
@@ -131,9 +169,9 @@
         <FragmentOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(FragmentEntry)\s*\('))</FragmentOk>
         <ComputeOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(ComputeEntry)\s*\('))</ComputeOk>
       </_LoomDxilEntry>
-      <!-- A shader whose entry points come from an #include (one source compiled twice, a variant defining a macro and
-           including the other) declares its stages on the item, since the scan above can't see them:
-             <LoomSlangEntry Update="Shaders\*_cast.slang" Stages="vertex;fragment" />
+      <!-- A shader whose entry points come from an #include (a stage declared in a module it includes, or by a macro
+           it expands) declares its stages on the item, since the scan above can't see them:
+             <LoomSlangEntry Update="Shaders\wall.slang" Stages="vertex;fragment" />
            Its entry functions are then taken on trust; slangc fails the compile if one is missing. -->
       <_LoomDxilEntry Condition="'%(_LoomDxilEntry.Stages)' != ''">
         <HasVertex>$([System.String]::Copy(';%(_LoomDxilEntry.Stages);').Contains(';vertex;'))</HasVertex>
@@ -147,9 +185,9 @@
     <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True' And '%(_LoomDxilEntry.VertexOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;vertex&quot;)] entry point, but no function named '%(_LoomDxilEntry.VertexEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; VertexEntry=&quot;yourEntry&quot; /&gt;." />
     <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True' And '%(_LoomDxilEntry.FragmentOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;fragment&quot;)] entry point, but no function named '%(_LoomDxilEntry.FragmentEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; FragmentEntry=&quot;yourEntry&quot; /&gt;." />
     <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True' And '%(_LoomDxilEntry.ComputeOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;compute&quot;)] entry point, but no function named '%(_LoomDxilEntry.ComputeEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; ComputeEntry=&quot;yourEntry&quot; /&gt;." />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.VertexEntry) -stage vertex -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).vs.dxil&quot;" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.FragmentEntry) -stage fragment -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).ps.dxil&quot;" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.ComputeEntry) -stage compute -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.Filename).cs.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; %(_LoomDxilEntry.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.VertexEntry) -stage vertex -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).vs.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; %(_LoomDxilEntry.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.FragmentEntry) -stage fragment -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).ps.dxil&quot;" />
+    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; %(_LoomDxilEntry.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.ComputeEntry) -stage compute -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).cs.dxil&quot;" />
 
     <!-- WebGPU: also emit WGSL (whole module — Slang's WGSL target handles multi-entry) plus the
          WGSL-target reflection sidecar. -DLOOM_WGSL flips the loom_platform.module.slang macros: explicit
@@ -157,8 +195,8 @@
          explicit Vulkan numbers would collide because a combined Sampler2D needs TWO slots) and the
          push-constant block lowers to an ordinary uniform. The WebGPU backend derives its bind-group
          layouts from the emitted WGSL text + this sidecar, never from the Vulkan slot scheme. -->
-    <Message Condition="'$(LoomEmitWgsl)' == 'true'" Importance="high" Text="Slang -&gt; WGSL (+reflection): %(LoomSlangEntry.Filename).slang" />
-    <Exec Condition="'$(LoomEmitWgsl)' == 'true'" Command="&quot;$(SlangCompiler)&quot; &quot;%(LoomSlangEntry.FullPath)&quot; -target wgsl -DLOOM_WGSL -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).wgsl&quot; -reflection-json &quot;$(LoomShaderOutDir)%(LoomSlangEntry.Filename).wgsl.json&quot;" />
+    <Message Condition="'$(LoomEmitWgsl)' == 'true'" Importance="high" Text="Slang -&gt; WGSL (+reflection): %(_LoomShader.ShaderName)" />
+    <Exec Condition="'$(LoomEmitWgsl)' == 'true'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomShader.FullPath)&quot; -target wgsl -DLOOM_WGSL %(_LoomShader.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl.json&quot;" />
   </Target>
 
   <!-- No Inputs/Outputs => ALWAYS runs (even when the compile targets are up to date), so the outputs are
@@ -195,17 +233,17 @@
          Do NOT add Pack=false here: that would add the files to _PackageFilesToExclude, which blacklists
          them from appearing in the package even when re-added via other item groups. -->
     <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content'">
-      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
+      <Content Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).spv')">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        <Link>shaders\%(Filename).spv</Link>
-        <PackagePath>contentFiles/any/any/shaders/%(Filename).spv</PackagePath>
+        <Link>shaders\%(_LoomShader.ShaderName).spv</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(_LoomShader.ShaderName).spv</PackagePath>
         <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
-      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')">
+      <Content Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).json')">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        <Link>shaders\%(Filename).json</Link>
-        <PackagePath>contentFiles/any/any/shaders/%(Filename).json</PackagePath>
+        <Link>shaders\%(_LoomShader.ShaderName).json</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(_LoomShader.ShaderName).json</PackagePath>
         <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
@@ -216,17 +254,17 @@
         <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
-      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true' and '$(LoomEmbedWgsl)' != 'true'">
+      <Content Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true' and '$(LoomEmbedWgsl)' != 'true'">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        <Link>shaders\%(Filename).wgsl</Link>
-        <PackagePath>contentFiles/any/any/shaders/%(Filename).wgsl</PackagePath>
+        <Link>shaders\%(_LoomShader.ShaderName).wgsl</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(_LoomShader.ShaderName).wgsl</PackagePath>
         <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
-      <Content Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true' and '$(LoomEmbedWgsl)' != 'true'">
+      <Content Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true' and '$(LoomEmbedWgsl)' != 'true'">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        <Link>shaders\%(Filename).wgsl.json</Link>
-        <PackagePath>contentFiles/any/any/shaders/%(Filename).wgsl.json</PackagePath>
+        <Link>shaders\%(_LoomShader.ShaderName).wgsl.json</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(_LoomShader.ShaderName).wgsl.json</PackagePath>
         <PackageCopyToOutput>true</PackageCopyToOutput>
         <Visible>false</Visible>
       </Content>
@@ -236,13 +274,13 @@
          loose, because a browser app has no shader folder to look in. The web host finds it by the library's
          "<AssemblyName>.Shaders." prefix. -->
     <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content' and '$(LoomEmitWgsl)' == 'true' and '$(LoomEmbedWgsl)' == 'true'">
-      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')">
-        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).wgsl</LogicalName>
+      <EmbeddedResource Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).wgsl')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(_LoomShader.ShaderName).wgsl</LogicalName>
         <WithCulture>false</WithCulture>
         <Visible>false</Visible>
       </EmbeddedResource>
-      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')">
-        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).wgsl.json</LogicalName>
+      <EmbeddedResource Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).wgsl.json')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(_LoomShader.ShaderName).wgsl.json</LogicalName>
         <WithCulture>false</WithCulture>
         <Visible>false</Visible>
       </EmbeddedResource>
@@ -252,12 +290,12 @@
          reads via Assembly.GetManifestResourceStream("<prefix><name>.spv"). The LogicalName is mandatory:
          without it MSBuild derives the name from the obj\shaders\ path (ugly + build-config-dependent). -->
     <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Embed'">
-      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
-        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).spv</LogicalName>
+      <EmbeddedResource Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).spv')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(_LoomShader.ShaderName).spv</LogicalName>
         <Visible>false</Visible>
       </EmbeddedResource>
-      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')">
-        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).json</LogicalName>
+      <EmbeddedResource Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).json')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(_LoomShader.ShaderName).json</LogicalName>
         <Visible>false</Visible>
       </EmbeddedResource>
       <!-- WithCulture=false is REQUIRED: a stage suffix like ".ps"/".cs" (blit.ps.dxil, exposure.cs.dxil) is a
@@ -268,13 +306,13 @@
         <WithCulture>false</WithCulture>
         <Visible>false</Visible>
       </EmbeddedResource>
-      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'">
-        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).wgsl</LogicalName>
+      <EmbeddedResource Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(_LoomShader.ShaderName).wgsl</LogicalName>
         <WithCulture>false</WithCulture>
         <Visible>false</Visible>
       </EmbeddedResource>
-      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true'">
-        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).wgsl.json</LogicalName>
+      <EmbeddedResource Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).wgsl.json')" Condition="'$(LoomEmitWgsl)' == 'true'">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(_LoomShader.ShaderName).wgsl.json</LogicalName>
         <WithCulture>false</WithCulture>
         <Visible>false</Visible>
       </EmbeddedResource>

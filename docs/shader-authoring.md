@@ -119,6 +119,16 @@ Name them `vertexMain` / `fragmentMain` / `computeMain` and mark them with `[sha
 
 A compute technique states its entry once via `TechniqueDescriptor.Compute("shader")`. What the compiled artifact ends up calling that entry internally is the backend's problem — Vulkan resolves the real SPIR-V entry from the module, so a toolchain that renames the sole entry to `main` is handled without the author knowing.
 
+**Variants.** One source compiled again with macros defined, under a name of its own, is a `LoomSlangVariant`, not a second file that defines the macro and includes the first:
+
+```xml
+<ItemGroup>
+  <LoomSlangVariant Include="Shaders\terrain.slang;Shaders\car.slang" Suffix="_cast" Defines="CAST" />
+</ItemGroup>
+```
+
+That makes `terrain_cast` and `car_cast` beside `terrain` and `car`, on every backend, each a shader of its own that a `TechniqueDescriptor` names (`Defines` takes a list, `A;B=2`). The stages are found by scanning the source, as an entry's are, and the scan doesn't see `#ifdef`: a variant that compiles a stage out names the stages it keeps with `Stages="vertex"` on the item. Declare variants before the SDK's targets are imported, so the IDE's up-to-date check sees their outputs.
+
 ---
 
 ## 9. Where scalar parameters actually go
