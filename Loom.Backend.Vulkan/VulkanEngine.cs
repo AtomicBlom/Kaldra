@@ -49,6 +49,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 	private readonly IVulkanPresentTarget _presentTarget;
 	private readonly bool _offscreen;
 	private readonly string _shaderDir;
+	private readonly Func<string, byte[]?>? _shaderResolver;
 	private readonly VulkanMemoryAllocator _allocator;
 	private readonly VulkanTechniqueCache _techniques;
 	private readonly VulkanPipelineCache _pipelineCache;
@@ -150,6 +151,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_offscreen = offscreen;
 		_vk = _ctx.Vk;
 		_shaderDir = settings.ShaderDirectory;
+		_shaderResolver = settings.ShaderResolver;
 
 		// GPU-timing device support. 0 valid bits ⇒ the graphics queue can't timestamp, so the profiler stays
 		// permanently unavailable (the GpuTimingEnabled setter enforces this).
@@ -429,9 +431,12 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		if (File.Exists(path))
 			return File.ReadAllBytes(path);
 
+		if (_shaderResolver?.Invoke(name + extension) is { } resolved)
+			return resolved;
+
 		throw new ShaderAssetMissingException(
 			name,
-			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}') nor on disk ('{path}'). Did the app's shaders build, or is an engine shader missing from Loom.Backend.Vulkan?");
+			$"Shader asset '{name}{extension}' not found: neither embedded ('{EmbeddedShaderPrefix}{name}{extension}'), on disk ('{path}'), nor by the settings' ShaderResolver ({(_shaderResolver is null ? "none set" : "it returned null")}). Did the app's shaders build, or is an engine shader missing from Loom.Backend.Vulkan?");
 	}
 
 	protected override void RenderFrame(FrameInputs inputs)

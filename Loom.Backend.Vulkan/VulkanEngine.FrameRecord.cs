@@ -138,12 +138,16 @@ internal sealed unsafe partial class VulkanEngine
 				PImageIndices = &presentIndex,
 			};
 			var result = _ctx.KhrSwapchain.QueuePresent(_ctx.PresentQueue, in present);
-			if (result is Result.ErrorOutOfDateKhr or Result.SuboptimalKhr || _framebufferResized)
+			// Suboptimal is ignored where the swapchain expects it (the compositor rotating an un-rotated swapchain on Android
+			// answers every present with it); rebuilding there would recreate the swapchain on every frame.
+			var stale = result == Result.ErrorOutOfDateKhr
+				|| (result == Result.SuboptimalKhr && !WindowSwapchain.SuboptimalExpected);
+			if (stale || _framebufferResized)
 			{
 				_framebufferResized = false;
 				RecreatePresentTarget();
 			}
-			else if (result != Result.Success)
+			else if (result is not (Result.Success or Result.SuboptimalKhr))
 			{
 				result.Check("vkQueuePresentKHR");
 			}

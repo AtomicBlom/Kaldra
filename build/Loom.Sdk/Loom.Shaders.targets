@@ -278,6 +278,23 @@
       </EmbeddedResource>
     </ItemGroup>
 
+    <!-- Content with LoomEmbedSpirv (a library's shaders, as Loom.UI.SUIsei's): the SPIR-V and its reflection JSON are
+         embedded as well as copied loose, because an Android app has no shader folder beside it either; the loose
+         copies keep the desktop's shader folder and hot reload as they were. The Vulkan backend's ShaderResolver finds
+         them by the library's "<AssemblyName>.Shaders." prefix. -->
+    <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content' and '$(LoomEmbedSpirv)' == 'true'">
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).spv</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).json</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+    </ItemGroup>
+
     <!-- Embed (engine): .spv/.json (+ HLSL) become EmbeddedResource with a STABLE flat manifest name the engine
          reads via Assembly.GetManifestResourceStream("<prefix><name>.spv"). The LogicalName is mandatory:
          without it MSBuild derives the name from the obj\shaders\ path (ugly + build-config-dependent). -->

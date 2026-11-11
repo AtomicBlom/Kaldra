@@ -28,6 +28,13 @@ public sealed unsafe class VulkanSwapchain : IVulkanPresentTarget
 	/// </summary>
 	public bool HdrActive { get; private set; }
 
+	/// <summary>
+	/// True when this swapchain's pre-transform differs from the surface's current transform, so the compositor rotates
+	/// each frame and the presentation engine answers every present with <see cref="Result.SuboptimalKhr"/> (Android
+	/// does). The present path treats that result as expected rather than rebuilding the swapchain each frame.
+	/// </summary>
+	public bool SuboptimalExpected { get; private set; }
+
 	public VulkanSwapchain(VulkanContext ctx, Extent2D windowExtent, bool vsync, bool hdrOutput = false)
 	{
 		_ctx = ctx;
@@ -62,6 +69,18 @@ public sealed unsafe class VulkanSwapchain : IVulkanPresentTarget
 				LoomLog.Warning("HDR output requested but no HDR-capable surface format/colour space available — using SDR.");
 		}
 
+		// The engine renders upright and never rotates its output, so ask for IDENTITY and let the compositor rotate it into
+		// the display's orientation. Matching caps.CurrentTransform instead would tell the presentation engine the image
+		// is already rotated, and on a rotated Android device it would appear sideways. A surface without IDENTITY
+		// (none known) falls back to its current transform.
+		var preTransform = (caps.SupportedTransforms & SurfaceTransformFlagsKHR.IdentityBitKhr) != 0
+			? SurfaceTransformFlagsKHR.IdentityBitKhr
+			: caps.CurrentTransform;
+		// Android reports VK_SUBOPTIMAL_KHR on every present whose preTransform differs from the current transform. That
+		// is the cost of letting the compositor rotate, not a sign the swapchain is stale, so the present path must not
+		// rebuild on it. Size changes still arrive as a resize or VK_ERROR_OUT_OF_DATE_KHR.
+		SuboptimalExpected = preTransform != caps.CurrentTransform;
+
 		var imageCount = caps.MinImageCount + 1;
 		if (caps.MaxImageCount > 0 && imageCount > caps.MaxImageCount)
 			imageCount = caps.MaxImageCount;
@@ -82,8 +101,8 @@ public sealed unsafe class VulkanSwapchain : IVulkanPresentTarget
 			ImageExtent = extent,
 			ImageArrayLayers = 1,
 			ImageUsage = usage,
-			PreTransform = caps.CurrentTransform,
-			CompositeAlpha = CompositeAlphaFlagsKHR.OpaqueBitKhr,
+			PreTransform = preTransform,
+			CompositeAlpha = ChooseCompositeAlpha(caps),
 			PresentMode = presentMode,
 			Clipped = true,
 			OldSwapchain = oldSwapchain,
@@ -134,8 +153,12 @@ public sealed unsafe class VulkanSwapchain : IVulkanPresentTarget
 			&& TryFind(formats, Format.R16G16B16A16Sfloat, ColorSpaceKHR.SpaceExtendedSrgbLinearExt, out var scrgb))
 			return scrgb;
 
-		if (TryFind(formats, Format.B8G8R8A8Srgb, ColorSpaceKHR.SpaceSrgbNonlinearKhr, out var srgb))
+		// An sRGB format, so the hardware encodes the terminal pass's linear output: BGRA on desktop drivers, RGBA on
+		// Android's, which seldom offer BGRA.
+		if (TryFind(formats, Format.B8G8R8A8Srgb, ColorSpaceKHR.SpaceSrgbNonlinearKhr, out var srgb)
+			|| TryFind(formats, Format.R8G8B8A8Srgb, ColorSpaceKHR.SpaceSrgbNonlinearKhr, out srgb))
 			return srgb;
+		LoomLog.Warning($"The surface offers no 8-bit sRGB format; presenting {formats[0].Format}, whose colours will not be sRGB-encoded.");
 		return formats[0];
 	}
 
@@ -181,6 +204,23 @@ public sealed unsafe class VulkanSwapchain : IVulkanPresentTarget
 		return new Extent2D(
 			Math.Clamp(windowExtent.Width, caps.MinImageExtent.Width, caps.MaxImageExtent.Width),
 			Math.Clamp(windowExtent.Height, caps.MinImageExtent.Height, caps.MaxImageExtent.Height));
+	}
+
+	// Opaque when the surface offers it (desktop drivers do). Many Android drivers offer only INHERIT, which leaves the
+	// window's own opacity in charge; the engine's frames are opaque either way. Every surface supports at least one mode.
+	private static CompositeAlphaFlagsKHR ChooseCompositeAlpha(SurfaceCapabilitiesKHR caps)
+	{
+		ReadOnlySpan<CompositeAlphaFlagsKHR> preference =
+		[
+			CompositeAlphaFlagsKHR.OpaqueBitKhr,
+			CompositeAlphaFlagsKHR.InheritBitKhr,
+			CompositeAlphaFlagsKHR.PreMultipliedBitKhr,
+			CompositeAlphaFlagsKHR.PostMultipliedBitKhr,
+		];
+		foreach (var mode in preference)
+			if ((caps.SupportedCompositeAlpha & mode) != 0)
+				return mode;
+		throw new VulkanException($"The surface supports no composite-alpha mode (SupportedCompositeAlpha={caps.SupportedCompositeAlpha}).");
 	}
 
 	private void CreateViews()

@@ -165,6 +165,13 @@ public abstract class LoomApplication : IHostedApplication
 	protected bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents) => _host.SaveFile(name, contentType, contents);
 
 	/// <summary>
+	/// Physical pixels per layout unit on the display the app renders to (see <see cref="IHostControl.DisplayScale"/>):
+	/// about 3 on a phone, 1 on a desktop monitor at 100%. Scale a UI's layout by it. Valid from
+	/// <see cref="LoadContent"/> onward.
+	/// </summary>
+	protected float DisplayScale => _host.DisplayScale;
+
+	/// <summary>
 	/// Request that the next frame be rendered. Only meaningful under <see cref="RenderMode.OnDemand"/>, where a
 	/// frame is otherwise skipped: call this whenever app state changes so the change is drawn (an input handler, an
 	/// async load completing, an animation advancing). Idempotent within a frame, and safe to call from any thread —
