@@ -407,6 +407,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase, IReattachableSur
 		_vk.DeviceWaitIdle(_ctx.Device);
 		WindowSwapchain.Dispose();
 		_ctx.DestroySurface();
+		// A platform that takes the surface away may end the process next without disposing the engine (Android ends
+		// backgrounded apps), so the compiled pipelines are kept now rather than only at Dispose.
+		_pipelineCache.Save();
 		LoomLog.Info("surface detached; the engine keeps its resources until a surface is attached again");
 	}
 

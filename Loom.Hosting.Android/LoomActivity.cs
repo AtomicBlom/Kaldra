@@ -17,7 +17,7 @@ namespace Loom.Hosting.Android;
 /// <see cref="CreateApplication"/>, and mark the subclass as the launcher activity, handling the configuration changes
 /// in <see cref="HandledConfigChanges"/> itself:
 /// <code>
-/// [Activity(MainLauncher = true, ConfigurationChanges = LoomActivity.HandledConfigChanges, FullscreenTheme = LoomActivity.FullscreenTheme)]
+/// [Activity(MainLauncher = true, ConfigurationChanges = LoomActivity.HandledConfigChanges, Theme = LoomActivity.FullscreenTheme)]
 /// public sealed class MainActivity : LoomActivity
 /// {
 ///     protected override LoomApplication CreateApplication() =&gt; new MyApp();
@@ -34,17 +34,22 @@ namespace Loom.Hosting.Android;
 /// the app comes back it attaches the new surface and carries on, with nothing reloaded. Rotation and resizing keep the
 /// surface (the activity handles those configuration changes itself) and reach the app as a resize.
 /// </remarks>
-public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreographer.IFrameCallback
+public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreographer.IFrameCallback, View.IOnTouchListener, View.IOnGenericMotionListener
 {
 	/// <summary>
 	/// The configuration changes a <see cref="LoomActivity"/> handles itself rather than being destroyed and made again,
-	/// which would take its surface and so its engine with it. Pass it as the <c>ConfigurationChanges</c> of the
+	/// which would take its surface and so its engine with it: the display (orientation, size, density, colour mode),
+	/// input devices, and the user's text and locale settings. Pass it as the <c>ConfigurationChanges</c> of the
 	/// subclass's <c>[Activity]</c>.
 	/// </summary>
+#pragma warning disable CA1416 // FontWeightAdjustment is Android 12's; this is a manifest flag set, and an older Android ignores a bit it does not know
 	public const ConfigChanges HandledConfigChanges =
 		ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.SmallestScreenSize | ConfigChanges.ScreenLayout
-		| ConfigChanges.Density | ConfigChanges.Keyboard | ConfigChanges.KeyboardHidden | ConfigChanges.Navigation
-		| ConfigChanges.UiMode | ConfigChanges.Locale | ConfigChanges.LayoutDirection;
+		| ConfigChanges.Density | ConfigChanges.ColorMode | ConfigChanges.UiMode
+		| ConfigChanges.Keyboard | ConfigChanges.KeyboardHidden | ConfigChanges.Navigation | ConfigChanges.Touchscreen
+		| ConfigChanges.Locale | ConfigChanges.LayoutDirection | ConfigChanges.FontScale | ConfigChanges.FontWeightAdjustment
+		| ConfigChanges.Mcc | ConfigChanges.Mnc;
+#pragma warning restore CA1416
 
 	/// <summary>A theme with no title bar or action bar, for the subclass's <c>[Activity]</c>: the frame fills the window.</summary>
 	public const string FullscreenTheme = "@android:style/Theme.Material.NoActionBar.Fullscreen";
@@ -60,6 +65,9 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	private bool _resumed;
 	private bool _framesRunning;
 	private bool _failed;
+	// Set once OnDestroy has run. Android can still call the surface callbacks after it (a relaunch detaches the old
+	// activity's view after destroying it), and those must not act: Finish() from the old instance would finish the new.
+	private bool _destroyed;
 	private long _lastFrameNanos;
 	private double _totalSeconds;
 
@@ -82,6 +90,10 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 
 		_view = new SurfaceView(this);
 		_view.Holder!.AddCallback(this);
+		// Input from the view itself, so positions are relative to the surface the frame is drawn on, wherever the system
+		// bars leave it in the window.
+		_view.SetOnTouchListener(this);
+		_view.SetOnGenericMotionListener(this);
 		SetContentView(_view);
 	}
 
@@ -101,6 +113,8 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 
 	protected override void OnDestroy()
 	{
+		_destroyed = true;
+		_view?.Holder?.RemoveCallback(this);
 		ShutDownEngine();
 		base.OnDestroy();
 	}
@@ -120,11 +134,11 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 		_app?.SetFocus(hasFocus);
 	}
 
-	public override bool OnTouchEvent(MotionEvent? e) =>
-		(e is not null && _input is not null && _input.OnTouch(e)) || base.OnTouchEvent(e);
+	bool View.IOnTouchListener.OnTouch(View? view, MotionEvent? e) =>
+		e is not null && _input is not null && _input.OnTouch(e);
 
-	public override bool OnGenericMotionEvent(MotionEvent? e) =>
-		(e is not null && _input is not null && _input.OnGenericMotion(e)) || base.OnGenericMotionEvent(e);
+	bool View.IOnGenericMotionListener.OnGenericMotion(View? view, MotionEvent? e) =>
+		e is not null && _input is not null && _input.OnGenericMotion(e);
 
 	void ISurfaceHolderCallback.SurfaceCreated(ISurfaceHolder holder)
 	{
@@ -133,7 +147,7 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 
 	void ISurfaceHolderCallback.SurfaceChanged(ISurfaceHolder holder, Format format, int width, int height)
 	{
-		if (_failed || width <= 0 || height <= 0)
+		if (_destroyed || _failed || width <= 0 || height <= 0)
 			return;
 		if (_engine is null)
 		{
@@ -163,7 +177,10 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 
 	void ISurfaceHolderCallback.SurfaceDestroyed(ISurfaceHolder holder)
 	{
-		// The surface goes once this returns, so the engine must be done with it first.
+		// The surface goes once this returns, so the engine must be done with it first. After OnDestroy the engine is
+		// already gone, and this activity must not finish: on a relaunch, that would finish the activity replacing it.
+		if (_destroyed)
+			return;
 		StopFrames();
 		_input?.ReleasePrimary();
 		if (_engine is IReattachableSurface reattachable)
@@ -182,7 +199,10 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 			return;
 		}
 
-		// An engine that cannot move to a new surface ends with this one.
+		// An engine that cannot move to a new surface ends with this one, and the app with it. With no engine (it never
+		// came up, and the failure is on screen) there is nothing to end: leaving the screen just leaves it.
+		if (_engine is null)
+			return;
 		ShutDownEngine();
 		if (!IsFinishing)
 			Finish();
@@ -266,12 +286,14 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 		if (_engine is IReattachableSurface { HasSurface: false })
 			return; // off screen: frames start again when the next surface is attached
 		_framesRunning = true;
+		_input?.Accepting = true;
 		_lastFrameNanos = 0; // the time paused is not a frame's delta
 		_choreographer!.PostFrameCallback(this);
 	}
 
 	private void StopFrames()
 	{
+		_input?.Accepting = false; // nothing drains the app's input queue until frames run again
 		if (!_framesRunning)
 			return;
 		_framesRunning = false;

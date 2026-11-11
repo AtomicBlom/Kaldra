@@ -23,9 +23,19 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 	// The contact acting as the pointer, or -1 while no contact is down.
 	private int _primaryId = -1;
 
+	/// <summary>
+	/// Whether the app is taking frames, and so draining its input queue each one. While it is not (paused but still
+	/// visible, as in split screen), moves and new presses are dropped rather than left to fill the queue; a lift or a
+	/// cancel still ends a press already held.
+	/// </summary>
+	public bool Accepting { get; set; }
+
 	/// <summary>Queue the input in a touch, pen or mouse-button event. Returns whether the event was taken.</summary>
 	public bool OnTouch(MotionEvent e)
 	{
+		if (!Accepting && e.ActionMasked is not (MotionEventActions.Up or MotionEventActions.PointerUp or MotionEventActions.Cancel))
+			return true; // taken, and dropped: nothing drains the queue until frames run again
+
 		var timestamp = e.EventTime;
 		switch (e.ActionMasked)
 		{
@@ -86,6 +96,9 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 	/// <summary>Queue a hovering mouse or pen's move, or a mouse wheel's scroll. Returns whether the event was taken.</summary>
 	public bool OnGenericMotion(MotionEvent e)
 	{
+		if (!Accepting)
+			return false;
+
 		var timestamp = e.EventTime;
 		switch (e.ActionMasked)
 		{
@@ -103,11 +116,16 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 		}
 	}
 
-	/// <summary>Release the pointer's button if a contact holds it: for focus lost mid-press, whose up never comes.</summary>
+	/// <summary>
+	/// End a press a contact holds without it counting as a click: for a contact the system canceled, or focus lost
+	/// mid-press, whose up never comes. The pointer moves off the surface first, so the pressed element sees it leave
+	/// and the release lands on nothing.
+	/// </summary>
 	public void ReleasePrimary(long timestamp = 0)
 	{
 		if (_primaryId < 0)
 			return;
+		app.QueueInput(InputEvent.PointerMove(-1f, -1f, _primaryId, PointerDeviceType.Touch, timestamp));
 		app.QueueInput(InputEvent.MouseButtonUp(MouseButton.Left, timestamp));
 		_primaryId = -1;
 	}
