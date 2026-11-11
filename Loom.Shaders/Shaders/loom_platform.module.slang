@@ -10,11 +10,19 @@
 // slots in declaration order) and lowers the push-constant block to an ordinary uniform
 // parameter. The WebGPU backend recovers the actual assignments from the emitted WGSL text, so
 // no code shares slot numbers with this scheme.
+//
+// LOOM_REGISTER(reg) is a resource's DirectX 12 register, written after its name in place of `: register(reg)`:
+//     LOOM_BINDING(1) ConstantBuffer<ViewProj> view LOOM_REGISTER(b1);
+// WGSL drops it too. Left in, Slang takes a register's number as the WGSL binding of a parameter with no
+// [[vk::binding]] (warning 39029, once per parameter per shader), numbering the rest around it; and registers count
+// each kind apart (b1 and t1 are both 1) where WGSL's bindings are one list, so two could claim the same binding.
 #ifdef LOOM_WGSL
 #define LOOM_BINDING(slot)
+#define LOOM_REGISTER(reg)
 #define LOOM_PUSH_CONSTANT uniform
 #else
 #define LOOM_BINDING(slot) [[vk::binding(slot, 0)]]
+#define LOOM_REGISTER(reg) : register(reg)
 #define LOOM_PUSH_CONSTANT [[vk::push_constant]]
 #endif
 

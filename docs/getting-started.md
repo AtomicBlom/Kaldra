@@ -140,8 +140,8 @@ struct PerDraw  { float4x4 model; }      // staged by DrawCall.SetUniforms(ref b
 
 // Descriptors 0 and 1 because that is what they are numbered — and registers b1/b2, since b0 is reserved.
 // Uniform slots fill in a defined order: the pass's .Reads constants first, then the per-draw block.
-LOOM_BINDING(0) ConstantBuffer<ViewProj> view : register(b1);
-LOOM_BINDING(1) ConstantBuffer<PerDraw>  draw : register(b2);
+LOOM_BINDING(0) ConstantBuffer<ViewProj> view LOOM_REGISTER(b1);
+LOOM_BINDING(1) ConstantBuffer<PerDraw>  draw LOOM_REGISTER(b2);
 
 struct VSOut { float4 pos : SV_Position; float3 normal : NORMAL; }
 

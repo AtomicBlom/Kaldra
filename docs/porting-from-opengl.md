@@ -224,8 +224,8 @@ port runs into:
   draw's per-draw block. In the shader, each needs both a descriptor slot and a DirectX 12 register:
 
   ```hlsl
-  LOOM_BINDING(0) ConstantBuffer<Frame> frame : register(b1);       // the pass .Reads(frame)
-  LOOM_BINDING(1) ConstantBuffer<Terrain> terrain : register(b2);   // DrawCall.SetUniforms(ref block)
+  LOOM_BINDING(0) ConstantBuffer<Frame> frame LOOM_REGISTER(b1);       // the pass .Reads(frame)
+  LOOM_BINDING(1) ConstantBuffer<Terrain> terrain LOOM_REGISTER(b2);   // DrawCall.SetUniforms(ref block)
   ```
 
   Registers start at `b1`: `b0` is DirectX 12's root constants.
