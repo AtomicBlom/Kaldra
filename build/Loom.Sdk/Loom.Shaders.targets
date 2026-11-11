@@ -194,9 +194,13 @@
          [[vk::binding]] slots are dropped (Slang auto-assigns unique WGSL bindings in declaration order —
          explicit Vulkan numbers would collide because a combined Sampler2D needs TWO slots) and the
          push-constant block lowers to an ordinary uniform. The WebGPU backend derives its bind-group
-         layouts from the emitted WGSL text + this sidecar, never from the Vulkan slot scheme. -->
+         layouts from the emitted WGSL text + this sidecar, never from the Vulkan slot scheme.
+
+         Dropping those slots on purpose leaves every D3D register(...) without its [[vk::binding]], which Slang warns
+         about (39029) once per parameter per shader that imports it: hundreds of lines about Vulkan in a compile that
+         isn't for Vulkan. It is disabled here alone; the SPIR-V and DXIL compiles above still warn. -->
     <Message Condition="'$(LoomEmitWgsl)' == 'true'" Importance="high" Text="Slang -&gt; WGSL (+reflection): %(_LoomShader.ShaderName)" />
-    <Exec Condition="'$(LoomEmitWgsl)' == 'true'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomShader.FullPath)&quot; -target wgsl -DLOOM_WGSL %(_LoomShader.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl.json&quot;" />
+    <Exec Condition="'$(LoomEmitWgsl)' == 'true'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomShader.FullPath)&quot; -target wgsl -DLOOM_WGSL -warnings-disable 39029 %(_LoomShader.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl.json&quot;" />
   </Target>
 
   <!-- No Inputs/Outputs => ALWAYS runs (even when the compile targets are up to date), so the outputs are
