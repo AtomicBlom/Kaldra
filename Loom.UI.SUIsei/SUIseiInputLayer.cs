@@ -31,6 +31,10 @@ public sealed class SUIseiInputLayer : IInputLayer
 	private Vector2 _pointerPosition;
 	private Sui.PointerButtons _buttons;
 	private Sui.ModifierKeys _modifiers;
+	// The pointer the latest move came from, which a press, release or scroll belongs to: a press by touch is a touch
+	// press, so SUIsei can treat a drag from it as a pan.
+	private uint _pointerId;
+	private Sui.PointerDeviceType _device = Sui.PointerDeviceType.Mouse;
 
 	/// <summary>Creates a layer that feeds <paramref name="host"/>.</summary>
 	public SUIseiInputLayer(UIHost host)
@@ -48,7 +52,9 @@ public sealed class SUIseiInputLayer : IInputLayer
 			{
 				case InputEventKind.PointerMove:
 					_pointerPosition = new Vector2(e.X, e.Y);
-					_host.QueuePointer(Sui.PointerInput.Move(_pointerPosition, _buttons, (uint)e.PointerId, ToDevice(e.PointerType)));
+					_pointerId = (uint)e.PointerId;
+					_device = ToDevice(e.PointerType);
+					_host.QueuePointer(Sui.PointerInput.Move(_pointerPosition, _buttons, _pointerId, _device));
 					break;
 
 				case InputEventKind.MouseButtonDown:
@@ -56,7 +62,7 @@ public sealed class SUIseiInputLayer : IInputLayer
 						_buttons |= ToPointerButton(e.Button);
 						var kind = PressKind(e.Button);
 						if (kind != Sui.PointerUpdateKind.None)
-							_host.QueuePointer(Sui.PointerInput.Press(_pointerPosition, kind, _buttons));
+							_host.QueuePointer(Sui.PointerInput.Press(_pointerPosition, kind, _buttons, _pointerId, _device));
 						break;
 					}
 
@@ -65,12 +71,12 @@ public sealed class SUIseiInputLayer : IInputLayer
 						_buttons &= ~ToPointerButton(e.Button);
 						var kind = ReleaseKind(e.Button);
 						if (kind != Sui.PointerUpdateKind.None)
-							_host.QueuePointer(Sui.PointerInput.Release(_pointerPosition, kind, _buttons));
+							_host.QueuePointer(Sui.PointerInput.Release(_pointerPosition, kind, _buttons, _pointerId, _device));
 						break;
 					}
 
 				case InputEventKind.Wheel:
-					_host.QueuePointer(Sui.PointerInput.Scroll(_pointerPosition, new Vector2(e.X, e.Y), _buttons));
+					_host.QueuePointer(Sui.PointerInput.Scroll(_pointerPosition, new Vector2(e.X, e.Y), _buttons, _pointerId, _device));
 					break;
 
 				case InputEventKind.KeyDown:

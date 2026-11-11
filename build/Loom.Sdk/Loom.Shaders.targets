@@ -42,7 +42,9 @@
     </LoomSlangEntry>
   </ItemDefinitionGroup>
 
-  <ItemGroup Condition="'$(LoomShaderOutputMode)' != 'None'">
+  <!-- An app with no shaders of its own (no LoomShaderSourceDir: it draws with a library's) compiles nothing; an empty
+       directory would make these globs search the drive root. -->
+  <ItemGroup Condition="'$(LoomShaderOutputMode)' != 'None' and '$(LoomShaderSourceDir)' != ''">
     <LoomSlangEntry  Include="$(LoomShaderSourceDir)\**\*.slang" Exclude="$(LoomShaderSourceDir)\**\*.module.slang;$(LoomShaderExclude)" />
     <LoomSlangModule Include="$(LoomShaderSourceDir)\**\*.module.slang" />
     <!-- Shared includes (the LOOM_BINDING/LOOM_PUSH_CONSTANT header) live outside app shader dirs;

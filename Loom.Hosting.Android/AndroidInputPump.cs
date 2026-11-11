@@ -138,6 +138,9 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 				app.QueueInput(InputEvent.PointerMove(e.GetX(0), e.GetY(0), e.GetPointerId(0), PointerTypeOf(e, 0), timestamp));
 				return true;
 			case MotionEventActions.Scroll:
+				// The wheel scrolls what is under it, so the pointer moves there first, unless a contact holds it.
+				if (_primaryId < 0)
+					app.QueueInput(InputEvent.PointerMove(e.GetX(0), e.GetY(0), e.GetPointerId(0), PointerTypeOf(e, 0), timestamp));
 				app.QueueInput(InputEvent.Wheel(e.GetAxisValue(Axis.Hscroll), e.GetAxisValue(Axis.Vscroll), timestamp));
 				return true;
 			case MotionEventActions.ButtonPress:

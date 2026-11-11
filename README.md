@@ -216,7 +216,9 @@ dotnet run   --project Loom.Sandbox -- --demo bloom --backend dx12   # pick a de
 dotnet run   --project Loom.Tests               # unit tests (TUnit) — incl. GPU-gated golden/parity over the gallery
 ```
 
-Android builds from the same app source, with the `android` workload installed: `samples/HelloUI` targets both `net10.0` (a desktop exe) and `net11.0-android` (an APK on CoreCLR, Vulkan 1.3, SUIsei with touch). `dotnet build samples/HelloUI -f net11.0-android -t:Run` installs and starts it on a connected device; [`samples/HelloUI/README.md`](samples/HelloUI/README.md) has the rest. The Android projects live in `Loom.Android.slnx`, so `Loom.slnx` never needs the workload.
+Android builds from the same app source, with the `android` workload installed: `samples/HelloUI` targets both `net10.0` (a desktop exe) and `net11.0-android` (an APK on CoreCLR, Vulkan 1.3, SUIsei with touch). `dotnet build samples/HelloUI -f net11.0-android -t:Run` installs and starts it on a connected device; [`samples/HelloUI/README.md`](samples/HelloUI/README.md) has the rest. The demo gallery runs there too: `dotnet build Loom.Sandbox.Android -t:Run` installs `Loom.Gallery`'s `GalleryApp` (the gallery without the desktop's ImGui dev tools), its shaders embedded and its models packed into the APK. The Android projects live in `Loom.Android.slnx`, so `Loom.slnx` never needs the workload.
+
+On Android, a keyboard sends keys and text as on the desktop, the system's Back arrives as Escape (the app decides whether to leave), a mouse's buttons and a pen's barrel buttons are their own, and game controllers are pads with rumble. The on-screen keyboard opens while an input layer asks for text (`InputContext.RequestTextInput`, which SUIsei's layer does while a `TextBox` has focus); its height reaches the app as `LoomApplication.InputPaneHeight`, and in SUIsei `UIRoot.InputPaneHeight` plus `suisei:InputPane.AvoidsKeyboard="True"` on an element arranges that element clear of it, while a `ScrollViewer` keeps its focused field in view and pans by touch.
 
 The sandbox is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in `Loom.Tests` — `GalleryGoldenTests`/`GalleryParityTests` render the gallery offscreen in-process (GPU-gated; skipped without one). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
 
@@ -234,7 +236,7 @@ The sandbox is a `LoomApplication` on the desktop host: every run is interactive
 | `Loom.Input` | Neutral input: actions, bindings, layered event routing |
 | `Loom.Hosting.Desktop` | Desktop host — window, surface, frame loop, CLI flags |
 | `Loom.Hosting.Web` | Browser host, paired with the WebGPU backend |
-| `Loom.Hosting.Android` | Android host — a `LoomActivity` with a Vulkan surface, Choreographer-paced frames, touch input |
+| `Loom.Hosting.Android` | Android host — a `LoomActivity` with a Vulkan surface, Choreographer-paced frames, touch, keyboard and on-screen keyboard, mouse, game controllers |
 | `Loom.UI.SUIsei` | SUIsei XAML-UI integration (via the neutral draw-list verb) |
 | `Loom.UI.ImGui` | Dear ImGui integration |
 | `Loom.Sdk` | MSBuild SDK — reference this from a game project |
