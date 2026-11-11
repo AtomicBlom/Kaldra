@@ -79,6 +79,9 @@
     <UseSUIsei     Condition="'$(UseSUIsei)'     == ''">false</UseSUIsei>
     <UseImGui      Condition="'$(UseImGui)'      == ''">false</UseImGui>
     <LoomShaderOutputMode Condition="'$(LoomShaderOutputMode)' == '' and '$(_LoomTargetsBrowser)' == 'true'">Embed</LoomShaderOutputMode>
+    <!-- Noted so Sdk.targets can embed instead for an Android target, which is only known there (the target framework
+         of a single-target project is set in its body, after this file). An app that chose Content itself keeps it. -->
+    <_LoomShaderOutputModeDefaulted Condition="'$(LoomShaderOutputMode)' == ''">true</_LoomShaderOutputModeDefaulted>
     <LoomShaderOutputMode Condition="'$(LoomShaderOutputMode)' == ''">Content</LoomShaderOutputMode>
   </PropertyGroup>
 
