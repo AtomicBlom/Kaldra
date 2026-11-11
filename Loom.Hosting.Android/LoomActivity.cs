@@ -80,7 +80,6 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	protected override void OnCreate(Bundle? savedInstanceState)
 	{
 		base.OnCreate(savedInstanceState);
-		EnterFullscreen();
 		CurrentDisplayScale = Resources?.DisplayMetrics?.Density ?? 1f;
 		_choreographer = Choreographer.Instance;
 
@@ -95,6 +94,8 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 		_view.SetOnTouchListener(this);
 		_view.SetOnGenericMotionListener(this);
 		SetContentView(_view);
+		// After the content view: the window's insets controller belongs to its decor view, which setting content creates.
+		EnterFullscreen();
 	}
 
 	protected override void OnResume()
