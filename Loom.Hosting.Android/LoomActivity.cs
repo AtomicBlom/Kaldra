@@ -29,10 +29,10 @@ namespace Loom.Hosting.Android;
 /// and goes to logcat under the tag <c>Loom</c>.
 /// </summary>
 /// <remarks>
-/// The engine lives as long as the activity's surface. Android takes the surface away when the app leaves the screen,
-/// and the engine cannot yet move to a new one, so the activity unloads the app, disposes the engine and finishes then:
-/// leaving the app closes it. Rotation and resizing keep the surface (the activity handles those configuration changes
-/// itself) and reach the app as a resize.
+/// The engine and the app live as long as the activity. Android takes the surface away whenever the app leaves the
+/// screen; the activity detaches the engine from it (<see cref="IReattachableSurface"/>) and stops the frames, and when
+/// the app comes back it attaches the new surface and carries on, with nothing reloaded. Rotation and resizing keep the
+/// surface (the activity handles those configuration changes itself) and reach the app as a resize.
 /// </remarks>
 public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreographer.IFrameCallback
 {
@@ -142,18 +142,47 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 		}
 		try
 		{
-			_engine.Resize(width, height);
+			if (_engine is IReattachableSurface { HasSurface: false } reattachable)
+			{
+				// Back on screen with a new surface: the engine, the app and everything they loaded carried on without one.
+				_window = NativeWindow.FromSurface(holder.Surface!);
+				reattachable.AttachSurface(new AndroidVkSurface(_window), width, height);
+			}
+			else
+			{
+				_engine.Resize(width, height);
+			}
 			_app!.Resize(width, height);
+			StartFrames();
 		}
 		catch (Exception ex)
 		{
-			Fail("resizing the engine", ex);
+			Fail("giving the engine its surface", ex);
 		}
 	}
 
 	void ISurfaceHolderCallback.SurfaceDestroyed(ISurfaceHolder holder)
 	{
 		// The surface goes once this returns, so the engine must be done with it first.
+		StopFrames();
+		_input?.ReleasePrimary();
+		if (_engine is IReattachableSurface reattachable)
+		{
+			// Keep the engine and the app: the next surface (the app coming back on screen) is attached to them.
+			try
+			{
+				reattachable.DetachSurface();
+			}
+			catch (Exception ex)
+			{
+				Log.Error(LogTag, $"Detaching the engine from its surface failed: {ex}");
+			}
+			NativeWindow.Release(_window);
+			_window = 0;
+			return;
+		}
+
+		// An engine that cannot move to a new surface ends with this one.
 		ShutDownEngine();
 		if (!IsFinishing)
 			Finish();
@@ -234,6 +263,8 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	{
 		if (_framesRunning || !_resumed || _engine is null || _failed)
 			return;
+		if (_engine is IReattachableSurface { HasSurface: false })
+			return; // off screen: frames start again when the next surface is attached
 		_framesRunning = true;
 		_lastFrameNanos = 0; // the time paused is not a frame's delta
 		_choreographer!.PostFrameCallback(this);

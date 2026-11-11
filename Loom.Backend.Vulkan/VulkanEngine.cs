@@ -40,7 +40,7 @@ namespace Loom.Backend.Vulkan;
 /// command buffer), so the backbuffer needs no extra buffering.
 /// </para>
 /// </summary>
-internal sealed unsafe partial class VulkanEngine : EngineBase
+internal sealed unsafe partial class VulkanEngine : EngineBase, IReattachableSurface
 {
 	private const int MaxFramesInFlight = 2;
 
@@ -396,6 +396,42 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		_framebufferResized = true;
 	}
 
+	public bool HasSurface => !_offscreen && _ctx.Surface.Handle != 0;
+
+	// Everything but the swapchain and the surface stays: the device, the meshes, textures and pipelines, the graph and
+	// its transients. The swapchain goes first, since it was made on the surface.
+	public void DetachSurface()
+	{
+		if (!HasSurface)
+			return;
+		_vk.DeviceWaitIdle(_ctx.Device);
+		WindowSwapchain.Dispose();
+		_ctx.DestroySurface();
+		LoomLog.Info("surface detached; the engine keeps its resources until a surface is attached again");
+	}
+
+	// A new surface, then the swapchain rebuilt on it through the same path a resize takes, which also resizes the
+	// transients, the swapchain-sized readbacks and the per-image semaphores to what the new surface gives.
+	public void AttachSurface(object surface, int width, int height)
+	{
+		ArgumentNullException.ThrowIfNull(surface);
+		if (_offscreen)
+			throw new InvalidOperationException("An offscreen engine has no surface to attach.");
+		if (HasSurface)
+			throw new InvalidOperationException("The engine already has a surface; detach it before attaching another.");
+		if (width <= 0 || height <= 0)
+			throw new ArgumentOutOfRangeException(nameof(width), $"A surface must be attached at a positive size; got {width}x{height}.");
+		if (surface is not IVkSurface vkSurface)
+			throw new ArgumentException(
+				$"The Vulkan backend needs the window's {nameof(IVkSurface)}; got {surface.GetType().Name}.", nameof(surface));
+
+		_ctx.ReplaceSurface(vkSurface);
+		_windowExtent = new Extent2D((uint)width, (uint)height);
+		_framebufferResized = false;
+		RecreatePresentTarget();
+		LoomLog.Info($"surface attached at {_presentTarget.Extent.Width}x{_presentTarget.Extent.Height}");
+	}
+
 	public override void WaitIdle()
 	{
 		// Submit any recorded uploads first, so idle covers them too: a mesh or texture released while its copy was still
@@ -441,6 +477,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 	protected override void RenderFrame(FrameInputs inputs)
 	{
+		if (!_offscreen && !HasSurface)
+			throw new InvalidOperationException("The engine has no surface to present to: it was detached (IReattachableSurface.DetachSurface) and not attached again.");
+
 		ServicePendingUploads();
 		if (Graph is null || _transients is null)
 			throw new InvalidOperationException("No active graph; call SetGraph before Render.");
