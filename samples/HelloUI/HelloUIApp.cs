@@ -37,6 +37,8 @@ public sealed class HelloUIApp : LoomApplication
 		_page.ViewModel.Device = $"{Engine.DeviceName} ({Engine.BackendName})";
 		_view.Root.Content = _page;
 		PushInputLayer(new SUIseiInputLayer(_ui));
+		// On top, so it sees every event before the UI takes any: a readout, and Escape (Back on Android) to leave.
+		PushInputLayer(new InputReadoutLayer(_page.ViewModel, Exit));
 
 		SetGraph(RenderGraph.Define(g =>
 		{
@@ -53,8 +55,11 @@ public sealed class HelloUIApp : LoomApplication
 
 	protected override void BeforeRender(FrameTime time)
 	{
-		// Read every frame: it changes when the window moves to a monitor at another scale.
+		// Read every frame: the scale changes when the window moves to a monitor at another scale, and the keyboard's height
+		// as an on-screen keyboard opens and closes.
 		_view.Root.LayoutScale = DisplayScale;
+		_view.Root.InputPaneHeight = InputPaneHeight;
+		_page.ViewModel.Keyboard = InputPaneHeight > 0f ? $"Keyboard: up, {InputPaneHeight:0} px" : "Keyboard: down";
 		_ui.Tick(time.DeltaSeconds, (float)time.TotalSeconds, SurfaceSize);
 		_ui.Render();
 		_painter.Prepare();

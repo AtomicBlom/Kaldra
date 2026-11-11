@@ -2,13 +2,17 @@ using Android.App;
 using Android.Content.PM;
 using Android.Content.Res;
 using Android.Graphics;
+using Android.Hardware.Input;
 using Android.OS;
 using Android.Util;
 using Android.Views;
+using Android.Views.InputMethods;
 using Android.Widget;
+using Android.Window;
 
 using Loom.Backend.Vulkan;
 using Loom.Core.Hosting;
+using Loom.Input;
 
 namespace Loom.Hosting.Android;
 
@@ -24,17 +28,27 @@ namespace Loom.Hosting.Android;
 /// }
 /// </code>
 /// The activity fills its window with a <see cref="SurfaceView"/>, brings the Vulkan engine up on its surface, and runs
-/// one frame per display refresh from the <see cref="Choreographer"/>, on the UI thread, where Android delivers touch
+/// one frame per display refresh from the <see cref="Choreographer"/>, on the UI thread, where Android delivers input
 /// too, so input reaches the app on the thread its frames run on. A failure shows its message in place of the frame
 /// and goes to logcat under the tag <c>Loom</c>.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The engine and the app live as long as the activity. Android takes the surface away whenever the app leaves the
 /// screen; the activity detaches the engine from it (<see cref="IReattachableSurface"/>) and stops the frames, and when
 /// the app comes back it attaches the new surface and carries on, with nothing reloaded. Rotation and resizing keep the
 /// surface (the activity handles those configuration changes itself) and reach the app as a resize.
+/// </para>
+/// <para>
+/// Input: touch, a pen and a mouse drive the pointer; a keyboard sends keys and text; game controllers are pads
+/// (rumble included). The system's Back gesture or button reaches the app as <see cref="Key.Escape"/> pressed and
+/// released, and leaves the app only if the app then calls <c>Exit</c>, so a game can take Back for its own menus. The
+/// on-screen keyboard opens while the app wants text (a text field has focus) and closes when it stops; its height
+/// reaches the app as <c>LoomApplication.InputPaneHeight</c>, for laying the page out clear of it.
+/// </para>
 /// </remarks>
-public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreographer.IFrameCallback, View.IOnTouchListener, View.IOnGenericMotionListener
+public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreographer.IFrameCallback, View.IOnTouchListener,
+	View.IOnGenericMotionListener, View.IOnApplyWindowInsetsListener
 {
 	/// <summary>
 	/// The configuration changes a <see cref="LoomActivity"/> handles itself rather than being destroyed and made again,
@@ -57,9 +71,11 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	private const string LogTag = "Loom";
 
 	private IHostedApplication? _app;
-	private SurfaceView? _view;
+	private LoomSurfaceView? _view;
 	private Choreographer? _choreographer;
 	private AndroidInputPump? _input;
+	private AndroidGamepads? _gamepads;
+	private BackCallback? _backCallback;
 	private IEngine? _engine;
 	private nint _window;
 	private bool _resumed;
@@ -70,6 +86,13 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	private bool _destroyed;
 	private long _lastFrameNanos;
 	private double _totalSeconds;
+
+	// The on-screen keyboard: whether the activity asked for it to be up, whether it is up (from the window insets), and
+	// whether a tap since the last frame should bring it back after the user put it away.
+	private bool _imeRequested;
+	private bool _imeVisible;
+	private int _imeHeight;
+	private bool _imeReshow;
 
 	/// <summary>Physical pixels per layout unit on the screen the activity is on: Android's display density.</summary>
 	internal float CurrentDisplayScale { get; private set; } = 1f;
@@ -86,16 +109,26 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 		var application = CreateApplication();
 		LoomApplication.Run(application, []);
 		_app = application;
+		_input = new AndroidInputPump(application);
+		_gamepads = new AndroidGamepads(application, GetSystemService(InputService) as InputManager);
 
-		_view = new SurfaceView(this);
+		_view = new LoomSurfaceView(this, _input);
 		_view.Holder!.AddCallback(this);
 		// Input from the view itself, so positions are relative to the surface the frame is drawn on, wherever the system
 		// bars leave it in the window.
 		_view.SetOnTouchListener(this);
 		_view.SetOnGenericMotionListener(this);
+		_view.SetOnApplyWindowInsetsListener(this);
 		SetContentView(_view);
+		_view.RequestFocus();
 		// After the content view: the window's insets controller belongs to its decor view, which setting content creates.
 		EnterFullscreen();
+
+		if (OperatingSystem.IsAndroidVersionAtLeast(33))
+		{
+			_backCallback = new BackCallback(this);
+			OnBackInvokedDispatcher.RegisterOnBackInvokedCallback(IOnBackInvokedDispatcher.PriorityDefault, _backCallback);
+		}
 	}
 
 	protected override void OnResume()
@@ -116,6 +149,9 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	{
 		_destroyed = true;
 		_view?.Holder?.RemoveCallback(this);
+		if (_backCallback is not null && OperatingSystem.IsAndroidVersionAtLeast(33))
+			OnBackInvokedDispatcher.UnregisterOnBackInvokedCallback(_backCallback);
+		_gamepads?.Stop();
 		ShutDownEngine();
 		base.OnDestroy();
 	}
@@ -131,15 +167,65 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	{
 		base.OnWindowFocusChanged(hasFocus);
 		if (!hasFocus)
-			_input?.ReleasePrimary(); // a press held as the window loses focus never gets its up
+		{
+			// What is held as the window loses focus never gets its release.
+			var timestamp = SystemClock.UptimeMillis();
+			_input?.ReleaseAll(timestamp);
+			_gamepads?.ReleaseAll(timestamp);
+		}
 		_app?.SetFocus(hasFocus);
 	}
 
-	bool View.IOnTouchListener.OnTouch(View? view, MotionEvent? e) =>
-		e is not null && _input is not null && _input.OnTouch(e);
+	public override bool DispatchKeyEvent(KeyEvent? e)
+	{
+		if (e is null || _input is null)
+			return base.DispatchKeyEvent(e);
+		if (e.KeyCode == Keycode.Back)
+		{
+			// Below Android 13, Back arrives as a key; from it, as the callback registered in OnCreate.
+			if (e.Action == KeyEventActions.Up && e.RepeatCount == 0 && !e.IsCanceled)
+				OnBack();
+			return true;
+		}
+		if (_gamepads?.OnKey(e) == true || _input.OnKey(e))
+			return true;
+		return base.DispatchKeyEvent(e);
+	}
+
+	public override bool DispatchGenericMotionEvent(MotionEvent? e) =>
+		(e is not null && _gamepads?.OnMotion(e) == true) || base.DispatchGenericMotionEvent(e);
+
+	bool View.IOnTouchListener.OnTouch(View? view, MotionEvent? e)
+	{
+		if (e is null || _input is null)
+			return false;
+		if (e.ActionMasked == MotionEventActions.Down)
+			_imeReshow = true; // a tap brings the keyboard back if a text field still wants it
+		return _input.OnTouch(e);
+	}
 
 	bool View.IOnGenericMotionListener.OnGenericMotion(View? view, MotionEvent? e) =>
 		e is not null && _input is not null && _input.OnGenericMotion(e);
+
+	WindowInsets View.IOnApplyWindowInsetsListener.OnApplyWindowInsets(View view, WindowInsets insets)
+	{
+		// The keyboard covers the bottom of the window, and the surface fills the window, so its inset is the part of the
+		// surface it covers. Android 10 reports no keyboard inset; the app sees none there.
+		if (OperatingSystem.IsAndroidVersionAtLeast(30))
+		{
+			var ime = WindowInsets.Type.Ime();
+			var visible = insets.IsVisible(ime);
+			if (!visible && _imeVisible)
+				_view?.Connection?.Reset();
+			var height = visible ? insets.GetInsets(ime).Bottom : 0;
+			if (visible != _imeVisible || height != _imeHeight)
+				Log.Info(LogTag, visible ? $"on-screen keyboard up, covering {height} px" : "on-screen keyboard down");
+			_imeVisible = visible;
+			_imeHeight = height;
+			_app?.SetInputPaneHeight(height);
+		}
+		return view.OnApplyWindowInsets(insets) ?? insets;
+	}
 
 	void ISurfaceHolderCallback.SurfaceCreated(ISurfaceHolder holder)
 	{
@@ -226,7 +312,36 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 			Fail("running a frame", ex);
 			return;
 		}
+		UpdateTextInput();
+		_gamepads?.DrainRumble(_app.Rumble);
 		_choreographer!.PostFrameCallback(this);
+	}
+
+	// Back: the app sees Escape pressed and released, and decides what it means.
+	private void OnBack() => _input?.PressKey(Key.Escape, SystemClock.UptimeMillis());
+
+	// Open the on-screen keyboard when the app starts wanting text, close it when it stops, and bring it back on a tap
+	// when the user put it away while the app still wanted text.
+	private void UpdateTextInput()
+	{
+		var wants = _app!.WantsTextInput;
+		var reshow = _imeReshow;
+		_imeReshow = false;
+		if (wants && (!_imeRequested || (reshow && !_imeVisible)))
+		{
+			_imeRequested = true;
+			var imm = (InputMethodManager?)GetSystemService(InputMethodService);
+			_view!.RequestFocus();
+			imm?.RestartInput(_view); // a fresh connection: nothing composed carries over from the last field
+			imm?.ShowSoftInput(_view, ShowFlags.Implicit);
+		}
+		else if (!wants && _imeRequested)
+		{
+			_imeRequested = false;
+			var imm = (InputMethodManager?)GetSystemService(InputMethodService);
+			imm?.HideSoftInputFromWindow(_view!.WindowToken, HideSoftInputFlags.None);
+			_view?.Connection?.Reset();
+		}
 	}
 
 	private void BringUpEngine(ISurfaceHolder holder, int width, int height)
@@ -246,10 +361,11 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 			_engine = new VulkanBackend().Create(new AndroidVkSurface(_window), width, height, settings);
 			Log.Info(LogTag, $"Loom running on {_engine.DeviceName} ({_engine.BackendName}) at {width}x{height}, display scale {CurrentDisplayScale:0.##}");
 
-			_input = new AndroidInputPump(app);
 			app.Load(_engine, new AndroidHostControl(this));
 			// The host reports the initial size before the first frame, exactly like every later resize.
 			app.Resize(width, height);
+			// Controllers already connected are announced now the app is loaded, and later ones as they come and go.
+			_gamepads?.Start(new Handler(Looper.MainLooper!));
 			StartFrames();
 		}
 		catch (Exception ex)
@@ -277,7 +393,6 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 		}
 		NativeWindow.Release(_window);
 		_window = 0;
-		_input = null;
 	}
 
 	private void StartFrames()
@@ -318,11 +433,13 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 		AddContentView(scroll, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 	}
 
-	// Draw under the system bars and the display cutout, hide the bars until swiped in, and keep the screen on.
+	// Draw under the system bars and the display cutout, hide the bars until swiped in, and keep the screen on. The
+	// on-screen keyboard neither resizes nor pans the window: it covers the surface, and the app lays out clear of it.
 	private void EnterFullscreen()
 	{
 		var window = Window!;
 		window.AddFlags(WindowManagerFlags.KeepScreenOn);
+		window.SetSoftInputMode(SoftInput.AdjustNothing | SoftInput.StateHidden);
 		var attributes = window.Attributes!;
 		attributes.LayoutInDisplayCutoutMode = LayoutInDisplayCutoutMode.ShortEdges;
 		window.Attributes = attributes;
@@ -334,5 +451,11 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 			insets.Hide(WindowInsets.Type.SystemBars());
 			insets.SystemBarsBehavior = (int)WindowInsetsControllerBehavior.ShowTransientBarsBySwipe;
 		}
+	}
+
+	// The system's Back, from Android 13 on: Back no longer arrives as a key there.
+	private sealed class BackCallback(LoomActivity activity) : Java.Lang.Object, IOnBackInvokedCallback
+	{
+		public void OnBackInvoked() => activity.OnBack();
 	}
 }

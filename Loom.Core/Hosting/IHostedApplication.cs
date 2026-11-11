@@ -52,6 +52,21 @@ public interface IHostedApplication
 	/// </summary>
 	RumbleQueue Rumble { get; }
 
+	/// <summary>
+	/// Whether the app took typed text on its last frame — an input layer holds a focused text field (see
+	/// <see cref="Loom.Input.InputContext.RequestTextInput"/>). A host with an on-screen keyboard shows it while this is
+	/// true and hides it when it goes false; a host with a physical keyboard ignores it.
+	/// </summary>
+	bool WantsTextInput => false;
+
+	/// <summary>
+	/// Notify the app how much of the bottom of its surface the host's on-screen keyboard covers, in surface pixels: zero
+	/// when it goes. Only a host with an on-screen keyboard calls it.
+	/// </summary>
+	void SetInputPaneHeight(float pixels)
+	{
+	}
+
 	/// <summary>Advance one frame: the app's <c>Update</c>, then <c>Draw</c>, then the framework's own <see cref="IEngine.Render"/> (every frame under <see cref="RenderMode.Continuous"/>; gated under <see cref="RenderMode.OnDemand"/>).</summary>
 	void Tick(FrameTime time);
 

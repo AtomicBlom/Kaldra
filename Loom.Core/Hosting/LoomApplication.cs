@@ -172,6 +172,13 @@ public abstract class LoomApplication : IHostedApplication
 	protected float DisplayScale => _host.DisplayScale;
 
 	/// <summary>
+	/// How much of the bottom of the surface the host's on-screen keyboard covers, in surface pixels: zero while there is
+	/// none, and always on a host whose keyboard is a physical one. A SUIsei app hands it to its root each frame
+	/// (<c>UIRoot.InputPaneHeight</c>), where elements marked <c>InputPane.AvoidsKeyboard</c> are arranged clear of it.
+	/// </summary>
+	protected float InputPaneHeight { get; private set; }
+
+	/// <summary>
 	/// Request that the next frame be rendered. Only meaningful under <see cref="RenderMode.OnDemand"/>, where a
 	/// frame is otherwise skipped: call this whenever app state changes so the change is drawn (an input handler, an
 	/// async load completing, an animation advancing). Idempotent within a frame, and safe to call from any thread —
@@ -229,6 +236,17 @@ public abstract class LoomApplication : IHostedApplication
 	void IHostedApplication.QueueInput(in InputEvent e) => _inputQueue.Enqueue(in e);
 
 	RumbleQueue IHostedApplication.Rumble => _inputStack.RumbleQueue;
+
+	bool IHostedApplication.WantsTextInput => _inputStack.TextInputRequested;
+
+	void IHostedApplication.SetInputPaneHeight(float pixels)
+	{
+		pixels = MathF.Max(0f, pixels);
+		if (pixels == InputPaneHeight)
+			return;
+		InputPaneHeight = pixels;
+		Invalidate(); // the layout changes, so an on-demand app draws again
+	}
 
 	void IHostedApplication.Tick(FrameTime time)
 	{

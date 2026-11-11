@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Text;
 using Loom.Input;
 using SUIsei;
+using SUIsei.Controls;
 using Sui = global::SUIsei.Input;
 
 namespace Loom.UI.SUIsei;
@@ -102,6 +103,10 @@ public sealed class SUIseiInputLayer : IInputLayer
 			ctx.Block(InputDevice.Pointer | InputDevice.Mouse);
 		if (_host.WantsKeyboard)
 			ctx.Block(InputDevice.Keyboard);
+
+		// A focused text box takes typed text, so a host whose keyboard is on the screen shows it.
+		if (_host.Focus.FocusedElement is TextBox)
+			ctx.RequestTextInput();
 	}
 
 	private void QueueText(uint codePoint)

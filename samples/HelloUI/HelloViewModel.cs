@@ -34,6 +34,27 @@ internal sealed class HelloViewModel : INotifyPropertyChanged
 		private set { if (field != value) { field = value; OnChanged(); } }
 	} = "Slider: 50";
 
+	/// <summary>The last key, character, mouse button or controller event the app received.</summary>
+	public string LastInput
+	{
+		get;
+		set { if (field != value) { field = value; OnChanged(); } }
+	} = "Input: none yet";
+
+	/// <summary>The first controller's sticks and triggers.</summary>
+	public string PadState
+	{
+		get;
+		set { if (field != value) { field = value; OnChanged(); } }
+	} = "No controller";
+
+	/// <summary>How much of the screen the on-screen keyboard covers.</summary>
+	public string Keyboard
+	{
+		get;
+		set { if (field != value) { field = value; OnChanged(); } }
+	} = "Keyboard: down";
+
 	public void Tap()
 	{
 		_taps++;
