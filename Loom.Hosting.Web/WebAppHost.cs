@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices.JavaScript;
@@ -143,8 +144,9 @@ public sealed partial class WebAppHost : IAppHost
 		_engine = engine;
 
 		app.Load(engine, Host);
-		// The host reports the initial size before the first frame, exactly like every later resize.
+		// The host reports the initial size and safe area before the first frame, exactly like every later resize.
 		app.Resize(width, height);
+		app.SetSafeArea(ParseInsets(GetSafeArea(canvasSelector)));
 
 		// Bridge the page's DOM/Gamepad-API input into the app's neutral queue, and its focus/visibility state into
 		// the app's focus hook. On blur/hide the pump synthesizes releases for everything held — the browser drops
@@ -254,7 +256,11 @@ public sealed partial class WebAppHost : IAppHost
 			return;
 		var (width, height) = ParseSize(GetCanvasSize(canvasSelector), null);
 		engine.Resize(width, height);
-		((IHostedApplication)current).Resize(width, height);
+		var app = (IHostedApplication)current;
+		app.Resize(width, height);
+		// The safe area comes and goes with the window's size (a phone turned, fullscreen), and changes alone too (the
+		// gesture bar), which the page reports as a resize. The app hears only a change.
+		app.SetSafeArea(ParseInsets(GetSafeArea(canvasSelector)));
 	}
 
 	// The app's control channel back to this host. The browser has no separate "window closed" event to hook, so
@@ -294,6 +300,22 @@ public sealed partial class WebAppHost : IAppHost
 		public bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents)
 		{
 			SaveFileJs(name, contentType, contents.ToArray());
+			return true;
+		}
+
+		[SupportedOSPlatform("browser")]
+		public bool CanFullscreen => CanFullscreenJs();
+
+		[SupportedOSPlatform("browser")]
+		public bool IsFullscreen => IsFullscreenJs();
+
+		// Asked, not done: the page asks the browser, which may still refuse; a change arrives as a resize
+		[SupportedOSPlatform("browser")]
+		public bool SetFullscreen(bool on)
+		{
+			if (!CanFullscreenJs())
+				return false;
+			SetFullscreenJs(on);
 			return true;
 		}
 	}
@@ -344,6 +366,22 @@ public sealed partial class WebAppHost : IAppHost
 		return (options?.Width ?? 1280, options?.Height ?? 720);
 	}
 
+	// Parse the "left,top,right,bottom" device-pixel insets the JS side reports for the canvas (getSafeArea), or none
+	// when they can't be read.
+	private static ScreenInsets ParseInsets(string ltrb)
+	{
+		var parts = ltrb.Split(',');
+		if (parts.Length != 4)
+			return ScreenInsets.None;
+		Span<float> v = stackalloc float[4];
+		for (var i = 0; i < 4; i++)
+		{
+			if (!float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v[i]))
+				return ScreenInsets.None;
+		}
+		return new ScreenInsets(v[0], v[1], v[2], v[3]);
+	}
+
 	// Extract a query-string value (e.g. "?capture=triangle&post" -> QueryValue(…, "capture") == "triangle").
 	private static string? QueryValue(string query, string key)
 	{
@@ -371,6 +409,11 @@ public sealed partial class WebAppHost : IAppHost
 	[JSImport("getCanvasSize", Module)]
 	[SupportedOSPlatform("browser")]
 	private static partial string GetCanvasSize(string canvasSelector);
+
+	// How far in from each of the canvas's edges the screen hides it, "left,top,right,bottom" in device pixels
+	[JSImport("getSafeArea", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial string GetSafeArea(string canvasSelector);
 
 	[JSImport("getLocationSearch", Module)]
 	[SupportedOSPlatform("browser")]
@@ -421,6 +464,19 @@ public sealed partial class WebAppHost : IAppHost
 	[JSImport("writeClipboardText", Module)]
 	[SupportedOSPlatform("browser")]
 	private static partial void WriteClipboardText(string text);
+
+	[JSImport("canFullscreen", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial bool CanFullscreenJs();
+
+	[JSImport("isFullscreen", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial bool IsFullscreenJs();
+
+	// Async on the JS side (the browser answers later); nothing waits on it
+	[JSImport("setFullscreen", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial void SetFullscreenJs(bool on);
 
 	// Async on the JS side (the save dialog); nothing waits on it
 	[JSImport("saveFile", Module)]

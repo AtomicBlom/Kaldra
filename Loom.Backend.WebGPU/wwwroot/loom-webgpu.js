@@ -120,7 +120,7 @@ export function configureCanvas(width, height) {
 		usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
 }
 
-// The canvas's current display resolution in device pixels — its CSS size (100vw×100vh) times the (capped) device
+// The canvas's current display resolution in device pixels — its CSS size (the default shell's 100dvw×100dvh) times the (capped) device
 // pixel ratio. The host reads this to size the engine so one rendered pixel maps to one device pixel.
 export function getCanvasSize(canvasSelector) {
 	const c = document.querySelector(canvasSelector);
@@ -129,6 +129,41 @@ export function getCanvasSize(canvasSelector) {
 	const w = Math.max(1, Math.round((c.clientWidth || 1280) * dpr));
 	const h = Math.max(1, Math.round((c.clientHeight || 720) * dpr));
 	return `${w},${h}`;
+}
+
+// An element padded by the page's safe-area insets, env(safe-area-inset-*), so they can be read back in CSS pixels: CSS
+// gives them to nothing else. It has no size of its own, so its border box is the insets alone, and a ResizeObserver on
+// it hears them change (startHostEventQueue).
+let safeAreaProbe = null;
+function getSafeAreaProbe() {
+	if (safeAreaProbe?.isConnected) return safeAreaProbe;
+	safeAreaProbe = document.createElement("div");
+	safeAreaProbe.setAttribute("aria-hidden", "true");
+	safeAreaProbe.style.cssText = "position: fixed; left: 0; top: 0; width: 0; height: 0; visibility: hidden; pointer-events: none;"
+		+ " padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);";
+	document.body.appendChild(safeAreaProbe);
+	return safeAreaProbe;
+}
+
+// How far in from each edge of the canvas the screen hides it, as "left,top,right,bottom" in device pixels (CSS pixels
+// times the capped device pixel ratio, as getCanvasSize): a phone's camera cutout, rounded corners, or its gesture bar.
+// The page reports them only when it lays itself out under them (viewport-fit=cover in its viewport meta), and they are
+// the viewport's, so a canvas that stops short of an edge keeps only the part of that edge's band it reaches into.
+export function getSafeArea(canvasSelector) {
+	const c = document.querySelector(canvasSelector);
+	if (!c) return "0,0,0,0";
+	const style = getComputedStyle(getSafeAreaProbe());
+	const inset = side => parseFloat(style.getPropertyValue(`padding-${side}`)) || 0;
+	const rect = c.getBoundingClientRect();
+	const viewWidth = document.documentElement.clientWidth, viewHeight = document.documentElement.clientHeight;
+	const dpr = Math.min(window.devicePixelRatio || 1, 2);
+	const px = v => Math.max(0, Math.round(v * dpr));
+	return [
+		px(inset("left") - rect.left),
+		px(inset("top") - rect.top),
+		px(rect.right - (viewWidth - inset("right"))),
+		px(rect.bottom - (viewHeight - inset("bottom"))),
+	].join(",");
 }
 
 // ── Object creation (C#-allocated handles) ──
@@ -486,6 +521,26 @@ export function writeClipboardText(text) {
 	else byCommand();
 }
 
+// Fullscreen, the whole page: no phone browser has a menu item for it, so the page asks. A page in an iframe may only
+// where the frame allows it (allowfullscreen), which fullscreenEnabled says; iOS's Safari offers it on an iPad alone.
+export function canFullscreen() {
+	return !!(document.fullscreenEnabled ?? document.webkitFullscreenEnabled);
+}
+
+export function isFullscreen() {
+	return !!(document.fullscreenElement ?? document.webkitFullscreenElement);
+}
+
+// Asked from the player's input, which the browser requires to be recent. The answer comes a moment later, as a resize
+// (the window grows over the bars); a refusal is only logged, and isFullscreen goes on saying no.
+export function setFullscreen(on) {
+	if (on === isFullscreen()) return;
+	const asked = on
+		? (document.documentElement.requestFullscreen?.({ navigationUI: "hide" }) ?? document.documentElement.webkitRequestFullscreen?.())
+		: (document.exitFullscreen?.() ?? document.webkitExitFullscreen?.());
+	Promise.resolve(asked).catch(e => console.warn(`[loom] fullscreen ${on ? "refused" : "not left"}: ${e?.message ?? e}`));
+}
+
 // Offers the player a file: the browser's save dialog, asking where it goes, where the browser has one and lets this
 // page use it (not in a cross-origin iframe), and otherwise a download. Either needs the input that asked for it to be
 // recent. Cancelling the dialog saves nothing.
@@ -772,12 +827,17 @@ export function startHostEventQueue() {
 		(code, down) => queueHostEvent(HOST_KEY, keyId(code), down ? 1 : 0, 0),
 		(pad, id) => { gamepadIds[pad] = id; queueHostEvent(HOST_GAMEPAD_ID, pad, 0, 0); },
 		(code, x, y) => queueHostEvent(HOST_TOUCH, code, x, y));
+	// A resize also has the host read the safe area again, which changes with the window (a phone turned on its side,
+	// fullscreen entered or left) and on its own (Android's gesture bar showing and hiding under a page that covers it)
 	let resized = false;
-	window.addEventListener("resize", () => {
+	const onResize = () => {
 		if (resized) return;
 		resized = true;
 		requestAnimationFrame(() => { resized = false; queueHostEvent(HOST_RESIZE, 0, 0, 0); });
-	});
+	};
+	window.addEventListener("resize", onResize);
+	if (typeof ResizeObserver === "function")
+		new ResizeObserver(onResize).observe(getSafeAreaProbe(), { box: "border-box" });
 }
 // Moves as many whole events as fit into destination (a MemoryView over the host's array), oldest first, and returns
 // how many numbers it wrote; what didn't fit waits for the next call.

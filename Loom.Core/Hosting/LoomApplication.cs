@@ -182,6 +182,24 @@ public abstract class LoomApplication : IHostedApplication
 	protected bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents) => _host.SaveFile(name, contentType, contents);
 
 	/// <summary>
+	/// Whether the host can have the app fill the screen, over the browser's own bars (see
+	/// <see cref="IHostControl.CanFullscreen"/>): only the browser host, so far.
+	/// </summary>
+	protected bool CanFullscreen => _host.CanFullscreen;
+
+	/// <summary>
+	/// Whether the app fills the screen, as far as the host knows: the player can leave fullscreen on their own (Esc, the
+	/// Back gesture), so read it each time rather than remembering what was asked.
+	/// </summary>
+	protected bool IsFullscreen => _host.IsFullscreen;
+
+	/// <summary>
+	/// Ask the host to fill the screen, or stop (see <see cref="IHostControl.SetFullscreen"/>). Call it from the input that
+	/// asked for it, which the browser requires. False when the host can't.
+	/// </summary>
+	protected bool SetFullscreen(bool on) => _host.SetFullscreen(on);
+
+	/// <summary>
 	/// Open a file of the app's packaged content by its path under the content root: the files the project lists as
 	/// <c>LoomContent</c>, which the Loom SDK packs where each host reads them (a <c>content</c> folder beside a desktop app,
 	/// an Android APK's assets). The path is relative, with forward slashes, matching the file's case exactly, as
