@@ -33,14 +33,16 @@ The single most confusing thing about a Loom shader is that a resource carries *
 
 ```hlsl
 LOOM_BINDING(0) Sampler2D albedoTex;
-LOOM_BINDING(1) ConstantBuffer<ViewProj> view : register(b1);
-LOOM_BINDING(2) ConstantBuffer<PerDraw>  draw : register(b2);
+LOOM_BINDING(1) ConstantBuffer<ViewProj> view LOOM_REGISTER(b1);
+LOOM_BINDING(2) ConstantBuffer<PerDraw>  draw LOOM_REGISTER(b2);
 ```
 
 - **`LOOM_BINDING(n)` numbers *every descriptor*** in one set. The sampler is 0, so the first constant buffer is 1. The numbers must be **unique**; they need not be contiguous, and they need not be grouped by category — the backend reads each parameter's actual slot out of reflection.
 - **`register(bN)` counts *only constant buffers*, and starts at `b1`.** `b0` is reserved (§4). The first constant buffer is `b1` whether or not samplers precede it.
 
 They coincide only in a shader with no samplers, which is why the mistake survives so long in a post-processing shader and then breaks the first time someone adds a texture. Slang honours `[[vk::binding]]` for SPIR-V and `register(bN)` for DXIL, so both must be right; each target reads the one addressed to it.
+
+Write the register through `LOOM_REGISTER(bN)`, never a bare `: register(bN)`. For WGSL both macros expand to nothing, so Slang numbers the bindings itself and the WebGPU backend reads them back. A bare register would survive into the WGSL compile, where Slang takes its number as the WGSL binding of any parameter without a `[[vk::binding]]` (warning 39029, once per parameter per shader). Registers count each kind separately (`b1` and `t1` are both 1), but WGSL has one list, so two parameters could end up on the same binding.
 
 ---
 
@@ -106,7 +108,7 @@ struct LoomMaterial
     float4 metallicRoughness;
 };
 
-LOOM_BINDING(3) ConstantBuffer<LoomMaterial> loomMaterial : register(b3);
+LOOM_BINDING(3) ConstantBuffer<LoomMaterial> loomMaterial LOOM_REGISTER(b3);
 ```
 
 Reflection reports which uniform slot it is and how many bytes it occupies; the engine stages a material's bytes into that slot on every draw using it. Convention is to declare it last, but nothing depends on that — it binds at whatever slot reflection reports.
@@ -122,6 +124,16 @@ The engine has no opinion about what the bytes mean — `GltfMaterialFactors` in
 Name them `vertexMain` / `fragmentMain` / `computeMain` and mark them with `[shader("vertex")]`, `[shader("fragment")]`, `[shader("compute")]`. The build detects the stages from those attributes; the SDK errors if a declared entry name isn't found.
 
 A compute technique states its entry once via `TechniqueDescriptor.Compute("shader")`. What the compiled artifact ends up calling that entry internally is the backend's problem — Vulkan resolves the real SPIR-V entry from the module, so a toolchain that renames the sole entry to `main` is handled without the author knowing.
+
+**Variants.** One source compiled again with macros defined, under a name of its own, is a `LoomSlangVariant`, not a second file that defines the macro and includes the first:
+
+```xml
+<ItemGroup>
+  <LoomSlangVariant Include="Shaders\terrain.slang;Shaders\car.slang" Suffix="_cast" Defines="CAST" />
+</ItemGroup>
+```
+
+That makes `terrain_cast` and `car_cast` beside `terrain` and `car`, on every backend, each a shader of its own that a `TechniqueDescriptor` names (`Defines` takes a list, `A;B=2`). The stages are found by scanning the source, as an entry's are, and the scan doesn't see `#ifdef`: a variant that compiles a stage out names the stages it keeps with `Stages="vertex"` on the item. Declare variants before the SDK's targets are imported, so the IDE's up-to-date check sees their outputs.
 
 ---
 

@@ -13,12 +13,11 @@ namespace Loom.Hosting.Android;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every finger and pen contact becomes <see cref="InputEventKind.Touch"/> events (began, moved, ended, canceled) under its
-/// pointer id, for an app that reads multi-touch. The primary contact — the first finger down, or a pen — is also sent the
-/// way a pointer is on the desktop and in the browser: a <see cref="InputEventKind.PointerMove"/> typed as touch or pen,
-/// with the left button going down and up. That is what a UI layer such as SUIsei's routes as a press, a drag and a
-/// click, so a tap on a button clicks it with nothing touch-specific in the UI. A pen's barrel buttons are the right and
-/// middle buttons.
+/// Every finger is its own contact: <see cref="InputEventKind.Touch"/> events (began, moved, ended, canceled) under its
+/// pointer id, and nothing else, as on the desktop and in the browser. A UI layer such as SUIsei's routes the fingers that
+/// land on it as touch pointers; the rest are the game's. A pen is a pointer, as a mouse is: a
+/// <see cref="InputEventKind.PointerMove"/> typed as pen, with the left button going down and up as its tip touches and
+/// lifts, and its barrel buttons as the right and middle buttons.
 /// </para>
 /// <para>
 /// A mouse is a pointer, not a contact: it moves the pointer whether or not a button is down, and each of its buttons is
@@ -32,8 +31,11 @@ namespace Loom.Hosting.Android;
 /// </remarks>
 internal sealed class AndroidInputPump(IHostedApplication app)
 {
-	// The contact acting as the pointer, or -1 while no contact is down.
+	// The pen touching the screen, which drives the pointer, or -1 while none is.
 	private int _primaryId = -1;
+
+	// The fingers down and where each last was, so focus loss can cancel them.
+	private readonly Dictionary<int, (float X, float Y)> _fingers = [];
 
 	// What is held, so focus loss can release it: keys by neutral value, mouse buttons as a mask.
 	private readonly bool[] _keysHeld = new bool[256];
@@ -72,11 +74,15 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 					var id = e.GetPointerId(index);
 					var x = e.GetX(index);
 					var y = e.GetY(index);
-					app.QueueInput(InputEvent.Touch(TouchPhase.Began, id, x, y, timestamp));
-					if (_primaryId < 0)
+					if (!IsPen(e, index))
+					{
+						_fingers[id] = (x, y);
+						app.QueueInput(InputEvent.Touch(TouchPhase.Began, id, x, y, timestamp));
+					}
+					else if (_primaryId < 0)
 					{
 						_primaryId = id;
-						app.QueueInput(InputEvent.PointerMove(x, y, id, PointerTypeOf(e, index), timestamp));
+						app.QueueInput(InputEvent.PointerMove(x, y, id, PointerDeviceType.Pen, timestamp));
 						SetMouseButton(MouseButton.Left, down: true, timestamp);
 					}
 					return true;
@@ -87,9 +93,15 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 					var id = e.GetPointerId(index);
 					var x = e.GetX(index);
 					var y = e.GetY(index);
-					app.QueueInput(InputEvent.Touch(TouchPhase.Moved, id, x, y, timestamp));
 					if (id == _primaryId)
-						app.QueueInput(InputEvent.PointerMove(x, y, id, PointerTypeOf(e, index), timestamp));
+					{
+						app.QueueInput(InputEvent.PointerMove(x, y, id, PointerDeviceType.Pen, timestamp));
+					}
+					else if (_fingers.ContainsKey(id))
+					{
+						_fingers[id] = (x, y);
+						app.QueueInput(InputEvent.Touch(TouchPhase.Moved, id, x, y, timestamp));
+					}
 				}
 				return true;
 			case MotionEventActions.Up:
@@ -99,20 +111,21 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 					var id = e.GetPointerId(index);
 					var x = e.GetX(index);
 					var y = e.GetY(index);
-					app.QueueInput(InputEvent.Touch(TouchPhase.Ended, id, x, y, timestamp));
 					if (id == _primaryId)
 					{
-						app.QueueInput(InputEvent.PointerMove(x, y, id, PointerTypeOf(e, index), timestamp));
+						app.QueueInput(InputEvent.PointerMove(x, y, id, PointerDeviceType.Pen, timestamp));
 						SetMouseButton(MouseButton.Left, down: false, timestamp);
 						_primaryId = -1;
+					}
+					else if (_fingers.Remove(id))
+					{
+						app.QueueInput(InputEvent.Touch(TouchPhase.Ended, id, x, y, timestamp));
 					}
 					return true;
 				}
 			case MotionEventActions.Cancel:
 				// The system took every contact away (a gesture it recognised, the activity losing the window).
-				for (var index = 0; index < e.PointerCount; index++)
-					app.QueueInput(InputEvent.Touch(TouchPhase.Canceled, e.GetPointerId(index), e.GetX(index), e.GetY(index), timestamp));
-				ReleasePrimary(timestamp);
+				ReleaseContacts(timestamp);
 				return true;
 			default:
 				return false;
@@ -134,11 +147,11 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 			case MotionEventActions.HoverMove:
 			case MotionEventActions.HoverEnter:
 				if (_primaryId >= 0)
-					return false; // a contact is down and already drives the pointer
+					return false; // the pen is down and already drives the pointer
 				app.QueueInput(InputEvent.PointerMove(e.GetX(0), e.GetY(0), e.GetPointerId(0), PointerTypeOf(e, 0), timestamp));
 				return true;
 			case MotionEventActions.Scroll:
-				// The wheel scrolls what is under it, so the pointer moves there first, unless a contact holds it.
+				// The wheel scrolls what is under it, so the pointer moves there first, unless the pen holds it.
 				if (_primaryId < 0)
 					app.QueueInput(InputEvent.PointerMove(e.GetX(0), e.GetY(0), e.GetPointerId(0), PointerTypeOf(e, 0), timestamp));
 				app.QueueInput(InputEvent.Wheel(e.GetAxisValue(Axis.Hscroll), e.GetAxisValue(Axis.Vscroll), timestamp));
@@ -205,26 +218,29 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 	}
 
 	/// <summary>
-	/// End a press a contact holds without it counting as a click: for a contact the system canceled, or focus lost
-	/// mid-press, whose up never comes. The pointer moves off the surface first, so the pressed element sees it leave
-	/// and the release lands on nothing.
+	/// End every contact without it counting as a tap or a click: for contacts the system canceled, or focus lost
+	/// mid-press, whose ups never come. Each finger is canceled; a pen's pointer moves off the surface first, so the
+	/// pressed element sees it leave and the release lands on nothing.
 	/// </summary>
-	public void ReleasePrimary(long timestamp = 0)
+	public void ReleaseContacts(long timestamp = 0)
 	{
+		foreach (var (id, at) in _fingers)
+			app.QueueInput(InputEvent.Touch(TouchPhase.Canceled, id, at.X, at.Y, timestamp));
+		_fingers.Clear();
 		if (_primaryId < 0)
 			return;
-		app.QueueInput(InputEvent.PointerMove(-1f, -1f, _primaryId, PointerDeviceType.Touch, timestamp));
+		app.QueueInput(InputEvent.PointerMove(-1f, -1f, _primaryId, PointerDeviceType.Pen, timestamp));
 		SetMouseButton(MouseButton.Left, down: false, timestamp);
 		_primaryId = -1;
 	}
 
 	/// <summary>
-	/// Release everything held — the primary contact, keys and mouse buttons — for the window losing focus, after which
+	/// Release everything held — fingers, the pen, keys and mouse buttons — for the window losing focus, after which
 	/// their releases never come.
 	/// </summary>
 	public void ReleaseAll(long timestamp)
 	{
-		ReleasePrimary(timestamp);
+		ReleaseContacts(timestamp);
 		for (var i = 0; i < _keysHeld.Length; i++)
 		{
 			if (!_keysHeld[i])
@@ -289,6 +305,9 @@ internal sealed class AndroidInputPump(IHostedApplication app)
 		MotionEventButtonState.StylusSecondary => MouseButton.Middle,
 		_ => null,
 	};
+
+	private static bool IsPen(MotionEvent e, int index)
+		=> e.GetToolType(index) is MotionEventToolType.Stylus or MotionEventToolType.Eraser;
 
 	private static PointerDeviceType PointerTypeOf(MotionEvent e, int index) => e.GetToolType(index) switch
 	{

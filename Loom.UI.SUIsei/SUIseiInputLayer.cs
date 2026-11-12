@@ -23,24 +23,17 @@ namespace Loom.UI.SUIsei;
 /// that same frame, so a click on a control never also reaches the game.
 /// </para>
 /// <para>
-/// Touch is decided finger by finger. A finger that comes down on UI content belongs to the UI until it lifts, and the
-/// game sees none of its touch events; a finger that comes down anywhere else is the game's, so one thumb can hold a
-/// button while the other steers.
+/// Touch is decided finger by finger. A finger that comes down on UI content belongs to the UI until it lifts, pressed,
+/// dragged and released there as a touch pointer, and the game sees none of its touch events; a finger that comes down
+/// anywhere else is the game's for its life, whatever it is dragged over, so one thumb can hold a button while the other
+/// steers.
 /// </para>
 /// <para>
-/// A controller goes to the UI while <see cref="TakesGamepad"/> is set (a menu is open), or while an element holds focus
-/// it got from the keyboard, a controller or code — not from a tap, which would take the pad from the game whenever a
-/// button had last been touched. Then the A, B, X and Y buttons, Start and Back reach SUIsei as its gamepad keys, the
-/// d-pad and the left stick move focus between controls, and the game sees no controller input.
+/// A controller goes to the UI while <see cref="PadNavigation"/> is set (a menu is open): see there.
 /// </para>
 /// </remarks>
 public sealed class SUIseiInputLayer : IInputLayer
 {
-	private const int PadCount = 4;
-	// How far the left stick goes before it moves focus, and how far back before it can again.
-	private const float StickPress = 0.5f;
-	private const float StickRelease = 0.3f;
-
 	private readonly UIHost _host;
 
 	// Running pointer/modifier state, persisted across frames: neutral button/wheel/key events carry no position or
@@ -48,19 +41,20 @@ public sealed class SUIseiInputLayer : IInputLayer
 	private Vector2 _pointerPosition;
 	private Sui.PointerButtons _buttons;
 	private Sui.ModifierKeys _modifiers;
-	// The pointer the latest move came from, which a press, release or scroll belongs to: a press by touch is a touch
-	// press, so SUIsei can treat a drag from it as a pan.
+	// The pointer the latest move came from, which a press, release or scroll belongs to.
 	private uint _pointerId;
 	private Sui.PointerDeviceType _device = Sui.PointerDeviceType.Mouse;
 	// Whether the pointer's press came down on UI content, until it is released.
 	private bool _pressOnUI;
 
-	// The fingers that came down on UI content and have not lifted.
+	// A pad through the UI (PadNavigation): the direction held, from the d-pad or the left stick, and when it next repeats
+	private const float StickOn = 0.55f, StickOff = 0.35f;
+	private const long RepeatFirstMs = 400, RepeatMs = 90;
+	private Sui.VirtualKey _dpadHeld, _stickHeld;
+	private Vector2 _stick;
+	private long _repeatAt;
+	// The touch contacts that came down on the UI and are its until they lift (TouchToUI)
 	private readonly HashSet<int> _uiTouches = [];
-
-	// Per pad: the left stick's position, and the direction it is held in as a d-pad key (None when centred).
-	private readonly Vector2[] _stick = new Vector2[PadCount];
-	private readonly Sui.VirtualKey[] _stickKey = new Sui.VirtualKey[PadCount];
 
 	/// <summary>Creates a layer that feeds <paramref name="host"/>.</summary>
 	public SUIseiInputLayer(UIHost host)
@@ -70,23 +64,36 @@ public sealed class SUIseiInputLayer : IInputLayer
 	}
 
 	/// <summary>
-	/// Whether the UI has the controllers, whatever holds focus: set it while a menu or other page a player drives with a
-	/// pad is open, and clear it as play resumes. While set, every pad button reaches SUIsei (the d-pad moves focus into
-	/// the page when nothing is focused yet) and the game sees no controller input.
+	/// Whether the UI has the pad: while true, any pad's face buttons go to the UI as <see cref="Sui.VirtualKey.GamepadA"/>
+	/// and the rest (Start and Back as GamepadMenu and GamepadView), and its d-pad and left stick, and the keyboard's arrows,
+	/// as the d-pad's keys (moving focus by position, into the page when nothing is focused yet), a held direction repeating
+	/// after 0.4 s every 0.09 s; and the pad is blocked from the layers below, so a press isn't also the game's.
+	/// The app sets it while a menu or page that a pad can work is open, and clears it as play resumes.
 	/// </summary>
-	public bool TakesGamepad { get; set; }
+	public bool PadNavigation
+	{
+		get;
+		set
+		{
+			if (field == value)
+				return;
+			field = value;
+			ReleasePad();   // nothing held carries across: a direction or button held as it changes is let go
+		}
+	}
 
 	/// <inheritdoc/>
 	public void Process(ref InputContext ctx)
 	{
-		// Decided from the last tick, before this frame's events: a pad press that focuses a control this frame takes the
-		// pad from the next.
-		var focus = _host.Focus;
-		var padToUI = TakesGamepad || focus.FocusedElement is not null && focus.FocusState is not (FocusState.Pointer or FocusState.Unfocused);
 		var pointerOnUIThisFrame = _pressOnUI;
 
 		foreach (ref readonly var e in ctx.Incoming)
 		{
+			if (PadNavigation && e.Device == InputDevice.Gamepad)
+			{
+				PadToUI(in e);
+				continue;
+			}
 			switch (e.Kind)
 			{
 				case InputEventKind.PointerMove:
@@ -124,15 +131,16 @@ public sealed class SUIseiInputLayer : IInputLayer
 					break;
 
 				case InputEventKind.Touch:
-					// A finger is the UI's from the moment it lands on UI content until it lifts; the game never sees it.
-					if (e.Phase == TouchPhase.Began && _host.HitsContent(e.Position))
-						_uiTouches.Add(e.PointerId);
-					if (_uiTouches.Contains(e.PointerId))
-					{
+					if (TouchToUI(in e))
 						ctx.Consume(in e);
-						if (e.Phase is TouchPhase.Ended or TouchPhase.Canceled)
-							_uiTouches.Remove(e.PointerId);
-					}
+					break;
+
+				// The arrows move focus as the d-pad does while the UI has navigation (the same key, so the same rules)
+				case InputEventKind.KeyDown or InputEventKind.KeyUp when PadNavigation && ArrowAsDPad(e.Key) is { } arrow:
+					if (e.Kind == InputEventKind.KeyDown)
+						Hold(ref _dpadHeld, arrow);
+					else if (_dpadHeld == arrow)
+						Hold(ref _dpadHeld, Sui.VirtualKey.None);
 					break;
 
 				case InputEventKind.KeyDown:
@@ -156,75 +164,157 @@ public sealed class SUIseiInputLayer : IInputLayer
 				case InputEventKind.Text:
 					QueueText(e.CodePoint);
 					break;
-
-				case InputEventKind.GamepadButtonDown or InputEventKind.GamepadButtonUp when padToUI:
-					{
-						var vk = ToGamepadKey(e.GamepadButton);
-						if (vk != Sui.VirtualKey.None)
-							_host.QueueKey(new Sui.KeyInput(vk, Down: e.Kind == InputEventKind.GamepadButtonDown, Repeat: false, _modifiers, 0));
-						break;
-					}
-
-				case InputEventKind.GamepadAxis when (uint)e.PadIndex < PadCount
-					&& e.GamepadAxis is GamepadAxis.LeftX or GamepadAxis.LeftY:
-					MoveStick(e.PadIndex, e.GamepadAxis, e.Value, padToUI);
-					break;
 			}
 		}
 
-		// The pointer: where its press came down on UI content, the UI has it from that very frame; otherwise the host's
-		// last-tick report decides. A touch-driven pointer gives the UI only its own moves and buttons, so a game's other
-		// fingers keep their touches; a mouse or pen gives it every pointer event.
+		// The mouse (its moves, buttons and wheel) and a pen's moves: where a press came down on UI content, the UI has them
+		// from that very frame; otherwise the host's last-tick report decides. Never a touch, which is the UI's or not
+		// contact by contact (TouchToUI), so a finger on the UI doesn't take every other finger from the game.
 		if (pointerOnUIThisFrame || _host.WantsPointer)
 		{
-			if (_device == Sui.PointerDeviceType.Touch)
-			{
-				ctx.Block(InputDevice.Mouse);
-				foreach (ref readonly var e in ctx.Incoming)
-					if (e is { Kind: InputEventKind.PointerMove, PointerType: PointerDeviceType.Touch } && (uint)e.PointerId == _pointerId)
-						ctx.Consume(in e);
-			}
-			else
-			{
-				ctx.Block(InputDevice.Pointer | InputDevice.Mouse);
-			}
+			ctx.Block(InputDevice.Mouse);
+			foreach (ref readonly var e in ctx.Incoming)
+				if (e.Kind == InputEventKind.PointerMove && e.PointerType != PointerDeviceType.Touch)
+					ctx.Consume(in e);   // a pen's moves, which aren't the mouse's
 		}
 		if (_host.WantsKeyboard)
 			ctx.Block(InputDevice.Keyboard);
-		if (padToUI)
+		if (PadNavigation)
+		{
+			RepeatHeld();
 			ctx.Block(InputDevice.Gamepad);
+		}
 
 		// A focused text box takes typed text, so a host whose keyboard is on the screen shows it.
-		if (focus.FocusedElement is TextBox)
+		if (_host.Focus.FocusedElement is TextBox)
 			ctx.RequestTextInput();
 	}
 
-	// The left stick as a d-pad: pushed past StickPress it presses the direction it points most along, and releases it
-	// once back inside StickRelease or turned to another direction. Tracked even while the game has the pad, so a stick
-	// already held as the UI takes it does not move focus until it is pushed again.
-	private void MoveStick(int pad, GamepadAxis axis, float value, bool padToUI)
+	// A pad's event as the UI's: face buttons as the gamepad's keys, the d-pad as its direction keys, the left stick past
+	// half way as the d-pad (back under a third, let go)
+	private void PadToUI(in InputEvent e)
 	{
-		var stick = _stick[pad];
-		stick = axis == GamepadAxis.LeftX ? stick with { X = value } : stick with { Y = value };
-		_stick[pad] = stick;
+		switch (e.Kind)
+		{
+			case InputEventKind.GamepadButtonDown or InputEventKind.GamepadButtonUp:
+				{
+					bool down = e.Kind == InputEventKind.GamepadButtonDown;
+					var key = ToGamepadKey((GamepadButton)e.Code);
+					if (key == Sui.VirtualKey.None)
+						break;
+					if (IsDirection(key))
+					{
+						if (down)
+							Hold(ref _dpadHeld, key);
+						else if (_dpadHeld == key)
+							Hold(ref _dpadHeld, Sui.VirtualKey.None);
+					}
+					else
+						QueuePadKey(key, down, repeat: false);
+					break;
+				}
+			case InputEventKind.GamepadAxis when (GamepadAxis)e.Code is GamepadAxis.LeftX or GamepadAxis.LeftY:
+				{
+					if ((GamepadAxis)e.Code == GamepadAxis.LeftX) _stick.X = e.Value;
+					else _stick.Y = e.Value;
+					var dir = _stickHeld;
+					float along = dir switch
+					{
+						Sui.VirtualKey.GamepadDPadLeft => -_stick.X,
+						Sui.VirtualKey.GamepadDPadRight => _stick.X,
+						Sui.VirtualKey.GamepadDPadUp => -_stick.Y,
+						Sui.VirtualKey.GamepadDPadDown => _stick.Y,
+						_ => 0f,
+					};
+					if (dir != Sui.VirtualKey.None && along > StickOff)
+						break;   // still held that way
+					var next = Sui.VirtualKey.None;
+					if (MathF.Max(MathF.Abs(_stick.X), MathF.Abs(_stick.Y)) > StickOn)
+						next = MathF.Abs(_stick.X) > MathF.Abs(_stick.Y)
+							? _stick.X < 0f ? Sui.VirtualKey.GamepadDPadLeft : Sui.VirtualKey.GamepadDPadRight
+							: _stick.Y < 0f ? Sui.VirtualKey.GamepadDPadUp : Sui.VirtualKey.GamepadDPadDown;   // up is negative
+					Hold(ref _stickHeld, next);
+					break;
+				}
+		}
+	}
 
-		var held = _stickKey[pad];
-		var reach = held == Sui.VirtualKey.None ? StickPress : StickRelease;
-		var direction = MathF.Max(MathF.Abs(stick.X), MathF.Abs(stick.Y)) < reach
-			? Sui.VirtualKey.None
-			: MathF.Abs(stick.X) >= MathF.Abs(stick.Y)
-				? (stick.X < 0f ? Sui.VirtualKey.GamepadDPadLeft : Sui.VirtualKey.GamepadDPadRight)
-				: (stick.Y < 0f ? Sui.VirtualKey.GamepadDPadUp : Sui.VirtualKey.GamepadDPadDown); // y is down, as on every host
-		if (direction == held)
-			return;
-		_stickKey[pad] = direction;
-		if (!padToUI)
+	// A touch as the UI's, if it is the UI's: a contact that comes down on UI content (UIHost.HitsContent) is the UI's until
+	// it lifts, pressed, dragged and released there as a touch pointer, and true is returned so it is kept from the layers
+	// below; any other contact is theirs for its life, whatever it is dragged over, so a finger on a button and another on
+	// the game work at once. Ids are kept apart from the mouse's (0) by the top bit.
+	private bool TouchToUI(in InputEvent e)
+	{
+		var id = (uint)e.PointerId | 0x8000_0000u;
+		var at = new Vector2(e.X, e.Y);
+		switch (e.Phase)
+		{
+			case TouchPhase.Began:
+				if (!_host.HitsContent(at))
+					return false;
+				_uiTouches.Add(e.PointerId);
+				_host.QueuePointer(Sui.PointerInput.Move(at, Sui.PointerButtons.None, id, Sui.PointerDeviceType.Touch));
+				_host.QueuePointer(Sui.PointerInput.Press(at, Sui.PointerUpdateKind.LeftButtonPressed, Sui.PointerButtons.Left, id, Sui.PointerDeviceType.Touch));
+				return true;
+
+			case TouchPhase.Moved or TouchPhase.Stationary:
+				if (!_uiTouches.Contains(e.PointerId))
+					return false;
+				_host.QueuePointer(Sui.PointerInput.Move(at, Sui.PointerButtons.Left, id, Sui.PointerDeviceType.Touch));
+				return true;
+
+			default:   // Ended, Canceled
+				if (!_uiTouches.Remove(e.PointerId))
+					return false;
+				_host.QueuePointer(Sui.PointerInput.Release(at, Sui.PointerUpdateKind.LeftButtonReleased, Sui.PointerButtons.None, id, Sui.PointerDeviceType.Touch));
+				return true;
+		}
+	}
+
+	private static Sui.VirtualKey? ArrowAsDPad(Key key) => key switch
+	{
+		Key.Up => Sui.VirtualKey.GamepadDPadUp,
+		Key.Down => Sui.VirtualKey.GamepadDPadDown,
+		Key.Left => Sui.VirtualKey.GamepadDPadLeft,
+		Key.Right => Sui.VirtualKey.GamepadDPadRight,
+		_ => null,
+	};
+
+	private static bool IsDirection(Sui.VirtualKey key) => key is Sui.VirtualKey.GamepadDPadUp or Sui.VirtualKey.GamepadDPadDown
+		or Sui.VirtualKey.GamepadDPadLeft or Sui.VirtualKey.GamepadDPadRight;
+
+	// A direction pressed (or let go, for None): its key goes down at once and repeats while held
+	private void Hold(ref Sui.VirtualKey held, Sui.VirtualKey key)
+	{
+		if (held == key)
 			return;
 		if (held != Sui.VirtualKey.None)
-			_host.QueueKey(new Sui.KeyInput(held, Down: false, Repeat: false, _modifiers, 0));
-		if (direction != Sui.VirtualKey.None)
-			_host.QueueKey(new Sui.KeyInput(direction, Down: true, Repeat: false, _modifiers, 0));
+			QueuePadKey(held, down: false, repeat: false);
+		held = key;
+		if (key == Sui.VirtualKey.None)
+			return;
+		QueuePadKey(key, down: true, repeat: false);
+		_repeatAt = Environment.TickCount64 + RepeatFirstMs;
 	}
+
+	private void RepeatHeld()
+	{
+		var held = _dpadHeld != Sui.VirtualKey.None ? _dpadHeld : _stickHeld;
+		if (held == Sui.VirtualKey.None || Environment.TickCount64 < _repeatAt)
+			return;
+		QueuePadKey(held, down: true, repeat: true);
+		_repeatAt = Environment.TickCount64 + RepeatMs;
+	}
+
+	private void ReleasePad()
+	{
+		Hold(ref _dpadHeld, Sui.VirtualKey.None);
+		Hold(ref _stickHeld, Sui.VirtualKey.None);
+		_stick = Vector2.Zero;
+	}
+
+	private void QueuePadKey(Sui.VirtualKey key, bool down, bool repeat)
+		=> _host.QueueKey(new Sui.KeyInput(key, down, repeat, _modifiers, 0));
 
 	private void QueueText(uint codePoint)
 	{

@@ -37,6 +37,7 @@ public sealed class DesktopInputPump : IDisposable
 	private readonly IInputContext _context;
 	private readonly InputSink _sink;
 	private readonly RumbleQueue? _rumble;
+	private readonly bool _readGamepads;
 
 	private readonly List<IKeyboard> _keyboards = [];
 	private readonly List<IMouse> _mice = [];
@@ -58,19 +59,23 @@ public sealed class DesktopInputPump : IDisposable
 	// Remaining rumble seconds per pad, so a timed effect stops itself once elapsed.
 	private readonly float[] _rumbleRemaining = new float[4];
 
-	/// <summary>Creates a pump that feeds a hosted application's input queue and drains its rumble output.</summary>
-	public DesktopInputPump(IInputContext context, IHostedApplication application)
-		: this(context, (application ?? throw new ArgumentNullException(nameof(application))).QueueInput, application.Rumble)
+	/// <summary>Creates a pump that feeds a hosted application's input queue and, if it reads the pads, drains its rumble
+	/// output. <paramref name="gamepads"/> false leaves the pads to another source (<see cref="Sdl.SdlGamepadPump"/>), so
+	/// none is seen twice.</summary>
+	public DesktopInputPump(IInputContext context, IHostedApplication application, bool gamepads = true)
+		: this(context, (application ?? throw new ArgumentNullException(nameof(application))).QueueInput,
+			gamepads ? application.Rumble : null, gamepads)
 	{
 	}
 
 	/// <summary>Creates a pump that feeds an arbitrary <paramref name="sink"/>, optionally draining
-	/// <paramref name="rumble"/> to hardware.</summary>
-	public DesktopInputPump(IInputContext context, InputSink sink, RumbleQueue? rumble = null)
+	/// <paramref name="rumble"/> to hardware; <paramref name="gamepads"/> false reads the keyboards and mice alone.</summary>
+	public DesktopInputPump(IInputContext context, InputSink sink, RumbleQueue? rumble = null, bool gamepads = true)
 	{
 		_context = context ?? throw new ArgumentNullException(nameof(context));
 		_sink = sink ?? throw new ArgumentNullException(nameof(sink));
 		_rumble = rumble;
+		_readGamepads = gamepads;
 
 		_context.ConnectionChanged += OnConnectionChanged;
 
@@ -78,11 +83,11 @@ public sealed class DesktopInputPump : IDisposable
 			Subscribe(keyboard);
 		foreach (var mouse in _context.Mice)
 			Subscribe(mouse);
-		foreach (var gamepad in _context.Gamepads)
+		foreach (var gamepad in _readGamepads ? _context.Gamepads : [])
 		{
 			Subscribe(gamepad);
 			if (gamepad.IsConnected)
-				Queue(InputEvent.GamepadConnected(gamepad.Index));
+				Queue(Connected(gamepad));
 		}
 	}
 
@@ -151,6 +156,11 @@ public sealed class DesktopInputPump : IDisposable
 
 	private void Queue(in InputEvent e) => _sink(in e);
 
+	// GLFW gives a pad its mapping's name ("PS5 Controller", "Xbox Controller"), and Silk.NET no USB ids: the type is
+	// read from the name
+	private static InputEvent Connected(IGamepad gamepad)
+		=> InputEvent.GamepadConnected(gamepad.Index, GamepadIdentity.FromName(gamepad.Name), 0, 0);
+
 	private void FlushPendingMove()
 	{
 		if (!_hasPendingMove)
@@ -177,9 +187,11 @@ public sealed class DesktopInputPump : IDisposable
 				Unsubscribe(mouse);
 				_mice.Remove(mouse);
 				break;
+			case IGamepad when !_readGamepads:
+				break;
 			case IGamepad gamepad when connected:
 				Subscribe(gamepad);
-				Queue(InputEvent.GamepadConnected(gamepad.Index));
+				Queue(Connected(gamepad));
 				break;
 			case IGamepad gamepad:
 				Unsubscribe(gamepad);

@@ -71,22 +71,18 @@ public class SUIseiInputLayerTests
 		}
 	}
 
-	private static InputEvent[] TouchDown(int id, Vector2 at, bool primary) => primary
-		? [InputEvent.Touch(TouchPhase.Began, id, at.X, at.Y), InputEvent.PointerMove(at.X, at.Y, id, PointerDeviceType.Touch), InputEvent.MouseButtonDown(MouseButton.Left)]
-		: [InputEvent.Touch(TouchPhase.Began, id, at.X, at.Y)];
-
-	private static InputEvent[] TouchUp(int id, Vector2 at, bool primary) => primary
-		? [InputEvent.Touch(TouchPhase.Ended, id, at.X, at.Y), InputEvent.PointerMove(at.X, at.Y, id, PointerDeviceType.Touch), InputEvent.MouseButtonUp(MouseButton.Left)]
-		: [InputEvent.Touch(TouchPhase.Ended, id, at.X, at.Y)];
+	// A finger, as every host sends one: touch events only, never the mouse.
+	private static InputEvent TouchDown(int id, Vector2 at) => InputEvent.Touch(TouchPhase.Began, id, at.X, at.Y);
+	private static InputEvent TouchUp(int id, Vector2 at) => InputEvent.Touch(TouchPhase.Ended, id, at.X, at.Y);
 
 	[Test]
 	public void A_tap_on_a_button_clicks_it_and_the_game_sees_none_of_it()
 	{
 		var page = new Page();
 
-		page.Frame(TouchDown(0, OnFirst, primary: true));
+		page.Frame(TouchDown(0, OnFirst));
 		var seenDown = page.Game.Seen.ToList();
-		page.Frame(TouchUp(0, OnFirst, primary: true));
+		page.Frame(TouchUp(0, OnFirst));
 
 		page.FirstClicks.ShouldBe(1);
 		seenDown.ShouldBeEmpty();
@@ -98,11 +94,10 @@ public class SUIseiInputLayerTests
 	{
 		var page = new Page();
 
-		page.Frame([.. TouchDown(0, OnFirst, primary: true), .. TouchDown(1, Empty, primary: false)]);
+		page.Frame(TouchDown(0, OnFirst), TouchDown(1, Empty));
 
 		page.Game.Seen.ShouldContain(e => e.Kind == InputEventKind.Touch && e.PointerId == 1);
 		page.Game.Seen.ShouldNotContain(e => e.Kind == InputEventKind.Touch && e.PointerId == 0);
-		page.Game.Seen.ShouldNotContain(e => e.Kind == InputEventKind.MouseButtonDown);
 	}
 
 	[Test]
@@ -110,10 +105,9 @@ public class SUIseiInputLayerTests
 	{
 		var page = new Page();
 
-		page.Frame(TouchDown(0, Empty, primary: true));
+		page.Frame(TouchDown(0, Empty));
 
 		page.Game.Seen.ShouldContain(e => e.Kind == InputEventKind.Touch);
-		page.Game.Seen.ShouldContain(e => e.Kind == InputEventKind.MouseButtonDown);
 	}
 
 	[Test]
@@ -131,7 +125,7 @@ public class SUIseiInputLayerTests
 	public void With_the_pad_taken_the_d_pad_moves_focus_and_a_clicks_and_the_game_sees_neither()
 	{
 		var page = new Page();
-		page.Layer.TakesGamepad = true;
+		page.Layer.PadNavigation = true;
 		page.Host.Focus.TrySetFocus(page.First, FocusState.Programmatic).ShouldBeTrue();
 
 		page.Frame(InputEvent.GamepadButtonDown(0, GamepadButton.DPadDown));
@@ -151,7 +145,7 @@ public class SUIseiInputLayerTests
 	public void The_left_stick_moves_focus_like_the_d_pad()
 	{
 		var page = new Page();
-		page.Layer.TakesGamepad = true;
+		page.Layer.PadNavigation = true;
 		page.Host.Focus.TrySetFocus(page.First, FocusState.Programmatic).ShouldBeTrue();
 
 		page.Frame(InputEvent.GamepadAxisMoved(0, GamepadAxis.LeftY, 0.8f)); // down: y is down
@@ -177,8 +171,8 @@ public class SUIseiInputLayerTests
 	public void Focus_from_a_tap_does_not_take_the_pad_from_the_game()
 	{
 		var page = new Page();
-		page.Frame(TouchDown(0, OnFirst, primary: true));
-		page.Frame(TouchUp(0, OnFirst, primary: true));
+		page.Frame(TouchDown(0, OnFirst));
+		page.Frame(TouchUp(0, OnFirst));
 		page.Host.Focus.FocusState.ShouldBe(FocusState.Pointer);
 
 		page.Frame(InputEvent.GamepadButtonDown(0, GamepadButton.South));

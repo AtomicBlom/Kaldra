@@ -48,6 +48,8 @@ internal sealed class WebInputPump
 	private readonly bool[] _keysHeld = new bool[256];
 	private uint _mouseHeld;
 	private readonly uint[] _padButtonsHeld = new uint[4];
+	private readonly Dictionary<int, Vector2> _touchesHeld = [];
+	private readonly (GamepadType Type, ushort Vendor, ushort Product)[] _padIdentity = new (GamepadType, ushort, ushort)[4];
 	// The neutral key for each key id the shim has sent, indexed by id (ids are dense, numbered from 0 in the order the
 	// page first meets each KeyboardEvent.code), and how to ask the page for an id's code the first time it comes
 	private readonly List<Key> _keysById = new(128);
@@ -66,6 +68,23 @@ internal sealed class WebInputPump
 	/// </summary>
 	public void OnPointerMove(double x, double y, double type)
 		=> _sink(InputEvent.PointerMove((float)x, (float)y, 0, ToPointerType((int)type)));
+
+	/// <summary>
+	/// A touch contact: <paramref name="code"/> is the contact's <c>PointerEvent.pointerId</c> × 8 plus its
+	/// <see cref="TouchPhase"/> (began, moved, ended or cancelled), <paramref name="x"/>/<paramref name="y"/> in device
+	/// pixels. The live contacts are tracked so <see cref="ReleaseAllHeld"/> can cancel them.
+	/// </summary>
+	public void OnTouch(double code, double x, double y)
+	{
+		var packed = (long)code;
+		var id = (int)(packed >> 3);
+		var phase = (TouchPhase)(packed & 7);
+		if (phase is TouchPhase.Ended or TouchPhase.Canceled)
+			_touchesHeld.Remove(id);
+		else
+			_touchesHeld[id] = new Vector2((float)x, (float)y);
+		_sink(InputEvent.Touch(phase, id, (float)x, (float)y));
+	}
 
 	/// <summary>
 	/// Gamepad button change: <paramref name="pad"/> index, <paramref name="standardIndex"/> a Standard-Gamepad
@@ -169,6 +188,10 @@ internal sealed class WebInputPump
 			_sink(InputEvent.MouseButtonUp((MouseButton)bit));
 		}
 
+		foreach (var (id, at) in _touchesHeld)
+			_sink(InputEvent.Touch(TouchPhase.Canceled, id, at.X, at.Y));
+		_touchesHeld.Clear();
+
 		for (var pad = 0; pad < _padButtonsHeld.Length; pad++)
 		{
 			var bits = _padButtonsHeld[pad];
@@ -193,12 +216,31 @@ internal sealed class WebInputPump
 		_sink(down ? InputEvent.MouseButtonDown(button) : InputEvent.MouseButtonUp(button));
 	}
 
+	/// <summary>
+	/// A pad's <c>Gamepad.id</c>, which the page sends just before the pad connects: what the pad is
+	/// (<see cref="GamepadIdentity.FromBrowserId"/>), held for its connection.
+	/// </summary>
+	public void OnGamepadId(double pad, string id)
+	{
+		var p = (int)pad;
+		if ((uint)p >= (uint)_padIdentity.Length)
+			return;
+		var type = GamepadIdentity.FromBrowserId(id, out var vendor, out var product);
+		_padIdentity[p] = (type, vendor, product);
+	}
+
 	private void OnGamepadConnection(int pad, bool connected)
 	{
 		// A fresh (dis)connect holds nothing, so clear the pad's tracked buttons rather than stranding them.
 		if ((uint)pad < (uint)_padButtonsHeld.Length)
 			_padButtonsHeld[pad] = 0;
-		_sink(connected ? InputEvent.GamepadConnected(pad) : InputEvent.GamepadDisconnected(pad));
+		if (!connected)
+		{
+			_sink(InputEvent.GamepadDisconnected(pad));
+			return;
+		}
+		var (type, vendor, product) = (uint)pad < (uint)_padIdentity.Length ? _padIdentity[pad] : default;
+		_sink(InputEvent.GamepadConnected(pad, type, vendor, product));
 	}
 
 	private void OnFocus(bool focused)
@@ -246,6 +288,7 @@ internal sealed class WebInputPump
 		14 => GamepadButton.DPadLeft,
 		15 => GamepadButton.DPadRight,
 		16 => GamepadButton.Guide,
+		17 => GamepadButton.Touchpad,   // past the standard layout: Chromium's for a PlayStation pad's touchpad click
 		_ => null,
 	};
 

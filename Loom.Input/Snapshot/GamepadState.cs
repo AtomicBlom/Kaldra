@@ -17,10 +17,14 @@ public readonly struct GamepadState
 	private readonly float _rightY;
 	private readonly float _leftTrigger;
 	private readonly float _rightTrigger;
+	private readonly uint _ids;
 
 	internal GamepadState(bool connected, bool prevConnected, uint buttons, uint prevButtons,
-		float leftX, float leftY, float rightX, float rightY, float leftTrigger, float rightTrigger)
+		float leftX, float leftY, float rightX, float rightY, float leftTrigger, float rightTrigger,
+		GamepadType type = GamepadType.Unknown, uint ids = 0)
 	{
+		Type = type;
+		_ids = ids;
 		Connected = connected;
 		_prevConnected = prevConnected;
 		_buttons = buttons;
@@ -35,6 +39,19 @@ public readonly struct GamepadState
 
 	/// <summary>Whether a pad is connected at this index.</summary>
 	public bool Connected { get; }
+
+	/// <summary>What the pad is, as far as the host could tell when it connected (<see cref="GamepadType.Unknown"/> if
+	/// it couldn't): for prompts that name its buttons.</summary>
+	public GamepadType Type { get; }
+
+	/// <summary>The family whose labels the pad's face buttons carry.</summary>
+	public GamepadFamily Family => Type.Family();
+
+	/// <summary>The pad's USB vendor id, or 0 where the host can't say.</summary>
+	public ushort Vendor => (ushort)(_ids >> 16);
+
+	/// <summary>The pad's USB product id, or 0 where the host can't say.</summary>
+	public ushort Product => (ushort)_ids;
 
 	/// <summary>True on the frame the pad became connected.</summary>
 	public bool JustConnected => Connected && !_prevConnected;

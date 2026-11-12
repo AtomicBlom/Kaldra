@@ -42,6 +42,12 @@ public sealed record HostOptions
 	/// deterministic software rendering. Maps onto <see cref="EngineSettings.PreferSoftwareAdapter"/>.</summary>
 	public bool SoftwareAdapter { get; init; }
 
+	/// <summary>
+	/// Where gamepads are read from: SDL 3 (the default, falling back to GLFW where SDL3.dll is missing or won't start),
+	/// or GLFW's own gamepad mapping, for comparing the two. <c>--pads sdl|glfw</c>.
+	/// </summary>
+	public GamepadSource Pads { get; init; } = GamepadSource.Sdl;
+
 	/// <summary>Print usage and exit. Set by <c>--help</c>/<c>-h</c> or by any parse error.</summary>
 	public bool ShowHelp { get; init; }
 
@@ -66,6 +72,9 @@ public sealed record HostOptions
 		  --vsync <on|off>          Explicit form of the above.
 		  --max-fps <n>             Frame-rate cap for the render loop (0 = unlimited).
 		  --hdr                     Request true HDR (scRGB) display output.
+
+		Input:
+		  --pads <sdl|glfw>         Read gamepads through SDL 3 (default; GLFW if SDL3.dll is missing) or GLFW.
 
 		Dev / debug:
 		  --watch-shaders           Hot-reload rebuilt shader artifacts.
@@ -93,6 +102,7 @@ public sealed record HostOptions
 		var hdr = false;
 		var watchShaders = false;
 		var softwareAdapter = false;
+		var pads = GamepadSource.Sdl;
 		var help = false;
 		var appArgs = new List<string>();
 
@@ -140,6 +150,7 @@ public sealed record HostOptions
 					case "--hdr": hdr = Flag(); break;
 					case "--watch-shaders": watchShaders = Flag(); break;
 					case "--software-adapter": softwareAdapter = Flag(); break;
+					case "--pads": pads = ParsePads(Value()); break;
 					case "--help" or "-h" or "-?": help = true; break;
 					default:
 						// Not one of ours — pass it through untouched (its own value token, if any, arrives on the
@@ -162,6 +173,7 @@ public sealed record HostOptions
 			HdrOutput = hdr,
 			WatchShaderDirectory = watchShaders,
 			SoftwareAdapter = softwareAdapter,
+			Pads = pads,
 			ShowHelp = help,
 			AppArgs = [.. appArgs],
 		};
@@ -193,10 +205,27 @@ public sealed record HostOptions
 		_ => throw new ArgumentException($"unknown backend '{value}' (expected vulkan or dx12)"),
 	};
 
+	private static GamepadSource ParsePads(string value) => value.ToLowerInvariant() switch
+	{
+		"sdl" or "sdl3" => GamepadSource.Sdl,
+		"glfw" => GamepadSource.Glfw,
+		_ => throw new ArgumentException($"unknown gamepad source '{value}' (expected sdl or glfw)"),
+	};
+
 	private static bool ParseBool(string value) => value.ToLowerInvariant() switch
 	{
 		"1" or "true" or "on" or "yes" => true,
 		"0" or "false" or "off" or "no" => false,
 		_ => throw new ArgumentException($"expected a boolean (on/off), got '{value}'"),
 	};
+}
+
+/// <summary>Where the desktop host reads gamepads from (<see cref="HostOptions.Pads"/>).</summary>
+public enum GamepadSource
+{
+	/// <summary>SDL 3's gamepad subsystem (<see cref="Sdl.SdlGamepadPump"/>), with GLFW's as the fallback.</summary>
+	Sdl,
+
+	/// <summary>GLFW's gamepad mapping, through Silk.NET's input context.</summary>
+	Glfw,
 }

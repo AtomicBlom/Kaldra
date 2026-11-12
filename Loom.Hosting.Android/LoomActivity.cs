@@ -296,7 +296,7 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 		if (_destroyed)
 			return;
 		StopFrames();
-		_input?.ReleasePrimary();
+		_input?.ReleaseContacts();
 		if (_engine is IReattachableSurface reattachable)
 		{
 			// Keep the engine and the app: the next surface (the app coming back on screen) is attached to them.

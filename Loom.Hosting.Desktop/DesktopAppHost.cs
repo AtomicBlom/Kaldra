@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 
 using Loom.Core.Diagnostics;
 using Loom.Core.Hosting;
+using Loom.Hosting.Desktop.Sdl;
 
 using Silk.NET.Input;
 using Silk.NET.Maths;
@@ -24,7 +25,11 @@ public sealed class DesktopAppHost : IAppHost
 {
 #pragma warning disable CA2255 // ModuleInitializer is the intended self-registration hook, matching the backends.
 	[ModuleInitializer]
-	internal static void Register() => AppHost.Register(new DesktopAppHost());
+	internal static void Register()
+	{
+		Sdl3.InstallResolver();   // before any of this assembly's code is compiled (Sdl3.InstallResolver says why)
+		AppHost.Register(new DesktopAppHost());
+	}
 #pragma warning restore CA2255
 
 	public string Name => "Desktop";
@@ -104,10 +109,28 @@ public sealed class DesktopAppHost : IAppHost
 		// The host reports the initial size before the first frame, exactly like every later resize.
 		driver.Resize(window.FramebufferSize.X, window.FramebufferSize.Y);
 
+		// Gamepads through SDL 3 where it is there and starts (Sdl3.targets ships it), GLFW's otherwise, never both.
+		SdlGamepadPump? padPump = null;
+		if (hostOptions.Pads == GamepadSource.Sdl)
+		{
+			padPump = SdlGamepadPump.TryCreate(driver.QueueInput, driver.Rumble, out var why);
+			LoomLog.Info(padPump is null ? $"gamepads through GLFW: {why}" : $"gamepads through SDL {padPump.Version}");
+		}
+
 		// Pump the window's platform input devices into the app's neutral input queue. The pump takes the input
 		// context (not the window), so a host with its own window can reuse it against its own context.
-		var inputPump = new DesktopInputPump(inputContext, driver);
+		input.Pads = padPump;
+		var inputPump = new DesktopInputPump(inputContext, driver, gamepads: padPump is null);
 		input.Pump = inputPump;
+		// A touch screen, which GLFW doesn't read, from the window's own pointer messages, a finger a contact
+		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
+		Win32TouchPump? touchPump = null;
+		if (OperatingSystem.IsWindows())
+		{
+			touchPump = Win32TouchPump.TryCreate(hwnd, driver.QueueInput, out var noTouch);
+			LoomLog.Info(touchPump is null ? $"no touch: {noTouch}" : "touch through the window's pointer messages");
+		}
+		input.Touch = touchPump;
 		// Closing is raised synchronously by Close, so an app that calls RequestExit from inside Tick closes its input
 		// there and then, mid-frame: nothing after Tick in the frame below touches the input again.
 		window.Closing += input.Dispose;
@@ -136,7 +159,12 @@ public sealed class DesktopAppHost : IAppHost
 			// The OS drops the ups for anything held across a focus loss (alt-tab), so synthesize releases to keep
 			// held keys/buttons from being stranded down.
 			if (!focused && !input.Closed)
+			{
 				inputPump.ReleaseAllHeld();
+				touchPump?.ReleaseAllHeld();
+			}
+			if (!input.Closed)
+				padPump?.SetFocus(focused);
 			driver.SetFocus(focused);
 		};
 
@@ -147,8 +175,8 @@ public sealed class DesktopAppHost : IAppHost
 		// Where the desktop shows SDR white on the window's monitor, for an HDR frame's paper white, and the brightest it
 		// shows, for its highlights: asked once a second, on the thread pool, so moving the window to another monitor or
 		// moving Windows' "SDR content brightness" slider follows.
-		// Only Windows reports either, and only for a window it has a handle for; elsewhere they stay null and nothing is asked.
-		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
+		// Only Windows reports either, and only for a window it has a handle for (hwnd, above); elsewhere they stay null and
+		// nothing is asked.
 		var askDisplay = OperatingSystem.IsWindows() && hwnd != 0;
 		// Made once: the window, and so what is asked, doesn't change from one question to the next
 		Func<(float? White, float? Peak)> queryDisplay = () => (SdrWhiteLevel.Nits(hwnd), DisplayOutput.PeakNits(hwnd));
@@ -195,6 +223,8 @@ public sealed class DesktopAppHost : IAppHost
 				luminance = Task.Run(queryDisplay);
 			}
 			inputPump.Update(delta);
+			if (!input.Closed)
+				padPump?.Update(delta);
 			driver.Tick(new FrameTime(delta, total));
 		};
 
@@ -256,11 +286,13 @@ public sealed class DesktopAppHost : IAppHost
 		return Backends.Available;
 	}
 
-	// The window's input context and the pump reading it, closed once, by whichever comes first: the window's Closing, or
-	// the end of Run's scope when Load or a frame throws.
+	// The window's input context and the pumps reading it (its keyboards and mice, SDL's pads, the window's touches),
+	// closed once, by whichever comes first: the window's Closing, or the end of Run's scope when Load or a frame throws.
 	private sealed class WindowInput(IInputContext context) : IDisposable
 	{
 		public DesktopInputPump? Pump { get; set; }
+		public SdlGamepadPump? Pads { get; set; }
+		public Win32TouchPump? Touch { get; set; }
 
 		public bool Closed { get; private set; }
 
@@ -269,7 +301,9 @@ public sealed class DesktopAppHost : IAppHost
 			if (Closed)
 				return;
 			Closed = true;
+			Touch?.Dispose();
 			Pump?.Dispose();
+			Pads?.Dispose();
 			context.Dispose();
 		}
 	}

@@ -52,6 +52,8 @@ public sealed partial class WebAppHost : IAppHost
 	private const int HostEventKey = 5;
 	private const int HostEventResize = 6;
 	private const int HostEventPaste = 7;
+	private const int HostEventTouch = 8;
+	private const int HostEventGamepadId = 9;
 
 	// The text of a paste the page queued among this frame's events, which GetClipboardText answers with; null in a frame
 	// with none
@@ -227,10 +229,12 @@ public sealed partial class WebAppHost : IAppHost
 				switch ((int)events[i])
 				{
 					case HostEventPointerMove: input.OnPointerMove(a, b, c); break;
+					case HostEventTouch: input.OnTouch(a, b, c); break;
 					case HostEventGamepadButton: input.OnGamepadButton(a, b, c); break;
 					case HostEventGamepadAxis: input.OnGamepadAxis(a, b, c); break;
 					case HostEventInput: input.OnEvent(a, b, c); break;
 					case HostEventKey: input.OnKey((int)a, b != 0); break;
+					case HostEventGamepadId: input.OnGamepadId(a, GetGamepadId((int)a)); break;
 					case HostEventResize: resized = true; break;
 					case HostEventPaste: _pastedText = GetPastedText() is { Length: > 0 } text ? text : null; break;
 				}
@@ -394,6 +398,11 @@ public sealed partial class WebAppHost : IAppHost
 	[JSImport("getKeyCode", Module)]
 	[SupportedOSPlatform("browser")]
 	private static partial string GetKeyCode(int id);
+
+	// A pad's Gamepad.id as it last connected, asked as its id event is taken (just before it connects)
+	[JSImport("getGamepadId", Module)]
+	[SupportedOSPlatform("browser")]
+	private static partial string GetGamepadId(int pad);
 
 	// Drops what is queued and queues nothing more: called once the host stops taking events, or the queue would grow for
 	// as long as the page stays open

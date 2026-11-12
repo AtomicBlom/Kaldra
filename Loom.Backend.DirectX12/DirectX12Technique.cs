@@ -321,7 +321,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		// ConstantBuffer. Bound each frame from a Constants resource's UPLOAD address (a pass's .Reads) or the
 		// uniform ring (an in-closure push). ShaderVisibility.All so they serve both a fullscreen pixel reader
 		// (CSM/lighting params) and a vertex reader (foliage wind). Registers b1.. match the shaders' explicit
-		// `: register(bN)`, which Slang honours for DXIL while [[vk::binding]] drives SPIR-V.
+		// LOOM_REGISTER(bN), which Slang honours for DXIL while [[vk::binding]] drives SPIR-V.
 		if (template.UniformBufferCount > 0)
 		{
 			CbvRootParam = paramCount;

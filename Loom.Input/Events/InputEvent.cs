@@ -121,6 +121,19 @@ public readonly record struct InputEvent
 	public static InputEvent GamepadConnected(int padIndex, long timestamp = 0)
 		=> new() { Kind = InputEventKind.GamepadConnected, PointerId = padIndex, Timestamp = timestamp };
 
+	/// <summary>A pad connected, with what it is: its <paramref name="type"/> in <see cref="Code"/>, and its USB
+	/// <paramref name="vendor"/> and <paramref name="product"/> ids in <see cref="CodePoint"/> (vendor in the high half),
+	/// zero where the host can't say.</summary>
+	public static InputEvent GamepadConnected(int padIndex, GamepadType type, ushort vendor, ushort product, long timestamp = 0)
+		=> new()
+		{
+			Kind = InputEventKind.GamepadConnected,
+			PointerId = padIndex,
+			Code = (int)type,
+			CodePoint = ((uint)vendor << 16) | product,
+			Timestamp = timestamp,
+		};
+
 	public static InputEvent GamepadDisconnected(int padIndex, long timestamp = 0)
 		=> new() { Kind = InputEventKind.GamepadDisconnected, PointerId = padIndex, Timestamp = timestamp };
 

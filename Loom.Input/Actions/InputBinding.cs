@@ -27,7 +27,8 @@ public readonly record struct InputBinding
 	/// <summary>Quaternary code (composite "right").</summary>
 	public int Code4 { get; init; }
 
-	/// <summary>The gamepad index for gamepad-family sources.</summary>
+	/// <summary>The gamepad index for gamepad-family sources: 0..3, or <see cref="Pad.Last"/> (what a pad button or axis
+	/// converts to, and every <see cref="Pad"/> helper makes) for the pad last used.</summary>
 	public int PadIndex { get; init; }
 
 	/// <summary>Binds a keyboard key as a button.</summary>
@@ -40,9 +41,9 @@ public readonly record struct InputBinding
 
 	/// <summary>Binds a gamepad button.</summary>
 	public static implicit operator InputBinding(GamepadButton button)
-		=> new() { Kind = BindingKind.Button, Family = InputFamily.Gamepad, Code = (int)button };
+		=> new() { Kind = BindingKind.Button, Family = InputFamily.Gamepad, Code = (int)button, PadIndex = Pad.Last };
 
 	/// <summary>Binds a gamepad analog axis.</summary>
 	public static implicit operator InputBinding(GamepadAxis axis)
-		=> new() { Kind = BindingKind.Axis, Family = InputFamily.Gamepad, Code = (int)axis };
+		=> new() { Kind = BindingKind.Axis, Family = InputFamily.Gamepad, Code = (int)axis, PadIndex = Pad.Last };
 }

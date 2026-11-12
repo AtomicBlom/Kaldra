@@ -570,7 +570,7 @@ function keepFromBrowser(e) {
 // animation frame, so a high-rate device can't flood the frame's event capacity. Pointer coordinates are device
 // pixels (CSS position × the capped device-pixel ratio, matching getCanvasSize) so a hit-test lands on the
 // geometry the engine rendered.
-export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis, onEvent, onKey) {
+export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis, onEvent, onKey, onGamepadId, onTouch) {
 	// onEvent kind codes — must match WebInputPump's Kind* constants.
 	const POINTER_BUTTON = 1, WHEEL = 2, TEXT = 3, GAMEPAD_CONNECTION = 4, FOCUS = 5;
 
@@ -592,18 +592,56 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 		onPointerMove(pendingMove[0], pendingMove[1], pendingMove[2]);
 		pendingMove = null;
 	};
+	// Touches are contacts, not a mouse: each finger goes to the host as its own touch (onTouch(id * 8 + phase, x, y),
+	// phase 0 began, 1 moved, 3 ended, 4 cancelled as TouchPhase), its moves coalesced per finger per frame like the
+	// mouse's, and never as a pointer move or a button. The page leaves the canvas alone under a finger (no scrolling,
+	// pinch-zooming, double-tap zoom or long-press menu), so every gesture is the app's.
+	const TOUCH_BEGAN = 0, TOUCH_MOVED = 1, TOUCH_ENDED = 3, TOUCH_CANCELED = 4;
+	const touchCode = (e, phase) => e.pointerId * 8 + phase;
+	const pendingTouches = new Map();
+	const flushTouches = () => {
+		for (const [id, [x, y]] of pendingTouches) onTouch?.(id * 8 + TOUCH_MOVED, x, y);
+		pendingTouches.clear();
+	};
+	let lastPointerWasTouch = false;
+	if (canvas) {
+		canvas.style.touchAction = "none";
+		canvas.style.webkitUserSelect = canvas.style.userSelect = "none";
+		canvas.style.webkitTouchCallout = "none";
+		canvas.addEventListener("contextmenu", e => { if (lastPointerWasTouch) e.preventDefault(); });
+	}
+	const isTouch = e => e.pointerType === "touch" && onTouch;
+
 	target.addEventListener("pointermove", e => {
 		const [x, y] = toDevice(e);
+		if (isTouch(e)) { pendingTouches.set(e.pointerId, [x, y]); return; }
 		pendingMove = [x, y, pointerKind(e.pointerType)];
 	});
 	const button = (e, down) => {
 		const [x, y] = toDevice(e);
+		lastPointerWasTouch = e.pointerType === "touch";
+		if (isTouch(e)) {
+			// A finger's moves so far go before its lift, so it lifts where it was
+			const pending = pendingTouches.get(e.pointerId);
+			if (pending) { onTouch(touchCode(e, TOUCH_MOVED), pending[0], pending[1]); pendingTouches.delete(e.pointerId); }
+			onTouch(touchCode(e, down ? TOUCH_BEGAN : TOUCH_ENDED), x, y);
+			if (down) e.target.setPointerCapture?.(e.pointerId);
+			e.preventDefault();
+			return;
+		}
 		pendingMove = [x, y, pointerKind(e.pointerType)];
 		flushMove();
 		onEvent(POINTER_BUTTON, e.button, down ? 1 : 0);
 	};
 	target.addEventListener("pointerdown", e => button(e, true));
 	target.addEventListener("pointerup", e => button(e, false));
+	// The browser took a finger back (a system gesture, the page losing focus): the contact is gone, not lifted
+	target.addEventListener("pointercancel", e => {
+		if (!isTouch(e)) return;
+		pendingTouches.delete(e.pointerId);
+		const [x, y] = toDevice(e);
+		onTouch(touchCode(e, TOUCH_CANCELED), x, y);
+	});
 	// Vertical scroll rides deltaY, a shift-scroll reports on deltaX; passive since the host doesn't cancel it.
 	target.addEventListener("wheel", e => onEvent(WHEEL, e.deltaX, e.deltaY), { passive: true });
 
@@ -635,7 +673,13 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 
 	// Gamepads: connect/disconnect via the DOM events, button/axis changes by diffing the poll-only API each frame.
 	const padStates = [];
-	window.addEventListener("gamepadconnected", e => { padStates[e.gamepad.index] = { buttons: [], axes: [] }; onEvent(GAMEPAD_CONNECTION, e.gamepad.index, 1); });
+	// A pad's Gamepad.id goes first ("DualSense Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)" in
+	// Chromium, "054c-0ce6-DualSense Wireless Controller" in Firefox), so the host knows what it is as it connects
+	window.addEventListener("gamepadconnected", e => {
+		padStates[e.gamepad.index] = { buttons: [], axes: [] };
+		onGamepadId?.(e.gamepad.index, e.gamepad.id ?? "");
+		onEvent(GAMEPAD_CONNECTION, e.gamepad.index, 1);
+	});
 	window.addEventListener("gamepaddisconnected", e => { padStates[e.gamepad.index] = null; onEvent(GAMEPAD_CONNECTION, e.gamepad.index, 0); });
 
 	const AXIS_EPS = 1e-3;
@@ -669,7 +713,7 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 	};
 
 	// One maintenance tick per animation frame: flush the coalesced pointer move, then diff the gamepads.
-	const tick = () => { flushMove(); pollGamepads(); requestAnimationFrame(tick); };
+	const tick = () => { flushMove(); flushTouches(); pollGamepads(); requestAnimationFrame(tick); };
 	requestAnimationFrame(tick);
 }
 
@@ -683,10 +727,15 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 //   1 pointer move     x, y, pointer type          4 onEvent's channel   its kind, a, b
 //   2 gamepad button   pad, index, down            5 key                 key id, down
 //   3 gamepad axis     pad, index, value           6 the window resized
-//                                                  7 a paste             (its text from getPastedText)
-// A key is its KeyboardEvent.code's id, numbered in the order the page first meets each code; the host asks the code of
-// an id it hasn't seen (getKeyCode) once, so its code → key table stays in C#.
+//   8 a touch          code, x, y                  7 a paste             (its text from getPastedText)
+//   9 a pad's id       pad (its Gamepad.id from getGamepadId), just before it connects
+// A touch's code is its contact id × 8 + its phase (TouchPhase). A key is its KeyboardEvent.code's id, numbered in the
+// order the page first meets each code; the host asks the code of an id it hasn't seen (getKeyCode) once, so its
+// code → key table stays in C#.
 const HOST_MOVE = 1, HOST_GAMEPAD_BUTTON = 2, HOST_GAMEPAD_AXIS = 3, HOST_EVENT = 4, HOST_KEY = 5, HOST_RESIZE = 6, HOST_PASTE = 7;
+const HOST_TOUCH = 8, HOST_GAMEPAD_ID = 9;
+// Each pad's Gamepad.id as it last connected, by its index, for getGamepadId
+const gamepadIds = [];
 let hostQueue = new Float64Array(1024);
 let hostQueued = 0;
 let hostQueueOpen = false;
@@ -720,7 +769,9 @@ export function startHostEventQueue() {
 		(pad, index, down) => queueHostEvent(HOST_GAMEPAD_BUTTON, pad, index, down),
 		(pad, index, value) => queueHostEvent(HOST_GAMEPAD_AXIS, pad, index, value),
 		(kind, a, b) => queueHostEvent(HOST_EVENT, kind, a, b),
-		(code, down) => queueHostEvent(HOST_KEY, keyId(code), down ? 1 : 0, 0));
+		(code, down) => queueHostEvent(HOST_KEY, keyId(code), down ? 1 : 0, 0),
+		(pad, id) => { gamepadIds[pad] = id; queueHostEvent(HOST_GAMEPAD_ID, pad, 0, 0); },
+		(code, x, y) => queueHostEvent(HOST_TOUCH, code, x, y));
 	let resized = false;
 	window.addEventListener("resize", () => {
 		if (resized) return;
@@ -739,6 +790,7 @@ export function takeHostEvents(destination) {
 	return n;
 }
 export function getKeyCode(id) { return keyCodes[id] ?? ""; }
+export function getGamepadId(pad) { return gamepadIds[pad] ?? ""; }
 // The host has stopped taking events (a fault, or the app's exit): what is queued is dropped and nothing more is queued,
 // or the queue would grow with every pointer move for as long as the page stays open.
 export function stopHostEventQueue() {
