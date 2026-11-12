@@ -102,8 +102,8 @@ internal sealed unsafe partial class DirectX12RenderContext
 			stored.CheckInstanceStride(baked.InstanceStride, call.Technique);
 			var instanceView = new VertexBufferView
 			{
-				BufferLocation = _meshes.BindPoseAddress(stored.Storage.Id) + (ulong)(call.Instances.StaticFirst * stored.Stride),
-				SizeInBytes = (uint)(call.Instances.Count * stored.Stride),
+				BufferLocation = _meshes.VertexAddress(stored.Storage.Id) + (ulong)call.Instances.StaticFirst * (ulong)stored.Stride,
+				SizeInBytes = checked((uint)((long)call.Instances.Count * stored.Stride)),
 				StrideInBytes = (uint)stored.Stride,
 			};
 			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, instanceView, (uint)call.Instances.Count, call.Indices);
@@ -157,6 +157,9 @@ internal sealed unsafe partial class DirectX12RenderContext
 		// sampled textures, as a draw's do; one that declares more than the pass reads throws.
 		if (baked.InputBufferCount > _activeStorageCount)
 			throw new InvalidOperationException($"DirectX12: compute technique '{technique}' declares {baked.InputBufferCount} read-only storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		if (baked.InputBufferCount > 0)
+			baked.Bindings.CheckPassStorage(technique, _pass!, readOnlyOnly: true);
+		baked.Bindings.CheckDispatchStorage(technique, storage);
 		for (var s = 0; s < baked.InputBufferCount; s++)
 			_cmd.SetComputeRootShaderResourceView((uint)(baked.InputBufferBaseParam + s), _transients.Resource(_slot, _activeStorageIds[s]).GetGPUVirtualAddress());
 
@@ -247,7 +250,7 @@ internal sealed unsafe partial class DirectX12RenderContext
 		// (stride 0): t0 = bind-pose verts, t1 = bone palette, u0 = output.
 		var paletteBytes = MemoryMarshal.AsBytes(palette);
 		var paletteAddress = _storageUpload.Upload(_slot, paletteBytes);
-		_cmd.SetComputeRootShaderResourceView((uint)baked.InputBufferBaseParam, _meshes.BindPoseAddress(skinnedMesh.Id));
+		_cmd.SetComputeRootShaderResourceView((uint)baked.InputBufferBaseParam, _meshes.VertexAddress(skinnedMesh.Id));
 		_cmd.SetComputeRootShaderResourceView((uint)(baked.InputBufferBaseParam + 1), paletteAddress);
 		_cmd.SetComputeRootUnorderedAccessView((uint)baked.UavRootParam, _transients.Resource(_slot, output.Id).GetGPUVirtualAddress());
 

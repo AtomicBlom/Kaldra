@@ -151,10 +151,11 @@ public ref struct DrawCall
 	{
 		ArgumentOutOfRangeException.ThrowIfNegative(first);
 		ArgumentOutOfRangeException.ThrowIfNegative(count);
-		if (first + count > buffer.Count)
+		// Subtracted rather than summed, so a first and a count each in range can't overflow past the check
+		if (first > buffer.Count || count > buffer.Count - first)
 		{
 			throw new ArgumentOutOfRangeException(nameof(count),
-				$"Draw asks for instances {first}..{first + count} of an instance buffer that holds {buffer.Count}.");
+				$"Draw asks for instances {first}..{(long)first + count} of an instance buffer that holds {buffer.Count}.");
 		}
 		return InstanceSource.FromStatic(buffer, first, count);
 	}

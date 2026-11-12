@@ -1,6 +1,7 @@
 using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using Silk.NET.DXGI;
@@ -69,6 +70,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 
 	/// <summary>Which uniform slot carries the per-material parameter block, or null when the shader declares none.</summary>
 	public int? MaterialUniformSlot { get; }
+
+	/// <summary>The shader's reflected bindings, which a pass's <c>.Reads</c> storage buffers are held to at the draw.</summary>
+	public ShaderBindingMap Bindings { get; }
 
 	// The on-disk blob cache and this pipeline's key in it. Null cache = this run does not persist pipelines.
 	private readonly DirectX12PipelineBlobCache? _blobs;
@@ -139,6 +143,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		UniformBufferCount = template.UniformBufferCount;
 		InstanceStride = template.Instance?.Stride ?? 0;
 		MaterialUniformSlot = template.MaterialUniformSlot;
+		Bindings = template.Bindings;
 
 		if (template.IsCompute)
 		{
@@ -237,13 +242,16 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 
 		var samplers = stackalloc StaticSamplerDesc[template.InputCount > 0 ? template.InputCount : 1];
 		for (var i = 0; i < template.InputCount; i++)
+		{
+			// A slot the shader samples by comparison takes a comparison sampler, as a graphics technique's does
+			var compare = template.ComparedInputs is { } c && i < c.Length && c[i];
 			samplers[i] = new StaticSamplerDesc
 			{
-				Filter = template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
-				AddressU = ToTextureAddress(template.Address),
-				AddressV = ToTextureAddress(template.Address),
-				AddressW = ToTextureAddress(template.Address),
-				ComparisonFunc = ComparisonFunc.Never,
+				Filter = compare ? Filter.ComparisonMinMagLinearMipPoint : template.LinearFilter ? Filter.MinMagMipLinear : Filter.MinMagMipPoint,
+				AddressU = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressV = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				AddressW = compare ? TextureAddressMode.Clamp : ToTextureAddress(template.Address),
+				ComparisonFunc = compare ? ToD3DCompare(template.SampleCompare!.Value) : ComparisonFunc.Never,
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
 				MaxLOD = float.MaxValue,
@@ -251,6 +259,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				RegisterSpace = 0,
 				ShaderVisibility = ShaderVisibility.All,
 			};
+		}
 
 		var rootDesc = new RootSignatureDesc
 		{

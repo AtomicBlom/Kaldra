@@ -58,8 +58,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// Kept geometry for draw-list streams that carry a stable identity. The rings above stay: a transient list still
 	// uses them, and so does the group-opacity composite quad, which is pushed through _listVtx mid-list.
 	private readonly VulkanDrawListStore _listStore;
-	// Monotonic across the engine's life, unlike _frameSlot which cycles. The draw-list store uses it to notice a
-	// stream submitted twice in one frame, which would silently serve one submission the other's geometry.
+	// Monotonic across the engine's life, unlike _frameSlot which cycles: IRenderContext.Frame. The draw-list store uses
+	// it to notice a stream submitted again in one frame at another revision, which would silently serve one submission
+	// the other's geometry.
 	private long _frameIndex = -1;
 	// Renderer-private offscreen targets backing UI group-opacity layers (BeginLayer/EndLayer), below the graph seam.
 	private readonly VulkanLayerTargets _layerTargets;
@@ -107,6 +108,8 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	public double DeltaTime { get; private set; }
 
 	public double Time { get; private set; }
+
+	public long Frame => _frameIndex;
 
 	public bool HdrOutput { get; private set; }
 
@@ -207,21 +210,27 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// The app-writable storage buffers (ResourceKind.Storage) the current pass .Reads, in order — bound to the
 	// technique's storage-buffer slots (after the sampled inputs, before the uniform slots).
 	public const int MaxStorageBuffers = GraphLimits.MaxStorageBuffersPerPass;
+	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
+	private int _activeStorageCount;
+
+	// The pass being recorded, which a technique's storage slots are held to (ShaderBindingMap.CheckPassStorage)
+	private GraphPass? _pass;
 
 	// The storage buffers the pass .Reads, for a technique's draw: the first as many as it declares, in the order the
-	// pass read them. A pass may read more than one technique uses (one storage buffer for the road, beside techniques
-	// that read none); a technique that declares more than the pass reads would read an unbound slot, so it throws.
+	// pass read them. A pass may read more than one technique uses (beside techniques that read none, or fewer); a
+	// technique that declares more than the pass reads would read an unbound slot, so it throws, and one whose slot can't
+	// be reading the buffer bound to it by element size throws.
 	private int PassStorage(Span<Silk.NET.Vulkan.Buffer> into, in ShaderBindingMap map, string technique)
 	{
 		var declared = map.StorageBuffers.Length;
 		if (declared > _activeStorageCount)
 			throw new VulkanException($"Technique '{technique}' declares {declared} storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		if (declared > 0)
+			map.CheckPassStorage(technique, _pass!);
 		for (var j = 0; j < declared; j++)
 			into[j] = _resources.GetStorageBuffer(_frameSlot, _activeStorageIds[j]);
 		return declared;
 	}
-	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
-	private int _activeStorageCount;
 
 	/// <summary>
 	/// Set the attachment formats of the current pass — the formats its techniques bake against — plus whether
@@ -234,6 +243,7 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	{
 		_samples = samples;
 		_validate.BeginPass(pass);
+		_pass = pass;
 		// Copy into the inline buffer (no allocation) rather than .ToArray(); the incoming span points into
 		// the executor's stackalloc, which is gone once this returns. Throw — never clamp — on an over-wide
 		// pass: silently dropping formats would bake a pipeline with fewer attachments than the pass writes.
@@ -365,13 +375,20 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 	// the attachment formats are the current pass's. So one template used in passes with different targets
 	// caches distinct pipelines, and the call site only needs the name. The local cache keeps the per-draw
 	// path off VulkanTechniqueCache's file read.
-	private VulkanTechnique Bake(string technique)
+	private VulkanTechnique Bake(string technique) =>
+		Bake(technique, ((ReadOnlySpan<VkFormat>)_colorFormats)[.._colorCount], _depthFormat, _depthReadOnly, _samples);
+
+	// The technique baked for a draw list's group-opacity layer target rather than the pass: its one colour attachment
+	// in the pass's first format, no depth, and one sample, whatever the pass has.
+	private VulkanTechnique BakeLayer(string technique) =>
+		Bake(technique, ((ReadOnlySpan<VkFormat>)_colorFormats)[..1], VkFormat.Undefined, depthReadOnly: false, samples: 1);
+
+	private VulkanTechnique Bake(string technique, ReadOnlySpan<VkFormat> colorFormats, VkFormat depthFormat, bool depthReadOnly, int samples)
 	{
 		if (!_registry.TryGetValue(technique, out var template))
 			throw new TechniqueNotDefinedException(technique);
 
-		var colorFormats = ((ReadOnlySpan<VkFormat>)_colorFormats)[.._colorCount];
-		var key = new PipelineKey(technique, colorFormats, _depthFormat, _depthReadOnly, _samples);
+		var key = new PipelineKey(technique, colorFormats, depthFormat, depthReadOnly, samples);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
@@ -380,11 +397,11 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		// is a one-time warmup allocation per unique pipeline, not per-frame churn.
 		var baked = _techniques.GetOrBake(new VulkanTechniqueDescription(
 			template.Spirv, template.VertexEntry, template.FragmentEntry, colorFormats.ToArray(),
-			template.Bindings, template.HasVertexInput, _depthFormat, template.Blend, DepthWrite: !_depthReadOnly,
+			template.Bindings, template.HasVertexInput, depthFormat, template.Blend, DepthWrite: !depthReadOnly,
 			HasFragmentPush: template.HasFragmentPush, IsCompute: template.IsCompute,
 			Layout: template.Layout, Instance: template.Instance,
 			HasListPush: template.HasListPush, Cull: template.Cull,
-			DepthTest: template.DepthTest, Bias: template.Bias, Samples: _samples,
+			DepthTest: template.DepthTest, Bias: template.Bias, Samples: samples,
 			AlphaToCoverage: template.AlphaToCoverage), technique);
 		// Note: template.Blend / LinearFilter / HasFragmentPush need no extra key term — Blend and
 		// HasFragmentPush are folded into the VulkanTechniqueDescription hash, and LinearFilter only affects the
@@ -464,9 +481,6 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		}
 	}
 
-	// Nearest keeps the low-res pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
-	// the smooth filtering a chunky pixel glow still wants internally. The sampler is part of the combined
-	// image-sampler descriptor, so the technique's LinearFilter flag just selects which one FullScreen binds.
 	// One comparison sampler per compare function, made the first time a technique asks for it
 	private readonly Sampler[] _compareSamplers = new Sampler[(int)DepthCompare.Always + 1];
 
@@ -492,6 +506,9 @@ internal sealed unsafe partial class VulkanRenderContext : IRenderContext, IDisp
 		return sampler;
 	}
 
+	// Nearest keeps the low-res pixel grid crisp (the upscale blit); linear gives bloom's downsample/upsample
+	// the smooth filtering a chunky pixel glow still wants internally. The sampler is part of the combined
+	// image-sampler descriptor, so the technique's LinearFilter flag just selects which one FullScreen binds.
 	private Sampler CreateSampler(Filter filter, SamplerAddressMode address = SamplerAddressMode.ClampToEdge)
 	{
 		var mip = filter == Filter.Linear ? SamplerMipmapMode.Linear : SamplerMipmapMode.Nearest;

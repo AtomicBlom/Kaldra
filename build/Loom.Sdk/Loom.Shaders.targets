@@ -66,11 +66,40 @@
     <_LoomShaderOutput Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl')" Condition="'$(LoomEmitWgsl)' == 'true'" />
   </ItemGroup>
 
+  <!-- An item's own Stages (see the DXIL emit below), normalised and checked before anything compiles: tokens are
+       trimmed and lower-cased ("Vertex; fragment" is "vertex;fragment"), and any token that is not vertex, fragment or
+       compute, or a Stages that names none, fails the build. Dropping an unknown token ("pixel") instead would build a
+       shader with no fragment DXIL, which DirectX 12 finds missing only at run time. Runs ahead of the compile's
+       up-to-date check, so a bad Stages fails even a build with nothing to compile, and so the DXIL an item's Stages
+       promises is among the outputs that check looks for: adding Stages to an item whose SPIR-V is already up to date
+       then compiles it, rather than leaving its DXIL unmade. -->
+  <Target Name="_LoomResolveShaderStages" Condition="'$(LoomShaderOutputMode)' != 'None'">
+    <ItemGroup>
+      <LoomSlangEntry Condition="'%(LoomSlangEntry.Stages)' != ''">
+        <_StagesGiven>%(LoomSlangEntry.Stages)</_StagesGiven>
+        <Stages>$([System.Text.RegularExpressions.Regex]::Replace($([System.Text.RegularExpressions.Regex]::Replace('%(LoomSlangEntry.Stages)', '\s*;\s*', ';').Trim().ToLowerInvariant()), ';+', ';').Trim(';'))</Stages>
+      </LoomSlangEntry>
+      <LoomSlangEntry Condition="'%(LoomSlangEntry._StagesGiven)' != ''">
+        <_StagesValid>$([System.Text.RegularExpressions.Regex]::IsMatch('%(LoomSlangEntry.Stages)', '^(vertex|fragment|compute)(;(vertex|fragment|compute))*$'))</_StagesValid>
+      </LoomSlangEntry>
+    </ItemGroup>
+    <Error Condition="'%(LoomSlangEntry._StagesGiven)' != '' And '%(LoomSlangEntry._StagesValid)' != 'True'"
+           Text="%(LoomSlangEntry.Filename).slang has Stages=&quot;%(LoomSlangEntry._StagesGiven)&quot;, but Stages is a semicolon-separated list of one or more of vertex, fragment and compute." />
+    <ItemGroup Condition="'$(LoomEmitDxil)' == 'true'">
+      <_LoomShaderOutput Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).vs.dxil')" Condition="$([System.String]::Copy(';%(LoomSlangEntry.Stages);').Contains(';vertex;'))" />
+      <_LoomShaderOutput Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).ps.dxil')" Condition="$([System.String]::Copy(';%(LoomSlangEntry.Stages);').Contains(';fragment;'))" />
+      <_LoomShaderOutput Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).cs.dxil')" Condition="$([System.String]::Copy(';%(LoomSlangEntry.Stages);').Contains(';compute;'))" />
+    </ItemGroup>
+  </Target>
+
   <!-- Incremental: recompile when ANY .slang (entry OR shared module) is newer than ANY .spv. Listing every
-       source as an input means editing a shared *.module.slang rebuilds the shaders that import it. -->
+       source as an input means editing a shared *.module.slang rebuilds the shaders that import it. The project file
+       is an input too, since the items' metadata (Stages, an entry point's name) is written there and changes what
+       the compile emits. -->
   <Target Name="LoomCompileShaders"
           Condition="'$(LoomShaderOutputMode)' != 'None'"
-          Inputs="@(LoomSlangSource)"
+          DependsOnTargets="_LoomResolveShaderStages"
+          Inputs="@(LoomSlangSource);$(MSBuildProjectFullPath)"
           Outputs="@(_LoomShaderOutput)">
     <Error Condition="'$(PkgSlang_Sdk)' == ''"
            Text="LoomShaderOutputMode='$(LoomShaderOutputMode)' but Slang.Sdk is not referenced in this project. Add a Slang.Sdk PackageReference with GeneratePathProperty=&quot;true&quot;." />
@@ -134,7 +163,8 @@
       <!-- A shader whose entry points come from an #include (one source compiled twice, a variant defining a macro and
            including the other) declares its stages on the item, since the scan above can't see them:
              <LoomSlangEntry Update="Shaders\*_cast.slang" Stages="vertex;fragment" />
-           Its entry functions are then taken on trust; slangc fails the compile if one is missing. -->
+           Its entry functions are then taken on trust; slangc fails the compile if one is missing. Its Stages arrive
+           here checked and normalised by _LoomResolveShaderStages. -->
       <_LoomDxilEntry Condition="'%(_LoomDxilEntry.Stages)' != ''">
         <HasVertex>$([System.String]::Copy(';%(_LoomDxilEntry.Stages);').Contains(';vertex;'))</HasVertex>
         <HasFragment>$([System.String]::Copy(';%(_LoomDxilEntry.Stages);').Contains(';fragment;'))</HasFragment>

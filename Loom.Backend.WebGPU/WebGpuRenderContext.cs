@@ -67,8 +67,13 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	private readonly int[] _activeStorageIds = new int[MaxStorageBuffers];
 	private int _activeStorageCount;
 
+	// The pass being recorded, which a technique's storage slots are held to (ShaderBindingMap.CheckPassStorage)
+	private GraphPass? _pass;
+
 	public double DeltaTime { get; private set; }
 	public double Time { get; private set; }
+	// -1 until the first BeginFrame, which makes it 0.
+	public long Frame { get; private set; } = -1;
 	public bool HdrOutput => false; // browser output is the SDR canvas; HDR canvas negotiation is a later concern
 
 	/// <summary>Set the per-frame inputs before the graph records.</summary>
@@ -76,6 +81,8 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	{
 		DeltaTime = deltaTime;
 		Time = time;
+
+		Frame++;
 	}
 
 	/// <summary>
@@ -86,6 +93,7 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	public void BeginPass(GraphPass pass, ReadOnlySpan<int> colorFormatIds, int depthFormatId, bool depthReadOnly, ReadOnlySpan<int> colorViews, int areaWidth, int areaHeight, ReadOnlySpan<int> constantsIds = default, ReadOnlySpan<int> storageIds = default, int samples = 1)
 	{
 		_validate.BeginPass(pass);
+		_pass = pass;
 		_samples = samples;
 		if (colorFormatIds.Length > MaxColorFormats)
 			throw new WebGpuException($"A pass has {colorFormatIds.Length} color attachments; the pipeline-key buffer holds {MaxColorFormats}.");
@@ -106,15 +114,22 @@ internal sealed partial class WebGpuRenderContext(WebGpuEngine engine, RecordVal
 	}
 
 	/// <summary>Resolve a technique to a render pipeline baked against the current pass's attachment formats.</summary>
-	private WebGpuTechnique Bake(string technique)
+	private WebGpuTechnique Bake(string technique) =>
+		Bake(technique, ((ReadOnlySpan<int>)_colorFormatIds)[.._colorCount], _depthFormatId, _depthReadOnly, _samples);
+
+	// The technique baked for a draw list's group-opacity layer target rather than the pass: its one colour attachment in
+	// the pass's first format, no depth, and one sample, whatever the pass has.
+	private WebGpuTechnique BakeLayer(string technique) =>
+		Bake(technique, ((ReadOnlySpan<int>)_colorFormatIds)[..1], -1, depthReadOnly: false, samples: 1);
+
+	private WebGpuTechnique Bake(string technique, ReadOnlySpan<int> colorFormats, int depthFormatId, bool depthReadOnly, int samples)
 	{
 		var template = _engine.Template(technique);
-		var colorFormats = ((ReadOnlySpan<int>)_colorFormatIds)[.._colorCount];
-		var key = new PipelineKey(technique, colorFormats, _depthFormatId, _depthReadOnly, _samples);
+		var key = new PipelineKey(technique, colorFormats, depthFormatId, depthReadOnly, samples);
 		if (_baked.TryGetValue(key, out var cached))
 			return cached;
 
-		var baked = WebGpuTechnique.Bake(_engine.Handles, template, technique, colorFormats, _depthFormatId, depthWrite: !_depthReadOnly, _samples);
+		var baked = WebGpuTechnique.Bake(_engine.Handles, template, technique, colorFormats, depthFormatId, depthWrite: !depthReadOnly, samples);
 		_baked[key] = baked;
 		return baked;
 	}

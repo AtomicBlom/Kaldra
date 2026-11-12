@@ -85,8 +85,8 @@ internal sealed unsafe partial class VulkanRenderContext
 		{
 			// Instances uploaded once: the stored buffer itself, from the draw's first instance.
 			stored.CheckInstanceStride(template.Instance?.Stride ?? 0, call.Technique);
-			var buffer = _meshes.BindPoseBuffer(stored.Storage.Id);
-			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, buffer, (ulong)(call.Instances.StaticFirst * stored.Stride),
+			var buffer = _meshes.VertexBuffer(stored.Storage.Id);
+			_meshes.DrawInstanced(_cmd, _validate.RequireMesh(call).Id, buffer, (ulong)call.Instances.StaticFirst * (ulong)stored.Stride,
 				(uint)call.Instances.Count, call.Indices);
 		}
 		else
@@ -129,11 +129,15 @@ internal sealed unsafe partial class VulkanRenderContext
 			if (binding.Kind == ShaderBindingKind.StorageBufferReadOnly) readOnly++; else readWrite++;
 		if (readOnly > _activeStorageCount)
 			throw new InvalidOperationException($"Vulkan: compute technique '{technique}' declares {readOnly} read-only storage buffer(s) but its pass .Reads {_activeStorageCount}; the pass must .Reads each one the technique reads.");
+		if (readOnly > 0)
+			map.CheckPassStorage(technique, _pass!, readOnlyOnly: true);
+		map.CheckDispatchStorage(technique, storage);
 		var total = sampled.Length + storage.Length + readOnly + uniforms;
 		if (total > 0)
 		{
 			// Sampled inputs use the technique's declared filter (matching the Draw/FullScreen path and DirectX12's
-			// static sampler) — not a hardcoded nearest, which silently diverged from DirectX12 for a LinearFilter pass.
+			// static sampler) — not a hardcoded nearest, which silently diverged from DirectX12 for a LinearFilter pass —
+			// and a slot the shader reads by comparison takes the technique's comparison sampler, as a draw's does.
 			var sampler = template.LinearFilter ? _linearSampler : _nearestSampler;
 			// Each descriptor's slot and its type come from the same reflected binding, so they cannot disagree.
 			// They could before: the slot was this loop's index while the type was chosen from the runtime handle's
@@ -150,7 +154,8 @@ internal sealed unsafe partial class VulkanRenderContext
 			for (var i = 0; i < sampled.Length; i++, count++)
 			{
 				ref var image = ref _resources.Get(_frameSlot, sampled[i].Id);
-				imageInfos[count] = new DescriptorImageInfo { Sampler = sampler, ImageView = image.SampledView, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
+				var slotSampler = map.ComparedTextures[i] ? CompareSampler(template.SampleCompare!.Value) : sampler;
+				imageInfos[count] = new DescriptorImageInfo { Sampler = slotSampler, ImageView = image.SampledView, ImageLayout = ImageLayout.ShaderReadOnlyOptimal };
 				writes[count] = Write((uint)map.SampledTextures[i].Index, DescriptorType.CombinedImageSampler);
 				writes[count].PImageInfo = &imageInfos[count];
 			}
@@ -217,7 +222,7 @@ internal sealed unsafe partial class VulkanRenderContext
 		// own set rather than going through the generic Dispatch storage path.
 		var paletteBytes = MemoryMarshal.AsBytes(palette);
 		var (paletteBuffer, paletteOffset) = _storageUpload.Upload(_frameSlot, paletteBytes);
-		var inBuffer = _meshes.BindPoseBuffer(skinnedMesh.Id);
+		var inBuffer = _meshes.VertexBuffer(skinnedMesh.Id);
 		var outBuffer = _resources.GetBuffer(_frameSlot, output.Id);
 
 		var set = _descriptors.Allocate(baked.DescriptorSetLayout);

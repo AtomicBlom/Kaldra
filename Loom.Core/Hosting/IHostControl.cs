@@ -22,12 +22,24 @@ public interface IHostControl
 
 	/// <summary>
 	/// The text on the system clipboard, or null when it holds none or the host cannot read it. Defaults to null so a
-	/// host without a clipboard need not implement it.
+	/// host without a clipboard need not implement it. The browser host, which may not read the clipboard without
+	/// asking, answers with the text of a paste into the page in this frame (Ctrl+V's comes in the same frame as its
+	/// keydown), and null in any other.
+	/// <para>
+	/// Main thread only: the thread the host runs the app's frames on (its <see cref="LoomApplication"/> callbacks), since
+	/// the desktop host's windowing (GLFW) reaches the clipboard there and nowhere else. The desktop host throws
+	/// <see cref="InvalidOperationException"/> for a call from any other thread.
+	/// </para>
 	/// </summary>
 	string? GetClipboardText() => null;
 
-	/// <summary>Put <paramref name="text"/> on the system clipboard. Defaults to a no-op so a host without a clipboard need not implement it.</summary>
-	void SetClipboardText(string text) { }
+	/// <summary>
+	/// Put <paramref name="text"/> on the system clipboard. Returns false when the host has no clipboard to put it on, so
+	/// an app can say the copy did not happen rather than let the player paste nothing; defaults to that, so a host without
+	/// a clipboard need not implement it. True means the host took the text: the browser host writes it asynchronously,
+	/// and the browser can still refuse it there. Main thread only, as <see cref="GetClipboardText"/> is.
+	/// </summary>
+	bool SetClipboardText(string text) => false;
 
 	/// <summary>
 	/// Offer the user a file to keep, for a host whose app can't write files where the user can reach them: the web host

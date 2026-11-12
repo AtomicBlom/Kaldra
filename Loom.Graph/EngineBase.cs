@@ -70,16 +70,16 @@ public abstract class EngineBase : IEngine
 	public float? DisplayPeakNits { get; set; }
 
 	/// <inheritdoc/>
-	public float? HdrPaperWhiteChoice { get; set; }
+	public float? HdrPaperWhiteChoice { get; set => field = HdrLevels.Choice(value, nameof(HdrPaperWhiteChoice)); }
 
 	/// <inheritdoc/>
-	public float? HdrPeakChoice { get; set; }
+	public float? HdrPeakChoice { get; set => field = HdrLevels.Choice(value, nameof(HdrPeakChoice)); }
 
 	/// <inheritdoc/>
-	public float HdrPaperWhiteNits => HdrPaperWhiteChoice ?? DisplaySdrWhiteNits ?? 200f;
+	public float HdrPaperWhiteNits => HdrLevels.PaperWhite(HdrPaperWhiteChoice, DisplaySdrWhiteNits);
 
 	/// <inheritdoc/>
-	public float HdrPeakNits => MathF.Max(HdrPeakChoice ?? DisplayPeakNits ?? 1000f, HdrPaperWhiteNits);
+	public float HdrPeakNits => HdrLevels.Peak(HdrPeakChoice, DisplayPeakNits, HdrPaperWhiteNits);
 
 	/// <summary>Per-pass GPU timings from the most recently completed frame (empty when timing is disabled).</summary>
 	public IReadOnlyList<PassTiming> LastFrameTimings => _timings;
@@ -149,6 +149,10 @@ public abstract class EngineBase : IEngine
 	public void DefineTechnique(string name, TechniqueDescriptor descriptor)
 	{
 		ArgumentException.ThrowIfNullOrEmpty(name);
+		// A draw list's textures are loaded images and UI layers, colour formats all, and its one sampler slot is plain on
+		// every backend; a list technique that compared would read undefined results.
+		if (descriptor.HasListPush && descriptor.SampleCompare is not null)
+			throw new InvalidOperationException($"Technique '{name}' is a draw-list technique (HasListPush) and names SampleCompare; a draw list samples colour textures, which no backend can compare.");
 		var shape = BakeTechnique(name, descriptor);
 		// Recording what the shader expects of a material is what lets a mismatch be caught at *definition* — and
 		// because a hot reload replays this, at reload too, against every material already built for the name.
@@ -305,16 +309,12 @@ public abstract class EngineBase : IEngine
 
 	private void Written(int id) => CollectionsMarshal.GetValueRefOrNullRef(_writes, id)++;
 
-	// Whether this slot's copy of a buffer is behind its last Write; if it is, it is about to be brought up to date
-	private bool Behind(int id, int slot)
-	{
-		var uploaded = _uploadedWrites[id];
-		var writes = _writes[id];
-		if (uploaded[slot] == writes)
-			return false;
-		uploaded[slot] = writes;
-		return true;
-	}
+	// Whether this slot's copy of a buffer is behind its last Write
+	private bool Behind(int id, int slot) => _uploadedWrites[id][slot] != _writes[id];
+
+	// This slot's copy of a buffer now holds its last Write. Marked after the backend's write rather than before, so a write
+	// that throws leaves the slot behind and the next frame tries again.
+	private void CaughtUp(int id, int slot) => _uploadedWrites[id][slot] = _writes[id];
 
 	/// <summary>Which of the per-frame-slot copies of each Constants and Storage buffer the frame being recorded reads.</summary>
 	protected abstract int ShadowSlot { get; }
@@ -528,9 +528,15 @@ public abstract class EngineBase : IEngine
 		var executed = graph;
 		if (ResourceInspectionEnabled)
 		{
+			// A multisampled target with no resolve is left out (a depth target, an integer or 32-bit float one), since the
+			// derivation refuses sampling it.
 			foreach (var resource in graph.Resources)
-				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth)
+			{
+				var resolvable = resource.Domain.Samples == 1
+					|| (resource.Kind == ResourceKind.Color && resource.Format is not (Format.R32F or Format.R32Uint));
+				if (resource.Kind is ResourceKind.Color or ResourceKind.Depth && resolvable)
 					_inspectable.Add(new InspectableResource(resource.Id, resource.Name, resource.Kind, resource.Format));
+			}
 			executed = graph.WithDebugSampling(_inspectable.ConvertAll(r => r.Id));
 		}
 
@@ -623,15 +629,23 @@ public abstract class EngineBase : IEngine
 	{
 		// Bring this frame slot's copy of each app-writable buffer up to its last IEngine.Write, which is what makes that
 		// write persist: a static parameter is written once and an animated one per frame, and either way what the GPU
-		// reads this frame is current. A copy already up to date is left alone, so a large buffer written once (a
-		// world's per-point tints) costs nothing per frame once every slot holds it.
+		// reads this frame is current. A copy already up to date is left alone, so a large buffer written once (a table
+		// of thousands of elements filled at load) costs nothing per frame once every slot holds it.
 		var slot = ShadowSlot;
 		foreach (var (id, bytes) in ConstantsShadows)
-			if (Behind(id, slot))
-				WriteConstantsShadow(id, bytes);
+		{
+			if (!Behind(id, slot))
+				continue;
+			WriteConstantsShadow(id, bytes);
+			CaughtUp(id, slot);
+		}
 		foreach (var (id, bytes) in StorageShadows)
-			if (Behind(id, slot))
-				WriteStorageShadow(id, bytes);
+		{
+			if (!Behind(id, slot))
+				continue;
+			WriteStorageShadow(id, bytes);
+			CaughtUp(id, slot);
+		}
 
 		BeginFrameTimestamps();
 
@@ -803,6 +817,14 @@ public abstract class EngineBase : IEngine
 		RetireTexture(texture);
 	}
 
+	/// <inheritdoc/>
+	public void UpdateTexture(Texture texture, ReadOnlySpan<byte> texels)
+	{
+		AssertRenderThread(nameof(UpdateTexture));
+		ThrowIfRecording(nameof(UpdateTexture));
+		WriteTexels(texture, texels);
+	}
+
 	/// <summary>Upload canonical-layout geometry and mint its handle — the backend half of <see cref="CreateMesh(ReadOnlySpan{Vertex}, ReadOnlySpan{uint})"/>.</summary>
 	protected abstract Mesh UploadMesh(ReadOnlySpan<Vertex> vertices, ReadOnlySpan<uint> indices);
 
@@ -828,6 +850,14 @@ public abstract class EngineBase : IEngine
 	/// it. Every cached binding object that names its view is evicted before the view's handle can be reused.
 	/// </summary>
 	protected abstract void RetireTexture(Texture texture);
+
+	/// <summary>
+	/// Copy new texels into a texture's existing image ahead of the next frame — the backend half of
+	/// <see cref="UpdateTexture"/>. Called between frames. The copy must be ordered after every frame already submitted
+	/// that may sample the image, and it must allocate nothing after the texture's first update. Every backend holds the
+	/// texture to the same shape first, through <see cref="TextureUpdates.Check"/>.
+	/// </summary>
+	protected abstract void WriteTexels(Texture texture, ReadOnlySpan<byte> texels);
 
 	// The pass whose callback is running, or null between passes and between frames. Set by RecordFrame; read by
 	// ThrowIfRecording on the render thread only, so it needs no synchronisation.

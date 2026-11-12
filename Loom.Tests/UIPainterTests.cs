@@ -4,6 +4,7 @@ using Loom.Backend.DirectX12;
 using Loom.Backend.Vulkan;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
+using Loom.Core.Primitives;
 using Loom.UI.SUIsei;
 using SUIsei;
 using SUIsei.Controls;
@@ -33,8 +34,8 @@ public class UIPainterTests
 		foreach (var backend in AvailableBackends())
 		{
 			// A HUD and an in-world panel are two hosts, and each numbers its first surface 0. Kept geometry is per stream,
-			// so if both submitted stream 0 the second would be refused as one stream submitted twice in a frame — or, on
-			// a backend that let it through, draw over the first one's buffers.
+			// and both lists are at their first revision, so if both submitted one stream the second would be served the
+			// first's kept buffers. Each painter mints its surfaces' streams, so they never share one.
 			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
 			var left = new Hosted(engine, HorizontalAlignment.Left, HdrColor.FromRgb(255, 0, 0));
 			var right = new Hosted(engine, HorizontalAlignment.Right, HdrColor.FromRgb(0, 0, 255));
@@ -84,6 +85,79 @@ public class UIPainterTests
 			hosted.Host.Render();
 			var thrown = Should.Throw<Exception>(() => engine.Render(Inputs));
 			thrown.ToString().ShouldContain("UIPainter.Prepare", customMessage: $"{backend.Name}: drawing an unprepared frame should name the missing step.");
+		}
+	}
+
+	[Test]
+	public void A_prepared_surface_draws_in_every_pass_of_its_frame()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			// One UI shown twice in a frame — on the frame and again into an inset — is one Prepare and two Draws. The
+			// check that catches a skipped Prepare must not take the second Draw for one.
+			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+			var hosted = new Hosted(engine, HorizontalAlignment.Stretch, HdrColor.FromRgb(0, 255, 0));
+			engine.SetGraph(RenderGraph.Define(g =>
+			{
+				var inset = g.Domain("inset", W, H).Color("inset", Format.Rgba8Srgb);
+				g.Pass("inset").Writes(inset).Draw(ctx => hosted.Painter.Draw(ctx, hosted.Surface));
+				var screen = g.Backbuffer;
+				g.Pass("ui").Samples(inset).Writes(screen).Draw(ctx =>
+				{
+					hosted.Painter.Draw(ctx, hosted.Surface);
+					hosted.Painter.Draw(ctx, hosted.Surface);
+				});
+				g.Present(screen);
+			}));
+
+			var (width, rgba) = Capture(engine, frames: 3, _ => hosted.Compose());
+			Pixel(rgba, width, W / 2, H / 2).ShouldBe(Colour.Green, $"{backend.Name}: the surface should draw on the frame.");
+
+			// The next frame skips Prepare, and its first Draw still says so.
+			hosted.Host.Tick(1.0 / 60.0, 0f, new Vector2(W, H));
+			hosted.Host.Render();
+			Should.Throw<Exception>(() => engine.Render(Inputs)).ToString()
+				.ShouldContain("UIPainter.Prepare", customMessage: $"{backend.Name}: a frame that skipped Prepare should still be refused.");
+		}
+	}
+
+	[Test]
+	public void A_stream_submitted_again_in_one_frame_must_hold_the_same_revision()
+	{
+		foreach (var backend in AvailableBackends())
+		{
+			// A stable stream keeps one buffer per frame slot. Submitted again at the revision it holds, it re-binds the same
+			// bytes; at another, the second write would land before the first draw executes and serve both its geometry.
+			using var engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
+			UIPainter.Create(engine, new UIHost()); // for the "ui" technique
+			var stream = engine.AllocateDrawListStream();
+			var white = new Half4((Half)1f, (Half)1f, (Half)1f, (Half)1f);
+			Loom.Core.Geometry.OverlayVertex[] quad =
+			[
+				new(new Vector2(0, 0), Vector2.Zero, white, Vector4.Zero),
+				new(new Vector2(W, 0), Vector2.Zero, white, Vector4.Zero),
+				new(new Vector2(W, H), Vector2.Zero, white, Vector4.Zero),
+			];
+			ushort[] indices = [0, 1, 2];
+			Loom.Core.Hosting.DrawCommand[] commands = [new(new Loom.Core.Primitives.Rect(0, 0, W, H), TextureIndex: 0, IndexOffset: 0, IndexCount: 3, VertexOffset: 0, Tag: 0)];
+			TextureRef[] textures = [engine.CreateTexture(Loom.Core.Materials.TextureData.FromRgba8(1, 1, [255, 255, 255, 255], Loom.Core.Materials.TextureFormat.Rgba8Unorm, generateMips: false))];
+			var secondRevision = 1u;
+			engine.SetGraph(RenderGraph.Define(g =>
+			{
+				var screen = g.Backbuffer;
+				g.Pass("ui").Writes(screen).Draw(ctx =>
+				{
+					Span<float> push = [2f / W, 2f / H, -1f, -1f, 1f, 0f];
+					ctx.DrawList("ui", new DrawListIdentity(stream, 1), textures, quad, indices, commands, push);
+					ctx.DrawList("ui", new DrawListIdentity(stream, secondRevision), textures, quad, indices, commands, push);
+				});
+				g.Present(screen);
+			}));
+
+			Should.NotThrow(() => engine.Render(Inputs), $"{backend.Name}: the same revision twice in a frame should draw.");
+			secondRevision = 2;
+			Should.Throw<Exception>(() => engine.Render(Inputs)).ToString()
+				.ShouldContain("revisions 1 and 2", customMessage: $"{backend.Name}: two revisions of one stream in a frame should be refused.");
 		}
 	}
 

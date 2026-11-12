@@ -108,6 +108,10 @@ public sealed unsafe partial class DirectX12Engine
 			}
 			if (transition.To != ResourceState.ColorAttachment)
 				throw new NotSupportedException($"DirectX12: '{transition.Resource.Name}' is multisampled and is resolved only to be sampled; the graph takes it to {transition.To}.");
+			// Drawn into from nothing, after drawing, or after its resolve was sampled: anything else would be a use the
+			// derivation refuses, so one slipping past it throws here as it does on Vulkan
+			if (transition.From is not (ResourceState.Undefined or ResourceState.ColorAttachment or ResourceState.ShaderRead))
+				throw new NotSupportedException($"DirectX12: '{transition.Resource.Name}' is multisampled and is resolved only to be sampled; the graph takes it from {transition.From}.");
 		}
 
 		var current = transients.State(index, id);

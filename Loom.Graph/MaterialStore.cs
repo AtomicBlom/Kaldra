@@ -149,6 +149,14 @@ public sealed class MaterialStore
 			return;
 		}
 
+		if (layout.ComparedTextureCount > 0)
+		{
+			throw new TechniqueMismatchException(
+				$"Material {material.Id} cannot drive technique '{technique}': its shader reads {layout.ComparedTextureCount} " +
+				"texture(s) by comparison, and a material's textures are colour formats, which no backend can compare. Give the " +
+				"depth texture to the pass with .Samples and draw it as a sampled input, without a material.", technique);
+		}
+
 		var problem = entry.Textures.Length < layout.TextureCount
 			? $"supplies {entry.Textures.Length} texture(s) but the technique samples {layout.TextureCount}"
 			: $"carries a {entry.Parameters.Length}-byte parameter block but the technique reads {layout.ParameterByteSize} bytes";
