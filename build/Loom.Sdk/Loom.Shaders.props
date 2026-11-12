@@ -60,6 +60,10 @@
          one after another. -->
     <LoomShaderParallelism Condition="'$(LoomShaderParallelism)' == ''"></LoomShaderParallelism>
 
+    <!-- true: every shader compiled again, however up to date. Otherwise each compile runs only when a file it read (the
+         shader, a module it imports, slangc) is newer than what it made, or its arguments changed. -->
+    <LoomShaderForce Condition="'$(LoomShaderForce)' == ''">false</LoomShaderForce>
+
     <!-- Optional semicolon-separated list of .slang paths/globs to exclude from compilation (on top of the
          always-excluded *.module.slang). Used to drop ImGui's shader when the engine is built without ImGui. -->
     <LoomShaderExclude Condition="'$(LoomShaderExclude)' == ''"></LoomShaderExclude>
