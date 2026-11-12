@@ -61,6 +61,28 @@ public interface IHostControl
 	bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents) => false;
 
 	/// <summary>
+	/// Whether <see cref="SetFullscreen"/> can have the app fill the screen. The browser host can where the page may ask
+	/// (the Fullscreen API, which a phone's browser offers no menu item for, and an iframe allows only with
+	/// <c>allowfullscreen</c>); the Android host is always fullscreen and the desktop host's window is the app's own, so
+	/// neither offers it. Defaults to false.
+	/// </summary>
+	bool CanFullscreen => false;
+
+	/// <summary>
+	/// Whether the app fills the screen now, as far as the host knows. The user can leave it without the app (Esc, a
+	/// phone's Back gesture), so this is read rather than remembered. Defaults to false.
+	/// </summary>
+	bool IsFullscreen => false;
+
+	/// <summary>
+	/// Ask the host to have the app fill the screen, or to stop. The browser asks the page, which must follow soon after
+	/// the user's input that asked for it (as <see cref="SaveFile"/>), and fullscreen arrives a moment later, as a resize;
+	/// on a phone it also lets the app run under the camera cutout, which the safe area then reports. Returns false when
+	/// the host can't (see <see cref="CanFullscreen"/>); defaults to that.
+	/// </summary>
+	bool SetFullscreen(bool on) => false;
+
+	/// <summary>
 	/// Open a file of the app's packaged content (its <c>LoomContent</c> items) by its path under the content root, with
 	/// forward slashes, as <c>levels/1.json</c>: the desktop host reads the content folder beside the app, the Android host
 	/// the APK's assets. Throws <see cref="FileNotFoundException"/> for a path the app does not have. A host that packs no
