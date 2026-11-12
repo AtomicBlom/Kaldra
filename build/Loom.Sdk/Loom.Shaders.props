@@ -56,6 +56,10 @@
     <LoomDxcArch Condition="'$(LoomDxcArch)' == '' And '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString())' == 'Arm64'">arm64</LoomDxcArch>
     <LoomDxcArch Condition="'$(LoomDxcArch)' == ''">x64</LoomDxcArch>
 
+    <!-- How many slangc runs the compile has going at once (LoomRunSlang). Empty, as many as there are processors; 1,
+         one after another. -->
+    <LoomShaderParallelism Condition="'$(LoomShaderParallelism)' == ''"></LoomShaderParallelism>
+
     <!-- Optional semicolon-separated list of .slang paths/globs to exclude from compilation (on top of the
          always-excluded *.module.slang). Used to drop ImGui's shader when the engine is built without ImGui. -->
     <LoomShaderExclude Condition="'$(LoomShaderExclude)' == ''"></LoomShaderExclude>
