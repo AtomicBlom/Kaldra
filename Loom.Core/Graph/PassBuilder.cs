@@ -78,9 +78,16 @@ public sealed class PassBuilder
 
 	/// <summary>
 	/// Read an app-writable storage buffer (<see cref="GraphBuilder.Storage{T}"/>) as the technique's read-only
-	/// structured-buffer input (an SSBO). The backend binds it to the technique's reflected storage-buffer slot;
-	/// the app fills it by handle via <c>IEngine.Write</c> with a span. No barrier is derived (the buffer is
-	/// host-coherent, CPU-written).
+	/// structured-buffer input (an SSBO). The app fills it by handle via <c>IEngine.Write</c> with a span. No barrier is
+	/// derived (the buffer is host-coherent, CPU-written).
+	/// <para>
+	/// The binding is <b>positional</b>, never by name: every technique drawn or dispatched in the pass takes the storage
+	/// buffers it <c>.Reads</c> in the order they were read, its first reflected storage-buffer slot the first (a compute
+	/// technique's first <em>read-only</em> slot; its read-write ones take the dispatch's own storage). A technique that
+	/// reads only some of a pass's storage buffers must therefore declare them in the order the pass reads them, from the
+	/// first. A slot whose reflected element size can't be the bound buffer's <c>sizeof(T)</c> throws at the draw, as does
+	/// a technique declaring more than the pass reads, or one drawn with a material.
+	/// </para>
 	/// </summary>
 	public PassBuilder Reads(IStorageBufferHandle storage) => Add(AccessKind.ReadStorage, (ResourceHandle)storage);
 

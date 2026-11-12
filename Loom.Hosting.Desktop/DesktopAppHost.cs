@@ -85,13 +85,24 @@ public sealed class DesktopAppHost : IAppHost
 			? window.Native?.Win32?.Hwnd ?? throw new InvalidOperationException("The DirectX12 backend needs the window's Win32 HWND, which the platform did not expose.")
 			: window.VkSurface ?? throw new InvalidOperationException("The Vulkan backend needs the window's surface, which the windowing platform did not expose.");
 
+		// HDR output only where the window's monitor is in HDR, on every backend alike: a surface or swapchain able to present
+		// scRGB says nothing about the monitor, which composes it down to SDR when it isn't. Where the monitor can't be
+		// asked (off Windows), the backend goes by what its surface offers.
+		if (options.EngineSettings.HdrOutput && DisplayOutput.IsHdr(window.Native?.Win32?.Hwnd ?? 0) == false)
+		{
+			LoomLog.Warning("HDR output was asked for, but the window's monitor is not in HDR; presenting SDR.");
+			options.EngineSettings.HdrOutput = false;
+		}
 		using var engine = backend.Create(surface, window.FramebufferSize.X, window.FramebufferSize.Y, options.EngineSettings);
 
 		// The input context comes first: the host control reaches the clipboard through its keyboard. It is closed as the
 		// window closes (below), not at the end of this method: Silk's Run() resets the window as it returns, destroying
-		// GLFW's window, and the context's disposal puts its callbacks back on that window, which read through the freed
-		// handle crashed the process on exit (0xC0000005 in glfwSetMouseButtonCallback), on some exits and not others.
+		// GLFW's window, and the context's disposal puts its callbacks back on that window, so disposing it after Run
+		// would read through the freed handle (an access violation in glfwSetMouseButtonCallback).
 		var inputContext = window.CreateInput();
+		// Closed by the window's Closing (below). Where Load or a frame throws instead, the window never closes, and Silk
+		// resets it only when Run returns normally, so this using closes the input on a window that is still alive.
+		using var input = new WindowInput(inputContext);
 		IHostControl host = new WindowHostControl(window, inputContext);
 		driver.Load(engine, host);
 
@@ -108,7 +119,9 @@ public sealed class DesktopAppHost : IAppHost
 
 		// Pump the window's platform input devices into the app's neutral input queue. The pump takes the input
 		// context (not the window), so a host with its own window can reuse it against its own context.
+		input.Pads = padPump;
 		var inputPump = new DesktopInputPump(inputContext, driver, gamepads: padPump is null);
+		input.Pump = inputPump;
 		// A touch screen, which GLFW doesn't read, from the window's own pointer messages, a finger a contact
 		var hwnd = window.Native?.Win32?.Hwnd ?? 0;
 		Win32TouchPump? touchPump = null;
@@ -117,17 +130,10 @@ public sealed class DesktopAppHost : IAppHost
 			touchPump = Win32TouchPump.TryCreate(hwnd, driver.QueueInput, out var noTouch);
 			LoomLog.Info(touchPump is null ? $"no touch: {noTouch}" : "touch through the window's pointer messages");
 		}
-		var inputClosed = false;
-		window.Closing += () =>
-		{
-			if (inputClosed)
-				return;
-			inputClosed = true;
-			touchPump?.Dispose();
-			inputPump.Dispose();
-			padPump?.Dispose();
-			inputContext.Dispose();
-		};
+		input.Touch = touchPump;
+		// Closing is raised synchronously by Close, so an app that calls RequestExit from inside Tick closes its input
+		// there and then, mid-frame: nothing after Tick in the frame below touches the input again.
+		window.Closing += input.Dispose;
 
 		// A 0x0 framebuffer (minimized) has nothing to render into — skip both the engine resize and driver.Resize
 		// so SurfaceSize keeps the last non-zero size, and skip Tick entirely while it stays minimized.
@@ -144,12 +150,12 @@ public sealed class DesktopAppHost : IAppHost
 		{
 			// The OS drops the ups for anything held across a focus loss (alt-tab), so synthesize releases to keep
 			// held keys/buttons from being stranded down.
-			if (!focused && !inputClosed)
+			if (!focused && !input.Closed)
 			{
 				inputPump.ReleaseAllHeld();
 				touchPump?.ReleaseAllHeld();
 			}
-			if (!inputClosed)
+			if (!input.Closed)
 				padPump?.SetFocus(focused);
 			driver.SetFocus(focused);
 		};
@@ -161,38 +167,55 @@ public sealed class DesktopAppHost : IAppHost
 		// Where the desktop shows SDR white on the window's monitor, for an HDR frame's paper white, and the brightest it
 		// shows, for its highlights: asked once a second, on the thread pool, so moving the window to another monitor or
 		// moving Windows' "SDR content brightness" slider follows.
+		// Only Windows reports either, and only for a window it has a handle for (hwnd, above); elsewhere they stay null and
+		// nothing is asked.
+		var askDisplay = OperatingSystem.IsWindows() && hwnd != 0;
+		// Made once: the window, and so what is asked, doesn't change from one question to the next
+		Func<(float? White, float? Peak)> queryDisplay = () => (SdrWhiteLevel.Nits(hwnd), DisplayOutput.PeakNits(hwnd));
 		var sinceWhite = double.MaxValue;
 		Task<(float? White, float? Peak)>? luminance = null;
+		var luminanceFailed = false;
 		var total = 0.0;
 		window.Render += delta =>
 		{
 			if (minimized)
 				return;
 			total += delta;
-			// Asked off the frame's thread: a DXGI factory and the display configuration take milliseconds, which on the
-			// frame showed as a stall once a second. The answer is taken on the next frame after it arrives.
+			// Asked off the frame's thread: a DXGI factory and the display configuration take milliseconds, too long for a
+			// frame to wait on. The answer is taken on the next frame after it arrives. A query that
+			// throws costs only its answer, never the frame: the levels stay as they were and it is asked again next
+			// second, with the failure logged the first time.
 			if (luminance is { IsCompleted: true } asked)
 			{
-				var (nits, peak) = asked.Result;
 				luminance = null;
-				if (nits is { } white && white != engine.DisplaySdrWhiteNits)
+				if (asked.IsCompletedSuccessfully)
 				{
-					engine.DisplaySdrWhiteNits = white;
-					LoomLog.Info($"SDR white on the window's monitor: {white:F0} nits");
+					var (nits, peak) = asked.Result;
+					// A null answer goes through too: a monitor that can't say replaces one that could, rather than keeping its level.
+					if (nits != engine.DisplaySdrWhiteNits)
+					{
+						engine.DisplaySdrWhiteNits = nits;
+						LoomLog.Info(nits is { } white ? $"SDR white on the window's monitor: {white:F0} nits" : "the window's monitor reports no SDR white");
+					}
+					if (peak != engine.DisplayPeakNits)
+					{
+						engine.DisplayPeakNits = peak;
+						LoomLog.Info(peak is { } brightest ? $"the window's monitor peaks at {brightest:F0} nits" : "the window's monitor reports no peak");
+					}
 				}
-				if (peak is { } brightest && brightest != engine.DisplayPeakNits)
+				else if (!luminanceFailed)
 				{
-					engine.DisplayPeakNits = brightest;
-					LoomLog.Info($"the window's monitor peaks at {brightest:F0} nits");
+					luminanceFailed = true;
+					LoomLog.Warning($"Asking the window's monitor for its SDR white and peak failed; keeping the last levels: {asked.Exception?.GetBaseException().Message}");
 				}
 			}
-			if ((sinceWhite += delta) >= 1.0 && luminance == null)
+			if (askDisplay && (sinceWhite += delta) >= 1.0 && luminance == null)
 			{
 				sinceWhite = 0.0;
-				luminance = Task.Run(() => (SdrWhiteLevel.Nits(hwnd), DisplayPeak.Nits(hwnd)));
+				luminance = Task.Run(queryDisplay);
 			}
 			inputPump.Update(delta);
-			if (!inputClosed)
+			if (!input.Closed)
 				padPump?.Update(delta);
 			driver.Tick(new FrameTime(delta, total));
 		};
@@ -255,10 +278,35 @@ public sealed class DesktopAppHost : IAppHost
 		return Backends.Available;
 	}
 
+	// The window's input context and the pumps reading it (its keyboards and mice, SDL's pads, the window's touches),
+	// closed once, by whichever comes first: the window's Closing, or the end of Run's scope when Load or a frame throws.
+	private sealed class WindowInput(IInputContext context) : IDisposable
+	{
+		public DesktopInputPump? Pump { get; set; }
+		public SdlGamepadPump? Pads { get; set; }
+		public Win32TouchPump? Touch { get; set; }
+
+		public bool Closed { get; private set; }
+
+		public void Dispose()
+		{
+			if (Closed)
+				return;
+			Closed = true;
+			Touch?.Dispose();
+			Pump?.Dispose();
+			Pads?.Dispose();
+			context.Dispose();
+		}
+	}
+
 	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,
-	// which unwinds window.Run() and lets Run's teardown (Unload + WaitIdle) proceed.
+	// which unwinds window.Run() and lets Run's teardown (Unload + WaitIdle) proceed. Made on the thread that runs the
+	// window, which is the only one GLFW lets reach the clipboard.
 	private sealed class WindowHostControl(IWindow window, IInputContext input) : IHostControl
 	{
+		private readonly int _mainThreadId = Environment.CurrentManagedThreadId;
+
 		public void RequestExit() => window.Close();
 
 		// Wake the event-driven loop so the next frame renders (a no-op effect when not event-driven). Thread-safe
@@ -266,12 +314,29 @@ public sealed class DesktopAppHost : IAppHost
 		public void RequestRender() => window.ContinueEvents();
 
 		// Silk reaches the system clipboard through a keyboard (GLFW's is the window's); with none attached there is no clipboard.
-		public string? GetClipboardText() => input.Keyboards.Count > 0 ? input.Keyboards[0].ClipboardText : null;
-
-		public void SetClipboardText(string text)
+		public string? GetClipboardText()
 		{
-			if (input.Keyboards.Count > 0)
-				input.Keyboards[0].ClipboardText = text;
+			ThrowIfNotMainThread(nameof(GetClipboardText));
+			return input.Keyboards.Count > 0 ? input.Keyboards[0].ClipboardText : null;
+		}
+
+		public bool SetClipboardText(string text)
+		{
+			ThrowIfNotMainThread(nameof(SetClipboardText));
+			if (input.Keyboards.Count == 0)
+				return false;
+			input.Keyboards[0].ClipboardText = text;
+			return true;
+		}
+
+		// GLFW's clipboard calls are main-thread only; from another thread they fail or corrupt its state without a word.
+		private void ThrowIfNotMainThread(string member)
+		{
+			if (Environment.CurrentManagedThreadId == _mainThreadId)
+				return;
+			throw new InvalidOperationException(
+				$"IHostControl.{member} was called from thread {Environment.CurrentManagedThreadId}, but the desktop host's clipboard " +
+				$"is reached only from its main thread ({_mainThreadId}), the one the app's frames run on. Marshal the call onto it.");
 		}
 	}
 }

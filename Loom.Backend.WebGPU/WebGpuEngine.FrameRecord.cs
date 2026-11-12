@@ -33,10 +33,19 @@ internal sealed partial class WebGpuEngine
 
 		// Everything the derived plan needs recording, in the order EngineBase fixes for every backend — which is also
 		// what moved this backend's readback copies ahead of its capture copy, matching the other two.
-		RecordFrame();
-
-		var commands = _writer.Finish();
-		WebGpuInterop.SubmitFrame(commands, _arena.Used);
+		try
+		{
+			RecordFrame();
+			var commands = _writer.Finish();
+			WebGpuInterop.SubmitFrame(commands, _arena.Used);
+		}
+		catch
+		{
+			// The buffer uploads RecordFrame counted as caught up were only commands in this frame's stream, which is
+			// dropped unsubmitted, so the next frame must upload every buffer again.
+			ForgetUploadedShadows();
+			throw;
+		}
 
 		// Drive the async maps (started the frame after their copy submits, then polled to completion).
 		ServiceCapture();
@@ -59,17 +68,21 @@ internal sealed partial class WebGpuEngine
 
 	protected override void WriteStorageShadow(int id, ReadOnlySpan<byte> bytes) => EmitBufferUpload(id, bytes);
 
-	// Deliberately empty, not omitted: WebGPU tracks resource state itself, so the plan's transitions genuinely have
-	// nothing to translate into here. Only the attachment load/store actions survive, into the render-pass descriptor.
 	// WebGPU tracks resource state itself, so there are no barriers to emit, but a multisampled target the graph takes
-	// to ShaderRead is resolved here, between the passes, into the texture its samplers read
+	// to ShaderRead is resolved here, between the passes, into the texture its samplers read. It is only ever drawn
+	// into otherwise; the derivation refuses every other use, and this refuses one that slips past it, as the other
+	// backends do.
 	protected override void EmitTransitions(ReadOnlySpan<ResourceTransition> transitions)
 	{
 		foreach (var transition in transitions)
 		{
 			ref var tex = ref _transients!.Texture(transition.Resource.Id);
-			if (tex.Resolves && transition.To == ResourceState.ShaderRead)
+			if (!tex.Resolves)
+				continue;
+			if (transition.To == ResourceState.ShaderRead)
 				_writer.Resolve(tex.ViewHandle, tex.ResolveView);
+			else if (transition.To != ResourceState.ColorAttachment)
+				throw new WebGpuException($"'{transition.Resource.Name}' is multisampled and is resolved only to be sampled; the graph takes it to {transition.To}.");
 		}
 	}
 

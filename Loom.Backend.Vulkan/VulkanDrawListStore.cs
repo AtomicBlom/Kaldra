@@ -68,14 +68,15 @@ internal sealed unsafe class VulkanDrawListStore : IDisposable
 		if (!_kept.TryGetValue(key, out var kept))
 			_kept[key] = kept = new Kept();
 
-		// Two submissions of one stream in a frame would each be served the other's geometry, because there is one
-		// kept buffer per stream and the second write would land before the first draw executes. Say so rather than
-		// rendering the wrong thing: the producer needs distinct stream ids, or Transient.
-		if (kept.LastFrame == frameIndex)
+		// A stream submitted again in one frame at the revision it holds re-binds the same bytes, as one UI drawn on the
+		// frame and again into an inset does. At another revision the second write would land before the first draw
+		// executes, serving both the second's geometry, so say so rather than render the wrong thing: the producer needs
+		// distinct stream ids, or Transient.
+		if (kept.LastFrame == frameIndex && kept.Revision != revision)
 			throw new VulkanException(
-				$"Draw-list stream {stream} was submitted twice in one frame. A stable stream holds one kept buffer " +
-				"per frame slot, so the second submission would overwrite the first before it draws. Give the " +
-				"submissions distinct stream ids, or pass DrawListIdentity.Transient.");
+				$"Draw-list stream {stream} was submitted twice in one frame, at revisions {kept.Revision} and {revision}. A " +
+				"stable stream holds one kept buffer per frame slot, so the second submission would overwrite the first " +
+				"before it draws. Give the submissions distinct stream ids, or pass DrawListIdentity.Transient.");
 		kept.LastFrame = frameIndex;
 
 		if (kept.Revision == revision && kept.VertexCapacity >= (ulong)vertices.Length && kept.IndexCapacity >= (ulong)indices.Length)

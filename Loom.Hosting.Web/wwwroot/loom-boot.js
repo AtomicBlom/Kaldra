@@ -1,9 +1,17 @@
 // Reusable Loom browser boot helper, shipped as a static web asset (served at
 // _content/Loom.Hosting.Web/loom-boot.js). Both the default shell's main.js and an embedder's own bootstrap
-// call runLoom({ canvas }) — the canvas selector the *page* owns. It loads the .NET runtime, wires the WebGPU
-// backend's JS shim, runs the app's Main (which registers the LoomApplication), hands the canvas to the host's
-// StartApp export so the device comes up on that specific canvas, then drives the host's Frame export once an
-// animation frame.
+// call runLoom({ canvas }), the canvas selector the *page* owns, and should: it is the whole contract with the host.
+//
+// An embedder that boots the runtime itself must do everything runLoom does, in order:
+//   1. Create the .NET runtime with a thread pool big enough for the app (the threads option below).
+//   2. setModuleImports('loom-webgpu', <the loom-webgpu.js module>): the host's and the backend's [JSImport]s.
+//   3. Optionally setBrowserKeyCapture(false) on that module (the captureKeys option below).
+//   4. runMain(): the app's Main, whose LoomApplication.Run registers the app and returns.
+//   5. Await the host's StartApp(canvasSelector) export (Loom.Hosting.Web.WebAppHost): the device comes up on that
+//      canvas, and the page starts queueing its input, resizes and pastes for the host.
+//   6. Call the host's Frame(timestamp) export once a requestAnimationFrame, for as long as the page runs, never
+//      calling it again until the last call's promise has settled. Nothing else runs a frame: StartApp starts no loop
+//      of its own, and the input, resizes and pastes queued since the last frame are taken by the next.
 //
 // Every call into C# here is async, as a multithreaded runtime (WasmEnableThreads) requires: its C# runs on a worker,
 // the "deputy", which the page's thread may not call synchronously. A frame still running when the next animation
@@ -14,7 +22,17 @@
 //   ../Loom.Backend.WebGPU/loom-webgpu.js -> /_content/Loom.Backend.WebGPU/loom-webgpu.js (sibling package asset)
 import * as loomWebgpu from '../Loom.Backend.WebGPU/loom-webgpu.js'
 
-export async function runLoom({ canvas = '#loom-canvas' } = {}) {
+// canvas: the selector of the page's <canvas> the app draws into.
+// threads: the Web Workers a multithreaded runtime makes before the app starts, one a thread. Every thread the app runs
+//   at once (its own, the thread pool's, the runtime's) must fit: one started past the pool needs a new worker made while
+//   the app runs, and on .NET 11 that hangs the deputy without a word (its frame finishes, but the page never hears so
+//   and asks for no more). The single-threaded runtime ignores it.
+// captureKeys: false leaves every key to the browser, F1, Tab and a lone Alt included (see setBrowserKeyCapture in
+//   loom-webgpu.js); by default they are kept from it while the player is in the canvas.
+export async function runLoom({ canvas = '#loom-canvas', threads = 16, captureKeys = true } = {}) {
+	if (!Number.isInteger(threads) || threads < 1)
+		throw new RangeError(`runLoom: threads must be a whole number of at least 1, not ${threads}`);
+	loomWebgpu.setBrowserKeyCapture(captureKeys);
 	// A start that fails is put on the page, not only in the console, or "loading .NET runtime" stays up for good. The
 	// runtime is imported here rather than at the top for the same reason: a multithreaded runtime on a page without
 	// cross-origin isolation asserts as its module loads, which would fail this module before it could say so. Other
@@ -25,7 +43,7 @@ export async function runLoom({ canvas = '#loom-canvas' } = {}) {
 	window.addEventListener('error', onError);
 	window.addEventListener('unhandledrejection', onRejection);
 	try {
-		await start(canvas);
+		await start(canvas, threads);
 	} catch (e) {
 		show(e);
 		throw e;
@@ -35,14 +53,10 @@ export async function runLoom({ canvas = '#loom-canvas' } = {}) {
 	}
 }
 
-async function start(canvas) {
+async function start(canvas, threads) {
 	const { dotnet } = await import('../../_framework/dotnet.js');
-	// A multithreaded runtime runs each thread on a Web Worker from a pool made before the app starts. One started past the
-	// pool needs a new worker made while the app runs, and on .NET 11 that hangs the deputy: its frame finishes, but the
-	// page never hears so and asks for no more. A pool big enough for an app's threads never needs one. The single-threaded
-	// runtime ignores these.
 	const { setModuleImports, runMain, getAssemblyExports } = await dotnet
-		.withConfig({ pthreadPoolInitialSize: 16, pthreadPoolUnusedSize: 4 })
+		.withConfig({ pthreadPoolInitialSize: threads, pthreadPoolUnusedSize: Math.min(4, threads) })
 		.create();
 	setModuleImports('loom-webgpu', { ...loomWebgpu });
 	// runMain runs the app's Main -> LoomApplication.Run, which (via the web host) registers the app and returns.

@@ -71,19 +71,6 @@ internal static class DirectX12Shaders
 	/// shader would cause. Vulkan already throws for the equivalent gap.
 	/// </para>
 	/// </summary>
-	/// <summary>
-	/// The shader's SPIR-V, embedded or loose beside the <c>.dxil</c>, or null: read for which textures it samples by
-	/// comparison (<see cref="SpirvDepthTextures"/>), which neither the DXIL here nor the reflection sidecar says.
-	/// </summary>
-	public static byte[]? TryResolveSpirv(string shaderDir, string name)
-	{
-		var spirv = TryReadEmbedded(name + ".spv");
-		if (spirv is not null)
-			return spirv;
-		var path = Path.Combine(shaderDir, name + ".spv");
-		return File.Exists(path) ? File.ReadAllBytes(path) : null;
-	}
-
 	public static ShaderReflection ResolveReflection(string shaderDir, string name)
 	{
 		var json = TryReadEmbedded(name + ".json");
@@ -104,5 +91,31 @@ internal static class DirectX12Shaders
 		// one Vulkan does. Its indices size the root signature's tables; the b/t/u register numbers come from the
 		// shader's own `register(...)` annotations, which is a separate numbering DXIL honours directly.
 		return ShaderReflection.FromBytes(json, ShaderBindingTarget.SpirV);
+	}
+
+	/// <summary>
+	/// The shader's SPIR-V, embedded or loose beside the <c>.dxil</c>: read for which textures it samples by comparison
+	/// (<see cref="SpirvDepthTextures"/>), which neither the DXIL here nor the reflection sidecar says.
+	/// <para>
+	/// A missing module throws rather than reading as "compares nothing". Each comparing slot would then get a plain
+	/// static sampler on this backend alone, and a technique that names no <c>SampleCompare</c> would pass the check that
+	/// is meant to catch it.
+	/// </para>
+	/// </summary>
+	public static byte[] ResolveSpirv(string shaderDir, string name)
+	{
+		var spirv = TryReadEmbedded(name + ".spv");
+		if (spirv is not null)
+			return spirv;
+		var path = Path.Combine(shaderDir, name + ".spv");
+		if (!File.Exists(path))
+		{
+			throw new ShaderAssetMissingException(
+				name,
+				$"SPIR-V '{name}.spv' not found: neither embedded ('{EmbeddedPrefix}{name}.spv') nor on disk ('{path}'). " +
+				"DirectX 12 reads it for which of the shader's textures it samples by comparison, so a technique that " +
+				"samples a texture cannot be baked without it.");
+		}
+		return File.ReadAllBytes(path);
 	}
 }

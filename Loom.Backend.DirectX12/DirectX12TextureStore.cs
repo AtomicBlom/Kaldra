@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
 using DxgiFormat = Silk.NET.DXGI.Format;
@@ -26,6 +27,16 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		public uint MipLevels;
 		public bool IsCube;
 		public bool Released; // the id's slot after IEngine.ReleaseTexture: no resource, and Slot refuses it
+
+		// Its shape, which an update is held to (TextureUpdates.Check).
+		public int Width, Height, BytesPerTexel;
+
+		// The upload-heap buffer its updates are staged in, laid out as its one subresource's copyable footprint: made by
+		// the first update and kept until the texture goes, so an update every frame allocates nothing. Null until then.
+		public ComPtr<ID3D12Resource> Staging;
+		public PlacedSubresourceFootprint StagingFootprint;
+		public uint StagingRows;
+		public ulong StagingRowBytes;
 	}
 
 	private readonly DirectX12Context _ctx;
@@ -166,7 +177,16 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 		cmd.ResourceBarrier(1, &barrier);
 		_uploads.Retire(staging);
 
-		_textures.Add(new StoredTexture { Resource = texture, Format = format, MipLevels = mipsPerFace, IsCube = data.IsCube });
+		_textures.Add(new StoredTexture
+		{
+			Resource = texture,
+			Format = format,
+			MipLevels = mipsPerFace,
+			IsCube = data.IsCube,
+			Width = data.Width,
+			Height = data.Height,
+			BytesPerTexel = data.Levels[0].Pixels.Length / (data.Width * data.Height),
+		});
 		return new Texture(_textures.Count, data.Width, data.Height);
 	}
 
@@ -181,6 +201,101 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 
 	/// <summary>True when the texture is a cube map (six array slices), so the SRV is created as a <c>TextureCube</c>.</summary>
 	public bool IsCube(int textureId) => _textures[Slot(textureId)].IsCube;
+
+	/// <summary>
+	/// Copy <paramref name="texels"/> into a texture's resource in place, through the upload batch, ahead of the next
+	/// frame. The resource is not replaced, so the SRVs naming it stay. Its staging buffer is made by the first update and
+	/// kept, so later ones allocate nothing.
+	/// <para>
+	/// Two hazards, both answered by queue order rather than a wait. The staging buffer is rewritten while the last batch
+	/// may still be copying from it, so the batch is opened first: opening one waits out the one before, which was
+	/// executed a frame ago and has long finished. And frames already executed may still sample the texture, so the copy
+	/// is bracketed by transitions out of and back into <c>PixelShaderResource</c>: a transition waits for the queue's
+	/// earlier work on the resource, so the write follows those reads on the GPU.
+	/// </para>
+	/// </summary>
+	public void Write(int textureId, ReadOnlySpan<byte> texels)
+	{
+		var slot = Slot(textureId);
+		var texture = _textures[slot];
+		TextureUpdates.Check(textureId, texture.Width, texture.Height, texture.BytesPerTexel, (int)texture.MipLevels, texture.IsCube ? 6 : 1, texels.Length);
+
+		var cmd = _uploads.Recorder();
+		if (texture.Staging.Handle is null)
+		{
+			var desc = new ResourceDesc
+			{
+				Dimension = ResourceDimension.Texture2D,
+				Alignment = 0,
+				Width = (ulong)texture.Width,
+				Height = (uint)texture.Height,
+				DepthOrArraySize = 1,
+				MipLevels = 1,
+				Format = texture.Format,
+				SampleDesc = new Silk.NET.DXGI.SampleDesc { Count = 1, Quality = 0 },
+				Layout = TextureLayout.LayoutUnknown,
+				Flags = ResourceFlags.None,
+			};
+			PlacedSubresourceFootprint footprint;
+			uint rows;
+			ulong rowBytes, totalBytes;
+			_ctx.Device.GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &rows, &rowBytes, &totalBytes);
+			texture.Staging = CreateUploadBuffer(totalBytes);
+			texture.StagingFootprint = footprint;
+			texture.StagingRows = rows;
+			texture.StagingRowBytes = rowBytes;
+			_textures[slot] = texture;
+		}
+
+		void* mapped;
+		var noRead = new Silk.NET.Direct3D12.Range { Begin = 0, End = 0 };
+		SilkMarshal.ThrowHResult(texture.Staging.Map(0, &noRead, &mapped));
+		var srcPitch = texture.Width * texture.BytesPerTexel;
+		var dstPitch = (int)texture.StagingFootprint.Footprint.RowPitch;
+		var rowSize = (int)texture.StagingRowBytes;
+		fixed (byte* src = texels)
+		{
+			for (var r = 0; r < texture.StagingRows; r++)
+				System.Buffer.MemoryCopy(src + r * srcPitch, (byte*)mapped + texture.StagingFootprint.Offset + (ulong)(r * dstPitch), rowSize, rowSize);
+		}
+		texture.Staging.Unmap(0, (Silk.NET.Direct3D12.Range*)null);
+
+		Transition(cmd, texture.Resource, ResourceStates.PixelShaderResource, ResourceStates.CopyDest);
+		var dst = new TextureCopyLocation
+		{
+			PResource = texture.Resource.Handle,
+			Type = TextureCopyType.SubresourceIndex,
+			Anonymous = new TextureCopyLocationUnion { SubresourceIndex = 0 },
+		};
+		var source = new TextureCopyLocation
+		{
+			PResource = texture.Staging.Handle,
+			Type = TextureCopyType.PlacedFootprint,
+			Anonymous = new TextureCopyLocationUnion { PlacedFootprint = texture.StagingFootprint },
+		};
+		cmd.CopyTextureRegion(&dst, 0, 0, 0, &source, (Box*)null);
+		Transition(cmd, texture.Resource, ResourceStates.CopyDest, ResourceStates.PixelShaderResource);
+	}
+
+	private static void Transition(ComPtr<ID3D12GraphicsCommandList> cmd, ComPtr<ID3D12Resource> resource, ResourceStates before, ResourceStates after)
+	{
+		var barrier = new ResourceBarrier
+		{
+			Type = ResourceBarrierType.Transition,
+			Flags = ResourceBarrierFlags.None,
+			Anonymous = new ResourceBarrierUnion
+			{
+				Transition = new ResourceTransitionBarrier
+				{
+					PResource = resource.Handle,
+					Subresource = 0xffffffff, // all subresources
+					StateBefore = before,
+					StateAfter = after,
+				},
+			},
+		};
+		cmd.ResourceBarrier(1, &barrier);
+	}
 
 	/// <summary>
 	/// Release a texture: its id stops resolving at once, and its resource waits until the frame fence reaches
@@ -210,6 +325,8 @@ internal sealed unsafe class DirectX12TextureStore : IDisposable
 	{
 		if (texture.Resource.Handle is not null)
 			texture.Resource.Dispose();
+		if (texture.Staging.Handle is not null)
+			texture.Staging.Dispose();
 	}
 
 	private ComPtr<ID3D12Resource> CreateUploadBuffer(ulong size)

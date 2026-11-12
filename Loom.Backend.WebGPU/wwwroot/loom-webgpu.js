@@ -451,18 +451,23 @@ export function consoleError(text) { console.error(text); }
 
 // What was last pasted into the page. Reading the clipboard outright (navigator.clipboard.readText) asks the player's
 // permission, and in a cross-origin iframe (itch.io's, for one) it is refused; a paste event carries the text without
-// asking. Ctrl+V fires it straight after the keydown, so it has arrived by the frame that reads the key.
+// asking. Each paste is queued for the host as an event (startHostEventQueue), which then asks for its text: Ctrl+V
+// fires it straight after the keydown, so it is taken in the same frame as the key.
 let pastedText = null;
 export function startClipboard() {
 	document.addEventListener("paste", e => {
 		const text = e.clipboardData?.getData("text/plain");
-		if (text) pastedText = text;
+		if (!text) return;
+		pastedText = text;
+		queueHostEvent(HOST_PASTE, 0, 0, 0);
 	});
 }
 export function getPastedText() { return pastedText ?? ""; }
 
 // Copies text. navigator.clipboard needs a secure context and, in a cross-origin iframe, the embedding page's
-// permission (clipboard-write); without them the old copy command still works while the input that asked for it is recent.
+// permission (clipboard-write); without them the old copy command still works while the input that asked for it is
+// recent. Where the browser says outright that the page may not write the clipboard, or has no navigator.clipboard, the
+// command runs at once rather than after the refusal comes back.
 export function writeClipboardText(text) {
 	const byCommand = () => {
 		const area = document.createElement("textarea");
@@ -475,7 +480,9 @@ export function writeClipboardText(text) {
 		area.remove();
 		canvas?.focus?.();
 	};
-	if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(byCommand);
+	const policy = document.permissionsPolicy ?? document.featurePolicy;
+	const refused = typeof policy?.allowsFeature === "function" && !policy.allowsFeature("clipboard-write");
+	if (navigator.clipboard?.writeText && !refused) navigator.clipboard.writeText(text).catch(byCommand);
 	else byCommand();
 }
 
@@ -536,6 +543,23 @@ export function startPointerHandler(dotnetPointer) {
 	canvas.addEventListener("pointermove", e => send(e, 0));
 	canvas.addEventListener("pointerdown", e => send(e, 1));
 	canvas.addEventListener("pointerup", e => send(e, 2));
+}
+
+// Keys the browser would also act on, which mean nothing to an app being played in its canvas, are kept from the
+// browser: F1's help, F3's find, F7's caret browsing, F9's reader view, F10 and a lone Alt's menu, and Tab moving focus
+// off the canvas. Only while the player is in the app, though: the key's target is the canvas, or the page itself with
+// nothing else focused. In a text field, a button or a link of the page's own the browser keeps every key. Shift+Tab
+// stays the browser's everywhere, the way out of the page (or the iframe it is embedded in) by keyboard alone, as do
+// F6 (to the address bar), Shift+F10 (the context menu), F5, F11 and F12 (reload, full screen, developer tools) and
+// anything with Ctrl or Meta held (Ctrl+V's paste). runLoom({ captureKeys: false }) leaves every key to the browser.
+const keptFromBrowser = new Set(["F1", "F3", "F7", "F9", "F10", "Tab", "AltLeft", "AltRight"]);
+let captureBrowserKeys = true;
+export function setBrowserKeyCapture(on) { captureBrowserKeys = !!on; }
+function keepFromBrowser(e) {
+	if (!captureBrowserKeys || !keptFromBrowser.has(e.code) || e.ctrlKey || e.metaKey) return false;
+	if (e.shiftKey && (e.code === "Tab" || e.code === "F10")) return false;
+	const t = e.target;
+	return t === canvas || t === document.body || t === document.documentElement || t === document || t === window;
 }
 
 // Forward DOM pointer/keyboard/text + Gamepad-API events to the host as neutral input. Each callback carries at
@@ -623,16 +647,13 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 
 	// Keyboard state via the physical (layout-independent) code; drop auto-repeat — the host's held state already
 	// covers a key held across frames, and typed characters come through the text channel below.
-	// Keys the browser would also act on, which mean nothing on a page that is a game are kept from it: F1's help, F3 and
-	// F7's find and caret browsing, F10 and a lone Alt's menu, Tab's focus moving off the canvas. F5, F11 and F12
-	// (reload, full screen, developer tools) and anything with Ctrl or Meta held (Ctrl+V's paste) stay the browser's.
-	const keptFromBrowser = new Set(["F1", "F2", "F3", "F4", "F6", "F7", "F8", "F9", "F10", "Tab", "AltLeft", "AltRight"]);
+	// Every key is delivered; keepFromBrowser decides only whether the browser acts on it too.
 	window.addEventListener("keydown", e => {
-		if (keptFromBrowser.has(e.code) && !e.ctrlKey && !e.metaKey) e.preventDefault();
+		if (keepFromBrowser(e)) e.preventDefault();
 		if (!e.repeat) onKey(e.code, true);
 	});
 	window.addEventListener("keyup", e => {
-		if (keptFromBrowser.has(e.code) && !e.ctrlKey && !e.metaKey) e.preventDefault();   // a lone Alt opens the menu on its release
+		if (keepFromBrowser(e)) e.preventDefault();   // a lone Alt opens the menu on its release
 		onKey(e.code, false);
 	});
 	// Typed text via keypress: it delivers a layout/shift-resolved character that raw key codes can't. Emit only
@@ -696,37 +717,86 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 	requestAnimationFrame(tick);
 }
 
-// The same input, and the window's resizes, queued for the host to take once a frame (takeHostEvents) rather than
-// called into C# as they happen. A multithreaded runtime runs C# on a worker (the "deputy"), which the page's own
-// thread may only call asynchronously; the host's frame is that one async call, and it collects everything else.
-// One event a line, fields apart by spaces (a KeyboardEvent.code has none):
-//   m x y type        pointer move          e kind a b       onEvent's low-rate channel
-//   b pad index down  gamepad button        k code down      key
-//   a pad index value gamepad axis          r                the window resized
-//   g pad id...       a pad's Gamepad.id, the rest of the line, just before it connects
-//   t code x y        a touch: code = contact id × 8 + phase (TouchPhase)
-let hostEvents = [];
+// The same input, the window's resizes and the page's pastes, queued for the host to take once a frame
+// (takeHostEvents) rather than called into C# as they happen. A multithreaded runtime runs C# on a worker (the
+// "deputy"), which the page's own thread may only call asynchronously; the host's frame is that one async call, and it
+// collects everything else.
+//
+// An event is four numbers, [kind, a, b, c], so the host takes a frame's events into an array of its own without a
+// string or an allocation. The kinds, kept in lockstep with WebAppHost's HostEvent* constants:
+//   1 pointer move     x, y, pointer type          4 onEvent's channel   its kind, a, b
+//   2 gamepad button   pad, index, down            5 key                 key id, down
+//   3 gamepad axis     pad, index, value           6 the window resized
+//   8 a touch          code, x, y                  7 a paste             (its text from getPastedText)
+//   9 a pad's id       pad (its Gamepad.id from getGamepadId), just before it connects
+// A touch's code is its contact id × 8 + its phase (TouchPhase). A key is its KeyboardEvent.code's id, numbered in the
+// order the page first meets each code; the host asks the code of an id it hasn't seen (getKeyCode) once, so its
+// code → key table stays in C#.
+const HOST_MOVE = 1, HOST_GAMEPAD_BUTTON = 2, HOST_GAMEPAD_AXIS = 3, HOST_EVENT = 4, HOST_KEY = 5, HOST_RESIZE = 6, HOST_PASTE = 7;
+const HOST_TOUCH = 8, HOST_GAMEPAD_ID = 9;
+// Each pad's Gamepad.id as it last connected, by its index, for getGamepadId
+const gamepadIds = [];
+let hostQueue = new Float64Array(1024);
+let hostQueued = 0;
+let hostQueueOpen = false;
+const keyCodes = [];
+const keyIds = new Map();
+function queueHostEvent(kind, a, b, c) {
+	if (!hostQueueOpen) return;
+	if (hostQueued + 4 > hostQueue.length) {
+		const grown = new Float64Array(hostQueue.length * 2);
+		grown.set(hostQueue);
+		hostQueue = grown;
+	}
+	hostQueue[hostQueued++] = kind;
+	hostQueue[hostQueued++] = a;
+	hostQueue[hostQueued++] = b;
+	hostQueue[hostQueued++] = c;
+}
+function keyId(code) {
+	let id = keyIds.get(code);
+	if (id === undefined) {
+		id = keyCodes.length;
+		keyCodes.push(code);
+		keyIds.set(code, id);
+	}
+	return id;
+}
 export function startHostEventQueue() {
+	hostQueueOpen = true;
 	startInputHandlers(
-		(x, y, type) => hostEvents.push(`m ${x} ${y} ${type}`),
-		(pad, index, down) => hostEvents.push(`b ${pad} ${index} ${down}`),
-		(pad, index, value) => hostEvents.push(`a ${pad} ${index} ${value}`),
-		(kind, a, b) => hostEvents.push(`e ${kind} ${a} ${b}`),
-		(code, down) => hostEvents.push(`k ${code} ${down ? 1 : 0}`),
-		(pad, id) => hostEvents.push(`g ${pad} ${id.replace(/[\r\n]+/g, " ")}`),
-		(code, x, y) => hostEvents.push(`t ${code} ${x} ${y}`));
+		(x, y, type) => queueHostEvent(HOST_MOVE, x, y, type),
+		(pad, index, down) => queueHostEvent(HOST_GAMEPAD_BUTTON, pad, index, down),
+		(pad, index, value) => queueHostEvent(HOST_GAMEPAD_AXIS, pad, index, value),
+		(kind, a, b) => queueHostEvent(HOST_EVENT, kind, a, b),
+		(code, down) => queueHostEvent(HOST_KEY, keyId(code), down ? 1 : 0, 0),
+		(pad, id) => { gamepadIds[pad] = id; queueHostEvent(HOST_GAMEPAD_ID, pad, 0, 0); },
+		(code, x, y) => queueHostEvent(HOST_TOUCH, code, x, y));
 	let resized = false;
 	window.addEventListener("resize", () => {
 		if (resized) return;
 		resized = true;
-		requestAnimationFrame(() => { resized = false; hostEvents.push("r"); });
+		requestAnimationFrame(() => { resized = false; queueHostEvent(HOST_RESIZE, 0, 0, 0); });
 	});
 }
-export function takeHostEvents() {
-	if (hostEvents.length === 0) return "";
-	const text = hostEvents.join("\n");
-	hostEvents = [];
-	return text;
+// Moves as many whole events as fit into destination (a MemoryView over the host's array), oldest first, and returns
+// how many numbers it wrote; what didn't fit waits for the next call.
+export function takeHostEvents(destination) {
+	const n = Math.min(hostQueued, destination.length - destination.length % 4);
+	if (n === 0) return 0;
+	destination.set(hostQueue.subarray(0, n));
+	hostQueue.copyWithin(0, n, hostQueued);
+	hostQueued -= n;
+	return n;
+}
+export function getKeyCode(id) { return keyCodes[id] ?? ""; }
+export function getGamepadId(pad) { return gamepadIds[pad] ?? ""; }
+// The host has stopped taking events (a fault, or the app's exit): what is queued is dropped and nothing more is queued,
+// or the queue would grow with every pointer move for as long as the page stays open.
+export function stopHostEventQueue() {
+	hostQueueOpen = false;
+	hostQueued = 0;
+	pastedText = null;
 }
 
 function align4(n) { return (n + 3) & ~3; }

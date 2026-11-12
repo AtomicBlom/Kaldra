@@ -9,8 +9,10 @@ namespace Loom.Graph;
 /// variable's binding. The desktop backends build their samplers from it; WebGPU reads the same fact from the WGSL it
 /// parses (<c>texture_depth_2d</c>, <c>sampler_comparison</c>).
 /// <para>
-/// A texture passed into a function Slang didn't inline would be lost on the way; Loom's shaders read their samplers as
-/// globals, which a function body loads directly.
+/// A comparison whose image can't be followed back to a bound variable (one stored into a local, chosen by an
+/// <c>OpPhi</c> or <c>OpSelect</c>, or passed into a function Slang didn't inline) throws rather than going unreported:
+/// its slot would keep a plain sampler. Loom's shaders read their samplers as globals, which a function body loads
+/// directly.
 /// </para>
 /// </summary>
 public static class SpirvDepthTextures
@@ -24,7 +26,13 @@ public static class SpirvDepthTextures
 
 	/// <summary>The binding numbers (as <c>[[vk::binding]]</c> / <c>LOOM_BINDING</c> give them) of every texture the
 	/// shader reads by comparison. Empty for a module that isn't SPIR-V, rather than a guess.</summary>
-	public static IReadOnlySet<int> Bindings(ReadOnlySpan<byte> spirv)
+	/// <param name="spirv">The module.</param>
+	/// <param name="shader">The shader's name, for the message when a comparison can't be traced.</param>
+	/// <exception cref="InvalidOperationException">A depth-comparison sample reads an image that can't be followed back
+	/// to a bound variable: one stored into a local (<c>OpStore</c>), chosen by an <c>OpPhi</c> or <c>OpSelect</c>, or
+	/// passed in as a function parameter. Its slot would otherwise keep a plain sampler and compare to undefined results
+	/// on one backend and not another.</exception>
+	public static IReadOnlySet<int> Bindings(ReadOnlySpan<byte> spirv, string shader)
 	{
 		var found = new HashSet<int>();
 		if (spirv.Length < 20 || spirv.Length % 4 != 0)
@@ -77,8 +85,15 @@ public static class SpirvDepthTextures
 			var id = image;
 			for (var steps = 0; steps < 16 && !variables.Contains(id) && from.TryGetValue(id, out var source); steps++)
 				id = source;
-			if (variables.Contains(id) && bindings.TryGetValue(id, out var binding))
-				found.Add(binding);
+			if (!variables.Contains(id) || !bindings.TryGetValue(id, out var binding))
+			{
+				throw new InvalidOperationException(
+					$"Shader '{shader}' samples by comparison an image (SPIR-V id %{id}) that can't be followed back to a bound " +
+					"texture: it reaches the sample through a local variable, an OpPhi or OpSelect, or a function parameter. " +
+					"Read the shadow sampler from its global directly in the function that compares, so its slot gets a " +
+					"comparison sampler on every backend.");
+			}
+			found.Add(binding);
 		}
 		return found;
 	}

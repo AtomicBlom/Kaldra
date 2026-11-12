@@ -128,6 +128,33 @@ public class RecordValidationTests
 	}
 
 	[Test]
+	public void A_draw_list_graph_texture_is_held_to_its_declaration_even_with_validation_off()
+	{
+		// The backend resolves a draw list's graph texture by id. Undeclared, it is read in whatever layout the last pass
+		// left it in; kept from an earlier graph, it binds whatever the new graph has under that id. Neither shows as an
+		// error anywhere else, so the draw list checks them with the per-draw scans off, as it does its format.
+		var (pass, declared, undeclared) = SamplingPass();
+		var validator = ValidatorOn(pass, enabled: false);
+
+		Should.Throw<PassBindingException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [new TextureRef((ColorHandle)undeclared)]))
+			.Message.ShouldContain(".Samples(undeclared)");
+		Should.NotThrow(() => validator.DrawList("ui", DrawListIdentity.Transient, [new TextureRef((ColorHandle)declared)]));
+
+		ColorHandle stale = null!;
+		RenderGraph.Define(g =>
+		{
+			stale = g.Domain("map", 64, 64).Color("minimap", Format.Rgba8Srgb);
+			g.Pass("map").Writes(stale);
+		});
+		stale.Id.ShouldBe(declared.Id, "the test needs the two graphs' resources to share an id");
+		Should.Throw<PassBindingException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [stale]))
+			.Message.ShouldContain("earlier graph");
+
+		// The pass's own sampled inputs keep to the switch: off, an undeclared one passes as it always has.
+		Should.NotThrow(() => validator.FullScreen("blit", [undeclared]));
+	}
+
+	[Test]
 	public void A_draw_list_refuses_a_graph_texture_it_cannot_sample_as_a_filterable_float_even_with_validation_off()
 	{
 		// A draw-list technique reads one Texture2D through a filtering sampler. A depth, integer or 32-bit float target

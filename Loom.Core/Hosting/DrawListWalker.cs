@@ -138,7 +138,8 @@ public ref struct DrawListWalker
 	/// <summary>
 	/// Whether this draw step needs its texture bound. False across a run of commands sharing one texture — a UI list
 	/// is mostly the glyph atlas for run after run, so only a change costs a descriptor write. Forced true after a
-	/// layer composite, which binds the layer as its own texture and so invalidates whatever was memoised.
+	/// layer opens, which may switch to a pipeline baked for the layer's target, and after a layer composite, which
+	/// binds the layer as its own texture; either invalidates whatever was memoised.
 	/// </summary>
 	public bool TextureChanged { get; private set; }
 
@@ -192,6 +193,9 @@ public ref struct DrawListWalker
 				(opening.X0, opening.Y0, opening.X1, opening.Y1) = Bounds;
 				_openLayers++;
 				DeepestNesting = Math.Max(DeepestNesting, _openLayers + _suppressedLayers);
+				// A layer may be drawn by a pipeline of its own (one sample, where its pass has several), so whatever a
+				// draw had memoised was bound for another.
+				_boundTextureId = -1;
 				Step = DrawListStep.BeginLayer;
 				return true;
 			}

@@ -224,10 +224,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		// Transients sized to the backbuffer must follow the new extent (re-derive at the new size). The replacement is
 		// built before the old one is released so it can adopt the persistents that survive a resize — their contents
 		// are cross-frame history, and rebuilding them would throw it away.
-		if (Graph is not null)
+		if (_executed is not null)
 		{
 			var previous = _transients;
-			_transients = new DirectX12Transients(_ctx, Graph!, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height, previous);
+			_transients = new DirectX12Transients(_ctx, _executed, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height, previous);
 			previous?.Dispose();
 			_context.SetTransients(_transients);
 			ForgetUploadedShadows();   // the new transients' Constants and Storage buffers hold nothing yet
@@ -320,10 +320,12 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		byte[] vertexBytecode, fragmentBytecode;
 		var inputCount = reflection.SampleCount;
 		// Which inputs the shader samples by comparison, from its SPIR-V: the DXIL can't say, and the reflection describes
-		// a shadow sampler as it does any single-channel texture
-		var spirv = DirectX12Shaders.TryResolveSpirv(dir, shader);
-		var compared = ShaderBindingMap.From(reflection, spirv is null ? null : SpirvDepthTextures.Bindings(spirv));
+		// a shadow sampler as it does any single-channel texture. A shader that samples nothing compares nothing, so
+		// needs no SPIR-V; one that samples throws without it rather than reading as comparing nothing.
+		var compared = ShaderBindingMap.From(reflection,
+			inputCount > 0 ? SpirvDepthTextures.Bindings(DirectX12Shaders.ResolveSpirv(dir, shader), shader) : null);
 		ShaderBindingMap.CheckCompare(name, compared.ComparedCount, descriptor.SampleCompare);
+		compared.CheckDrawStorage(name, descriptor.IsCompute);
 		var storageImages = 0;
 		var storageBuffers = 0;
 		var storageBufferStride = 0;
@@ -368,9 +370,9 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
 			descriptor.Cull, descriptor.DepthTest, descriptor.Bias,
 			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes,
-			[.. compared.ComparedTextures], descriptor.SampleCompare, descriptor.AlphaToCoverage));
+			[.. compared.ComparedTextures], descriptor.SampleCompare, descriptor.AlphaToCoverage, compared));
 		return new TechniqueShape(
-			new MaterialLayout(inputCount, reflection.MaterialParameterBytes),
+			new MaterialLayout(inputCount, reflection.MaterialParameterBytes, compared.ComparedCount),
 			reflection.UniformBufferBytes,
 			descriptor.HasFragmentPush ? DirectX12Technique.ScalarPushSize : 0,
 			descriptor.HasListPush ? DirectX12Technique.ListPushSize : 0);
@@ -385,6 +387,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 
 	protected override void GrowStorage(int id, int newByteSize) => _transients!.GrowStorage(_ctx, id, newByteSize, Graph!.Resources[id].Name);
 
+	// The graph the transients are built from: the active graph with the resource viewer's sample edges, which decide
+	// what a multisampled target keeps a resolve for. A resize rebuilds from it, not from the graph as authored.
+	private RenderGraph? _executed;
+
 	protected override void RebuildGraphResources(RenderGraph authored, RenderGraph executed)
 	{
 		// Members after a bucket's first reuse an earlier member's memory mid-frame and need an aliasing barrier on
@@ -393,9 +399,11 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		for (uint i = 0; i < BufferCount; i++)
 			_backbufferState[i] = ResourceStates.Present;
 
-		// Build transients from `executed` (same resources/ids; the injected edges only affect derived state). The
+		// Build transients from `executed` (same resources/ids; its debug-sample edges give an inspected multisampled
+		// target the resolve copy its viewer reads). The
 		// AliasPlan (the transient-memory partition) is the SAME backend-neutral product the Vulkan engine consumes;
 		// this backend turns each bucket into a placed-resource heap shared by its members.
+		_executed = executed;
 		_transients = new DirectX12Transients(_ctx, executed, Aliases, BufferCount, _presentTarget.Width, _presentTarget.Height);
 		_context.SetTransients(_transients);
 		SetupReadback(authored);
@@ -513,6 +521,10 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 	// it: a material's SRV table can only name a texture no release can reach (a material holds its textures), and a
 	// draw list writes its SRVs into this frame's ring slot, which outlives the texture by exactly the frames that read it.
 	protected override void RetireTexture(Texture texture) => _textures.Release(texture.Id, _fenceValue + 1);
+
+	// Recorded into the upload batch, which executes ahead of the next frame, as a new texture's upload does. A release
+	// that follows still waits for the next fence value, which covers the batch.
+	protected override void WriteTexels(Texture texture, ReadOnlySpan<byte> texels) => _textures.Write(texture.Id, texels);
 
 	[DllImport("kernel32", SetLastError = true)]
 	private static extern nint CreateEventW(nint lpEventAttributes, int bManualReset, int bInitialState, nint lpName);

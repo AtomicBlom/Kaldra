@@ -1,5 +1,5 @@
 Loom 0.1.0-preview.1 — render-graph engine for .NET
-Generated: 2026-10-27
+Generated: 2026-11-09
 Source: https://github.com/AtomicBlom/Loom
 
 ## Pillars of Design (abbreviated)
@@ -34,7 +34,7 @@ A graph is built once with `RenderGraph.Define(g => { … })` and set on the eng
 | `g.Buffer("name", count, layout)` | The same, sized by a `VertexLayout`'s stride — the spelling for a buffer a compute fills and a draw consumes as its per-instance stream. Naming the layout the technique names lets the draw path reject a stride mismatch. |
 | `g.Buffer("name", byteSize)` | The same as an opaque block of `byteSize` bytes. Declares no element contract, so neither draw-path guard applies — prefer one of the two above. |
 | `g.Constants<T>("name")` | An app-written uniform/constant block of `sizeof(T)` bytes → `ConstantsHandle`. Fill with `engine.Write`. |
-| `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. |
+| `g.Storage<T>("name", count, growable=false)` | An app-written structured array (SSBO), `count × sizeof(T)` → `StorageBufferHandle`. `growable: true` lets a larger `Write` grow it. A `Constants` or `Storage` buffer is uploaded only into the frame slots behind its last `Write`, so one written once costs nothing per frame however large it is; the last `Write` persists either way. |
 | `g.Persistent("name", format, size=1)` | A screen-sized cross-frame colour image whose memory is never aliased → `ColorHandle`. Only `size == 1` is supported. A window resize reallocates it at the new extent, so its contents are lost (there is no resample) — use `domain.Persistent` on a fixed-size domain for history that must outlive a resize. |
 
 ### Pass access declarations (`PassBuilder`, all chainable)
@@ -50,8 +50,8 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 | `.ReadWrites(params IStorageHandle[])` | Read-modify-write storage images or buffers (compute UAV). |
 | `.ReadsVertex(BufferHandle)` | Bind a buffer as a vertex / instance stream (a compute pass filled it). |
 | `.ReadsIndirect(BufferHandle)` | Bind a buffer as draw arguments — the counts the command processor reads instead of the CPU supplying them. |
-| `.Reads(IUniformHandle)` | Read a `g.Constants` block as the technique's uniform input. |
-| `.Reads(IStorageBufferHandle)` | Read a `g.Storage` SSBO read-only (an overload of `.Reads`). |
+| `.Reads(IUniformHandle)` | Read a `g.Constants` block as the technique's uniform input, in a raster pass or a compute pass alike: a technique's constant buffers take the pass's blocks in the order read, and a compute technique declaring more than its pass reads throws at dispatch. |
+| `.Reads(IStorageBufferHandle)` | Read a `g.Storage` SSBO read-only (an overload of `.Reads`). Bound to every draw in the pass, mesh or fullscreen, **by position**: a technique's first storage buffer takes the first the pass reads, its second the second, and so on, as many as it declares (vertex or fragment stage) — never by name. So a technique that reads only some of a pass's storage buffers must declare them in the order the pass reads them, from its first: one that declares only the pass's second gets its first. Where the element sizes show it (a slot's reflected element against the buffer's `sizeof(T)`, packed or padded to its std430 alignment), that throws at the draw, naming both; one declaring more than the pass reads throws too. A material draw whose technique reads storage throws, on every backend. In a compute pass the technique's read-only storage buffers (`StructuredBuffer<T>`) take them by the same rule, and its read-write ones the dispatch's own storage; one declaring more read-only buffers than its pass reads, or more read-write ones than the dispatch supplies, throws at dispatch. A read-only slot binds only the pass's `.Reads` storage, so a GPU-produced `g.Buffer` a dispatch supplies must be declared `RWStructuredBuffer` in the shader even when it is only read. |
 | `.Queue(Queue)` | Assign the pass to a queue (see `Queue` below). |
 | `.Draw(Action<IRenderContext>)` / `.Dispatch(Action<IRenderContext>)` | The per-frame record callback (raster / compute). Pull from `ctx`; never capture per-frame data. |
 
@@ -63,7 +63,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 |---|---|
 | `g.Backbuffer` | The swapchain colour target (`ColorHandle`) — *is* the present surface. Hand it to `.Writes`/`.Blends` and `g.Present`. |
 | `g.Screen` | The native-resolution `Domain` (alias for `g.Backbuffer.Domain`); declare full-res sibling targets here. |
-| `g.Domain("name", width, height, samples=1)` | A fixed-size `Domain` (a constant-size pixel-art world); `samples` is the MSAA count (power of two). |
+| `g.Domain("name", width, height, samples=1)` | A fixed-size `Domain` (a constant-size pixel-art world); `samples` is the MSAA count (power of two, within `Capabilities.SampleCounts`: WebGPU has 1 and 4). Every target in a multisampled domain is multisampled, and so is every pipeline drawing into it. A pass that `.Samples` a multisampled colour target reads its *resolve*: the engine resolves it into a single-sample image of its own wherever the graph takes it from being drawn to being sampled, so nothing in the graph names the resolve. Anything else is refused when the graph is derived, the same on every backend: sampling a multisampled depth target, `.ReadWrites` on a multisampled target (a storage image is single-sample), `g.Readback` or `g.Present` of one, and a `Persistent` target in a multisampled domain. Group-opacity UI layers drawn in a multisampled pass render single-sample and composite back at the pass's count. |
 | `g.Domain("name", scale, samples=1)` | A backbuffer-relative `Domain` — `scale × native`, re-resolved on resize (e.g. `0.5f` for half-res). |
 | `domain.Color("name", format, clearValue?=null, noClear?=false)` | A colour target in this domain → `ColorHandle`. `noClear: true` skips the clear (only when the first pass covers every pixel). |
 | `domain.Color("name", format, scale, …)` | A colour target at a fraction of the domain's resolution (mip chains, bloom pyramid). |

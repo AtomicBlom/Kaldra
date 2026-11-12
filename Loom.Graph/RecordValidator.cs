@@ -119,19 +119,22 @@ public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques, 
 			"procedural draw (VertexCount plus an instance source).");
 
 	/// <summary>
-	/// Validate a draw list's identity and its textures.
+	/// Validate a draw list's identity and its textures. All of it is <strong>always checked</strong>, validation on or
+	/// off, because every mistake it catches is silent: nothing else reports it, and the frame draws something wrong.
 	/// <para>
-	/// A stable identity must name a stream <see cref="IEngine.AllocateDrawListStream"/> minted. <strong>Always
-	/// checked</strong> — it is one comparison, and what it prevents is silent: a backend keeps a stable stream's geometry
-	/// and skips the upload while the revision holds, so two producers sharing a number at matching revisions would draw
-	/// each other's geometry without any error.
+	/// A stable identity must name a stream <see cref="IEngine.AllocateDrawListStream"/> minted. A backend keeps a stable
+	/// stream's geometry and skips the upload while the revision holds, so two producers sharing a number at matching
+	/// revisions would draw each other's geometry. It is one comparison.
 	/// </para>
 	/// <para>
-	/// A graph texture must sample as a filterable float, also always checked: a draw-list technique reads one
-	/// <c>Texture2D</c> through a filtering sampler, and binding a depth or integer image there is a device error on one
-	/// backend and garbage on another. And it must be declared with <c>.Samples</c> on the recording pass, like every other
-	/// sampled input, because that edge is what orders the list after the texture's producer and moves the image into a
-	/// sampleable layout. Engine textures need neither: they are not graph resources and are always sampleable.
+	/// A graph texture must sample as a filterable float: a draw-list technique reads one <c>Texture2D</c> through a
+	/// filtering sampler, and binding a depth or integer image there is a device error on one backend and garbage on
+	/// another. And it must be declared with <c>.Samples</c> on the recording pass, like every other sampled input, because
+	/// that edge is what orders the list after the texture's producer and moves the image into a sampleable layout. A
+	/// <see cref="TextureRef"/> sits in a producer's array, where it outlives the graph it came from, so an undeclared or
+	/// stale one is likelier here than in a pass's own bindings; and the backend resolves it by id, so a stale one would
+	/// bind whatever the new graph has under that id. The check is a scan of the pass's declarations per graph texture,
+	/// and engine textures need none of it: they are not graph resources and are always sampleable.
 	/// </para>
 	/// </summary>
 	public void DrawList(string technique, in DrawListIdentity identity, ReadOnlySpan<TextureRef> textures)
@@ -159,7 +162,7 @@ public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques, 
 					"but a draw list reads its textures as filterable floats, which a depth, integer or 32-bit float target " +
 					"cannot be on every backend. Copy it into a colour target the list can sample.");
 			}
-			RequireDeclared(technique, resource, AccessKind.Sample, ".Samples", sameName: true);
+			RequireDeclared(technique, resource, AccessKind.Sample, ".Samples", sameName: true, always: true);
 		}
 	}
 
@@ -242,9 +245,10 @@ public sealed class RecordValidator(bool enabled, TechniqueRegistry techniques, 
 	// array and can outlive the graph whose handle it holds; ids are only unique within one graph, so after a swap the
 	// stale id can name an unrelated resource the new pass happens to declare. Names are unique within a graph too, and
 	// a rebuilt graph that keeps the resource keeps both, so the pair tells "the same resource" from "a coincidence".
-	private void RequireDeclared(string technique, ResourceHandle handle, AccessKind kind, string verb, bool sameName = false)
+	// `always` runs the check with validation off, for a binding whose mistake nothing else would report.
+	private void RequireDeclared(string technique, ResourceHandle handle, AccessKind kind, string verb, bool sameName = false, bool always = false)
 	{
-		if (!Enabled || _pass is null)
+		if ((!Enabled && !always) || _pass is null)
 			return;
 
 		var accesses = _pass.Accesses;
