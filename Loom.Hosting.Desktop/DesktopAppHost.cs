@@ -103,7 +103,7 @@ public sealed class DesktopAppHost : IAppHost
 		// Closed by the window's Closing (below). Where Load or a frame throws instead, the window never closes, and Silk
 		// resets it only when Run returns normally, so this using closes the input on a window that is still alive.
 		using var input = new WindowInput(inputContext);
-		IHostControl host = new WindowHostControl(window, inputContext);
+		IHostControl host = new WindowHostControl(window, inputContext, window.Native?.Win32?.Hwnd ?? 0);
 		driver.Load(engine, host);
 
 		// The host reports the initial size before the first frame, exactly like every later resize.
@@ -137,12 +137,20 @@ public sealed class DesktopAppHost : IAppHost
 
 		// A 0x0 framebuffer (minimized) has nothing to render into — skip both the engine resize and driver.Resize
 		// so SurfaceSize keeps the last non-zero size, and skip Tick entirely while it stays minimized.
+		// Minimizing is the desktop's leaving the screen: the app is suspended until the window is restored.
 		var minimized = false;
 		window.FramebufferResize += fb =>
 		{
+			var wasMinimized = minimized;
 			minimized = fb.X == 0 || fb.Y == 0;
 			if (minimized)
+			{
+				if (!wasMinimized)
+					driver.Suspend();
 				return;
+			}
+			if (wasMinimized)
+				driver.Resume();
 			engine.Resize(fb.X, fb.Y);
 			driver.Resize(fb.X, fb.Y);
 		};
@@ -303,7 +311,7 @@ public sealed class DesktopAppHost : IAppHost
 	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,
 	// which unwinds window.Run() and lets Run's teardown (Unload + WaitIdle) proceed. Made on the thread that runs the
 	// window, which is the only one GLFW lets reach the clipboard.
-	private sealed class WindowHostControl(IWindow window, IInputContext input) : IHostControl
+	private sealed class WindowHostControl(IWindow window, IInputContext input, nint hwnd) : IHostControl
 	{
 		private readonly int _mainThreadId = Environment.CurrentManagedThreadId;
 
@@ -312,6 +320,21 @@ public sealed class DesktopAppHost : IAppHost
 		// Wake the event-driven loop so the next frame renders (a no-op effect when not event-driven). Thread-safe
 		// per Silk's ContinueEvents contract, so an app may invalidate from an off-thread callback.
 		public void RequestRender() => window.ContinueEvents();
+
+		// On Windows, the DPI of the monitor the window is on: GLFW makes the process per-monitor DPI aware, so the window's
+		// pixels are physical ones and a 200% display reports 192. Elsewhere a framebuffer larger than the window's size, as
+		// on a Retina display, says how many pixels make a unit. Asked each call, so moving the window between monitors follows.
+		public float DisplayScale
+		{
+			get
+			{
+				if (OperatingSystem.IsWindows() && hwnd != 0 && User32.GetDpiForWindow(hwnd) is var dpi and > 0)
+					return dpi / 96f;
+				var size = window.Size;
+				var framebuffer = window.FramebufferSize;
+				return size.X > 0 && framebuffer.X > 0 ? framebuffer.X / (float)size.X : 1f;
+			}
+		}
 
 		// Silk reaches the system clipboard through a keyboard (GLFW's is the window's); with none attached there is no clipboard.
 		public string? GetClipboardText()
@@ -337,6 +360,15 @@ public sealed class DesktopAppHost : IAppHost
 			throw new InvalidOperationException(
 				$"IHostControl.{member} was called from thread {Environment.CurrentManagedThreadId}, but the desktop host's clipboard " +
 				$"is reached only from its main thread ({_mainThreadId}), the one the app's frames run on. Marshal the call onto it.");
+		}
+
+		// The content folder beside the app, where the Loom SDK copies an app's LoomContent.
+		public Stream OpenContent(string path)
+		{
+			var file = Path.Combine(AppContext.BaseDirectory, "content", path);
+			if (!File.Exists(file))
+				throw new FileNotFoundException($"The app has no content at '{path}' (looked for {file}).", file);
+			return File.OpenRead(file);
 		}
 	}
 }
