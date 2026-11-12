@@ -63,6 +63,13 @@ public sealed class InputLayerStack
 	/// <summary>The queue rumble effects are enqueued onto (via <see cref="InputSnapshot.Rumble"/>), for a host adapter to drain.</summary>
 	public RumbleQueue RumbleQueue => _rumble;
 
+	/// <summary>
+	/// Whether a layer asked for text input during the last <see cref="Resolve"/> (see
+	/// <see cref="InputContext.RequestTextInput"/>): something is ready to take typed text, so a host whose keyboard is
+	/// on the screen should show it. Asked again every frame, so it lapses the frame nothing asks.
+	/// </summary>
+	public bool TextInputRequested { get; private set; }
+
 	/// <summary>Adds a layer on top of the stack, where it is processed first.</summary>
 	public void Push(IInputLayer layer)
 	{
@@ -121,6 +128,7 @@ public sealed class InputLayerStack
 		if (raw.Length > _capacity)
 			throw new InvalidOperationException($"Frame produced {raw.Length} input events, exceeding the stack capacity of {_capacity}.");
 
+		TextInputRequested = false;
 		var count = _entries.Count;
 		if (_order.Length < count)
 			_order = new LayerEntry[count];
@@ -185,6 +193,8 @@ public sealed class InputLayerStack
 	}
 
 	internal void BlockCurrent(InputDevice devices) => _currentBlock |= devices;
+
+	internal void RequestTextInputCurrent() => TextInputRequested = true;
 
 	internal void ConsumeCurrent(in InputEvent e)
 	{

@@ -19,6 +19,9 @@
          this library is the same assembly, so it always carries it -->
     <LoomEmitWgsl>true</LoomEmitWgsl>
     <LoomEmbedWgsl>true</LoomEmbedWgsl>
+    <!-- And the SPIR-V, embedded under the same prefix, for an Android app: an APK has no shader folder, so the Vulkan
+         backend reads it from this assembly. The loose copies stay for the desktop. -->
+    <LoomEmbedSpirv>true</LoomEmbedSpirv>
   </PropertyGroup>
 
   <PropertyGroup Label="NuGet">

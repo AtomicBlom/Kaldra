@@ -21,6 +21,14 @@ public interface IHostControl
 	void RequestRender() { }
 
 	/// <summary>
+	/// How many physical pixels of the app's surface make one layout unit on this display: about 3 on a typical phone,
+	/// 1 on a desktop monitor at 100%. A UI scales its layout by it (SUIsei's <c>UILayer.LayoutScale</c>) so controls keep
+	/// a physical size a finger or a cursor can hit. Read it each frame: it changes when the window moves to another
+	/// display. Defaults to 1 for a host that does not know its display's density.
+	/// </summary>
+	float DisplayScale => 1f;
+
+	/// <summary>
 	/// The text on the system clipboard, or null when it holds none or the host cannot read it. Defaults to null so a
 	/// host without a clipboard need not implement it. The browser host, which may not read the clipboard without
 	/// asking, answers with the text of a paste into the page in this frame (Ctrl+V's comes in the same frame as its
@@ -51,4 +59,13 @@ public interface IHostControl
 	/// <param name="contentType">Its media type, e.g. <c>application/zip</c>.</param>
 	/// <param name="contents">The file's bytes.</param>
 	bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents) => false;
+
+	/// <summary>
+	/// Open a file of the app's packaged content (its <c>LoomContent</c> items) by its path under the content root, with
+	/// forward slashes, as <c>levels/1.json</c>: the desktop host reads the content folder beside the app, the Android host
+	/// the APK's assets. Throws <see cref="FileNotFoundException"/> for a path the app does not have. A host that packs no
+	/// content throws <see cref="NotSupportedException"/>.
+	/// </summary>
+	Stream OpenContent(string path) =>
+		throw new NotSupportedException("This host does not read packaged content.");
 }

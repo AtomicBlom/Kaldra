@@ -42,7 +42,9 @@
     </LoomSlangEntry>
   </ItemDefinitionGroup>
 
-  <ItemGroup Condition="'$(LoomShaderOutputMode)' != 'None'">
+  <!-- An app with no shaders of its own (no LoomShaderSourceDir: it draws with a library's) compiles nothing; an empty
+       directory would make these globs search the drive root. -->
+  <ItemGroup Condition="'$(LoomShaderOutputMode)' != 'None' and '$(LoomShaderSourceDir)' != ''">
     <LoomSlangEntry  Include="$(LoomShaderSourceDir)\**\*.slang" Exclude="$(LoomShaderSourceDir)\**\*.module.slang;$(LoomShaderExclude)" />
     <LoomSlangModule Include="$(LoomShaderSourceDir)\**\*.module.slang" />
     <!-- Shared includes (the LOOM_BINDING/LOOM_PUSH_CONSTANT header) live outside app shader dirs;
@@ -273,6 +275,23 @@
       </EmbeddedResource>
       <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).wgsl.json')">
         <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).wgsl.json</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+    </ItemGroup>
+
+    <!-- Content with LoomEmbedSpirv (a library's shaders, as Loom.UI.SUIsei's): the SPIR-V and its reflection JSON are
+         embedded as well as copied loose, because an Android app has no shader folder beside it either; the loose
+         copies keep the desktop's shader folder and hot reload as they were. The Vulkan backend's ShaderResolver finds
+         them by the library's "<AssemblyName>.Shaders." prefix. -->
+    <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content' and '$(LoomEmbedSpirv)' == 'true'">
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).spv')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).spv</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(LoomSlangEntry->'$(LoomShaderOutDir)%(Filename).json')">
+        <LogicalName>$(LoomEmbedManifestPrefix)%(Filename).json</LogicalName>
         <WithCulture>false</WithCulture>
         <Visible>false</Visible>
       </EmbeddedResource>
