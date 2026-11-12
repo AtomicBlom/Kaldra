@@ -4,7 +4,7 @@ namespace Loom.Graph;
 
 /// <summary>
 /// An allocation-free cache key for a GPU binding object — a Vulkan descriptor set, a WebGPU bind group — made of the
-/// handles of the objects it names: the layout and the sampler, then the ordered binding, kind, handle and window of
+/// handles of the objects it names: the layout and the samplers, then the ordered binding, kind, handle and window of
 /// every entry. Equality compares every value rather than collapsing to a hash, because two different binding objects
 /// colliding would bind one draw's resources to another's.
 /// <para>
@@ -28,16 +28,22 @@ public struct BindingKey : IEquatable<BindingKey>
 
 	private readonly ulong _layout;
 	private readonly ulong _sampler;
+	private readonly ulong _compareSampler;
 	private Values _values;
 	private int _count;
 
 	/// <param name="layout">The layout the binding object is built against.</param>
-	/// <param name="sampler">The sampler every sampled entry pairs with, or 0 when nothing is sampled. Held once rather
-	/// than per entry because a binding object samples all its textures through its technique's one sampler.</param>
-	public BindingKey(ulong layout, ulong sampler = 0)
+	/// <param name="sampler">The sampler every plainly sampled entry pairs with, or 0 when nothing is sampled. Held
+	/// once rather than per entry because a binding object samples all its textures through at most two samplers, its
+	/// technique's plain one and its comparison one.</param>
+	/// <param name="compareSampler">The comparison sampler the entries the shader reads by comparison pair with, or 0
+	/// when none does. Which entries those are is fixed by the shader, and so by the layout; the sampler, which carries
+	/// the technique's compare function, is not, since two techniques over one shader can share a layout.</param>
+	public BindingKey(ulong layout, ulong sampler = 0, ulong compareSampler = 0)
 	{
 		_layout = layout;
 		_sampler = sampler;
+		_compareSampler = compareSampler;
 	}
 
 	/// <summary>
@@ -67,7 +73,7 @@ public struct BindingKey : IEquatable<BindingKey>
 
 	public readonly bool Equals(BindingKey other)
 	{
-		if (_layout != other._layout || _sampler != other._sampler || _count != other._count)
+		if (_layout != other._layout || _sampler != other._sampler || _compareSampler != other._compareSampler || _count != other._count)
 			return false;
 		for (var i = 0; i < _count; i++)
 		{
@@ -84,6 +90,7 @@ public struct BindingKey : IEquatable<BindingKey>
 		var hash = new HashCode();
 		hash.Add(_layout);
 		hash.Add(_sampler);
+		hash.Add(_compareSampler);
 		hash.Add(_count);
 		for (var i = 0; i < _count; i++)
 			hash.Add(_values[i]);

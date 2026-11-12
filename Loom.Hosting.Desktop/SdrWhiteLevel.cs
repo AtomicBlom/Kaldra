@@ -12,7 +12,7 @@ namespace Loom.Hosting.Desktop;
 /// Null off Windows, or where any step fails.
 /// </para>
 /// </summary>
-internal static unsafe class SdrWhiteLevel
+internal static unsafe partial class SdrWhiteLevel
 {
 	public static float? Nits(nint hwnd)
 	{
@@ -20,7 +20,7 @@ internal static unsafe class SdrWhiteLevel
 			return null;
 		try
 		{
-			var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+			var monitor = User32.MonitorFromWindow(hwnd, User32.MonitorDefaultToNearest);
 			var info = new MonitorInfoEx { Size = (uint)sizeof(MonitorInfoEx) };
 			if (monitor == 0 || !GetMonitorInfoW(monitor, &info))
 				return null;
@@ -63,7 +63,6 @@ internal static unsafe class SdrWhiteLevel
 		Id = *(uint*)(path + at + 8),
 	};
 
-	private const uint MonitorDefaultToNearest = 2;
 	private const uint QdcOnlyActivePaths = 2;
 	private const int PathInfoSize = 72;   // sizeof(DISPLAYCONFIG_PATH_INFO)
 	private const int ModeInfoSize = 64;   // sizeof(DISPLAYCONFIG_MODE_INFO)
@@ -104,19 +103,16 @@ internal static unsafe class SdrWhiteLevel
 		public uint Level;
 	}
 
-	[DllImport("user32.dll")]
-	private static extern nint MonitorFromWindow(nint hwnd, uint flags);
-
-	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+	[LibraryImport("user32.dll")]
 	[return: MarshalAs(UnmanagedType.Bool)]
-	private static extern bool GetMonitorInfoW(nint monitor, MonitorInfoEx* info);
+	private static partial bool GetMonitorInfoW(nint monitor, MonitorInfoEx* info);
 
-	[DllImport("user32.dll")]
-	private static extern int GetDisplayConfigBufferSizes(uint flags, out int pathCount, out int modeCount);
+	[LibraryImport("user32.dll")]
+	private static partial int GetDisplayConfigBufferSizes(uint flags, out int pathCount, out int modeCount);
 
-	[DllImport("user32.dll")]
-	private static extern int QueryDisplayConfig(uint flags, ref int pathCount, byte* paths, ref int modeCount, byte* modes, nint topologyId);
+	[LibraryImport("user32.dll")]
+	private static partial int QueryDisplayConfig(uint flags, ref int pathCount, byte* paths, ref int modeCount, byte* modes, nint topologyId);
 
-	[DllImport("user32.dll")]
-	private static extern int DisplayConfigGetDeviceInfo(DeviceInfoHeader* request);
+	[LibraryImport("user32.dll")]
+	private static partial int DisplayConfigGetDeviceInfo(DeviceInfoHeader* request);
 }

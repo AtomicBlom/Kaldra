@@ -75,6 +75,13 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// GPU, so a mesh can be released the frame after its last draw without waiting for the GPU first. Ids are not
 	/// reused, so a stale handle always fails loudly. Call it between frames: from inside a pass callback it throws,
 	/// because the frame being recorded may already have drawn the mesh.
+	/// <para>
+	/// Render thread only: the thread that created the engine and calls <see cref="Render"/>. The meshes being retired are
+	/// kept without locks, as the frame's own state is, so a call from any other thread throws
+	/// <see cref="InvalidOperationException"/> rather than racing the frame. A mesh built on a worker
+	/// (<see cref="CreateMeshAsync"/>) is released from the render thread once the worker hands it back. The same holds for
+	/// <see cref="ReleaseInstances"/> and <see cref="ReleaseTexture"/>.
+	/// </para>
 	/// </summary>
 	void ReleaseMesh(Mesh mesh);
 
@@ -136,6 +143,26 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// </para>
 	/// </summary>
 	void ReleaseTexture(Texture texture);
+
+	/// <summary>
+	/// Write new texels into <paramref name="texture"/> in place: the counterpart of <see cref="CreateTexture"/> for an image
+	/// whose content changes while its handle, size and format stay (a UI bitmap redrawn every frame, a video frame, a
+	/// trace). The handle, every material holding it and every cached binding naming it stay as they are, so nothing is
+	/// rebuilt, and after the first update of a texture none allocates: the backend keeps one staging buffer for it.
+	/// <para>
+	/// <paramref name="texels"/> is the whole image, rows tightly packed, in the format the texture was created with
+	/// (<see cref="TextureData.Format"/>), so exactly width × height × bytes per texel. Only a texture of one mip level and
+	/// one layer can be updated: a mip chain would need regenerating from the new texels, and a cube has six faces, so
+	/// either throws, as does a length that does not fit.
+	/// </para>
+	/// <para>
+	/// The texels reach the GPU ahead of the next frame, and the frames already submitted keep sampling what they had: the
+	/// copy is ordered after them on the GPU, so nothing waits on the CPU. Call it between frames on the render thread,
+	/// as <see cref="CreateTexture"/>: from a pass callback it throws, since the frame being recorded would already sample
+	/// the texture.
+	/// </para>
+	/// </summary>
+	void UpdateTexture(Texture texture, ReadOnlySpan<byte> texels);
 
 	/// <summary>
 	/// Run every GPU creation call queued by a <c>*Async</c> method (<see cref="CreateMeshAsync"/>,
@@ -287,29 +314,30 @@ public interface IEngine : IEngineClipSpace, IDisposable
 	/// brightness") and the brightest it shows. The desktop host keeps both current for the window's monitor; null where
 	/// it can't tell. Reports only: what a frame uses is <see cref="HdrPaperWhiteNits"/> and <see cref="HdrPeakNits"/>.
 	/// </summary>
-	float? DisplaySdrWhiteNits { get => null; set { } }
+	float? DisplaySdrWhiteNits { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(DisplaySdrWhiteNits)}; setting it would be dropped."); }
 
 	/// <inheritdoc cref="DisplaySdrWhiteNits"/>
-	float? DisplayPeakNits { get => null; set { } }
+	float? DisplayPeakNits { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(DisplayPeakNits)}; setting it would be dropped."); }
 
-	/// <summary>The app's own choice of paper white and peak (a player's setting), or null to follow the display.</summary>
-	float? HdrPaperWhiteChoice { get => null; set { } }
+	/// <summary>The app's own choice of paper white and peak (a player's setting), in nits, or null to follow the display.</summary>
+	/// <exception cref="ArgumentOutOfRangeException">Set to zero, a negative, an infinite or a NaN level (<see cref="HdrLevels.Choice"/>).</exception>
+	float? HdrPaperWhiteChoice { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(HdrPaperWhiteChoice)}; setting it would be dropped."); }
 
 	/// <inheritdoc cref="HdrPaperWhiteChoice"/>
-	float? HdrPeakChoice { get => null; set { } }
+	float? HdrPeakChoice { get => null; set => throw new NotSupportedException($"This engine keeps no {nameof(HdrPeakChoice)}; setting it would be dropped."); }
 
 	/// <summary>
 	/// Where white paper sits on an HDR output, in nits: the luminance SDR-referred white (a UI, an app's paper white) is
-	/// written at, so it matches the rest of the desktop. The app's choice, else the display's SDR white, else 200.
-	/// Unused on SDR output, where white is simply 1.
+	/// written at, so it matches the rest of the desktop. The app's choice, else the display's SDR white, else 200
+	/// (<see cref="HdrLevels.PaperWhite"/>). Unused on SDR output, where white is simply 1.
 	/// </summary>
-	float HdrPaperWhiteNits => HdrPaperWhiteChoice ?? DisplaySdrWhiteNits ?? 200f;
+	float HdrPaperWhiteNits => HdrLevels.PaperWhite(HdrPaperWhiteChoice, DisplaySdrWhiteNits);
 
 	/// <summary>
 	/// The brightest an HDR output shows, in nits: what highlights roll off toward rather than clip at. The app's choice,
-	/// else the display's peak, else 1000; never below paper white. Unused on SDR output.
+	/// else the display's peak, else 1000; never below paper white (<see cref="HdrLevels.Peak"/>). Unused on SDR output.
 	/// </summary>
-	float HdrPeakNits => MathF.Max(HdrPeakChoice ?? DisplayPeakNits ?? 1000f, HdrPaperWhiteNits);
+	float HdrPeakNits => HdrLevels.Peak(HdrPeakChoice, DisplayPeakNits, HdrPaperWhiteNits);
 
 	/// <summary>
 	/// Per-pass GPU timings from the most recently <em>completed</em> frame (a frame or two stale, like

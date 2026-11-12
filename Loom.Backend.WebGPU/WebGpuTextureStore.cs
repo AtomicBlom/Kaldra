@@ -1,7 +1,9 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Graph;
 
 namespace Loom.Backend.WebGPU;
 
@@ -20,6 +22,9 @@ internal sealed class WebGpuTextureStore(WebGpuHandleAllocator handles) : IDispo
 		public int Texture;
 		public int View;
 		public bool Released; // the id's slot after IEngine.ReleaseTexture: no handles, and Slot refuses it
+
+		// Its shape, which an update is held to (TextureUpdates.Check).
+		public int Width, Height, BytesPerTexel, MipLevels;
 	}
 
 	private readonly List<StoredTexture> _textures = [];
@@ -74,12 +79,35 @@ internal sealed class WebGpuTextureStore(WebGpuHandleAllocator handles) : IDispo
 		var view = handles.Allocate(WebGpuHandleAllocator.Views);
 		WebGpuInterop.CreateTextureView(view, texture, formatId, baseMip: 0, mipCount, "texture");
 
-		_textures.Add(new StoredTexture { Texture = texture, View = view });
+		_textures.Add(new StoredTexture
+		{
+			Texture = texture,
+			View = view,
+			Width = data.Width,
+			Height = data.Height,
+			BytesPerTexel = bytesPerTexel,
+			MipLevels = mipCount,
+		});
 		return new Texture(_textures.Count, data.Width, data.Height);
 	}
 
 	/// <summary>The sampled view handle of an uploaded texture.</summary>
 	public int View(int textureId) => _textures[Slot(textureId)].View;
+
+	/// <summary>
+	/// Write <paramref name="texels"/> into a texture in place with <c>queue.writeTexture</c>, which the queue orders after
+	/// every command buffer already submitted and before the next: frames in flight keep sampling what they had, and the
+	/// next frame samples the new texels. The texture and its view stay, so every bind group naming them does too.
+	/// </summary>
+	public void Write(int textureId, ReadOnlySpan<byte> texels)
+	{
+		var texture = _textures[Slot(textureId)];
+		// Cubes are refused at creation here, so every texture has one layer.
+		TextureUpdates.Check(textureId, texture.Width, texture.Height, texture.BytesPerTexel, texture.MipLevels, 1, texels.Length);
+		// The interop takes a writable span for its memory view; the page only reads it.
+		var bytes = MemoryMarshal.CreateSpan(ref MemoryMarshal.GetReference(texels), texels.Length);
+		WebGpuInterop.WriteTexture(texture.Texture, 0, texture.Width, texture.Height, texture.Width * texture.BytesPerTexel, bytes);
+	}
 
 	/// <summary>
 	/// Release a texture: its id stops resolving and its handles are released at once, which destroys the texture.

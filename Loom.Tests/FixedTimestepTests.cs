@@ -148,6 +148,8 @@ public class FixedTimestepTests
 
 		public void ReleaseTexture(Texture texture) => throw new NotSupportedException();
 
+		public void UpdateTexture(Texture texture, ReadOnlySpan<byte> texels) => throw new NotSupportedException();
+
 		public int AllocateDrawListStream() => throw new NotSupportedException();
 
 		public void Write<T>(ConstantsHandle handle, in T value) where T : unmanaged => throw new NotSupportedException();

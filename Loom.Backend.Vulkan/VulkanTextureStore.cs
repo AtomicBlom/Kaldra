@@ -1,7 +1,9 @@
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
+using Loom.Graph;
 using Silk.NET.Vulkan;
 using VMASharp;
+using Buffer = Silk.NET.Vulkan.Buffer;
 using VkFormat = Silk.NET.Vulkan.Format;
 
 namespace Loom.Backend.Vulkan;
@@ -23,6 +25,15 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 		public Allocation Allocation;
 		public ImageView View;
 		public bool Released; // the id's slot after IEngine.ReleaseTexture: no image, and Slot refuses it
+
+		// Its shape, which an update is held to (TextureUpdates.Check).
+		public int Width, Height, BytesPerTexel;
+		public uint MipLevels, Layers;
+
+		// The host-visible buffer its updates are staged in, made by the first one and kept until the image goes, so an
+		// update every frame allocates nothing. Null until then.
+		public Buffer Staging;
+		public Allocation? StagingAllocation;
 	}
 
 	private readonly VulkanContext _ctx;
@@ -119,12 +130,78 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 
 		UploadLevels(image, data);
 
-		_textures.Add(new StoredTexture { Image = image, Allocation = allocation, View = view });
+		_textures.Add(new StoredTexture
+		{
+			Image = image,
+			Allocation = allocation,
+			View = view,
+			Width = data.Width,
+			Height = data.Height,
+			BytesPerTexel = data.Levels[0].Pixels.Length / (data.Width * data.Height),
+			MipLevels = mipLevels,
+			Layers = layerCount,
+		});
 		return new Texture(_textures.Count, data.Width, data.Height);
 	}
 
 	/// <summary>The sampled image view a material binding points at.</summary>
 	public ImageView View(int textureId) => _textures[Slot(textureId)].View;
+
+	/// <summary>
+	/// Copy <paramref name="texels"/> into a texture's image in place, through the upload batch, ahead of the next frame.
+	/// The image is not replaced, so its view, and every set naming it, stays. Its staging buffer is made by the first
+	/// update and kept, so later ones allocate nothing.
+	/// <para>
+	/// Two hazards, both answered by queue order rather than a wait. The staging buffer is rewritten while the last batch
+	/// may still be copying from it, so the batch is opened first: opening one waits out the one before, which was
+	/// submitted a frame ago and has long finished. And frames already submitted may still sample the image, so the copy
+	/// starts with a barrier whose first scope is every earlier command on the queue: the write waits for those reads on
+	/// the GPU.
+	/// </para>
+	/// </summary>
+	public void Write(int textureId, ReadOnlySpan<byte> texels)
+	{
+		var slot = Slot(textureId);
+		var texture = _textures[slot];
+		TextureUpdates.Check(textureId, texture.Width, texture.Height, texture.BytesPerTexel, (int)texture.MipLevels, (int)texture.Layers, texels.Length);
+
+		var cmd = _uploads.Recorder();
+		if (texture.StagingAllocation is null)
+		{
+			BufferCreateInfo stagingInfo = new()
+			{
+				SType = StructureType.BufferCreateInfo,
+				Size = (ulong)texels.Length,
+				Usage = BufferUsageFlags.TransferSrcBit,
+				SharingMode = SharingMode.Exclusive,
+			};
+			texture.Staging = _allocator.CreateBuffer(in stagingInfo, new AllocationCreateInfo { Usage = MemoryUsage.CPU_Only }, out var made);
+			texture.StagingAllocation = made;
+			_textures[slot] = texture;
+		}
+
+		var mapped = (byte*)texture.StagingAllocation.Map();
+		texels.CopyTo(new Span<byte>(mapped, texels.Length));
+		texture.StagingAllocation.Unmap();
+
+		// The whole of the one level is rewritten, so its old contents are discarded (Undefined) rather than kept.
+		var range = new ImageSubresourceRange(ImageAspectFlags.ColorBit, 0, 1, 0, 1);
+		TransitionImage(cmd, texture.Image, range,
+			ImageLayout.Undefined, ImageLayout.TransferDstOptimal,
+			PipelineStageFlags2.AllCommandsBit, AccessFlags2.None,
+			PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferWriteBit);
+		BufferImageCopy copy = new()
+		{
+			BufferOffset = 0,
+			ImageSubresource = new ImageSubresourceLayers { AspectMask = ImageAspectFlags.ColorBit, MipLevel = 0, BaseArrayLayer = 0, LayerCount = 1 },
+			ImageExtent = new Extent3D((uint)texture.Width, (uint)texture.Height, 1),
+		};
+		_vk.CmdCopyBufferToImage(cmd, texture.Staging, texture.Image, ImageLayout.TransferDstOptimal, 1, in copy);
+		TransitionImage(cmd, texture.Image, range,
+			ImageLayout.TransferDstOptimal, ImageLayout.ShaderReadOnlyOptimal,
+			PipelineStageFlags2.AllTransferBit, AccessFlags2.TransferWriteBit,
+			PipelineStageFlags2.AllCommandsBit, AccessFlags2.ShaderSampledReadBit);
+	}
 
 	/// <summary>
 	/// Release a texture: its id stops resolving at once, and its image waits until frame
@@ -160,6 +237,11 @@ internal sealed unsafe class VulkanTextureStore : IDisposable
 		if (texture.Image.Handle != 0)
 			_vk.DestroyImage(_ctx.Device, texture.Image, null);
 		texture.Allocation.Dispose();
+		if (texture.StagingAllocation is { } staging)
+		{
+			_vk.DestroyBuffer(_ctx.Device, texture.Staging, null);
+			staging.Dispose();
+		}
 	}
 
 	// Stage every level (tightly packed, concatenated) in one host-visible buffer, transition the whole

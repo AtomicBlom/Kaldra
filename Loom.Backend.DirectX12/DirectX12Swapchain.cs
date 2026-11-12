@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Loom.Core.Diagnostics;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D12;
@@ -30,9 +31,12 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 	/// </summary>
 	public Format RenderTargetFormat { get; private set; }
 
-	/// <summary>True when the swapchain presents scRGB: R16G16B16A16_FLOAT in the linear Rec.709 colour space (G10, 1.0 =
-	/// 80 nits), which DXGI composes for an HDR display and clips for an SDR one. Asked for with <c>hdr</c>, and granted
-	/// when the swapchain supports presenting in that colour space; otherwise the swapchain is SDR and this is false.</summary>
+	/// <summary>
+	/// True when the swapchain presents scRGB: R16G16B16A16_FLOAT in the linear Rec.709 colour space (G10, 1.0 = 80
+	/// nits). Asked for with <c>hdr</c>, and granted only when the display the window is on is in HDR and the swapchain can
+	/// present in that colour space; otherwise the swapchain is SDR, this is false, and a warning says why. DXGI would
+	/// compose scRGB for an SDR display too, clipping everything past paper white, so that is never granted.
+	/// </summary>
 	public bool HdrActive { get; private set; }
 
 	public ComPtr<IDXGISwapChain1> SwapChain;
@@ -67,11 +71,8 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 		_rtvStart = _rtvHeap.GetCPUDescriptorHandleForHeapStart();
 
 		CreateSwapChain(width, height);
-		if (hdr && !TryHdr())
-		{
-			// Not granted: keep the SDR swapchain this was made as, and say so, as Vulkan's surface negotiation does
-			LoomLog.Info("DirectX12: HDR output was asked for, but the swapchain cannot present scRGB; presenting SDR.");
-		}
+		if (hdr)
+			TryHdr();
 		LoomLog.Info($"DirectX12 swapchain format={Format}, hdr={HdrActive}");
 		CreateBackBuffers();
 	}
@@ -84,9 +85,12 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 	}
 
 	// Turn the swapchain over to scRGB: half-float buffers presented in the linear Rec.709 colour space. The RTV writes
-	// the shader's output as it is, linear, with no encode. False, leaving it SDR, where DXGI cannot present that space.
+	// the shader's output as it is, linear, with no encode. False, leaving it SDR and saying why, where DXGI cannot
+	// present that space. Whether the window's monitor is in HDR is the host's to ask before it asks for HDR, as it is
+	// for every backend.
 	private bool TryHdr()
 	{
+
 		const Format hdrFormat = Format.FormatR16G16B16A16Float;
 		const ColorSpaceType scRgb = ColorSpaceType.RgbFullG10NoneP709;
 		using var swapChain3 = SwapChain.QueryInterface<IDXGISwapChain3>();
@@ -96,6 +100,7 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 		if ((support & (uint)SwapChainColorSpaceSupportFlag.Present) == 0)
 		{
 			SilkMarshal.ThrowHResult(SwapChain.ResizeBuffers(_bufferCount, Width, Height, Format, 0));
+			LoomLog.Warning("DirectX12: HDR output was asked for, but the swapchain cannot present scRGB; presenting SDR.");
 			return false;
 		}
 		SilkMarshal.ThrowHResult(swapChain3.SetColorSpace1(scRgb));
@@ -122,8 +127,10 @@ internal sealed unsafe class DirectX12Swapchain : IDirectX12PresentTarget
 			AlphaMode = AlphaMode.Unspecified,
 			Flags = 0
 		};
+		ComPtr<IDXGISwapChain1> madeSwapChain = default;
 		SilkMarshal.ThrowHResult(_ctx.Factory.CreateSwapChainForHwnd(
-			_ctx.GraphicsQueue, _hwnd, &desc, (SwapChainFullscreenDesc*)null, default(ComPtr<IDXGIOutput>), ref SwapChain));
+			_ctx.GraphicsQueue, _hwnd, &desc, (SwapChainFullscreenDesc*)null, default(ComPtr<IDXGIOutput>), ref madeSwapChain));
+		SwapChain = madeSwapChain;
 		_ctx.Factory.MakeWindowAssociation(_hwnd, 1u << 1); // DXGI_MWA_NO_ALT_ENTER — don't let DXGI hijack Alt+Enter
 		_index = 0;
 	}

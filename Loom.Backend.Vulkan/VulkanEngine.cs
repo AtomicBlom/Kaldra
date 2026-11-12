@@ -246,8 +246,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.IsCompute ? descriptor.ComputeEntry : descriptor.FragmentEntry,
 			descriptor.IsCompute ? SpirvEntryPoints.Stage.Compute : SpirvEntryPoints.Stage.Fragment,
 			descriptor.Shader);
-		var bindings = ShaderBindingMap.From(reflection, SpirvDepthTextures.Bindings(spirv));
+		var bindings = ShaderBindingMap.From(reflection, SpirvDepthTextures.Bindings(spirv, descriptor.Shader));
 		ShaderBindingMap.CheckCompare(name, bindings.ComparedCount, descriptor.SampleCompare);
+		bindings.CheckDrawStorage(name, descriptor.IsCompute);
 		_registry[name] = new VulkanTechniqueTemplate(
 			spirv,
 			vertexEntry,
@@ -270,7 +271,7 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 			descriptor.SampleCompare,
 			descriptor.AlphaToCoverage);
 		return new TechniqueShape(
-			new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes),
+			new MaterialLayout(reflection.SampleCount, reflection.MaterialParameterBytes, bindings.ComparedCount),
 			reflection.UniformBufferBytes,
 			descriptor.HasFragmentPush ? VulkanTechnique.FragmentPushSize : 0,
 			descriptor.HasListPush ? VulkanTechnique.ListPushSize : 0);
@@ -318,6 +319,9 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 		var view = _textures.Release(texture.Id, lastReadingFrame);
 		_context.EvictBindings(BoundObject.View, view.Handle, lastReadingFrame);
 	}
+
+	// Recorded into the upload batch, which is submitted ahead of the next frame, as a new texture's upload is.
+	protected override void WriteTexels(Texture texture, ReadOnlySpan<byte> texels) => _textures.Write(texture.Id, texels);
 
 	// Free what was released once the frames that could read it are done: meshes, textures, and the cached sets their
 	// release evicted.
@@ -392,9 +396,18 @@ internal sealed unsafe partial class VulkanEngine : EngineBase
 
 	public override void WaitIdle()
 	{
+		// Submit any recorded uploads first, so idle covers them too: a mesh or texture released while its copy was still
+		// pending in the batch is then read by nothing.
+		_uploads.Flush();
 		_vk.DeviceWaitIdle(_ctx.Device);
 		_completedFrame = _submittedFrames;
-		CollectReleased();
+
+		// A release waits for the frame after the newest submitted (the one the upload batch rides ahead of). With that batch
+		// run and the device idle, nothing can read anything released so far, so all of it goes now rather than a frame later.
+		var everythingReleased = _submittedFrames + 1;
+		_meshes.CollectReleased(everythingReleased);
+		_textures.CollectReleased(everythingReleased);
+		_descriptors.CollectRetired(everythingReleased);
 	}
 
 	// Resolve a logical shader name (TechniqueDescriptor.Shader) + asset extension (".spv" or its ".json"

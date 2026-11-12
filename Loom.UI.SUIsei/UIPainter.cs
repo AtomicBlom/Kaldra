@@ -83,9 +83,10 @@ public sealed class UIPainter
 		public uint Revision = uint.MaxValue;
 		public uint TextureRevision = uint.MaxValue;
 		public uint SeenIn;
-		// Set by Prepare, consumed by Draw: a frame that skipped Prepare is caught at its first Draw rather than only
-		// once its UI happens to change.
+		// Set by Prepare, consumed by the first Draw after it, which notes its frame in DrawnIn so the frame's other Draws
+		// pass too. A frame that skipped Prepare is caught at its first Draw rather than only once its UI happens to change.
 		public bool Armed;
+		public long DrawnIn = long.MinValue;
 	}
 
 	private UIPainter(IEngine engine, UIHost host)
@@ -133,17 +134,18 @@ public sealed class UIPainter
 
 	/// <summary>
 	/// Make this frame's composited lists drawable. For each list that changed: check its commands, upload the sources
-	/// its slot table newly names (and replace one whose texels moved), bind host images to their textures, and rebuild
-	/// its texture array and command tags. Then release the textures of the sources the host's last render let go of
-	/// (<see cref="UIHost.ReleasedTextures"/>: no surface draws them any more, or they were disposed) — the engine keeps
-	/// each until the frames in flight are done with it. A surface seen for the first time mints a draw-list stream; one
-	/// whose root is gone is forgotten. Call once per frame, after <see cref="UIHost.Render"/> and before
-	/// <see cref="IEngine.Render"/>.
+	/// its slot table newly names (and write the new texels of one whose texels moved into its texture, in place), bind
+	/// host images to their textures, and rebuild its texture array and command tags. Then release the textures of the
+	/// sources the host's last render let go of (<see cref="UIHost.ReleasedTextures"/>: no surface draws them any more, or
+	/// they were disposed) — the engine keeps each until the frames in flight are done with it. A surface seen for the
+	/// first time mints a draw-list stream; one whose root is gone is forgotten. Call once per frame, after
+	/// <see cref="UIHost.Render"/> and before <see cref="IEngine.Render"/>.
 	/// <para>
-	/// It is a step of its own because textures cannot be created or released where they are discovered.
+	/// It is a step of its own because textures cannot be created, updated or released where they are discovered.
 	/// <see cref="Draw"/> runs in a pass callback, while the frame's commands are recorded: an upload made there is
 	/// submitted only ahead of the next frame, so a new image's first frame would sample a texture its pixels had not
-	/// reached, and the engine refuses it. A frame whose lists did not change does none of this, and allocates nothing.
+	/// reached, and the engine refuses it. A frame whose lists did not change does none of this, and allocates nothing;
+	/// nor does one that only rewrote a bitmap's texels.
 	/// </para>
 	/// </summary>
 	/// <exception cref="InvalidOperationException">A list samples a host image whose tag no texture is bound to, or whose colour space its texture's format does not decode; or a source the same render reported released.</exception>
@@ -203,8 +205,9 @@ public sealed class UIPainter
 	/// Submit the draw list registered under <paramref name="id"/> in this frame's composited output, binding the
 	/// textures <see cref="Prepare"/> resolved for it. A no-op when the frame carries no list for that id or it is
 	/// empty. Call from a pass that blends the target, and that declares with <c>.Samples</c> every texture bound by
-	/// <see cref="SetExternalTexture"/> the list shows. Throws when the list was not prepared this frame — when
-	/// <see cref="Prepare"/> was skipped, ran before the host last rendered, or this surface was already drawn since.
+	/// <see cref="SetExternalTexture"/> the list shows. A surface may be drawn any number of times in one frame, by one pass
+	/// or several (a HUD drawn on the frame and again into an inset). Throws when the list was not prepared for this frame:
+	/// when <see cref="Prepare"/> was skipped, or ran before the host last rendered.
 	/// </summary>
 	public void Draw(IRenderContext ctx, DrawListId id)
 	{
@@ -221,15 +224,17 @@ public sealed class UIPainter
 		if (draw is null)
 			return;
 
-		if (!_surfaces.TryGetValue(id, out var surface) || !surface.Armed
+		// Prepared for this frame: armed by a Prepare since the last frame drew it, or already drawn this frame.
+		if (!_surfaces.TryGetValue(id, out var surface) || !(surface.Armed || surface.DrawnIn == ctx.Frame)
 			|| surface.Revision != draw.Revision || surface.TextureRevision != draw.TextureRevision)
 		{
 			throw new InvalidOperationException(
 				$"UIPainter.Draw: surface {id.Value}'s draw list was not prepared for this frame. Call UIPainter.Prepare() once " +
 				"per frame, after UIHost.Render() and before IEngine.Render: it uploads the textures the list samples, which " +
-				"cannot be uploaded from the pass that draws them. A surface is prepared for one Draw per frame.");
+				"cannot be uploaded from the pass that draws them.");
 		}
 		surface.Armed = false;
+		surface.DrawnIn = ctx.Frame;
 
 		if (surface.CommandCount == 0)
 			return;
@@ -380,9 +385,10 @@ public sealed class UIPainter
 
 	/// <summary>
 	/// The texture for <paramref name="source"/>, uploading it the first time any surface names it. A source whose content
-	/// <see cref="TextureSource.Version"/> moved since its upload gets its new texels uploaded as a new texture and the old
-	/// one released: every other surface naming it sees its texture revision move as well, so all of them rebind in the
-	/// same <see cref="Prepare"/>.
+	/// <see cref="TextureSource.Version"/> moved since its upload has its new texels written into the same texture
+	/// (<see cref="IEngine.UpdateTexture"/>), so a bitmap rewritten every frame keeps one texture and allocates nothing;
+	/// every surface naming it rebinds the handle it already had. Only a source whose size no longer matches its texture
+	/// gets a new texture, and the old one released.
 	/// <para>
 	/// A disposed source is drawn like any other. A list composited before the app disposed it still names it, and the
 	/// host reports it released only at its next render, which redraws those surfaces without it — so the frame between
@@ -397,10 +403,17 @@ public sealed class UIPainter
 		}
 		else if (resident.Version != source.Version)
 		{
-			var stale = resident.Texture;
-			resident.Texture = CreateTexture(source);
+			if (resident.Texture.Width == source.Width && resident.Texture.Height == source.Height)
+			{
+				_engine.UpdateTexture(resident.Texture, source.Pixels.Span);
+			}
+			else
+			{
+				var stale = resident.Texture;
+				resident.Texture = CreateTexture(source);
+				_engine.ReleaseTexture(stale);
+			}
 			resident.Version = source.Version;
-			_engine.ReleaseTexture(stale);
 		}
 		return resident.Texture;
 	}
