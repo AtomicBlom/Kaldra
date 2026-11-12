@@ -25,4 +25,4 @@ internal readonly record struct DirectX12TechniqueTemplate(
 	DepthCompare DepthTest = DepthCompare.LessOrEqual, DepthBias? Bias = null,
 	int? MaterialUniformSlot = null, int MaterialParameterBytes = 0,
 	bool[]? ComparedInputs = null, DepthCompare? SampleCompare = null, bool AlphaToCoverage = false,
-	ShaderBindingMap Bindings = default);
+	ShaderBindingMap Bindings = default, DirectX12Registers Registers = default);

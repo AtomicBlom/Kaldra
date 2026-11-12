@@ -44,7 +44,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the storage-buffer root UAV (a compute's <c>.ReadWrites</c> of a buffer), or -1 if none.</summary>
 	public int UavRootParam { get; private set; } = -1;
 
-	/// <summary>Root-parameter slot of the FIRST read-only structured-buffer input root SRV (skin: bind-pose verts at t0, bone palette at t1); the i-th input SRV is this + i. -1 if the compute reads no input buffers.</summary>
+	/// <summary>Root-parameter slot of the FIRST read-only structured-buffer input root SRV (skin: bind-pose verts, bone palette); the i-th input SRV is this + i. -1 if the compute reads no input buffers.</summary>
 	public int InputBufferBaseParam { get; private set; } = -1;
 
 	/// <summary>Number of read-only structured-buffer input root SRVs the compute binds.</summary>
@@ -53,11 +53,11 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 	/// <summary>Root-parameter slot for the storage-image / structured-buffer UAV descriptor table (a compute's <c>.ReadWrites</c> of a texture or structured buffer), or -1 if none.</summary>
 	public int UavTableParam { get; private set; } = -1;
 
-	/// <summary>Root-parameter slot of the FIRST uniform buffer's root CBV (register b1; the i-th uniform buffer is
-	/// this + i, at b(1+i)) — the uniform seam: CSM matrices, lighting params, wind. -1 if the technique reads no constant buffer.</summary>
+	/// <summary>Root-parameter slot of the FIRST uniform buffer's root CBV (the i-th uniform buffer is this + i, at its
+	/// reflected register) — the uniform seam: CSM matrices, lighting params, wind. -1 if the technique reads no constant buffer.</summary>
 	public int CbvRootParam { get; private set; } = -1;
 
-	/// <summary>How many uniform buffers (root CBVs at b1..b<see cref="UniformBufferCount"/>) the technique declares — the reflected count. A pass's <c>.Reads</c> Constants fill the first slots; an in-closure push fills the next.</summary>
+	/// <summary>How many uniform buffers (one root CBV each) the technique declares — the reflected count. A pass's <c>.Reads</c> Constants fill the first slots; an in-closure push fills the next.</summary>
 	public int UniformBufferCount { get; }
 
 	/// <summary>Element stride (bytes) of a structured-buffer storage resource, for building its UAV descriptor's <c>StructureByteStride</c>/<c>NumElements</c>; 0 for a texture or raw buffer.</summary>
@@ -153,25 +153,28 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		BakeGraphics(ctx, template, colorFormats, depthFormat, depthReadOnly, samples);
 	}
 
-	// A compute root signature shaped to the technique: a 16-float scalar root constant at b0 (always) + a root CBV
-	// per constant buffer it declares at b1.. (the pass's .Reads Constants) + an optional t0.. SRV table for sampled inputs (e.g. the auto-exposure compute metering the lit scene) + the
+	// A compute root signature shaped to the technique: a 16-float scalar root constant (always) + a root CBV
+	// per constant buffer it declares (the pass's .Reads Constants) + an optional SRV table for sampled inputs (e.g. the auto-exposure compute metering the lit scene) + the
 	// storage binding — a RW texture (the 1×1 exposure image) OR a RW STRUCTURED buffer (the GPU-particle stream)
-	// via a u0 UAV descriptor TABLE, since both need a real descriptor (a structured buffer's StructureByteStride/
+	// via a UAV descriptor TABLE, since both need a real descriptor (a structured buffer's StructureByteStride/
 	// NumElements is what makes the shader's GetDimensions return a non-zero count; a root UAV is a raw GPU address
 	// with no metadata, so GetDimensions yields 0 and the particle update early-outs every thread). Only a RAW
-	// buffer with no reflected stride (the FXC built-in's ByteAddressBuffer) keeps the u0 root-UAV-by-address path.
-	// No compute technique mixes an image and a buffer, so u0 is unambiguous. All visible to ShaderVisibility.All
-	// (compute isn't covered by the per-stage VERTEX/PIXEL visibilities). Static samplers s0.. pair with the SRV table.
+	// buffer with no reflected stride (a ByteAddressBuffer) keeps the root-UAV-by-address path. No compute technique
+	// mixes an image and a buffer. All visible to ShaderVisibility.All (compute isn't covered by the per-stage
+	// VERTEX/PIXEL visibilities). A static sampler per sampled input pairs with the SRV table. Every register is the
+	// one the DXIL reflection gives the parameter (DirectX12Registers).
 	private void BakeCompute(DirectX12Context ctx, DirectX12TechniqueTemplate template)
 	{
-		// root constants (b0) + N uniform CBVs (b1..) + M read-only structured-buffer root SRVs (t0..) + optional SRV
-		// table + storage.
+		// root constants + N uniform CBVs + M read-only structured-buffer root SRVs + optional SRV table + storage.
 		var parameters = stackalloc RootParameter[3 + template.UniformBufferCount + template.InputBufferCount];
 		var paramCount = 0;
+		var registers = template.Registers;
 		var uavTableCount = template.StorageImages > 0 ? template.StorageImages : template.StorageBuffers;
-		var srvRange = new DescriptorRange { RangeType = DescriptorRangeType.Srv, NumDescriptors = (uint)template.InputCount, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
-		var uavRange = new DescriptorRange { RangeType = DescriptorRangeType.Uav, NumDescriptors = (uint)uavTableCount, BaseShaderRegister = 0, RegisterSpace = 0, OffsetInDescriptorsFromTableStart = 0 };
-		// A structured buffer (stride known from reflection) and a storage image both bind via the u0 UAV table;
+		var srvRanges = stackalloc DescriptorRange[Math.Max(1, template.InputCount)];
+		FillRanges(srvRanges, DescriptorRangeType.Srv, registers.Textures, template.InputCount);
+		var uavRanges = stackalloc DescriptorRange[Math.Max(1, uavTableCount)];
+		FillRanges(uavRanges, DescriptorRangeType.Uav, template.StorageImages > 0 ? registers.StorageImages : registers.ReadWriteBuffers, uavTableCount);
+		// A structured buffer (stride known from reflection) and a storage image both bind via the UAV table;
 		// only a raw buffer (stride 0) falls back to a root UAV.
 		var bufferViaTable = template.StorageBuffers > 0 && template.StorageBufferStride > 0;
 
@@ -180,10 +183,9 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		{
 			ParameterType = RootParameterType.Type32BitConstants,
 			ShaderVisibility = ShaderVisibility.All,
-			Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = 16 } },
+			Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = (uint)registers.Push, RegisterSpace = 0, Num32BitValues = 16 } },
 		};
-		// The pass's .Reads Constants as root CBVs at b1..bN, as a graphics technique takes them: the root constants
-		// own b0.
+		// The pass's .Reads Constants as root CBVs, as a graphics technique takes them, each at its reflected register.
 		if (template.UniformBufferCount > 0)
 		{
 			CbvRootParam = paramCount;
@@ -192,12 +194,11 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				{
 					ParameterType = RootParameterType.TypeCbv,
 					ShaderVisibility = ShaderVisibility.All,
-					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(1 + u), RegisterSpace = 0 } },
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)registers.UniformBuffers[u], RegisterSpace = 0 } },
 				};
 		}
-		// Read-only structured-buffer inputs (skin: bind-pose verts t0, bone palette t1; a pass's .Reads Storage) as
-		// root SRVs by GPU address — no descriptor heap. The shader's StructuredBuffer<T>s land after its sampled
-		// textures, at t(S)..t(S+N-1) in declaration order, as a graphics technique's do.
+		// Read-only structured-buffer inputs (skin: bind-pose verts, bone palette; a pass's .Reads Storage) as
+		// root SRVs by GPU address — no descriptor heap — each at the t register reflection gives it.
 		if (template.InputBufferCount > 0)
 		{
 			InputBufferBaseParam = paramCount;
@@ -206,7 +207,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				{
 					ParameterType = RootParameterType.TypeSrv,
 					ShaderVisibility = ShaderVisibility.All,
-					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(template.InputCount + b), RegisterSpace = 0 } },
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)registers.InputBuffers[b], RegisterSpace = 0 } },
 				};
 		}
 		if (template.InputCount > 0)
@@ -216,7 +217,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			{
 				ParameterType = RootParameterType.TypeDescriptorTable,
 				ShaderVisibility = ShaderVisibility.All,
-				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &srvRange } },
+				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = (uint)template.InputCount, PDescriptorRanges = srvRanges } },
 			};
 		}
 		if (template.StorageImages > 0 || bufferViaTable)
@@ -226,7 +227,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			{
 				ParameterType = RootParameterType.TypeDescriptorTable,
 				ShaderVisibility = ShaderVisibility.All,
-				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &uavRange } },
+				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = (uint)uavTableCount, PDescriptorRanges = uavRanges } },
 			};
 		}
 		else if (template.StorageBuffers > 0)
@@ -236,7 +237,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			{
 				ParameterType = RootParameterType.TypeUav,
 				ShaderVisibility = ShaderVisibility.All,
-				Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = 0, RegisterSpace = 0 } },
+				Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)registers.ReadWriteBuffers[0], RegisterSpace = 0 } },
 			};
 		}
 
@@ -255,7 +256,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
 				MaxLOD = float.MaxValue,
-				ShaderRegister = (uint)i,
+				ShaderRegister = (uint)registers.Samplers[i],
 				RegisterSpace = 0,
 				ShaderVisibility = ShaderVisibility.All,
 			};
@@ -286,26 +287,40 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 		}
 	}
 
+	// One descriptor range per binding, the k-th at the k-th binding's reflected register and the table's k-th
+	// descriptor: the record path writes a table's descriptors in binding order, and registers needn't be contiguous.
+	private static void FillRanges(DescriptorRange* ranges, DescriptorRangeType type, System.Collections.Immutable.ImmutableArray<int> registers, int count)
+	{
+		for (var i = 0; i < count; i++)
+		{
+			ranges[i] = new DescriptorRange
+			{
+				RangeType = type,
+				NumDescriptors = 1,
+				BaseShaderRegister = (uint)registers[i],
+				RegisterSpace = 0,
+				OffsetInDescriptorsFromTableStart = (uint)i,
+			};
+		}
+	}
+
 	private void BakeGraphics(DirectX12Context ctx, DirectX12TechniqueTemplate template, ReadOnlySpan<Format> colorFormats, Format depthFormat, bool depthReadOnly, int samples)
 	{
-		// Root signature: optionally a 32-bit root-constants block (the MVP at b0/vertex for a mesh or particle
-		// technique, or a 16-float scalar block at b0/pixel for a post pass — one or the other, mirroring the
-		// Vulkan layout), and optionally one SRV descriptor table (t0..tN-1) + a static sampler (s0).
+		// Root signature: optionally a 32-bit root-constants block (the MVP for a mesh or particle technique, or a
+		// 16-float scalar block for a post pass — one or the other, mirroring the Vulkan layout), and optionally one SRV
+		// descriptor table + a static sampler per input. Every register is the one the DXIL reflection gives the
+		// parameter (DirectX12Registers).
 		// A draw-list technique (HasListPush) wants an all-stage root-constants block (vertex reads scale/translate,
 		// pixel reads the tag/paper-white/hdr flag), so it pre-empts the vertex-only MVP push even though it also
 		// reads a vertex stream.
 		var hasRootConstants = template.HasFragmentPush || template.HasListPush;
-		// Root constants (b0) + N uniform CBVs (b1..bN) + one SRV table + M storage-buffer root SRVs.
+		// Root constants + N uniform CBVs + one SRV table + M storage-buffer root SRVs.
 		var parameters = stackalloc RootParameter[2 + template.UniformBufferCount + template.InputBufferCount];
 		var paramCount = 0;
-		var range = new DescriptorRange
-		{
-			RangeType = DescriptorRangeType.Srv,
-			NumDescriptors = (uint)template.InputCount,
-			BaseShaderRegister = 0,
-			RegisterSpace = 0,
-			OffsetInDescriptorsFromTableStart = 0,
-		};
+		var registers = template.Registers;
+		// The SRV table: one range per sampled input, the k-th at the k-th texture's reflected register.
+		var ranges = stackalloc DescriptorRange[Math.Max(1, template.InputCount)];
+		FillRanges(ranges, DescriptorRangeType.Srv, registers.Textures, template.InputCount);
 
 		if (hasRootConstants)
 		{
@@ -314,14 +329,13 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			{
 				ParameterType = RootParameterType.Type32BitConstants,
 				ShaderVisibility = template.HasListPush ? ShaderVisibility.All : ShaderVisibility.Pixel,
-				Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = 0, RegisterSpace = 0, Num32BitValues = template.HasListPush ? ListPushDwords : 16u } },
+				Anonymous = new RootParameterUnion { Constants = new RootConstants { ShaderRegister = (uint)registers.Push, RegisterSpace = 0, Num32BitValues = template.HasListPush ? ListPushDwords : 16u } },
 			};
 		}
-		// The per-frame uniform buffers as root CBVs at b1..bN (the root constants own b0), one per reflected
-		// ConstantBuffer. Bound each frame from a Constants resource's UPLOAD address (a pass's .Reads) or the
+		// The per-frame uniform buffers as root CBVs, one per reflected ConstantBuffer, each at the b register the DXIL
+		// reflection gives it. Bound each frame from a Constants resource's UPLOAD address (a pass's .Reads) or the
 		// uniform ring (an in-closure push). ShaderVisibility.All so they serve both a fullscreen pixel reader
-		// (CSM/lighting params) and a vertex reader (foliage wind). Registers b1.. match the shaders' explicit
-		// LOOM_REGISTER(bN), which Slang honours for DXIL while [[vk::binding]] drives SPIR-V.
+		// (CSM/lighting params) and a vertex reader (foliage wind).
 		if (template.UniformBufferCount > 0)
 		{
 			CbvRootParam = paramCount;
@@ -331,7 +345,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				{
 					ParameterType = RootParameterType.TypeCbv,
 					ShaderVisibility = ShaderVisibility.All,
-					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(1 + u), RegisterSpace = 0 } },
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)registers.UniformBuffers[u], RegisterSpace = 0 } },
 				};
 			}
 		}
@@ -342,12 +356,12 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 			{
 				ParameterType = RootParameterType.TypeDescriptorTable,
 				ShaderVisibility = ShaderVisibility.Pixel,
-				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = 1, PDescriptorRanges = &range } },
+				Anonymous = new RootParameterUnion { DescriptorTable = new RootDescriptorTable { NumDescriptorRanges = (uint)template.InputCount, PDescriptorRanges = ranges } },
 			};
 		}
-		// App-writable storage buffers (g.Storage SSBOs) as read-only root SRVs at t(InputCount)..; the sampled
-		// textures own t0..t(InputCount-1) via the table above, so these follow them. Bound from each Storage
-		// resource's UPLOAD address by a pass's .Reads, exactly as the compute skin path binds its input buffers.
+		// App-writable storage buffers (g.Storage SSBOs) as read-only root SRVs, each at its reflected t register. Bound
+		// from each Storage resource's UPLOAD address by a pass's .Reads, exactly as the compute skin path binds its
+		// input buffers.
 		if (template.InputBufferCount > 0)
 		{
 			InputBufferBaseParam = paramCount;
@@ -357,13 +371,13 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				{
 					ParameterType = RootParameterType.TypeSrv,
 					ShaderVisibility = ShaderVisibility.All,
-					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)(template.InputCount + b), RegisterSpace = 0 } },
+					Anonymous = new RootParameterUnion { Descriptor = new RootDescriptor { ShaderRegister = (uint)registers.InputBuffers[b], RegisterSpace = 0 } },
 				};
 			}
 		}
 		// One static sampler PER sampled input: Slang lowers each combined Sampler2D to a Texture2D + its OWN
-		// SamplerState (texture t_i paired with sampler s_i), so a pass that samples N inputs references s0..s(N-1).
-		// A single shared sampler (s0) satisfies a 1-input pass (blit, the bloom down/up taps) but a 2+-input pass
+		// SamplerState (a t register and an s register, both reflected), so a pass that samples N inputs references N.
+		// A single shared sampler satisfies a 1-input pass (blit, the bloom down/up taps) but a 2+-input pass
 		// (bloom composite, SSAO, deferred lighting) references s1.. — absent from the root signature, the PS would
 		// reference a sampler the root signature doesn't declare and CreateGraphicsPipelineState fails. Static
 		// samplers don't count against the 64-DWORD root budget, so N of them is free.
@@ -384,7 +398,7 @@ internal sealed unsafe class DirectX12Technique : IDisposable
 				BorderColor = StaticBorderColor.OpaqueBlack,
 				MinLOD = 0f,
 				MaxLOD = float.MaxValue,
-				ShaderRegister = (uint)i,
+				ShaderRegister = (uint)registers.Samplers[i],
 				RegisterSpace = 0,
 				ShaderVisibility = ShaderVisibility.Pixel,
 			};

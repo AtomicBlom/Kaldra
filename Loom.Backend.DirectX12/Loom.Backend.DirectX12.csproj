@@ -17,6 +17,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The root signature's registers resolved over every shipped shader (DirectX12RegistersTests) -->
+    <InternalsVisibleTo Include="Loom.Tests" />
+  </ItemGroup>
+
   <PropertyGroup Label="NuGet">
     <PackageId>Loom.Backend.DirectX12</PackageId>
     <Description>DirectX 12 backend for the Loom render-graph engine. PSOs, placed-resource aliasing, offline signed DXIL shaders embedded.</Description>

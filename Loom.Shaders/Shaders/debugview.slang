@@ -14,16 +14,16 @@ struct PushConstants
 
 LOOM_PUSH_CONSTANT PushConstants pc;
 
-LOOM_BINDING(0) Sampler2D graded;    // 0 Final (the tonemapped, exposure-graded image)
-LOOM_BINDING(1) Sampler2D albedo;    // 1
-LOOM_BINDING(2) Sampler2D normalTex; // 2 (stored *0.5+0.5, so the raw sample IS the classic normal view)
-LOOM_BINDING(3) Sampler2D position; // 3 world position
-LOOM_BINDING(4) Sampler2D depthTex;  // 4 perspective depth
-LOOM_BINDING(5) Sampler2D ao;        // 5 SSAO (single channel)
-LOOM_BINDING(6) Sampler2D lit;       // 6 deferred lit (HDR)
-LOOM_BINDING(7) Sampler2D outlined;  // 7 lit + JFA hover ring (HDR)
-LOOM_BINDING(8) Sampler2D glow;      // 8 bloom result (HDR)
-LOOM_BINDING(9) Sampler2D shadowTex; // 9 sun shadow map (ortho depth)
+Sampler2D graded;    // 0 Final (the tonemapped, exposure-graded image)
+Sampler2D albedo;    // 1
+Sampler2D normalTex; // 2 (stored *0.5+0.5, so the raw sample IS the classic normal view)
+Sampler2D position; // 3 world position
+Sampler2D depthTex;  // 4 perspective depth
+Sampler2D ao;        // 5 SSAO (single channel)
+Sampler2D lit;       // 6 deferred lit (HDR)
+Sampler2D outlined;  // 7 lit + JFA hover ring (HDR)
+Sampler2D glow;      // 8 bloom result (HDR)
+Sampler2D shadowTex; // 9 sun shadow map (ortho depth)
 
 struct VsOut
 {

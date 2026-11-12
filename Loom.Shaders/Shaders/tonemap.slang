@@ -5,8 +5,8 @@
 
 #include "loom_platform.module.slang"
 
-LOOM_BINDING(0) Sampler2D sceneTex;    // bloomed scene (HDR)
-LOOM_BINDING(1) Sampler2D exposureTex; // 1×1 auto-exposure multiplier
+Sampler2D sceneTex;    // bloomed scene (HDR)
+Sampler2D exposureTex; // 1×1 auto-exposure multiplier
 
 // hdr != 0 selects the HDR-display output path (M7-B6): the engine sets it from the negotiated swapchain
 // (ctx.HdrOutput). On an scRGB (linear) swapchain the terminal pass writes these values straight through, so

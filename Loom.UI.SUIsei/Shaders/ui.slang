@@ -55,7 +55,7 @@ LOOM_PUSH_CONSTANT PushConstants pc;
 
 // One combined sampler, bound per command to the white texel (fills) or an atlas page (glyph/image) — mirrors
 // ImGui's per-command texture bind. Slang lowers Sampler2D to a Texture2D+SamplerState pair for the DXIL target.
-LOOM_BINDING(0) Sampler2D tex;
+Sampler2D tex;
 
 struct VsIn
 {
