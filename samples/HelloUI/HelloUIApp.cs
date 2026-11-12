@@ -47,7 +47,8 @@ public sealed class HelloUIApp : LoomApplication
 		// The count saved when the app was last suspended, so it survives the platform ending the app in the background.
 		if (File.Exists(SavePath) && int.TryParse(File.ReadAllText(SavePath), out var taps))
 			_page.ViewModel.RestoreTaps(taps);
-		PushInputLayer(new SUIseiInputLayer(_ui));
+		// The page is all there is, so a controller drives it: the d-pad and stick move between controls, A presses them.
+		PushInputLayer(new SUIseiInputLayer(_ui) { TakesGamepad = true });
 		// On top, so it sees every event before the UI takes any: a readout, and Escape (Back on Android) to leave.
 		PushInputLayer(new InputReadoutLayer(_page.ViewModel, Exit));
 
