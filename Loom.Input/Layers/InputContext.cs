@@ -39,4 +39,12 @@ public ref struct InputContext
 	/// subject to this layer's own <see cref="Block"/>, so a layer can block the real player yet drive the
 	/// layers below with scripted input.</summary>
 	public readonly void Inject(in InputEvent e) => _stack.InjectCurrent(in e);
+
+	/// <summary>
+	/// Says this layer is ready to take typed text this frame — a text field holds focus — so a host whose keyboard is
+	/// on the screen shows it (<see cref="InputLayerStack.TextInputRequested"/>). Ask every frame it holds: the request
+	/// lapses the first frame no layer makes it, and the host then hides the keyboard. A desktop host, whose keyboard
+	/// is always there, ignores it.
+	/// </summary>
+	public readonly void RequestTextInput() => _stack.RequestTextInputCurrent();
 }

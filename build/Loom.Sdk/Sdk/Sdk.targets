@@ -11,6 +11,22 @@
     backend-isolation invariant). The guarantee is "absence of import" — no opt-in guard property needed.
   -->
 
+  <!--
+    Android, chosen by the target framework (net11.0-android) rather than a RID, and so decided here: a single-target
+    project sets its TargetFramework in its body, after Sdk.props. An Android app runs on Vulkan alone, embeds its
+    shaders (an APK has no folder beside the app to hold loose ones), and is hosted by Loom.Hosting.Android. Set
+    before the shader targets are imported, which read the output mode and the DXIL switch.
+  -->
+  <PropertyGroup>
+    <_LoomTargetsAndroid Condition="'$(TargetFramework)' != '' and '$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' == 'android'">true</_LoomTargetsAndroid>
+    <_LoomTargetsAndroid Condition="'$(_LoomTargetsAndroid)' == ''">false</_LoomTargetsAndroid>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(_LoomTargetsAndroid)' == 'true'">
+    <UseDirectX12>false</UseDirectX12>
+    <LoomEmitDxil>false</LoomEmitDxil>
+    <LoomShaderOutputMode Condition="'$(_LoomShaderOutputModeDefaulted)' == 'true'">Embed</LoomShaderOutputMode>
+  </PropertyGroup>
+
   <Import Project="$(MSBuildThisFileDirectory)..\Loom.Shaders.targets" />
 
   <!--
@@ -105,13 +121,30 @@
     LoomApplication.Run resolve a host (each self-registers via a module initializer), so an app writes only its
     LoomApplication + one LoomApplication.Run(...) line, no platform bootstrap.
   -->
-  <ItemGroup Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(UseLoomHost)' != 'false'">
+  <ItemGroup Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(_LoomTargetsAndroid)' != 'true' and '$(UseLoomHost)' != 'false'">
     <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Hosting.Desktop\Loom.Hosting.Desktop.csproj" />
     <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Hosting.Desktop" Version="$(LoomPackageVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(_LoomTargetsAndroid)' == 'true' and '$(UseLoomHost)' != 'false'">
+    <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Hosting.Android\Loom.Hosting.Android.csproj" />
+    <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Hosting.Android" Version="$(LoomPackageVersion)" />
   </ItemGroup>
   <ItemGroup Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseLoomHost)' != 'false'">
     <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Hosting.Web\Loom.Hosting.Web.csproj" />
     <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Hosting.Web" Version="$(LoomPackageVersion)" />
+  </ItemGroup>
+
+  <!--
+    Game content: the files an app lists as LoomContent, read at run time with LoomApplication.OpenContent by their path
+    under the folder the item's wildcard starts from (<LoomContent Include="Content\**" /> makes Content\levels\1.json
+    "levels/1.json"). Packed where each host reads it: a content\ folder beside a desktop exe, and the assets of an
+    Android APK, which has no folder beside the app. The browser host does not read content yet.
+  -->
+  <ItemGroup Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(_LoomTargetsAndroid)' != 'true'">
+    <Content Include="@(LoomContent)" Link="content\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(_LoomTargetsAndroid)' == 'true'">
+    <AndroidAsset Include="@(LoomContent)" Link="Assets\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!--
@@ -132,7 +165,8 @@
   -->
   <PropertyGroup Condition="'$(UseLoomHost)' != 'false'">
     <_LoomHostType Condition="'$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true'">Loom.Hosting.Web.WebAppHost</_LoomHostType>
-    <_LoomHostType Condition="'$(_LoomTargetsBrowser)' != 'true'">Loom.Hosting.Desktop.DesktopAppHost</_LoomHostType>
+    <_LoomHostType Condition="'$(_LoomTargetsAndroid)' == 'true'">Loom.Hosting.Android.AndroidAppHost</_LoomHostType>
+    <_LoomHostType Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(_LoomTargetsAndroid)' != 'true'">Loom.Hosting.Desktop.DesktopAppHost</_LoomHostType>
   </PropertyGroup>
 
   <Target Name="_LoomGenerateHostBootstrap" BeforeTargets="CoreCompile" Condition="'$(_LoomHostType)' != ''">
