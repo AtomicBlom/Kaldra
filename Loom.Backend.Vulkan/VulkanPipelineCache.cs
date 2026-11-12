@@ -105,7 +105,12 @@ internal sealed unsafe class VulkanPipelineCache : IDisposable
 		}
 	}
 
-	private void Save()
+	/// <summary>
+	/// Write the cache to its file now, as <see cref="Dispose"/> does. For a platform that may end the process without
+	/// disposing anything, as Android ends a backgrounded app: the engine saves it when its surface is taken away. A cache
+	/// with no file, or one that cannot be written, is skipped.
+	/// </summary>
+	public void Save()
 	{
 		if (_path is null || _cache.Handle == 0)
 			return;

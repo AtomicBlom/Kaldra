@@ -1,0 +1,60 @@
+<Project>
+
+  <!--
+    One project, two deployables, picked by target framework:
+        dotnet build -f net10.0                       → a native Vulkan desktop exe
+        dotnet build -f net11.0-android               → an Android APK (Vulkan, SUIsei, touch)
+    A SUIsei XAML page over a backdrop drawn by the app's own shader. The Loom SDK picks the host from the target
+    (Loom.Hosting.Desktop or Loom.Hosting.Android) and, for Android, embeds every shader in its assembly, since an APK
+    has no folder beside the app to hold loose ones. The app itself (HelloUIApp, MainPage) is the same source on both;
+    only the entry point differs: Platforms/Desktop/Program.cs, or the activity in Platforms/Android.
+    Kept out of Loom.slnx (in Loom.Android.slnx) so the desktop build never needs the android workload.
+  -->
+
+  <!-- Before the SDK props: Loom.Shaders.props derives which shader targets to emit from these. -->
+  <PropertyGroup>
+    <UseVulkan>true</UseVulkan>
+    <UseDirectX12>false</UseDirectX12>
+    <UseWebGPU>false</UseWebGPU>
+    <UseSUIsei>true</UseSUIsei>
+    <UseImGui>false</UseImGui>
+  </PropertyGroup>
+
+  <Import Project="..\..\build\Loom.Sdk\Sdk\Sdk.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net10.0;net11.0-android</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>HelloUI</RootNamespace>
+    <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' == 'android'">
+    <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
+    <ApplicationId>com.atomicblom.loom.helloui</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <!-- arm64 for phones; x64 for an emulator on an x64 machine. -->
+    <RuntimeIdentifiers>android-arm64;android-x64</RuntimeIdentifiers>
+    <AndroidManifest>Platforms\Android\AndroidManifest.xml</AndroidManifest>
+  </PropertyGroup>
+
+  <!-- Packaged content, read with LoomApplication.ReadContent("messages/greeting.txt") on every target. -->
+  <ItemGroup>
+    <LoomContent Include="Content\**" />
+  </ItemGroup>
+
+  <!-- Each target compiles its own entry point only. -->
+  <ItemGroup Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' == 'android'">
+    <Compile Remove="Platforms\Desktop\**" />
+  </ItemGroup>
+  <ItemGroup Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' != 'android'">
+    <Compile Remove="Platforms\Android\**" />
+    <None Remove="Platforms\Android\**" />
+  </ItemGroup>
+
+  <Import Project="..\..\build\Loom.Sdk\Sdk\Sdk.targets" />
+
+</Project>

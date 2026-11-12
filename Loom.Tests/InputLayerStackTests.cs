@@ -149,6 +149,40 @@ public class InputLayerStackTests
 		bottom.Down.ShouldBeTrue(); // with the blocker gone, the key flows through
 	}
 
+	[Test]
+	public void A_text_input_request_holds_for_the_frames_a_layer_makes_it_and_lapses_after()
+	{
+		var stack = new InputLayerStack();
+		var field = new TextField();
+		stack.Push(new PassthroughLayer());
+		stack.Push(field);
+
+		stack.Resolve([]);
+		stack.TextInputRequested.ShouldBeFalse();
+
+		field.Focused = true;
+		stack.Resolve([]);
+		stack.TextInputRequested.ShouldBeTrue();
+		stack.Resolve([]);
+		stack.TextInputRequested.ShouldBeTrue();
+
+		field.Focused = false;
+		stack.Resolve([]);
+		stack.TextInputRequested.ShouldBeFalse();
+	}
+
+	// A layer standing for a text field: it asks for text input while it is focused.
+	private sealed class TextField : IInputLayer
+	{
+		public bool Focused { get; set; }
+
+		public void Process(ref InputContext ctx)
+		{
+			if (Focused)
+				ctx.RequestTextInput();
+		}
+	}
+
 #if !DEBUG
 	[Test]
 	public void The_steady_resolve_path_allocates_nothing()

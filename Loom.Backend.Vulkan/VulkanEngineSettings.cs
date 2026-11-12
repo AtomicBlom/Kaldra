@@ -19,6 +19,15 @@ public sealed class VulkanEngineSettings : EngineSettings
 	/// </summary>
 	public string ShaderDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "shaders");
 
+	/// <summary>
+	/// Resolves a shader artifact the backend found neither embedded in itself nor under <see cref="ShaderDirectory"/>
+	/// (a <c>.spv</c> module or its <c>.json</c> reflection sidecar), by file name such as <c>"ui.spv"</c>; null when the
+	/// artifact does not exist. For a host with no shader folder beside the app, as on Android, where an APK carries its
+	/// shaders as embedded resources: <see cref="EmbeddedShaders.Resolve"/> finds them in the app's assemblies.
+	/// Null (the default) consults nothing past the folder.
+	/// </summary>
+	public Func<string, byte[]?>? ShaderResolver { get; set; }
+
 	/// <summary>Prefer a discrete GPU when several suitable devices are present (the default); set false to take the first suitable device.</summary>
 	public bool PreferDiscreteGpu { get; set; } = true;
 }

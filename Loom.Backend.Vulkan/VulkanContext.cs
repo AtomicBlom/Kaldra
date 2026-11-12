@@ -374,6 +374,40 @@ public sealed unsafe class VulkanContext : IDisposable
 	private void CreateSurface(IVkSurface surface) =>
 		Surface = surface.Create<AllocationCallbacks>(Instance.ToHandle(), null).ToSurface();
 
+	/// <summary>
+	/// Destroy the window surface, keeping the instance and device: for a platform that takes the surface away (Android,
+	/// when the app leaves the screen). The caller has destroyed the swapchain on it and drained the GPU. Does nothing
+	/// when no surface is held.
+	/// </summary>
+	public void DestroySurface()
+	{
+		if (Surface.Handle == 0)
+			return;
+		KhrSurface.DestroySurface(Instance, Surface, null);
+		Surface = default;
+	}
+
+	/// <summary>
+	/// Make <paramref name="surface"/> the window surface, after <see cref="DestroySurface"/>. The instance enabled the
+	/// extensions the first surface asked for, so the new one must come from the same windowing platform. Throws, holding
+	/// no surface, when the device's present queue cannot present to it.
+	/// </summary>
+	public void ReplaceSurface(IVkSurface surface)
+	{
+		if (_offscreen)
+			throw new InvalidOperationException("An offscreen Vulkan context has no surface to replace.");
+		if (Surface.Handle != 0)
+			throw new InvalidOperationException("The Vulkan context still holds a surface; destroy it before giving it another.");
+
+		CreateSurface(surface);
+		KhrSurface.GetPhysicalDeviceSurfaceSupport(PhysicalDevice, PresentFamily, Surface, out var presentSupported);
+		if (!presentSupported)
+		{
+			DestroySurface();
+			throw new VulkanException($"The device's present queue (family {PresentFamily}) cannot present to the new surface.");
+		}
+	}
+
 	private void PickPhysicalDevice()
 	{
 		var allDevices = Vk.GetPhysicalDevices(Instance).ToArray();
