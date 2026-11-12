@@ -24,7 +24,7 @@ public static class SpirvDepthTextures
 		OpImageSampleProjDrefImplicitLod = 91, OpImageSampleProjDrefExplicitLod = 92, OpImageDrefGather = 97;
 	private const uint DecorationBinding = 33;
 
-	/// <summary>The binding numbers (as <c>[[vk::binding]]</c> / <c>LOOM_BINDING</c> give them) of every texture the
+	/// <summary>The SPIR-V binding numbers (as the reflection sidecar gives them) of every texture the
 	/// shader reads by comparison. Empty for a module that isn't SPIR-V, rather than a guess.</summary>
 	/// <param name="spirv">The module.</param>
 	/// <param name="shader">The shader's name, for the message when a comparison can't be traced.</param>

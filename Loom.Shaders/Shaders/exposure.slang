@@ -10,8 +10,8 @@
 
 #include "loom_platform.module.slang"
 
-LOOM_BINDING(0) Sampler2D litTex;            // the HDR lit scene (sampled)
-LOOM_BINDING(1) RWTexture2D<float> exposure; // 1×1 persistent storage image (read-modify-write)
+Sampler2D litTex;            // the HDR lit scene (sampled)
+RWTexture2D<float> exposure; // 1×1 persistent storage image (read-modify-write)
 
 struct PushConstants
 {

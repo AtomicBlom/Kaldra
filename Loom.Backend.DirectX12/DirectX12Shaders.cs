@@ -87,10 +87,34 @@ internal static class DirectX12Shaders
 			}
 			json = File.ReadAllBytes(path);
 		}
-		// The SPIR-V-target sidecar: the DXIL passes emit no reflection of their own, so this backend reads the same
-		// one Vulkan does. Its indices size the root signature's tables; the b/t/u register numbers come from the
-		// shader's own `register(...)` annotations, which is a separate numbering DXIL honours directly.
+		// The SPIR-V-target sidecar, the one Vulkan reads: what the shader binds, by category and in order, which the
+		// record path fills slot by slot. The registers those slots sit at are the DXIL sidecar's (ResolveRegisters).
 		return ShaderReflection.FromBytes(json, ShaderBindingTarget.SpirV);
+	}
+
+	/// <summary>
+	/// The registers the DXIL compile gave the shader's parameters, from its own sidecar (<c>&lt;name&gt;.dxil.json</c>),
+	/// matched to <paramref name="map"/>'s bindings: what the root signature is built at. Embedded first, then loose
+	/// beside the <c>.dxil</c>. A missing sidecar throws: without it the registers would be guesses, and a guess that
+	/// misses binds a root parameter the shader never reads.
+	/// </summary>
+	public static DirectX12Registers ResolveRegisters(string shaderDir, string name, in ShaderBindingMap map)
+	{
+		var json = TryReadEmbedded(name + ".dxil.json");
+		if (json is null)
+		{
+			var path = Path.Combine(shaderDir, name + ".dxil.json");
+			if (!File.Exists(path))
+			{
+				throw new ShaderAssetMissingException(
+					name,
+					$"DXIL reflection '{name}.dxil.json' not found: neither embedded ('{EmbeddedPrefix}{name}.dxil.json') nor " +
+					$"on disk ('{path}'). It carries the registers the root signature is built at. Was the shader built by " +
+					"this version of Loom's SDK?");
+			}
+			json = File.ReadAllBytes(path);
+		}
+		return DirectX12Registers.Resolve(json, map, name);
 	}
 
 	/// <summary>

@@ -329,8 +329,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 		var storageImages = 0;
 		var storageBuffers = 0;
 		var storageBufferStride = 0;
-		// Descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound as a
-		// root CBV at b1.
+		// Descriptor-bound constant buffers (the per-frame uniform seam) — reflected from the sidecar, bound as root
+		// CBVs at the registers the DXIL reflection gives them.
 		var uniformBuffers = reflection.UniformBufferCount;
 		// Read-only structured-buffer inputs, bound as root SRVs: a compute's inputs (skin's bind-pose verts + bone
 		// palette) or a graphics technique's app-writable storage buffers (g.Storage SSBOs).
@@ -370,7 +370,8 @@ public sealed unsafe partial class DirectX12Engine : EngineBase
 			descriptor.Address, layout, descriptor.Instance, uniformBuffers, inputBuffers, descriptor.HasListPush,
 			descriptor.Cull, descriptor.DepthTest, descriptor.Bias,
 			reflection.MaterialUniformSlot, reflection.MaterialParameterBytes,
-			[.. compared.ComparedTextures], descriptor.SampleCompare, descriptor.AlphaToCoverage, compared));
+			[.. compared.ComparedTextures], descriptor.SampleCompare, descriptor.AlphaToCoverage, compared,
+			DirectX12Shaders.ResolveRegisters(dir, shader, compared)));
 		return new TechniqueShape(
 			new MaterialLayout(inputCount, reflection.MaterialParameterBytes, compared.ComparedCount),
 			reflection.UniformBufferBytes,

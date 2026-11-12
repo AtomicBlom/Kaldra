@@ -140,7 +140,30 @@ internal sealed unsafe class DirectX12TechniqueCache : IDisposable
 		hash.AppendData(BitConverter.GetBytes(t.AlphaToCoverage));
 		AppendLayout(hash, t.Layout);
 		AppendLayout(hash, t.Instance);
+		// The root signature a cached PSO was compiled against is part of it: the registers it is built at, and how
+		// DirectX12Technique lays it out, which RootSignatureLayout names. The same bytecode under another layout is
+		// another PSO, which the driver refuses to load from the old one's blob (and the debug layer reports).
+		hash.AppendData(RootSignatureLayout);
+		AppendRegisters(hash, t.Registers.Textures);
+		AppendRegisters(hash, t.Registers.Samplers);
+		AppendRegisters(hash, t.Registers.UniformBuffers);
+		AppendRegisters(hash, t.Registers.InputBuffers);
+		AppendRegisters(hash, t.Registers.StorageImages);
+		AppendRegisters(hash, t.Registers.ReadWriteBuffers);
+		hash.AppendData(BitConverter.GetBytes(t.Registers.Push));
 		return Convert.ToHexString(hash.GetHashAndReset());
+	}
+
+	// Changed whenever DirectX12Technique lays out its root signatures differently, so no blob from before is offered.
+	// 2: built at reflected registers, one descriptor range per binding.
+	private static ReadOnlySpan<byte> RootSignatureLayout => "root-signature-2"u8;
+
+	private static void AppendRegisters(IncrementalHash hash, System.Collections.Immutable.ImmutableArray<int> registers)
+	{
+		hash.AppendData(BitConverter.GetBytes(registers.IsDefault ? -1 : registers.Length));
+		if (!registers.IsDefault)
+			foreach (var register in registers)
+				hash.AppendData(BitConverter.GetBytes(register));
 	}
 
 	private static void AppendLayout(IncrementalHash hash, VertexLayout? layout)

@@ -185,7 +185,7 @@ backbuffer, whose encode returns the same 8-bit values:
 ```hlsl
 #include "loom_platform.module.slang"
 
-LOOM_BINDING(0) Sampler2D scene;
+Sampler2D scene;
 
 struct VsOut { float4 position : SV_Position; float2 uv : TEXCOORD0; };
 
@@ -221,14 +221,14 @@ port runs into:
 
 - **Start every shader with `#include "loom_platform.module.slang"`.**
 - **Uniforms become constant buffers, filled in a fixed order:** the pass's `.Reads(...)` blocks first, then the
-  draw's per-draw block. In the shader, each needs both a descriptor slot and a DirectX 12 register:
+  draw's per-draw block. In the shader they take no binding or register, only their order:
 
   ```hlsl
-  LOOM_BINDING(0) ConstantBuffer<Frame> frame LOOM_REGISTER(b1);       // the pass .Reads(frame)
-  LOOM_BINDING(1) ConstantBuffer<Terrain> terrain LOOM_REGISTER(b2);   // DrawCall.SetUniforms(ref block)
+  ConstantBuffer<Frame> frame;       // the pass .Reads(frame)
+  ConstantBuffer<Terrain> terrain;   // DrawCall.SetUniforms(ref block)
   ```
 
-  Registers start at `b1`: `b0` is DirectX 12's root constants.
+  Where GL had `layout(binding = n)`, leave it out: Slang numbers each target in declaration order.
 - **Lay blocks out in `float4` rows**, and give the C# struct the same rows (`Vector4` fields,
   `[StructLayout(LayoutKind.Sequential)]`). HLSL and WGSL disagree about tighter packing.
 - **Vertex inputs** carry both a Vulkan location and a semantic, matching the `VertexLayout` the mesh was uploaded

@@ -4,7 +4,7 @@
 // buffer), but the fragment shader SAMPLES an input texture rather than computing a gradient.
 // This is the engine's "blit" — a fullscreen-triangle sample with a nearest sampler (so it
 // doubles as the §9 pixelation upscale), NOT vkCmdBlitImage. The sampled resource is bound as
-// a single combined image sampler at set 0, binding 0.
+// a single combined image sampler.
 
 #include "loom_platform.module.slang"
 
@@ -25,8 +25,7 @@ VsOut vertexMain(uint vertexId : SV_VertexID)
 	return output;
 }
 
-// set 0, binding 0: a combined image sampler (the resource declared via .Samples(input)).
-LOOM_BINDING(0)
+// A combined image sampler (the resource declared via .Samples(input)).
 Sampler2D source;
 
 [shader("fragment")]

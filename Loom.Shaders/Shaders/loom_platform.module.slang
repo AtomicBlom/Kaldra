@@ -1,28 +1,15 @@
-// Per-target resource-binding macros. The same Slang source compiles to SPIR-V, DXIL, and WGSL,
-// but the targets disagree about explicit bindings:
+// Per-target macros. The same Slang source compiles to SPIR-V, DXIL, and WGSL.
 //
-//  - SPIR-V/DXIL: each resource carries an explicit [[vk::binding]] slot, and push constants use
-//    the dedicated push-constant block.
-//  - WGSL: there are no push constants, and a combined Sampler2D occupies TWO binding slots
-//    (texture + sampler), so the explicit slot numbers from the Vulkan scheme would collide.
+// Resources name no binding, slot or register. Slang gives each target its own numbers in declaration order, written to
+// a reflection sidecar per target (<name>.json, .dxil.json, .wgsl.json), and every backend binds by what that sidecar
+// says: Vulkan by SPIR-V binding, DirectX 12 by register (its root signature built at them), WebGPU by WGSL binding.
+// What a pass supplies fills a shader's slots in declaration order, kind by kind (sampled textures, storage buffers,
+// uniform buffers), so declaration order is the one thing a shader states.
 //
-// Compiling with LOOM_WGSL defined therefore drops the explicit numbers (Slang assigns unique
-// slots in declaration order) and lowers the push-constant block to an ordinary uniform
-// parameter. The WebGPU backend recovers the actual assignments from the emitted WGSL text, so
-// no code shares slot numbers with this scheme.
-//
-// LOOM_REGISTER(reg) is a resource's DirectX 12 register, written after its name in place of `: register(reg)`:
-//     LOOM_BINDING(1) ConstantBuffer<ViewProj> view LOOM_REGISTER(b1);
-// WGSL drops it too. Left in, Slang takes a register's number as the WGSL binding of a parameter with no
-// [[vk::binding]] (warning 39029, once per parameter per shader), numbering the rest around it; and registers count
-// each kind apart (b1 and t1 are both 1) where WGSL's bindings are one list, so two could claim the same binding.
+// The push-constant block is the exception: WGSL has none, so LOOM_WGSL lowers it to an ordinary uniform parameter.
 #ifdef LOOM_WGSL
-#define LOOM_BINDING(slot)
-#define LOOM_REGISTER(reg)
 #define LOOM_PUSH_CONSTANT uniform
 #else
-#define LOOM_BINDING(slot) [[vk::binding(slot, 0)]]
-#define LOOM_REGISTER(reg) : register(reg)
 #define LOOM_PUSH_CONSTANT [[vk::push_constant]]
 #endif
 

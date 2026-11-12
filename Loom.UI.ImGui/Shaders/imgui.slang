@@ -14,7 +14,7 @@ struct PushConstants
 
 LOOM_PUSH_CONSTANT PushConstants pc;
 
-LOOM_BINDING(0) Sampler2D fontTex;
+Sampler2D fontTex;
 
 struct VsIn
 {

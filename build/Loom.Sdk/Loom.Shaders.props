@@ -40,7 +40,7 @@
     <LoomEmbedSpirv Condition="'$(LoomEmbedSpirv)' == ''">false</LoomEmbedSpirv>
 
     <!-- Directory of shared cross-project shader includes (loom_platform.module.slang: the per-target
-         LOOM_BINDING / LOOM_PUSH_CONSTANT macros). Passed to every slangc invocation via -I so app and
+         macros: LOOM_PUSH_CONSTANT, the fullscreen and clip-space positions). Passed to every slangc invocation via -I so app and
          UI shader dirs resolve the same header the engine shaders use. In the repo this is Loom.Shaders/Shaders;
          shipped inside the Loom.Sdk package (where that repo path doesn't exist) it's the header packed beside
          this file under Shaders/. -->
