@@ -92,6 +92,7 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	private bool _imeRequested;
 	private bool _imeVisible;
 	private int _imeHeight;
+	private ScreenInsets _safeArea;
 	private bool _imeReshow;
 
 	/// <summary>Physical pixels per layout unit on the screen the activity is on: Android's display density.</summary>
@@ -135,6 +136,7 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	{
 		base.OnResume();
 		_resumed = true;
+		_app?.Resume(); // a no-op unless the app was suspended
 		StartFrames();
 	}
 
@@ -142,6 +144,19 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 	{
 		_resumed = false;
 		StopFrames();
+		// Android may end the process any time after this with no further call, so the app saves now. An app not loaded yet
+		// (left during start-up) has nothing to save and is not told.
+		if (_engine is not null)
+		{
+			try
+			{
+				_app?.Suspend();
+			}
+			catch (Exception ex)
+			{
+				Log.Error(LogTag, $"The app failed while suspending: {ex}");
+			}
+		}
 		base.OnPause();
 	}
 
@@ -224,6 +239,18 @@ public abstract class LoomActivity : Activity, ISurfaceHolderCallback, Choreogra
 			_imeHeight = height;
 			_app?.SetInputPaneHeight(height);
 		}
+
+		// The surface runs under the display cutout, so the cutout's safe insets are what the app keeps its content clear
+		// of; they move to another edge as the screen rotates. The system bars are hidden, and only swiped in over the
+		// frame for a moment, so they are not part of it.
+		var cutout = insets.DisplayCutout;
+		var safeArea = cutout is null
+			? ScreenInsets.None
+			: new ScreenInsets(cutout.SafeInsetLeft, cutout.SafeInsetTop, cutout.SafeInsetRight, cutout.SafeInsetBottom);
+		if (safeArea != _safeArea)
+			Log.Info(LogTag, $"safe area: {safeArea.Left}, {safeArea.Top}, {safeArea.Right}, {safeArea.Bottom} px in from left, top, right, bottom");
+		_safeArea = safeArea;
+		_app?.SetSafeArea(safeArea);
 		return view.OnApplyWindowInsets(insets) ?? insets;
 	}
 

@@ -59,4 +59,13 @@ public interface IHostControl
 	/// <param name="contentType">Its media type, e.g. <c>application/zip</c>.</param>
 	/// <param name="contents">The file's bytes.</param>
 	bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents) => false;
+
+	/// <summary>
+	/// Open a file of the app's packaged content (its <c>LoomContent</c> items) by its path under the content root, with
+	/// forward slashes, as <c>levels/1.json</c>: the desktop host reads the content folder beside the app, the Android host
+	/// the APK's assets. Throws <see cref="FileNotFoundException"/> for a path the app does not have. A host that packs no
+	/// content throws <see cref="NotSupportedException"/>.
+	/// </summary>
+	Stream OpenContent(string path) =>
+		throw new NotSupportedException("This host does not read packaged content.");
 }

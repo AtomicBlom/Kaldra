@@ -137,6 +137,23 @@ public abstract class LoomApplication : IHostedApplication
 	/// <summary>Called when the window/canvas gains or loses input focus. Override to pause gameplay, mute audio, or throttle background work; empty by default.</summary>
 	protected virtual void OnFocusChanged(bool focused) { }
 
+	/// <summary>
+	/// Called when the app's frames stop because it has left the screen: minimized on the desktop, sent to the background
+	/// or behind the lock screen on a phone. On a phone the process may be ended from here with no further call, not even
+	/// <see cref="UnloadContent"/>, so save anything the player would miss now; pause the game clock and audio here too.
+	/// No frame runs until <see cref="OnResumed"/>. Empty by default.
+	/// </summary>
+	protected virtual void OnSuspending() { }
+
+	/// <summary>
+	/// Called before the first frame after <see cref="OnSuspending"/>, as the app comes back on screen. The next frame's
+	/// <see cref="FrameTime.DeltaSeconds"/> does not include the time away. Empty by default.
+	/// </summary>
+	protected virtual void OnResumed() { }
+
+	/// <summary>Whether the app is suspended: between <see cref="OnSuspending"/> and <see cref="OnResumed"/>.</summary>
+	protected bool IsSuspended { get; private set; }
+
 	/// <summary>Release app-owned resources before the host tears down the engine. Runs once, on close, before <see cref="Engine"/> is disposed. Empty by default.</summary>
 	protected virtual void UnloadContent() { }
 
@@ -165,6 +182,50 @@ public abstract class LoomApplication : IHostedApplication
 	protected bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents) => _host.SaveFile(name, contentType, contents);
 
 	/// <summary>
+	/// Open a file of the app's packaged content by its path under the content root: the files the project lists as
+	/// <c>LoomContent</c>, which the Loom SDK packs where each host reads them (a <c>content</c> folder beside a desktop app,
+	/// an Android APK's assets). The path is relative, with forward slashes, matching the file's case exactly, as
+	/// <c>levels/1.json</c> for <c>Content\levels\1.json</c> under <c>&lt;LoomContent Include="Content\**" /&gt;</c>.
+	/// Throws <see cref="FileNotFoundException"/> for a file the app does not have.
+	/// </summary>
+	protected Stream OpenContent(string path) => _host.OpenContent(ContentPath(path));
+
+	/// <summary>Read a whole file of the app's packaged content (see <see cref="OpenContent"/>).</summary>
+	protected byte[] ReadContent(string path)
+	{
+		using var stream = OpenContent(path);
+		using var bytes = new MemoryStream();
+		stream.CopyTo(bytes);
+		return bytes.ToArray();
+	}
+
+	/// <summary>
+	/// Read a whole file of the app's packaged content (see <see cref="OpenContent"/>) off the calling thread, for loading
+	/// while frames keep running.
+	/// </summary>
+	protected Task<byte[]> ReadContentAsync(string path)
+	{
+		var checkedPath = ContentPath(path); // a bad path fails at the call, not inside the task
+		return Task.Run(() =>
+		{
+			using var stream = _host.OpenContent(checkedPath);
+			using var bytes = new MemoryStream();
+			stream.CopyTo(bytes);
+			return bytes.ToArray();
+		});
+	}
+
+	// A content path is relative and stays under the content root: forward slashes, no leading slash, no "..".
+	private static string ContentPath(string path)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(path);
+		var normalized = path.Replace('\\', '/');
+		if (normalized.StartsWith('/') || Path.IsPathRooted(normalized) || normalized.Split('/').Contains(".."))
+			throw new ArgumentException($"A content path is relative to the content root and stays under it: '{path}'.", nameof(path));
+		return normalized;
+	}
+
+	/// <summary>
 	/// Physical pixels per layout unit on the display the app renders to (see <see cref="IHostControl.DisplayScale"/>):
 	/// about 3 on a phone, 1 on a desktop monitor at 100%. Scale a UI's layout by it. Valid from
 	/// <see cref="LoadContent"/> onward.
@@ -177,6 +238,14 @@ public abstract class LoomApplication : IHostedApplication
 	/// (<c>UIRoot.InputPaneHeight</c>), where elements marked <c>InputPane.AvoidsKeyboard</c> are arranged clear of it.
 	/// </summary>
 	protected float InputPaneHeight { get; private set; }
+
+	/// <summary>
+	/// How far in from each edge of the surface the screen hides content, in surface pixels: a phone's camera cutout, on the
+	/// edge it is on for the current rotation. None on a desktop window. Keep text and controls inside it, while a background
+	/// can still run to the edges. A SUIsei app hands it to its root each frame (<c>UIRoot.SafeAreaInsets</c>), where
+	/// elements marked <c>SafeArea.Edges</c> are arranged clear of it.
+	/// </summary>
+	protected ScreenInsets SafeAreaInsets { get; private set; }
 
 	/// <summary>
 	/// Request that the next frame be rendered. Only meaningful under <see cref="RenderMode.OnDemand"/>, where a
@@ -233,6 +302,22 @@ public abstract class LoomApplication : IHostedApplication
 
 	void IHostedApplication.SetFocus(bool focused) => OnFocusChanged(focused);
 
+	void IHostedApplication.Suspend()
+	{
+		if (IsSuspended)
+			return;
+		IsSuspended = true;
+		OnSuspending();
+	}
+
+	void IHostedApplication.Resume()
+	{
+		if (!IsSuspended)
+			return;
+		IsSuspended = false;
+		OnResumed();
+	}
+
 	void IHostedApplication.QueueInput(in InputEvent e) => _inputQueue.Enqueue(in e);
 
 	RumbleQueue IHostedApplication.Rumble => _inputStack.RumbleQueue;
@@ -245,6 +330,14 @@ public abstract class LoomApplication : IHostedApplication
 		if (pixels == InputPaneHeight)
 			return;
 		InputPaneHeight = pixels;
+		Invalidate(); // the layout changes, so an on-demand app draws again
+	}
+
+	void IHostedApplication.SetSafeArea(ScreenInsets insets)
+	{
+		if (insets == SafeAreaInsets)
+			return;
+		SafeAreaInsets = insets;
 		Invalidate(); // the layout changes, so an on-demand app draws again
 	}
 

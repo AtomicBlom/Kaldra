@@ -33,4 +33,17 @@ internal sealed class AndroidHostControl(LoomActivity activity) : IHostControl
 		clipboard.PrimaryClip = ClipData.NewPlainText("text", text);
 		return true;
 	}
+
+	// The APK's assets, where the Loom SDK packs an app's LoomContent. Android's asset manager may be read from any thread.
+	public Stream OpenContent(string path)
+	{
+		try
+		{
+			return activity.Assets!.Open(path);
+		}
+		catch (Java.IO.FileNotFoundException ex)
+		{
+			throw new FileNotFoundException($"The app has no content at '{path}' (looked in the APK's assets).", path, ex);
+		}
+	}
 }

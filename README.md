@@ -220,6 +220,11 @@ Android builds from the same app source, with the `android` workload installed: 
 
 On Android, a keyboard sends keys and text as on the desktop, the system's Back arrives as Escape (the app decides whether to leave), a mouse's buttons and a pen's barrel buttons are their own, and game controllers are pads with rumble. The on-screen keyboard opens while an input layer asks for text (`InputContext.RequestTextInput`, which SUIsei's layer does while a `TextBox` has focus); its height reaches the app as `LoomApplication.InputPaneHeight`, and in SUIsei `UIRoot.InputPaneHeight` plus `suisei:InputPane.AvoidsKeyboard="True"` on an element arranges that element clear of it, while a `ScrollViewer` keeps its focused field in view and pans by touch.
 
+Three things a game needs on every host:
+- **Content.** List the files as `<LoomContent Include="Content\**" />` and read them with `LoomApplication.OpenContent`/`ReadContent`/`ReadContentAsync("levels/1.json")`. The SDK packs them as a `content` folder beside a desktop exe and as an APK's assets; the browser host doesn't read content yet.
+- **Suspend and resume.** `OnSuspending` runs when the app leaves the screen (minimized, backgrounded, the phone locked). A phone may end the app after it without another call, so save there. `OnResumed` runs as it comes back.
+- **Safe area.** `LoomApplication.SafeAreaInsets` is how far a phone's camera cutout reaches in from each edge. In SUIsei, `UIRoot.SafeAreaInsets` plus `suisei:SafeArea.Edges="All"` keeps an element's content clear of it while a background runs to the edges.
+
 The sandbox is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in `Loom.Tests` — `GalleryGoldenTests`/`GalleryParityTests` render the gallery offscreen in-process (GPU-gated; skipped without one). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
 
 ## Packages

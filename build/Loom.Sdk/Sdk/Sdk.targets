@@ -135,6 +135,19 @@
   </ItemGroup>
 
   <!--
+    Game content: the files an app lists as LoomContent, read at run time with LoomApplication.OpenContent by their path
+    under the folder the item's wildcard starts from (<LoomContent Include="Content\**" /> makes Content\levels\1.json
+    "levels/1.json"). Packed where each host reads it: a content\ folder beside a desktop exe, and the assets of an
+    Android APK, which has no folder beside the app. The browser host does not read content yet.
+  -->
+  <ItemGroup Condition="'$(_LoomTargetsBrowser)' != 'true' and '$(_LoomTargetsAndroid)' != 'true'">
+    <Content Include="@(LoomContent)" Link="content\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(_LoomTargetsAndroid)' == 'true'">
+    <AndroidAsset Include="@(LoomContent)" Link="Assets\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!--
     Default web shell injection (copy-if-absent): for a browser app that authored no wwwroot/index.html, the web
     host provides a runnable full-screen index.html + main.js at the app's wwwroot root. Imported here for
     source-mode (in-repo) consumers; a packaged consumer gets the same target auto-imported by NuGet from the

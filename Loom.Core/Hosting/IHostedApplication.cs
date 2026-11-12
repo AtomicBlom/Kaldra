@@ -38,6 +38,20 @@ public interface IHostedApplication
 	void SetFocus(bool focused);
 
 	/// <summary>
+	/// Notify the app that its frames are stopping: it has left the screen (minimized, sent to the background, the phone
+	/// locked). The platform may end the process from here without warning, so this is the app's moment to save. A host
+	/// calls <see cref="Resume"/> before the next frame it runs.
+	/// </summary>
+	void Suspend()
+	{
+	}
+
+	/// <summary>Notify the app that its frames are starting again after <see cref="Suspend"/>.</summary>
+	void Resume()
+	{
+	}
+
+	/// <summary>
 	/// The single host→app input channel: a host adapter feeds every raw device event through here (nothing
 	/// ad-hoc), so desktop and web can't diverge. The app buffers the events and resolves them at the top of the
 	/// next <see cref="Tick"/>. Called on the platform pump thread; single-threaded by design, so the buffer needs
@@ -64,6 +78,14 @@ public interface IHostedApplication
 	/// when it goes. Only a host with an on-screen keyboard calls it.
 	/// </summary>
 	void SetInputPaneHeight(float pixels)
+	{
+	}
+
+	/// <summary>
+	/// Notify the app how far in from each edge of its surface the screen hides content (a camera cutout), in surface
+	/// pixels. Only a host whose screen hides part of the surface calls it; the app starts from none.
+	/// </summary>
+	void SetSafeArea(ScreenInsets insets)
 	{
 	}
 

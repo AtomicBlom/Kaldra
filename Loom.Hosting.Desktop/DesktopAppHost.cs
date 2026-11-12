@@ -114,12 +114,20 @@ public sealed class DesktopAppHost : IAppHost
 
 		// A 0x0 framebuffer (minimized) has nothing to render into — skip both the engine resize and driver.Resize
 		// so SurfaceSize keeps the last non-zero size, and skip Tick entirely while it stays minimized.
+		// Minimizing is the desktop's leaving the screen: the app is suspended until the window is restored.
 		var minimized = false;
 		window.FramebufferResize += fb =>
 		{
+			var wasMinimized = minimized;
 			minimized = fb.X == 0 || fb.Y == 0;
 			if (minimized)
+			{
+				if (!wasMinimized)
+					driver.Suspend();
 				return;
+			}
+			if (wasMinimized)
+				driver.Resume();
 			engine.Resize(fb.X, fb.Y);
 			driver.Resize(fb.X, fb.Y);
 		};
@@ -318,6 +326,15 @@ public sealed class DesktopAppHost : IAppHost
 			throw new InvalidOperationException(
 				$"IHostControl.{member} was called from thread {Environment.CurrentManagedThreadId}, but the desktop host's clipboard " +
 				$"is reached only from its main thread ({_mainThreadId}), the one the app's frames run on. Marshal the call onto it.");
+		}
+
+		// The content folder beside the app, where the Loom SDK copies an app's LoomContent.
+		public Stream OpenContent(string path)
+		{
+			var file = Path.Combine(AppContext.BaseDirectory, "content", path);
+			if (!File.Exists(file))
+				throw new FileNotFoundException($"The app has no content at '{path}' (looked for {file}).", file);
+			return File.OpenRead(file);
 		}
 	}
 }

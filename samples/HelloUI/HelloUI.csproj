@@ -41,6 +41,11 @@
     <AndroidManifest>Platforms\Android\AndroidManifest.xml</AndroidManifest>
   </PropertyGroup>
 
+  <!-- Packaged content, read with LoomApplication.ReadContent("messages/greeting.txt") on every target. -->
+  <ItemGroup>
+    <LoomContent Include="Content\**" />
+  </ItemGroup>
+
   <!-- Each target compiles its own entry point only. -->
   <ItemGroup Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' == 'android'">
     <Compile Remove="Platforms\Desktop\**" />

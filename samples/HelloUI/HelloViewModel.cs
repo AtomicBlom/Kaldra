@@ -55,6 +55,30 @@ internal sealed class HelloViewModel : INotifyPropertyChanged
 		set { if (field != value) { field = value; OnChanged(); } }
 	} = "Keyboard: down";
 
+	/// <summary>A line read from the app's packaged content.</summary>
+	public string Greeting
+	{
+		get;
+		set { if (field != value) { field = value; OnChanged(); } }
+	} = "";
+
+	/// <summary>How often the app has been suspended, and how long it was away last time.</summary>
+	public string Lifecycle
+	{
+		get;
+		set { if (field != value) { field = value; OnChanged(); } }
+	} = "Not suspended yet";
+
+	/// <summary>How many times the button has been tapped, kept across the app being ended.</summary>
+	public int Taps => _taps;
+
+	/// <summary>Carry on counting from a count saved before the app was last ended.</summary>
+	public void RestoreTaps(int taps)
+	{
+		_taps = taps;
+		Count = taps switch { 0 => "Not tapped yet", 1 => "Tapped once", _ => $"Tapped {taps} times" };
+	}
+
 	public void Tap()
 	{
 		_taps++;
