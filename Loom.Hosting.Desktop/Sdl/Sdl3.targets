@@ -16,7 +16,9 @@
   </PropertyGroup>
 
   <!-- Which builds go out: the one matching a Windows RID when there is one, both otherwise (an AnyCPU app runs as the
-       machine's architecture, and the host picks the folder to match) -->
+       machine's architecture, and the host picks the folder to match). An app referencing this project builds it
+       without its RID (the SDK drops it for a library), so this sees none and hands both up; the Loom SDK's Sdk.targets
+       keeps only the app's own, by its runtimes/<rid>/native folder, in a publish for one runtime. -->
   <ItemGroup Condition="'$(LoomSdl3Enabled)' == 'true'">
     <LoomSdl3Arch Include="x64" Hash="$(LoomSdl3HashWinX64)" Condition="'$(RuntimeIdentifier)' == '' or '$(RuntimeIdentifier)' == 'win-x64'" />
     <LoomSdl3Arch Include="arm64" Hash="$(LoomSdl3HashWinArm64)" Condition="'$(RuntimeIdentifier)' == '' or '$(RuntimeIdentifier)' == 'win-arm64'" />
