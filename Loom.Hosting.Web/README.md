@@ -34,7 +34,8 @@ await runLoom({ canvas: '#my-canvas' });
 does, in order (the header of `loom-boot.js` is the reference):
 
 1. Create the runtime with a thread pool big enough for the app (see [Threads](#threads)).
-2. `setModuleImports('loom-webgpu', …)` with the `loom-webgpu.js` module (`_content/Loom.Backend.WebGPU/loom-webgpu.js`).
+2. `setModuleImports('loom-webgpu', …)` with the `loom-webgpu.js` module (`_content/Loom.Backend.WebGPU/loom-webgpu.js`),
+   and `setModuleImports('loom-audio', …)` with the `loom-audio.js` module (`_content/Loom.Hosting.Web/loom-audio.js`).
 3. Optionally `setBrowserKeyCapture(false)` on that module (see [Keys the browser would act on](#keys-the-browser-would-act-on)).
 4. `runMain()`, whose `LoomApplication.Run` registers the app and returns.
 5. Await `StartApp(canvasSelector)` on the `Loom.Hosting.Web.WebAppHost` exports.
@@ -60,6 +61,15 @@ after the app starts more work, raise `threads`, or keep the app's own work to f
 
 The multithreaded runtime needs a cross-origin isolated page: the server must send `Cross-Origin-Opener-Policy:
 same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. Without them it can't start, and the page says why.
+
+## Audio
+
+An app that sets `AppOptions.Audio` plays through an AudioWorklet (`loom-audio.js` and `loom-audio-worklet.js`). The
+.NET runtime can't run on the browser's audio thread, so the mix runs on the frame's thread after each tick, 50 ms
+ahead of the speaker, and the worklet plays what it is sent: a late frame is ridden out, and the lead is the web's
+latency. A browser lets a page make sound only after the player's first click, tap or key; until then the mix keeps
+its time and sends nothing. `__loomAudio()` at the console says what the output is doing: its state, rate, and the
+frames sent and played.
 
 ## Keys the browser would act on
 

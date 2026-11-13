@@ -1,7 +1,9 @@
 using Android.App;
 using Android.Content;
 
+using Loom.Audio;
 using Loom.Core.Hosting;
+using Loom.Hosting.Android.Audio;
 
 namespace Loom.Hosting.Android;
 
@@ -46,4 +48,8 @@ internal sealed class AndroidHostControl(LoomActivity activity) : IHostControl
 			throw new FileNotFoundException($"The app has no content at '{path}' (looked in the APK's assets).", path, ex);
 		}
 	}
+
+	// Through AAudio, at the lowest latency the device offers; silent, saying why, where no output opens
+	public IAudioDevice OpenAudioDevice(AudioOptions options) =>
+		AAudioDevice.TryOpen(options, out var reason) ?? (IAudioDevice)new NullAudioDevice(options.SampleRate > 0 ? options.SampleRate : 48_000, reason);
 }

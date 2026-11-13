@@ -6,6 +6,7 @@
   </Folder>
   <Project Path="build/Loom.Sdk/Loom.Sdk.csproj" />
   <Project Path="Loom.Assets/Loom.Assets.csproj" />
+  <Project Path="Loom.Audio/Loom.Audio.csproj" />
   <Project Path="Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj" />
   <Project Path="Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj" />
   <Project Path="Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj" />

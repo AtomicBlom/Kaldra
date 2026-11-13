@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
+using Loom.Audio;
 using Loom.Core.Diagnostics;
 using Loom.Core.Hosting;
 using Loom.Hosting.Desktop.Sdl;
@@ -370,5 +371,9 @@ public sealed class DesktopAppHost : IAppHost
 				throw new FileNotFoundException($"The app has no content at '{path}' (looked for {file}).", file);
 			return File.OpenRead(file);
 		}
+
+		// Through SDL 3 where it ships (Sdl3.targets) and a device is there; silent, saying why, otherwise
+		public IAudioDevice OpenAudioDevice(AudioOptions options) =>
+			SdlAudioDevice.TryOpen(options, out var reason) ?? (IAudioDevice)new NullAudioDevice(options.SampleRate > 0 ? options.SampleRate : 48_000, reason);
 	}
 }
