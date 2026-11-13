@@ -140,27 +140,38 @@
       <_LoomShaderOutput Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).ps.dxil')" Condition="$([System.String]::Copy(';%(_LoomShader.Stages);').Contains(';fragment;'))" />
       <_LoomShaderOutput Include="@(_LoomShader->'$(LoomShaderOutDir)%(ShaderName).cs.dxil')" Condition="$([System.String]::Copy(';%(_LoomShader.Stages);').Contains(';compute;'))" />
     </ItemGroup>
+    <!-- LoomShaderForce: an output that is never made, so the compile runs however new its outputs are, and every run in it -->
+    <PropertyGroup>
+      <_LoomForcedOutput Condition="'$(LoomShaderForce)' == 'true'">$(LoomShaderOutDir)loom-shaders-forced.never</_LoomForcedOutput>
+    </PropertyGroup>
     <Error Condition="'@(LoomSlangVariant)' != '' And '%(LoomSlangVariant.Suffix)' == ''" Text="The variant of %(LoomSlangVariant.Identity) has no Suffix, so it would be compiled under its entry's own name." />
   </Target>
 
-  <!-- Incremental: recompile when ANY .slang (entry OR shared module) is newer than ANY .spv. Listing every
-       source as an input means editing a shared *.module.slang rebuilds the shaders that import it. The project file
-       is an input too, since the items' metadata (Stages, an entry point's name) is written there and changes what
-       the compile emits. -->
+  <!-- Incremental in two steps. The target runs when ANY .slang (entry OR shared module) or the project file (the items'
+       metadata: Stages, an entry point's name) is newer than ANY output. Then LoomRunSlang runs only the compiles that are
+       out of date by their own dependency files: editing a shared *.module.slang remakes the shaders that import it, and
+       no others. -->
   <Target Name="LoomCompileShaders"
           Condition="'$(LoomShaderOutputMode)' != 'None'"
           DependsOnTargets="_LoomCollectShaders"
           Inputs="@(LoomSlangSource);$(MSBuildProjectFullPath)"
-          Outputs="@(_LoomShaderOutput)">
+          Outputs="@(_LoomShaderOutput);$(_LoomForcedOutput)">
     <Error Condition="'$(PkgSlang_Sdk)' == ''"
            Text="LoomShaderOutputMode='$(LoomShaderOutputMode)' but Slang.Sdk is not referenced in this project. Add a Slang.Sdk PackageReference with GeneratePathProperty=&quot;true&quot;." />
     <Error Condition="!Exists('$(SlangCompiler)')"
            Text="slangc not found at '$(SlangCompiler)'. Is Slang.Sdk restored for RID '$(SlangRid)'? (Only win-x64 / win-arm64 are packaged.)" />
     <MakeDir Directories="$(LoomShaderOutDir)" />
-    <Message Importance="high" Text="Slang -&gt; SPIR-V (+reflection): %(_LoomShader.ShaderName)" />
-    <!-- Emit reflection JSON beside the SPIR-V (M7-B4): the backend reads it at DefineTechnique to derive
-         the descriptor-binding layout, so the app states only pipeline intent. -->
-    <Exec Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomShader.FullPath)&quot; -target spirv %(_LoomShader.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).spv&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).json&quot;" />
+    <!-- Every compile is gathered as a run of slangc (_LoomSlangRun: its arguments, and what it makes) and they all run
+         at once at the end (LoomRunSlang), each a process of its own: slangc spends most of each run starting up, so
+         one after another they took minutes. -->
+    <ItemGroup>
+      <_LoomSlangRun Remove="@(_LoomSlangRun)" />
+      <!-- Reflection JSON beside the SPIR-V (M7-B4): the backend reads it at DefineTechnique to derive the
+           descriptor-binding layout, so the app states only pipeline intent. -->
+      <_LoomSlangRun Include="%(_LoomShader.ShaderName) SPIR-V"
+                     Outputs="$(LoomShaderOutDir)%(_LoomShader.ShaderName).spv;$(LoomShaderOutDir)%(_LoomShader.ShaderName).json" Depfile="$(LoomShaderOutDir)%(_LoomShader.ShaderName).spv.d"
+                     Arguments="&quot;%(_LoomShader.FullPath)&quot; -target spirv %(_LoomShader.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).spv&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).json&quot;" />
+    </ItemGroup>
 
     <!-- DirectX12: also emit SIGNED DXIL here (same target as SPIR-V, so the single LoomCompileShaders dependency
          covers BOTH and the registration below always sees every produced stage — a separate emit target
@@ -186,7 +197,6 @@
     </PropertyGroup>
     <Warning Condition="'$(LoomEmitDxil)' == 'true' And '$(LoomDxcPath)' == ''"
              Text="LoomEmitDxil is on but no DXC found (neither Microsoft.Direct3D.DXC NuGet package nor Windows SDK '$(LoomDxcArch)' bin). Add a Microsoft.Direct3D.DXC PackageReference with GeneratePathProperty=true to this project, or set $(LoomDxcPath)." />
-    <Message Condition="'$(LoomEmitDxil)' == 'true'" Importance="high" Text="Slang -&gt; signed DXIL (per stage): %(_LoomShader.ShaderName)" />
     <!-- Which stages to emit comes from the [shader("...")] attributes the source declares, and the entry-point name
          for each comes from item metadata defaulting to the conventional name. Matching the attribute rather than
          searching for the entry name keeps a mention in a comment (or a substring of another identifier) from
@@ -229,18 +239,160 @@
     <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True' And '%(_LoomDxilEntry.VertexOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;vertex&quot;)] entry point, but no function named '%(_LoomDxilEntry.VertexEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; VertexEntry=&quot;yourEntry&quot; /&gt;." />
     <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True' And '%(_LoomDxilEntry.FragmentOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;fragment&quot;)] entry point, but no function named '%(_LoomDxilEntry.FragmentEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; FragmentEntry=&quot;yourEntry&quot; /&gt;." />
     <Error Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True' And '%(_LoomDxilEntry.ComputeOk)' != 'True'" Text="%(_LoomDxilEntry.Filename).slang declares a [shader(&quot;compute&quot;)] entry point, but no function named '%(_LoomDxilEntry.ComputeEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;LoomSlangEntry Update=&quot;%(_LoomDxilEntry.Identity)&quot; ComputeEntry=&quot;yourEntry&quot; /&gt;." />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasVertex)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; %(_LoomDxilEntry.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.VertexEntry) -stage vertex -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).vs.dxil&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).dxil.json&quot;" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasFragment)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; %(_LoomDxilEntry.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.FragmentEntry) -stage fragment -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).ps.dxil&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).dxil.json&quot;" />
-    <Exec Condition="'$(LoomEmitDxil)' == 'true' And '%(_LoomDxilEntry.HasCompute)' == 'True'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; %(_LoomDxilEntry.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.ComputeEntry) -stage compute -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).cs.dxil&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).dxil.json&quot;" />
+    <!-- One run per stage. Each stage's compile can write the DXIL reflection: the same parameters and registers, but
+         its own entry point. Run at once they would write the one file together, so only the last stage a shader has
+         (vertex, fragment, compute) writes it, as the last one written did when they ran one after another. -->
+    <ItemGroup Condition="'$(LoomEmitDxil)' == 'true'">
+      <_LoomDxilEntry>
+        <VertexJson Condition="'%(_LoomDxilEntry.HasVertex)' == 'True' And '%(_LoomDxilEntry.HasFragment)' != 'True' And '%(_LoomDxilEntry.HasCompute)' != 'True'">$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).dxil.json</VertexJson>
+        <VertexReflection Condition="'%(_LoomDxilEntry.HasVertex)' == 'True' And '%(_LoomDxilEntry.HasFragment)' != 'True' And '%(_LoomDxilEntry.HasCompute)' != 'True'">-reflection-json &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).dxil.json&quot;</VertexReflection>
+        <FragmentJson Condition="'%(_LoomDxilEntry.HasFragment)' == 'True' And '%(_LoomDxilEntry.HasCompute)' != 'True'">$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).dxil.json</FragmentJson>
+        <FragmentReflection Condition="'%(_LoomDxilEntry.HasFragment)' == 'True' And '%(_LoomDxilEntry.HasCompute)' != 'True'">-reflection-json &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).dxil.json&quot;</FragmentReflection>
+        <ComputeJson Condition="'%(_LoomDxilEntry.HasCompute)' == 'True'">$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).dxil.json</ComputeJson>
+        <ComputeReflection Condition="'%(_LoomDxilEntry.HasCompute)' == 'True'">-reflection-json &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).dxil.json&quot;</ComputeReflection>
+      </_LoomDxilEntry>
+      <_LoomSlangRun Include="%(_LoomDxilEntry.ShaderName) DXIL vertex" Condition="'%(_LoomDxilEntry.HasVertex)' == 'True'"
+                     Outputs="$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).vs.dxil;%(_LoomDxilEntry.VertexJson)" Depfile="$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).vs.dxil.d"
+                     Arguments="&quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; %(_LoomDxilEntry.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.VertexEntry) -stage vertex -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).vs.dxil&quot; %(_LoomDxilEntry.VertexReflection)" />
+      <_LoomSlangRun Include="%(_LoomDxilEntry.ShaderName) DXIL fragment" Condition="'%(_LoomDxilEntry.HasFragment)' == 'True'"
+                     Outputs="$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).ps.dxil;%(_LoomDxilEntry.FragmentJson)" Depfile="$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).ps.dxil.d"
+                     Arguments="&quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; %(_LoomDxilEntry.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.FragmentEntry) -stage fragment -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).ps.dxil&quot; %(_LoomDxilEntry.FragmentReflection)" />
+      <_LoomSlangRun Include="%(_LoomDxilEntry.ShaderName) DXIL compute" Condition="'%(_LoomDxilEntry.HasCompute)' == 'True'"
+                     Outputs="$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).cs.dxil;%(_LoomDxilEntry.ComputeJson)" Depfile="$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).cs.dxil.d"
+                     Arguments="&quot;%(_LoomDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(LoomDxcPath)&quot; %(_LoomDxilEntry.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -entry %(_LoomDxilEntry.ComputeEntry) -stage compute -o &quot;$(LoomShaderOutDir)%(_LoomDxilEntry.ShaderName).cs.dxil&quot; %(_LoomDxilEntry.ComputeReflection)" />
+    </ItemGroup>
 
     <!-- WebGPU: also emit WGSL (whole module — Slang's WGSL target handles multi-entry) plus the
          WGSL-target reflection sidecar. -DLOOM_WGSL lowers the push-constant block to an ordinary uniform (WGSL has
          no push constants). Shaders name no bindings, so Slang numbers WGSL's in declaration order, as it does
          SPIR-V's and DXIL's registers; the WebGPU backend derives its bind-group layouts from the emitted WGSL text +
          this sidecar. -->
-    <Message Condition="'$(LoomEmitWgsl)' == 'true'" Importance="high" Text="Slang -&gt; WGSL (+reflection): %(_LoomShader.ShaderName)" />
-    <Exec Condition="'$(LoomEmitWgsl)' == 'true'" Command="&quot;$(SlangCompiler)&quot; &quot;%(_LoomShader.FullPath)&quot; -target wgsl -DLOOM_WGSL %(_LoomShader.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl.json&quot;" />
+    <ItemGroup Condition="'$(LoomEmitWgsl)' == 'true'">
+      <_LoomSlangRun Include="%(_LoomShader.ShaderName) WGSL"
+                     Outputs="$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl.json" Depfile="$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl.d"
+                     Arguments="&quot;%(_LoomShader.FullPath)&quot; -target wgsl -DLOOM_WGSL %(_LoomShader.DefineArgs) -I &quot;$(LoomShaderIncludeDir)&quot; -o &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl&quot; -reflection-json &quot;$(LoomShaderOutDir)%(_LoomShader.ShaderName).wgsl.json&quot;" />
+    </ItemGroup>
+
+    <LoomRunSlang Compiler="$(SlangCompiler)" Runs="@(_LoomSlangRun)" Parallelism="$(LoomShaderParallelism)" Force="$(LoomShaderForce)" />
   </Target>
+
+  <!-- Runs slangc once for each of Runs (its Arguments) that is out of date, as many at once as Parallelism (the
+       processors, unless the property LoomShaderParallelism says otherwise; 1 runs them one after another).
+
+       A run is up to date when every file it makes (Outputs) is there and newer than every file it read, as slangc
+       listed them in its dependency file (Depfile: the shader, every module it imports) and the compiler itself, and its
+       arguments are those it was last made with (kept beside the dependency file), so a changed define, stage or entry
+       point remakes it. Force (LoomShaderForce) runs every one.
+
+       Each run's output goes through MSBuild's reading of canonical errors and warnings ("file(line): error N: ...") as
+       Exec's does, a run's lines kept together; any run that fails fails the build, after every run has finished, and
+       is run again next time. -->
+  <UsingTask TaskName="LoomRunSlang" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Compiler ParameterType="System.String" Required="true" />
+      <Runs ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <Parallelism ParameterType="System.String" />
+      <Force ParameterType="System.String" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.Diagnostics" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Text" />
+      <Using Namespace="System.Threading.Tasks" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        int parallelism;
+        if (!int.TryParse(Parallelism, out parallelism) || parallelism < 1) parallelism = Environment.ProcessorCount;
+        bool force = string.Equals(Force, "true", StringComparison.OrdinalIgnoreCase);
+        DateTime compiler = File.GetLastWriteTimeUtc(Compiler);
+
+        // The files a dependency file lists after its target: Makefile's escapes undone (\ before a space, a colon, a
+        // backslash; a backslash ending a line continues it)
+        Func<string, List<string>> depends = path =>
+        {
+            var words = new List<string>();
+            var word = new StringBuilder();
+            string text = File.ReadAllText(path);
+            for (int c = 0; c < text.Length; c++)
+            {
+                char ch = text[c];
+                if (ch == '\\' && c + 1 < text.Length && text[c + 1] != '\r' && text[c + 1] != '\n') { word.Append(text[++c]); continue; }
+                if (ch == '\\' || char.IsWhiteSpace(ch))
+                {
+                    if (word.Length > 0) { words.Add(word.ToString()); word.Clear(); }
+                    continue;
+                }
+                word.Append(ch);
+            }
+            if (word.Length > 0) words.Add(word.ToString());
+            int after = words.FindIndex(w => w.EndsWith(":"));
+            return after < 0 ? new List<string>() : words.Skip(after + 1).ToList();
+        };
+
+        Func<ITaskItem, bool> stale = run =>
+        {
+            if (force) return true;
+            string depfile = run.GetMetadata("Depfile"), args = depfile + ".args";
+            var outputs = run.GetMetadata("Outputs").Split(';').Where(o => o.Trim().Length > 0).ToList();
+            if (depfile.Length == 0 || outputs.Count == 0 || !File.Exists(depfile) || !File.Exists(args)) return true;
+            if (File.ReadAllText(args) != run.GetMetadata("Arguments")) return true;
+            if (outputs.Any(o => !File.Exists(o))) return true;
+            DateTime made = outputs.Min(o => File.GetLastWriteTimeUtc(o));
+            if (compiler > made) return true;
+            foreach (var input in depends(depfile))
+                if (!File.Exists(input) || File.GetLastWriteTimeUtc(input) > made) return true;
+            return false;
+        };
+
+        var todo = Runs.Where(stale).ToArray();
+        var codes = new int[todo.Length];
+        var outputs = new string[todo.Length];
+        var watch = Stopwatch.StartNew();
+        Parallel.For(0, todo.Length, new ParallelOptions { MaxDegreeOfParallelism = parallelism }, i =>
+        {
+            string depfile = todo[i].GetMetadata("Depfile");
+            string arguments = todo[i].GetMetadata("Arguments") + (depfile.Length > 0 ? " -depfile \"" + depfile + "\"" : "");
+            if (depfile.Length > 0 && File.Exists(depfile + ".args")) File.Delete(depfile + ".args");
+            var start = new ProcessStartInfo(Compiler, arguments)
+            {
+                UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
+            };
+            using (var process = Process.Start(start))
+            {
+                var error = process.StandardError.ReadToEndAsync();
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                codes[i] = process.ExitCode;
+                outputs[i] = (output + "\n" + error.Result).Trim();
+            }
+            if (codes[i] != 0) return;
+            // Its files stamped as made now: slangc leaves an output that comes out the same as it was (a WGSL) unwritten,
+            // which would look older than what it read forever after
+            var now = DateTime.UtcNow;
+            foreach (var made in todo[i].GetMetadata("Outputs").Split(';'))
+                if (made.Trim().Length > 0 && File.Exists(made)) File.SetLastWriteTimeUtc(made, now);
+            // Its arguments kept only once it made its files, so a failed run runs again
+            if (depfile.Length > 0) File.WriteAllText(depfile + ".args", todo[i].GetMetadata("Arguments"));
+        });
+        bool failed = false;
+        for (int i = 0; i < todo.Length; i++)
+        {
+            Log.LogMessage(MessageImportance.High, "Slang -> " + todo[i].ItemSpec);
+            foreach (var line in outputs[i].Split('\n'))
+                if (line.Trim().Length > 0) Log.LogMessageFromText(line.TrimEnd('\r'), MessageImportance.High);
+            if (codes[i] != 0)
+            {
+                failed = true;
+                Log.LogError("slangc failed (exit code " + codes[i] + ") making " + todo[i].ItemSpec);
+            }
+        }
+        Log.LogMessage(MessageImportance.High, "Slang: " + todo.Length + " of " + Runs.Length + " compiles out of date, made in " +
+                       watch.Elapsed.TotalSeconds.ToString("F1") + " s, " + parallelism + " at a time");
+        return !failed && !Log.HasLoggedErrors;
+      ]]></Code>
+    </Task>
+  </UsingTask>
 
   <!-- No Inputs/Outputs => ALWAYS runs (even when the compile targets are up to date), so the outputs are
        always registered and never silently dropped from the assembly/output on incremental builds. The
