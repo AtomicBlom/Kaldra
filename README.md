@@ -228,7 +228,7 @@ Three things a game needs on every host:
 
 The sandbox is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in `Loom.Tests` — `GalleryGoldenTests`/`GalleryParityTests` render the gallery offscreen in-process (GPU-gated; skipped without one). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
 
-**Audio** — [`Loom.Audio`](Loom.Audio): set `AppOptions.Audio` and play through `LoomApplication.Audio`. Clips (WAV, Ogg Vorbis), music streamed from Ogg Vorbis as it plays, and game-written sources (software synthesizers, procedural music, sample by sample) play on pooled voices mixed through a tree of buses, with ducking between them, on the platform's audio thread at its lowest latency: SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser. The game and audio threads share no lock, and the steady mix allocates nothing. `samples/HelloAudio` is a playable synthesizer, and [the audio guide](docs/audio.md) covers the API, the threading model and each platform.
+**Audio** — [`Loom.Audio`](Loom.Audio): set `AppOptions.Audio` and play through `LoomApplication.Audio`. Clips (WAV, Ogg Vorbis), music streamed from Ogg Vorbis as it plays, and game-written sources (software synthesizers, procedural music, sample by sample) play on pooled voices mixed through a tree of buses, with ducking between them and 3D voices placed for a listener the game feeds, on the platform's audio thread at its lowest latency: SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser. The game and audio threads share no lock, and the steady mix allocates nothing. `samples/HelloAudio` is a playable synthesizer, and [the audio guide](docs/audio.md) covers the API, the threading model and each platform.
 
 ## Packages
 
@@ -242,7 +242,7 @@ The sandbox is a `LoomApplication` on the desktop host: every run is interactive
 | `Loom.Backend.WebGPU` | WebGPU backend (browser) |
 | `Loom.Concepts` | App-side helpers — `Camera`, `Frustum`, `Scene`. Not part of the engine |
 | `Loom.Input` | Neutral input: actions, bindings, layered event routing |
-| `Loom.Audio` | Low-latency audio: a lock-free, allocation-free mixer, buses and ducking, clips, Ogg Vorbis streams (its own decoder), and game-written sources for software synthesis |
+| `Loom.Audio` | Low-latency audio: a lock-free, allocation-free mixer, buses and ducking, 3D voices, clips, Ogg Vorbis streams (its own decoder), and game-written sources for software synthesis |
 | `Loom.Hosting.Desktop` | Desktop host — window, surface, frame loop, CLI flags; gamepads through SDL 3, fetched by the build |
 | `Loom.Hosting.Web` | Browser host, paired with the WebGPU backend |
 | `Loom.Hosting.Android` | Android host — a `LoomActivity` with a Vulkan surface, Choreographer-paced frames, touch, keyboard and on-screen keyboard, mouse, game controllers |
