@@ -15,5 +15,6 @@
   <Project Path="Loom.Sandbox.Android/Loom.Sandbox.Android.csproj" />
   <Project Path="Loom.UI.ImGui/Loom.UI.ImGui.csproj" />
   <Project Path="Loom.UI.SUIsei/Loom.UI.SUIsei.csproj" />
+  <Project Path="samples/HelloAudio/HelloAudio.csproj" />
   <Project Path="samples/HelloUI/HelloUI.csproj" />
 </Solution>
