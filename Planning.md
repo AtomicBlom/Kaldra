@@ -143,3 +143,26 @@ The debug spine (channel viewer, GPU timing) exists to make this loop fast for t
 ## 9. The UI track (SUIsei)
 
 Game/HUD UI is a **separate, standalone subsystem**: `SUIsei`, a GPU-free WinUI-3-compatible XAML UI runtime (compile-time `{x:Bind}`, NativeAOT-clean), vendored as the `external/SUIsei` submodule with its own repo and **its own design bible at [`external/SUIsei/Planning.md`](external/SUIsei/Planning.md)**. It reaches the GPU only through the neutral, UI-agnostic `IRenderContext.DrawList` verb (the same path ImGui rides) via the thin `Loom.UI.SUIsei` glue — so **no UI library is referenced by either backend, and no UI-specific type enters Core/Graph.** See that document for the UI roadmap and status; this file does not duplicate it.
+
+---
+
+## 10. The audio track
+
+Audio is a **separate subsystem beside the render graph**: `Loom.Audio`, a mixer that depends only on the BCL (as `Loom.Input` does), with each host opening its platform's output behind the `IAudioDevice` seam (SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser). It shares nothing with the graph: no graphics-API type and no audio API type enters `Loom.Audio`, and no audio type enters Graph. [`docs/audio.md`](docs/audio.md) documents what is built; epic #10 tracks the work.
+
+Its own load-bearing properties, beside §3's:
+
+- **Lowest latency the platform offers on native hosts**, because the target is software synthesizers and procedural music played live. The mix runs on the device's own audio thread at the device's own rate. The browser trades latency for a lead the frame thread renders ahead, since the .NET runtime can't run on the browser's audio thread.
+- **The game and audio threads share no lock**, and neither allocates once running: commands and events cross on single-producer, single-consumer rings, continuous controls through `AudioParameter`.
+- **Fail loud, except for a missing speaker.** Misuse throws on the frame thread (a wrong-thread call, a full command queue, a clip at the wrong rate, a source played twice), and an exception in a source is thrown again from `Update`. A machine with no output is not an app bug, so it runs silent on a `NullAudioDevice` with a logged warning.
+
+### Remaining roadmap
+
+| Item | Notes |
+|---|---|
+| **Streaming playback + more decoders** | Music decoded as it plays, from a loading thread into a ring the voice reads; Ogg Vorbis or Opus beside WAV. Clips are decoded whole today. |
+| **Ducking** | One bus turning another down by the other's level (dialogue over music). A bus-to-bus side-chain in the mixer. |
+| **3D positioning** | Distance attenuation and panning from a listener and an emitter position. The listener is the app's to name and feed, as a view is for the graph: the engine takes positions, not a camera. |
+| **Low-latency WASAPI on Windows** | SDL 3 stops at shared mode's 10 ms period. An exclusive-mode (or `IAudioClient3` small-period) device would reach 2–3 ms. |
+| **Browser: a shared ring instead of a message per frame** | The frame thread posts each frame's samples to the worklet as a new `Float32Array`. The runtime is already multithreaded (cross-origin isolated), so a `SharedArrayBuffer` ring would remove that per-frame garbage and the message hop. |
+| **Collections on the audio thread** | A full blocking collection the game sets off pauses the audio thread with every other. Decide whether the engine sets `GCSettings.LatencyMode` to `SustainedLowLatency` while audio runs, or leaves it to the app (it changes the whole process's collector). |

@@ -228,7 +228,7 @@ Three things a game needs on every host:
 
 The sandbox is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in `Loom.Tests` — `GalleryGoldenTests`/`GalleryParityTests` render the gallery offscreen in-process (GPU-gated; skipped without one). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
 
-**Audio** — [`Loom.Audio`](Loom.Audio): set `AppOptions.Audio` and play through `LoomApplication.Audio`. Clips and game-written sources (software synthesizers, procedural music, sample by sample) play on pooled voices mixed through a tree of buses, on the platform's audio thread at its lowest latency: SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser. The game and audio threads share no lock, and the steady mix allocates nothing. `samples/HelloAudio` is a playable synthesizer.
+**Audio** — [`Loom.Audio`](Loom.Audio): set `AppOptions.Audio` and play through `LoomApplication.Audio`. Clips and game-written sources (software synthesizers, procedural music, sample by sample) play on pooled voices mixed through a tree of buses, on the platform's audio thread at its lowest latency: SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser. The game and audio threads share no lock, and the steady mix allocates nothing. `samples/HelloAudio` is a playable synthesizer, and [the audio guide](docs/audio.md) covers the API, the threading model and each platform.
 
 ## Packages
 
@@ -276,6 +276,6 @@ Three layers, kept strictly separate — `Sandbox → {backends} → Graph → C
 
 - [GitHub](https://github.com/AtomicBlom/Loom)
 - [Design bible & roadmap](Planning.md) · [UI track](external/SUIsei/Planning.md)
-- Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [effect cookbook](docs/effect-cookbook.md) · [architecture](docs/architecture.md) · [porting from OpenGL](docs/porting-from-opengl.md)
+- Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [effect cookbook](docs/effect-cookbook.md) · [audio](docs/audio.md) · [architecture](docs/architecture.md) · [porting from OpenGL](docs/porting-from-opengl.md)
 - [CI with a software rasterizer (WARP, no GPU)](docs/ci-software-rasterizer.md)
 - [WebGPU pixel parity](docs/webgpu-parity.md)
