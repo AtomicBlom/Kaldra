@@ -343,7 +343,11 @@ public abstract class LoomApplication : IHostedApplication
 		OnResize(width, height);
 	}
 
-	void IHostedApplication.SetFocus(bool focused) => OnFocusChanged(focused);
+	void IHostedApplication.SetFocus(bool focused)
+	{
+		_audio?.SetFocused(focused);
+		OnFocusChanged(focused);
+	}
 
 	void IHostedApplication.Suspend()
 	{
