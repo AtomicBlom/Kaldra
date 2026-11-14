@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
 
+using Loom.Audio;
 using Loom.Backend.WebGPU;
 using Loom.Core.Hosting;
 
@@ -32,6 +33,8 @@ public sealed partial class WebAppHost : IAppHost
 	// Main has returned. The application itself is read from LoomApplication.Current — the JS start path can't
 	// rely on this host's own module initializer having run (unreliable under WASM AOT).
 	private static IEngine? _engine;
+	// The app's audio output, when it opened one: pumped once a frame, after the app's tick has queued the frame's sounds
+	private static WebAudioDevice? _audio;
 	private static string? _captureName;
 	private static double _time;
 	private static double _lastTimestampMs;
@@ -190,6 +193,8 @@ public sealed partial class WebAppHost : IAppHost
 		try
 		{
 			app.Tick(new FrameTime(delta, _time));
+			// After the tick, so the sounds the frame started are in what is sent
+			_audio?.Pump(delta);
 			if (_captureName is not null && _frame == CaptureFrame)
 				engine.RequestCapture(_captureName); // late enough that any delta-driven state has settled
 		}
@@ -278,6 +283,15 @@ public sealed partial class WebAppHost : IAppHost
 			StopTicking();
 			((IHostedApplication)current).Unload();
 			engine.WaitIdle();
+		}
+
+		// An AudioWorklet the frame loop sends the mix to (Frame pumps it after the app's tick)
+		[SupportedOSPlatform("browser")]
+		public IAudioDevice OpenAudioDevice(AudioOptions options)
+		{
+			var device = new WebAudioDevice(options);
+			_audio = device;
+			return device;
 		}
 
 		/// <summary>

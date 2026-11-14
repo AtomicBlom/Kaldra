@@ -1,5 +1,7 @@
 using System.Numerics;
 
+using Loom.Audio;
+using Loom.Core.Diagnostics;
 using Loom.Core.Graph;
 using Loom.Input;
 
@@ -63,6 +65,19 @@ public abstract class LoomApplication : IHostedApplication
 	/// per edge.
 	/// </remarks>
 	protected InputSnapshot Input => _inputStack.Output;
+
+	/// <summary>
+	/// The app's audio: clips and synthesizer sources played on voices, mixed through buses to the platform's output at the
+	/// lowest latency it offers. Opened by the host before <see cref="LoadContent"/> when <see cref="Configure"/> sets
+	/// <see cref="AppOptions.Audio"/>; paused while the app is suspended and closed after <see cref="UnloadContent"/>. Call it
+	/// from the frame thread (any lifecycle hook); a loading thread may make clips with it.
+	/// </summary>
+	/// <exception cref="InvalidOperationException">Audio is off: <see cref="AppOptions.Audio"/> was not set.</exception>
+	protected AudioEngine Audio => _audio ?? throw new InvalidOperationException(
+		"Audio is off: set AppOptions.Audio in Configure to open it (options.Audio = new AudioOptions()).");
+
+	private AudioOptions? _audioOptions;
+	private AudioEngine? _audio;
 
 	/// <summary>
 	/// The command-line arguments the host did not consume as its own launch options — the app's own flags,
@@ -301,6 +316,7 @@ public abstract class LoomApplication : IHostedApplication
 		Configure(options);
 		_fixedStepHz = options.FixedStepHz;
 		_renderMode = options.RenderMode;
+		_audioOptions = options.Audio;
 		return options;
 	}
 
@@ -308,6 +324,15 @@ public abstract class LoomApplication : IHostedApplication
 	{
 		Engine = engine;
 		_host = host;
+		if (_audioOptions is { } audio)
+		{
+			var device = host.OpenAudioDevice(audio);
+			if (device is NullAudioDevice)
+				LoomLog.Warning($"No audio output ({device.Name}): the app's audio plays to a silent device.");
+			else
+				LoomLog.Info($"audio through {device.Backend} on '{device.Name}': {device.SampleRate} Hz, {device.BufferFrames}-frame buffer");
+			_audio = new AudioEngine(device, audio);
+		}
 		LoadContent();
 	}
 
@@ -326,6 +351,7 @@ public abstract class LoomApplication : IHostedApplication
 			return;
 		IsSuspended = true;
 		OnSuspending();
+		_audio?.Pause();
 	}
 
 	void IHostedApplication.Resume()
@@ -333,6 +359,7 @@ public abstract class LoomApplication : IHostedApplication
 		if (!IsSuspended)
 			return;
 		IsSuspended = false;
+		_audio?.Resume();
 		OnResumed();
 	}
 
@@ -387,6 +414,8 @@ public abstract class LoomApplication : IHostedApplication
 
 		Update(frameTime);
 		BeforeRender(frameTime);
+		// Frees the voices that ended and throws what a source threw on the audio thread, here on the frame thread
+		_audio?.Update();
 
 		// Submit unconditionally under Continuous; under OnDemand only when the app invalidated, the first frame has
 		// not yet been drawn, or a resize is pending. Update/Draw still run every tick (input routing, animation) —
@@ -400,7 +429,18 @@ public abstract class LoomApplication : IHostedApplication
 		}
 	}
 
-	void IHostedApplication.Unload() => UnloadContent();
+	void IHostedApplication.Unload()
+	{
+		try
+		{
+			UnloadContent();
+		}
+		finally
+		{
+			_audio?.Dispose();
+			_audio = null;
+		}
+	}
 
 	/// <summary>
 	/// Run <paramref name="app"/> on the platform host. Reference a <c>Loom.Hosting.*</c> package so a host is

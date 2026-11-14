@@ -4,7 +4,8 @@
 //
 // An embedder that boots the runtime itself must do everything runLoom does, in order:
 //   1. Create the .NET runtime with a thread pool big enough for the app (the threads option below).
-//   2. setModuleImports('loom-webgpu', <the loom-webgpu.js module>): the host's and the backend's [JSImport]s.
+//   2. setModuleImports('loom-webgpu', <the loom-webgpu.js module>): the host's and the backend's [JSImport]s; and
+//      setModuleImports('loom-audio', <the loom-audio.js module>): the audio device's.
 //   3. Optionally setBrowserKeyCapture(false) on that module (the captureKeys option below).
 //   4. runMain(): the app's Main, whose LoomApplication.Run registers the app and returns.
 //   5. Await the host's StartApp(canvasSelector) export (Loom.Hosting.Web.WebAppHost): the device comes up on that
@@ -21,6 +22,7 @@
 //   ../../_framework/dotnet.js          -> /_framework/dotnet.js         (the runtime, at the app root)
 //   ../Loom.Backend.WebGPU/loom-webgpu.js -> /_content/Loom.Backend.WebGPU/loom-webgpu.js (sibling package asset)
 import * as loomWebgpu from '../Loom.Backend.WebGPU/loom-webgpu.js'
+import * as loomAudio from './loom-audio.js'
 
 // canvas: the selector of the page's <canvas> the app draws into.
 // threads: the Web Workers a multithreaded runtime makes before the app starts, one a thread. Every thread the app runs
@@ -59,6 +61,7 @@ async function start(canvas, threads) {
 		.withConfig({ pthreadPoolInitialSize: threads, pthreadPoolUnusedSize: Math.min(4, threads) })
 		.create();
 	setModuleImports('loom-webgpu', { ...loomWebgpu });
+	setModuleImports('loom-audio', { ...loomAudio });
 	// runMain runs the app's Main -> LoomApplication.Run, which (via the web host) registers the app and returns.
 	await runMain();
 	// The canvas identity comes from the page, not from C#: hand it to the host's [JSExport] to start everything.

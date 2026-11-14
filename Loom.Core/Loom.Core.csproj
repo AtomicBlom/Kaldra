@@ -15,9 +15,10 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
-  <!-- The input subsystem is a BCL-only leaf carrying no graphics-API type, so this downward reference
-       leaves backend portability untouched while giving the hosting layer a neutral input model. -->
+  <!-- The input and audio subsystems are BCL-only leaves carrying no graphics-API type, so these downward references
+       leave backend portability untouched while giving the hosting layer a neutral input model and an audio engine. -->
   <ItemGroup>
+    <ProjectReference Include="..\Loom.Audio\Loom.Audio.csproj" />
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
   </ItemGroup>
 

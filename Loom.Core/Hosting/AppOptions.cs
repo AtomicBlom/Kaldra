@@ -1,3 +1,5 @@
+using Loom.Audio;
+
 namespace Loom.Core.Hosting;
 
 /// <summary>
@@ -48,4 +50,12 @@ public sealed class AppOptions
 	/// the leftover fraction for render interpolation between the last two fixed states.
 	/// </summary>
 	public double FixedStepHz { get; set; }
+
+	/// <summary>
+	/// Turns audio on: the host opens its platform's output device (SDL 3 on the desktop, AAudio on Android, an
+	/// AudioWorklet in the browser) before <c>LoadContent</c> and the app plays through <c>LoomApplication.Audio</c>. Null
+	/// (the default) leaves audio off. The defaults ask for the device's own rate and its smallest buffer: the lowest
+	/// latency the platform offers.
+	/// </summary>
+	public AudioOptions? Audio { get; set; }
 }

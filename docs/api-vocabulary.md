@@ -386,3 +386,22 @@ Screen-space SUIsei elements that follow points in the world — labels over obj
 | `anchors.Add(element, world, alignment, pixelOffset)` → `ScreenAnchorId` | Wrap `element` in a container pinned to `world`: `alignment` is the fraction of the element's size that sits on the point ((0.5, 1) the middle of its bottom edge), `pixelOffset` a further offset in layout units. |
 | `anchors.SetWorldPosition(id, world)` / `SetPlacement(id, alignment, pixelOffset)` / `Remove(id)` / `GetFade(id)` | Move, re-place, remove (a removed id throws if used again) and read an anchor's fade. |
 | `anchors.Update(viewProjection, framebufferSize, deltaSeconds)` | Each frame between the host's `Tick` and `Render`: move every container to its projected point through `UIElement.Translation` (no layout) and step its fade — out while the point is off the viewport (beyond `ViewportMargin`) or behind the eye, on the container, so the element's own opacity is untouched. Allocates nothing. `FadeSeconds` sets the fade's length. |
+
+## Audio (`Loom.Audio`)
+
+Clips and game-written sources played on pooled voices, mixed through a tree of buses on the platform's audio thread. Turned on by `AppOptions.Audio`; reached through `LoomApplication.Audio`. The guide, with the threading model and each platform's device, is [`audio.md`](audio.md).
+
+| Type / member | Role |
+|---|---|
+| `AppOptions.Audio` (`AudioOptions`) | Set in `Configure` to open the platform's output before `LoadContent`; null (the default) leaves audio off. `SampleRate` and `BufferFrames` default to 0: the device's own rate and its smallest buffer. `MaxVoices` (64), `MaxBuses` (16), `CommandCapacity` (4096). |
+| `LoomApplication.Audio` (`AudioEngine`) | The app's engine. Called from the frame thread only (another thread throws), except `CreateClip`/`LoadWav`. Updated each tick, paused while suspended, closed after `UnloadContent`. |
+| `CreateClip(samples, channels, sampleRate)`, `LoadWav(bytes)` → `AudioClip` | Sound decoded into memory and converted to the engine's rate. WAV: PCM 8/16/24/32-bit, float 32/64, mono or stereo. Any thread. |
+| `Play(clip, bus, volume, pitch, pan, loop)` / `Play(source, bus, volume, pan)` → `VoiceHandle` | Takes a voice from the pool; `VoiceHandle.None` when every voice is busy (counted in `Stats.DroppedVoices`). |
+| `SetVolume`, `SetPitch`, `SetPan`, `Stop(voice, fadeSeconds)`, `IsPlaying(voice)` | Steer a voice. Every change ramps across at least a block, so nothing clicks. A stale handle (its voice ended) is ignored. |
+| `CreateBus(name, parent)` → `AudioBus`, `SetBusVolume(bus, volume, fadeSeconds)`, `Master` | A tree of buses under the master; mix order follows from the tree. Made at load, never removed. |
+| `AudioSource` | Subclass for sound the game writes: `OnStart(sampleRate)` on the frame thread, `Render(left, right, in AudioRenderInfo)` on the audio thread (no allocation, locks or blocking; false ends the voice; an exception stops the voice and is thrown again from `Update`). One voice at a time: `IsPlaying` holds until the voice has ended, a stop's fade included. |
+| `AudioRenderInfo` | The block's `Frames`, the engine's `SampleRate`, and `FrameTime`, the audio clock a sequencer counts on. |
+| `AudioParameter` | A continuous control: the game sets `Value`; the source takes `Ramp(frames)` once a block and `Next()` once a sample, or `Snap()`. |
+| `AudioEventQueue<T>` | A fixed-size, lock-free, one-producer one-consumer queue of struct events (note on, note off): `TryPost`/`Post` from the game, `TryTake` in `Render`. |
+| `AudioStats` (`Audio.Stats`) | The mix's clock, callbacks and buffer, active and dropped voices, peak level, and render load against the deadline. |
+| `IAudioDevice`, `IAudioRenderer`, `IHostControl.OpenAudioDevice` | The seam a host fills: SDL 3 (desktop), AAudio (Android), an AudioWorklet (browser). `NullAudioDevice` where there is no output; `OfflineAudioDevice` renders on the caller's thread, for tests and rendering to a file. |

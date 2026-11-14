@@ -145,7 +145,7 @@ public sealed class SdlGamepadPump : IDisposable
 				Sdl3.SDL_CloseGamepad(_slots[s].Pad);
 				_slots[s] = default;
 			}
-		Sdl3.SDL_Quit();
+		Sdl3.QuitSubSystem(Sdl3.InitGamepad); // only the pads: the audio device may still be playing through SDL
 	}
 
 	private void Handle(in SdlEvent e)

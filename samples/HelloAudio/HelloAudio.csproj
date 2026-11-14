@@ -1,0 +1,69 @@
+<Project>
+
+  <!--
+    One project, three deployables:
+        dotnet build -f net10.0                                 → a native Vulkan desktop exe (SDL 3 audio)
+        dotnet build -f net11.0-android                         → an Android APK (Vulkan, AAudio, touch)
+        dotnet publish -f net10.0 -r browser-wasm               → a WebGPU browser app (an AudioWorklet)
+    A bare <Project> (no outer Sdk= attribute): Loom.Sdk's own Sdk.props/Sdk.targets (imported below) choose and
+    import the real base SDK by target, pull in the matching backend and application host, and pick how the shaders
+    ship (loose beside the desktop exe, embedded for the browser and the APK). The app itself (AudioApp, PolySynth) is
+    the same source on all three; only the entry point differs: Platforms/Desktop/Program.cs (the desktop and the
+    browser), or the activity in Platforms/Android.
+    Kept out of Loom.slnx (in HelloAudio.slnx and Loom.Android.slnx) so the desktop build never needs the android
+    workload.
+  -->
+
+  <!-- Before the SDK props: Loom.Shaders.props derives which shader targets to emit from these. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+    <UseVulkan>false</UseVulkan>
+    <UseDirectX12>false</UseDirectX12>
+    <UseWebGPU>true</UseWebGPU>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != 'browser-wasm'">
+    <UseVulkan>true</UseVulkan>
+    <UseDirectX12>false</UseDirectX12>
+    <UseWebGPU>false</UseWebGPU>
+  </PropertyGroup>
+
+  <Import Project="..\..\build\Loom.Sdk\Sdk\Sdk.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net10.0;net11.0-android</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>HelloAudio</RootNamespace>
+    <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' == 'android'">
+    <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
+    <ApplicationId>com.atomicblom.loom.helloaudio</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <!-- arm64 for phones; x64 for an emulator on an x64 machine. -->
+    <RuntimeIdentifiers>android-arm64;android-x64</RuntimeIdentifiers>
+    <AndroidManifest>Platforms\Android\AndroidManifest.xml</AndroidManifest>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm' and '$(Configuration)' == 'Release'">
+    <RunAOTCompilation>true</RunAOTCompilation>
+    <WasmStripILAfterAOT>true</WasmStripILAfterAOT>
+  </PropertyGroup>
+
+  <!-- Each target compiles its own entry point only. -->
+  <ItemGroup Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' == 'android'">
+    <Compile Remove="Platforms\Desktop\**" />
+  </ItemGroup>
+  <ItemGroup Condition="'$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' != 'android'">
+    <Compile Remove="Platforms\Android\**" />
+    <None Remove="Platforms\Android\**" />
+  </ItemGroup>
+
+  <Import Project="..\..\build\Loom.Sdk\Sdk\Sdk.targets" />
+
+</Project>
