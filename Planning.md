@@ -161,7 +161,7 @@ Its own load-bearing properties, beside §3's:
 | Item | Notes |
 |---|---|
 | **More decoders** | FLAC next (lossless, simple), Opus if wanted, each written in C# in `Loom.Audio` as the Vorbis decoder is: no dependency, allocation-free while streaming, and the same code on every host, the browser included. |
-| **3D positioning** | Distance attenuation and panning from a listener and an emitter position. The listener is the app's to name and feed, as a view is for the graph: the engine takes positions, not a camera. |
+| **3D beyond stereo panning** | 3D voices pan, attenuate and Doppler-shift for a listener the app feeds (positions, never a camera). Not built: HRTF for above and behind, occlusion, reverb zones, sound cones. |
 | **Low-latency WASAPI on Windows** | SDL 3 stops at shared mode's 10 ms period. An exclusive-mode (or `IAudioClient3` small-period) device would reach 2–3 ms. |
 | **Browser: a shared ring instead of a message per frame** | The frame thread posts each frame's samples to the worklet as a new `Float32Array`. The runtime is already multithreaded (cross-origin isolated), so a `SharedArrayBuffer` ring would remove that per-frame garbage and the message hop. |
 | **Collections on the audio thread** | A full blocking collection the game sets off pauses the audio thread with every other. Decide whether the engine sets `GCSettings.LatencyMode` to `SustainedLowLatency` while audio runs, or leaves it to the app (it changes the whole process's collector). |
