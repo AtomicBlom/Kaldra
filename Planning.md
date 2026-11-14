@@ -160,8 +160,7 @@ Its own load-bearing properties, beside §3's:
 
 | Item | Notes |
 |---|---|
-| **Streaming playback + more decoders** | Music decoded as it plays, from a loading thread into a ring the voice reads; Ogg Vorbis or Opus beside WAV. Clips are decoded whole today. |
-| **Ducking** | One bus turning another down by the other's level (dialogue over music). A bus-to-bus side-chain in the mixer. |
+| **Streaming playback + more decoders** | Music decoded as it plays, from a loading thread into a ring the voice reads (on the frame thread in a single-threaded browser). Ogg Vorbis first, then FLAC, each decoder written in C# in `Loom.Audio`: no dependency, allocation-free while streaming, and the same code on every host, the browser included. Clips are decoded whole today. |
 | **3D positioning** | Distance attenuation and panning from a listener and an emitter position. The listener is the app's to name and feed, as a view is for the graph: the engine takes positions, not a camera. |
 | **Low-latency WASAPI on Windows** | SDL 3 stops at shared mode's 10 ms period. An exclusive-mode (or `IAudioClient3` small-period) device would reach 2–3 ms. |
 | **Browser: a shared ring instead of a message per frame** | The frame thread posts each frame's samples to the worklet as a new `Float32Array`. The runtime is already multithreaded (cross-origin isolated), so a `SharedArrayBuffer` ring would remove that per-frame garbage and the message hop. |
