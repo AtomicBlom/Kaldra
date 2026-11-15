@@ -228,7 +228,7 @@ Three things a game needs on every host:
 
 The sandbox is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in `Loom.Tests` — `GalleryGoldenTests`/`GalleryParityTests` render the gallery offscreen in-process (GPU-gated; skipped without one). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
 
-**Audio** — [`Loom.Audio`](Loom.Audio): set `AppOptions.Audio` and play through `LoomApplication.Audio`. Clips (WAV, Ogg Vorbis, FLAC), music streamed from Ogg Vorbis or FLAC as it plays, and game-written sources (software synthesizers, procedural music, sample by sample) play on pooled voices mixed through a tree of buses, with ducking between them and 3D voices placed for a listener the game feeds, on the platform's audio thread at its lowest latency: SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser. The game and audio threads share no lock, and the steady mix allocates nothing. `samples/HelloAudio` is a playable synthesizer, and [the audio guide](docs/audio.md) covers the API, the threading model and each platform.
+**Audio** — [`Loom.Audio`](Loom.Audio): set `AppOptions.Audio` and play through `LoomApplication.Audio`. Clips (WAV, Ogg Vorbis, FLAC), music streamed from Ogg Vorbis or FLAC as it plays, and game-written sources (software synthesizers, procedural music, sample by sample) play on pooled voices mixed through a tree of buses, with ducking between them and 3D voices placed for a listener the game feeds, on the platform's audio thread at its lowest latency: SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser. The game and audio threads share no lock, and the steady mix allocates nothing. `samples/HelloAudio` is a playable synthesizer, and [the audio guide](docs/audio.md) covers the API, the threading model and each platform. [`Loom.Audio.Synth`](Loom.Audio.Synth) builds synthesis on it, and renders sound offline to measure or save ([the synthesis guide](docs/synth.md)).
 
 ## Packages
 
@@ -243,6 +243,7 @@ The sandbox is a `LoomApplication` on the desktop host: every run is interactive
 | `Loom.Concepts` | App-side helpers — `Camera`, `Frustum`, `Scene`. Not part of the engine |
 | `Loom.Input` | Neutral input: actions, bindings, layered event routing |
 | `Loom.Audio` | Low-latency audio: a lock-free, allocation-free mixer, buses and ducking, 3D voices, clips, Ogg Vorbis and FLAC streams (its own decoders), and game-written sources for software synthesis |
+| `Loom.Audio.Synth` | Software synthesis over `Loom.Audio`: DSP, effects, a synthesizer chip, drum kits, music written as code; sound rendered offline to measure or save |
 | `Loom.Hosting.Desktop` | Desktop host — window, surface, frame loop, CLI flags; gamepads through SDL 3, fetched by the build |
 | `Loom.Hosting.Web` | Browser host, paired with the WebGPU backend |
 | `Loom.Hosting.Android` | Android host — a `LoomActivity` with a Vulkan surface, Choreographer-paced frames, touch, keyboard and on-screen keyboard, mouse, game controllers |
@@ -276,6 +277,6 @@ Three layers, kept strictly separate — `Sandbox → {backends} → Graph → C
 
 - [GitHub](https://github.com/AtomicBlom/Loom)
 - [Design bible & roadmap](Planning.md) · [UI track](external/SUIsei/Planning.md)
-- Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [effect cookbook](docs/effect-cookbook.md) · [audio](docs/audio.md) · [architecture](docs/architecture.md) · [porting from OpenGL](docs/porting-from-opengl.md)
+- Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [effect cookbook](docs/effect-cookbook.md) · [audio](docs/audio.md) · [synthesis](docs/synth.md) · [architecture](docs/architecture.md) · [porting from OpenGL](docs/porting-from-opengl.md)
 - [CI with a software rasterizer (WARP, no GPU)](docs/ci-software-rasterizer.md)
 - [WebGPU pixel parity](docs/webgpu-parity.md)

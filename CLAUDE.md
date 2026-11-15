@@ -18,6 +18,7 @@ Projects (dependency direction `Sandbox → {backends} → Graph → Core`):
 - **`Loom.Backend.Vulkan` / `Loom.Backend.DirectX12`** — the backends (the marshaling seam).
 - **`Loom.Assets`** — neutral image (StbImageSharp) + glTF (SharpGLTF) loaders, beside Core.
 - **`Loom.Audio`** — the audio subsystem (BCL-only, beside `Loom.Input`): a lock-free mixer with buses, pooled voices, clips and game-written `AudioSource`s, behind an `IAudioDevice` each host fills (SDL 3 on the desktop, AAudio on Android through the `libloomaaudio.so` CFI shim, an AudioWorklet in the browser). `AppOptions.Audio` turns it on; `docs/audio.md` is the guide, `samples/HelloAudio` the sample.
+- **`Loom.Audio.Synth`** — software synthesis over `Loom.Audio` (depends on it and the BCL only): offline rendering to measure sound or save it as a WAV (`OfflineSession`, `WavWriter`, `AudioAnalysis`). `docs/synth.md` is the guide.
 - **`Loom.Concepts`** — app-side helpers (`Camera`, `Frustum`, `Scene`); **not** part of Core/Graph.
 - **`Loom.Gallery`** — the demo gallery as a library (all the `IDemo`s + their shaders/assets/UI views + the shared `DemoScene`/`DemoShell`/`DemoGraph`), referenced by both the sandbox exe and the tests so they run the same demos. App-tier: references no backend.
 - **`SUIsei`** (the `external/SUIsei` submodule) — a standalone, GPU-free XAML UI runtime + `SUIsei.SourceGen` + `SUIsei.Tests`; integrated through `Loom.UI.SUIsei`. `Loom.UI.ImGui` is the debug-HUD bridge. Both reach the GPU only through the neutral draw-list verb, so neither backend references a UI library.

@@ -33,7 +33,7 @@ string Doc(string name) => docs.TryGetValue(name, out var s) ? s : $"<!-- {name}
 var xmlSummaries = new List<(string Member, string Summary)>();
 // Only include key consumer-facing assemblies in XML summaries (keeps full output manageable)
 var keyAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    { "Loom.Core", "Loom.Graph", "Loom.Assets", "Loom.Audio", "SUIsei" };
+    { "Loom.Core", "Loom.Graph", "Loom.Assets", "Loom.Audio", "Loom.Audio.Synth", "SUIsei" };
 // Every project that references an assembly copies its XML doc into its own output, so one assembly's doc is on disk
 // many times over. Read each assembly once, from its newest copy, so the output depends on the sources rather than on
 // how many projects happen to have been built.
