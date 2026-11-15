@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The song's sections: a button each, the one playing lit, a click jumping to it at the next bar; and the loop. -->
+<ContentControl xmlns="https://github.com/AtomicBlom/SUIsei/ui"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                x:Class="Loom.Audio.Workbench.Views.SectionStrip"
+                IsTabStop="False">
+    <StackPanel>
+        <TextBlock x:Name="Heading" Text="Sections" FontSize="13" Margin="0,0,0,6" />
+        <StackPanel x:Name="Buttons" Orientation="Horizontal" />
+        <CheckBox x:Name="LoopCheck" Content="Loop the section playing" Margin="0,8,0,0" />
+    </StackPanel>
+</ContentControl>

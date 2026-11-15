@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The patch bench: a button per patch and per kit, a keyboard of two octaves (and the keys A W S E D F T G Y H U J K),
+    how hard it plays, the patch's eight macros, and a pad per piece when a kit is chosen.
+-->
+<ContentControl xmlns="https://github.com/AtomicBlom/SUIsei/ui"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                x:Class="Loom.Audio.Workbench.Views.PatchBench"
+                IsTabStop="False">
+    <ScrollViewer>
+        <StackPanel>
+            <TextBlock x:Name="Heading" Text="Patch bench" FontSize="13" Margin="0,0,0,6" />
+            <StackPanel x:Name="PatchButtons" Orientation="Horizontal" Margin="0,0,0,2" />
+            <StackPanel x:Name="KitButtons" Orientation="Horizontal" Margin="0,0,0,6" />
+            <ContentControl x:Name="KeyboardHost" IsTabStop="False" Margin="0,0,0,6" />
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="VelocityLabel" Text="velocity" FontSize="12" Width="70" VerticalAlignment="Center" />
+                <Slider x:Name="VelocitySlider" Minimum="0.05" Maximum="1" StepFrequency="0.01" Width="220" Height="30" />
+                <TextBlock x:Name="OctaveLabel" FontSize="12" Margin="12,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel x:Name="MacroSliders" Margin="0,4,0,0" />
+            <StackPanel x:Name="PadButtons" Orientation="Horizontal" Margin="0,6,0,0" />
+        </StackPanel>
+    </ScrollViewer>
+</ContentControl>

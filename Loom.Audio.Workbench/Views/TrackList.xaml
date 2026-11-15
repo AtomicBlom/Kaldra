@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The tracks, a row each with its parts under it, scrolling when there are many. -->
+<ContentControl xmlns="https://github.com/AtomicBlom/SUIsei/ui"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                x:Class="Loom.Audio.Workbench.Views.TrackList"
+                IsTabStop="False">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <TextBlock x:Name="Heading" Grid.Row="0" Text="Tracks" FontSize="13" Margin="0,0,0,6" />
+        <ScrollViewer x:Name="Scroller" Grid.Row="1">
+            <StackPanel x:Name="Rows" />
+        </ScrollViewer>
+    </Grid>
+</ContentControl>

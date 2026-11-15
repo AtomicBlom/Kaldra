@@ -22,6 +22,7 @@
   <Project Path="Loom.Tests/Loom.Tests.csproj" />
   <Project Path="Loom.UI.ImGui/Loom.UI.ImGui.csproj" />
   <Project Path="Loom.UI.SUIsei/Loom.UI.SUIsei.csproj" />
+  <Project Path="samples/HelloSynth/HelloSynth.csproj" />
   <Folder Name="/SUIsei/">
     <Project Path="external\SUIsei\SUIsei\SUIsei.csproj" />
     <Project Path="external/SUIsei/SUIsei.HarfBuzz/SUIsei.HarfBuzz.csproj" />
