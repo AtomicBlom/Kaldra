@@ -24,7 +24,7 @@
        can read them at runtime. LOOM_GOLDEN_UPDATE (or tools/golden.ps1 -Update) regenerates them in the source tree. -->
   <ItemGroup>
     <Content Include="Goldens\**\*.png" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="AudioFixtures\*.ogg;AudioFixtures\*.s16" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="AudioFixtures\*.ogg;AudioFixtures\*.s16;AudioFixtures\*.flac" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Apps SdkXamlTests builds through the Loom SDK, each its own project (in no solution): none of their sources,
