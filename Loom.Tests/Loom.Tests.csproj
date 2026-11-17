@@ -51,6 +51,7 @@
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
     <ProjectReference Include="..\Loom.Audio.Synth\Loom.Audio.Synth.csproj" />
     <ProjectReference Include="..\Loom.Audio.Workbench\Loom.Audio.Workbench.csproj" />
+    <ProjectReference Include="..\Loom.Audio.Workbench.Projects\Loom.Audio.Workbench.Projects.csproj" />
   </ItemGroup>
 
   <!-- The demo gallery: the in-process golden/parity tests render its scenes offscreen (GPU-gated), and its

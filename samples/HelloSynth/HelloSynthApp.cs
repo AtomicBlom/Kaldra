@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 using HelloSynth.Demo;
 
 using Loom.Audio;
@@ -23,7 +21,6 @@ public sealed class HelloSynthApp : LoomApplication
 	private UIPainter _painter = null!;
 	private UIView _view = null!;
 	private Workbench _workbench = null!;
-	private string _saved = "";
 	private double _sinceSave;
 
 	protected override void Configure(AppOptions options)
@@ -44,7 +41,7 @@ public sealed class HelloSynthApp : LoomApplication
 
 		var music = Audio.CreateBus("music");
 		_workbench = new Workbench(Audio, music, DemoCatalog.Make());
-		if (Load() is { } state)
+		if (State.Load() is { } state)
 			_workbench.RestoreState(state);
 		_view.Root.Content = new WorkbenchView(_workbench.ViewModel);
 		PushInputLayer(new SUIseiInputLayer(_ui));
@@ -71,7 +68,7 @@ public sealed class HelloSynthApp : LoomApplication
 		if (_sinceSave >= 1.0)
 		{
 			_sinceSave = 0;
-			Save();
+			State.Save(_workbench.CaptureState());
 		}
 	}
 
@@ -85,32 +82,10 @@ public sealed class HelloSynthApp : LoomApplication
 
 	protected override void UnloadContent()
 	{
-		Save();
+		State.Save(_workbench.CaptureState());
 		_workbench.Dispose();
 	}
 
-	private static string StatePath { get; } =
-		Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Loom.HelloSynth", "workbench.json");
-
-	private void Save()
-	{
-		var json = JsonSerializer.Serialize(_workbench.CaptureState(), WorkbenchStateJson.Default.WorkbenchState);
-		if (json == _saved)
-			return;
-		Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
-		File.WriteAllText(StatePath, json);
-		_saved = json;
-	}
-
-	private static WorkbenchState? Load()
-	{
-		try
-		{
-			return File.Exists(StatePath) ? JsonSerializer.Deserialize(File.ReadAllText(StatePath), WorkbenchStateJson.Default.WorkbenchState) : null;
-		}
-		catch (JsonException)
-		{
-			return null;
-		}
-	}
+	private static readonly WorkbenchStateFile State =
+		new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Loom.HelloSynth", "workbench.json"));
 }
