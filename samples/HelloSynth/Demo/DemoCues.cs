@@ -2,14 +2,6 @@ using Loom.Audio.Synth.Music;
 
 namespace HelloSynth.Demo;
 
-/// <summary>A mood for the demo's motifs: one plays at a time.</summary>
-internal enum DemoMood
-{
-	Calm,
-	Bright,
-	Dark,
-}
-
 /// <summary>What the demo's music listens to. A game keeps its cues in static fields like these, and every song uses them.</summary>
 internal static class DemoCues
 {
