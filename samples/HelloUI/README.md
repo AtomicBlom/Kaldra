@@ -4,7 +4,7 @@ A SUIsei XAML page (a tap counter, a slider, a checkbox, and the GPU and runtime
 
 | Target | Output | Host |
 |---|---|---|
-| `net10.0` | a desktop exe | `Loom.Hosting.Desktop` (GLFW window) |
+| `net11.0` | a desktop exe | `Loom.Hosting.Desktop` (GLFW window) |
 | `net11.0-android` | an APK (CoreCLR) | `Loom.Hosting.Android` (`LoomActivity`) |
 
 Only the entry point differs: `Platforms/Desktop/Program.cs`, or `Platforms/Android/MainActivity.cs`. The page lays out at `LoomApplication.DisplayScale`, so it keeps one physical size on a 100% monitor, a 200% tablet and a phone.
@@ -12,7 +12,7 @@ Only the entry point differs: `Platforms/Desktop/Program.cs`, or `Platforms/Andr
 ## Desktop
 
 ```bash
-dotnet run --project samples/HelloUI -f net10.0
+dotnet run --project samples/HelloUI -f net11.0
 ```
 
 ## Android

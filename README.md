@@ -1,6 +1,6 @@
 # Loom
 
-A declarative, render-graph-driven rendering engine for .NET 10, running on **Vulkan and DirectX 12 at pixel parity**.
+A declarative, render-graph-driven rendering engine for .NET 11, running on **Vulkan and DirectX 12 at pixel parity**.
 
 You declare *what* each render pass reads and writes; Loom derives ordering, barriers, image-layout transitions, transient memory aliasing, and CPU↔GPU synchronisation. The procedural, struct-heavy graphics-API code is quarantined in a backend layer and never leaks into the authoring API.
 
@@ -216,7 +216,7 @@ dotnet run   --project Loom.Sandbox -- --demo bloom --backend dx12   # pick a de
 dotnet run   --project Loom.Tests               # unit tests (TUnit) — incl. GPU-gated golden/parity over the gallery
 ```
 
-Android builds from the same app source, with the `android` workload installed: `samples/HelloUI` targets both `net10.0` (a desktop exe) and `net11.0-android` (an APK on CoreCLR, Vulkan 1.3, SUIsei with touch). `dotnet build samples/HelloUI -f net11.0-android -t:Run` installs and starts it on a connected device; [`samples/HelloUI/README.md`](samples/HelloUI/README.md) has the rest. The demo gallery runs there too: `dotnet build Loom.Sandbox.Android -t:Run` installs `Loom.Gallery`'s `GalleryApp` (the gallery without the desktop's ImGui dev tools), its shaders embedded and its models packed into the APK. The Android projects live in `Loom.Android.slnx`, so `Loom.slnx` never needs the workload.
+Android builds from the same app source, with the `android` workload installed: `samples/HelloUI` targets both `net11.0` (a desktop exe) and `net11.0-android` (an APK on CoreCLR, Vulkan 1.3, SUIsei with touch). `dotnet build samples/HelloUI -f net11.0-android -t:Run` installs and starts it on a connected device; [`samples/HelloUI/README.md`](samples/HelloUI/README.md) has the rest. The demo gallery runs there too: `dotnet build Loom.Sandbox.Android -t:Run` installs `Loom.Gallery`'s `GalleryApp` (the gallery without the desktop's ImGui dev tools), its shaders embedded and its models packed into the APK. The Android projects live in `Loom.Android.slnx`, so `Loom.slnx` never needs the workload.
 
 On Android, each finger is a touch contact as on Windows and in the browser (a pen is a pointer), a keyboard sends keys and text as on the desktop, the system's Back arrives as Escape (the app decides whether to leave), a mouse's buttons and a pen's barrel buttons are their own, and game controllers are pads with rumble. The on-screen keyboard opens while an input layer asks for text (`InputContext.RequestTextInput`, which SUIsei's layer does while a `TextBox` has focus); its height reaches the app as `LoomApplication.InputPaneHeight`, and in SUIsei `UIRoot.InputPaneHeight` plus `suisei:InputPane.AvoidsKeyboard="True"` on an element arranges that element clear of it, while a `ScrollViewer` keeps its focused field in view and pans by touch.
 

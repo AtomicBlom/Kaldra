@@ -5,7 +5,7 @@
 ## Requirements
 
 - A browser with WebGPU support (`navigator.gpu`)
-- .NET 10, published as WebAssembly (e.g. a Blazor WebAssembly host)
+- .NET 11, published as WebAssembly (e.g. a Blazor WebAssembly host)
 - .NET's WASM interop (`System.Runtime.InteropServices.JavaScript`) plus a JS shim that implements the device/command-buffer bridge — see `Loom.Web` in the [Loom repo](https://github.com/AtomicBlom/Loom) for a working host
 
 ## What's included
