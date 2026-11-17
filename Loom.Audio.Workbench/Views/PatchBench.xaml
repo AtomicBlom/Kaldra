@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    The patch bench: a button per patch and per kit, the one played lit; a keyboard of two octaves (and the keys
-    A W S E D F T G Y H U J K); how hard it plays; the patch's eight macros; and a pad per piece when a kit is chosen.
+    Patch: the patch chosen in the library, played from the keyboard docked below, with its eight macros as sliders.
 -->
 <ContentControl xmlns="https://github.com/AtomicBlom/SUIsei/ui"
                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -10,67 +9,20 @@
                 x:Class="Loom.Audio.Workbench.Views.PatchBench"
                 IsTabStop="False">
     <ScrollViewer>
-        <StackPanel>
-            <TextBlock Text="Patch bench" FontSize="13" Foreground="{x:Static views:Theme.Dim}" Margin="0,0,0,6" />
-            <ItemsControl ItemsSource="{x:Bind ViewModel.Patches, Mode=OneWay}" Margin="0,0,0,2">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="wb:ChoiceViewModel">
-                        <ToggleButton IsChecked="{x:Bind IsSelected, Mode=TwoWay}" Margin="0,0,4,4">
-                            <TextBlock Text="{x:Bind Name}" FontSize="13" Margin="8,3,8,4" HorizontalAlignment="Center" />
-                        </ToggleButton>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <ItemsControl ItemsSource="{x:Bind ViewModel.Kits, Mode=OneWay}" Margin="0,0,0,6">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="wb:ChoiceViewModel">
-                        <ToggleButton IsChecked="{x:Bind IsSelected, Mode=TwoWay}" Margin="0,0,4,4">
-                            <TextBlock Text="{x:Bind views:Display.Kit(Name)}" FontSize="13" Margin="8,3,8,4" HorizontalAlignment="Center" />
-                        </ToggleButton>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <views:Keyboard ViewModel="{x:Bind ViewModel, Mode=OneWay}" Margin="0,0,0,6" />
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="velocity" FontSize="12" Foreground="{x:Static views:Theme.Dim}" Width="70" VerticalAlignment="Center" />
-                <Slider Minimum="0.05" Maximum="1" StepFrequency="0.01" Width="220" Height="30"
-                        Value="{x:Bind ViewModel.Velocity, Mode=TwoWay}" />
-                <TextBlock Text="{x:Bind views:Display.Octave(ViewModel.Octave), Mode=OneWay}" FontSize="12"
-                           Foreground="{x:Static views:Theme.Dim}" Margin="12,0,0,0" VerticalAlignment="Center" />
-            </StackPanel>
-            <ItemsControl ItemsSource="{x:Bind ViewModel.Macros, Mode=OneWay}" Margin="0,4,0,0"
+        <StackPanel Margin="12,10,16,12">
+            <TextBlock Text="{x:Bind ViewModel.DockLabel, Mode=OneWay}" FontSize="16" Foreground="{x:Static views:Theme.Ink}" Margin="0,0,0,4" />
+            <TextBlock Text="Play it from the keyboard below, or A W S E D F T G Y H U J K." FontSize="12"
+                       Foreground="{x:Static views:Theme.Dim}" Margin="0,0,0,12" />
+            <TextBlock Text="MACROS" FontSize="10" Foreground="{x:Static views:Theme.Faint}" Margin="0,0,0,6" />
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Macros, Mode=OneWay}"
                           Visibility="{x:Bind views:Display.Chosen(ViewModel.SelectedPatch), Mode=OneWay}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="wb:MacroViewModel">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="{x:Bind Name}" FontSize="12" Foreground="{x:Static views:Theme.Dim}" Width="70"
                                        VerticalAlignment="Center" />
-                            <Slider Minimum="0" Maximum="1" StepFrequency="0.01" Width="220" Height="26" Value="{x:Bind Value, Mode=TwoWay}" />
+                            <Slider Minimum="0" Maximum="1" StepFrequency="0.01" Width="260" Height="26" Value="{x:Bind Value, Mode=TwoWay}" />
                         </StackPanel>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <ItemsControl ItemsSource="{x:Bind ViewModel.Pads, Mode=OneWay}" Margin="0,6,0,0">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="wb:PadViewModel">
-                        <Button Command="{x:Bind Hit}" Margin="0,0,4,4">
-                            <TextBlock Text="{x:Bind Piece}" FontSize="13" Margin="8,3,8,4" HorizontalAlignment="Center" />
-                        </Button>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>

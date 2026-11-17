@@ -77,7 +77,7 @@ public sealed class HelloSynthApp : LoomApplication
 
 	protected override void BeforeRender(FrameTime time)
 	{
-		_view.Root.LayoutScale = DisplayScale;
+		_view.Root.LayoutScale = WorkbenchView.FitScale(SurfaceSize, DisplayScale);
 		_ui.Tick(time.DeltaSeconds, (float)time.TotalSeconds, SurfaceSize);
 		_ui.Render();
 		_painter.Prepare();
