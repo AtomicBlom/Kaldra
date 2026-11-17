@@ -155,7 +155,7 @@ Its own load-bearing properties, beside §3's:
 - **Lowest latency the platform offers on native hosts**, because the target is software synthesizers and procedural music played live. The mix runs on the device's own audio thread at the device's own rate. The browser trades latency for a lead the frame thread renders ahead, since the .NET runtime can't run on the browser's audio thread.
 - **The game and audio threads share no lock**, and neither allocates once running: commands and events cross on single-producer, single-consumer rings, continuous controls through `AudioParameter`.
 - **Fail loud, except for a missing speaker.** Misuse throws on the frame thread (a wrong-thread call, a full command queue, a clip at the wrong rate, a source played twice), and an exception in a source is thrown again from `Update`. A machine with no output is not an app bug, so it runs silent on a `NullAudioDevice` with a logged warning.
-- **Buses take effects and sends:** `AudioEffect`s run on a bus before its volume, and a send mixes one bus into another made before it, as a reverb bus is fed. `Loom.Audio.Synth` has the effects themselves.
+- **Buses take effects and sends:** `AudioEffect`s run on a bus before its volume, and a send mixes one bus into another, as a reverb bus is fed; the mix order is derived from the parents and sends, never declared. `Loom.Audio.Synth` has the effects themselves.
 
 ### Remaining roadmap
 
