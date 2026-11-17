@@ -25,4 +25,7 @@ public sealed class Conductor
 		var value = (int)_cue(cue);
 		return (T)Enum.ToObject(typeof(T), value);
 	}
+
+	// Any cue's value as the sequencer holds it, for a condition a song file's rules ask
+	internal float Value(CueBase cue) => _cue(cue);
 }
