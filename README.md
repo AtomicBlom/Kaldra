@@ -228,7 +228,18 @@ Three things a game needs on every host:
 
 The sandbox is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in `Loom.Tests` — `GalleryGoldenTests`/`GalleryParityTests` render the gallery offscreen in-process (GPU-gated; skipped without one). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
 
-**Audio** — [`Loom.Audio`](Loom.Audio): set `AppOptions.Audio` and play through `LoomApplication.Audio`. Clips (WAV, Ogg Vorbis, FLAC), music streamed from Ogg Vorbis or FLAC as it plays, and game-written sources (software synthesizers, procedural music, sample by sample) play on pooled voices mixed through a tree of buses, with ducking between them and 3D voices placed for a listener the game feeds, on the platform's audio thread at its lowest latency: SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser. The game and audio threads share no lock, and the steady mix allocates nothing. `samples/HelloAudio` is a playable synthesizer, and [the audio guide](docs/audio.md) covers the API, the threading model and each platform. [`Loom.Audio.Synth`](Loom.Audio.Synth) builds synthesis on it, and renders sound offline to measure or save ([the synthesis guide](docs/synth.md)). [`Loom.Audio.Workbench`](Loom.Audio.Workbench) is a SUIsei window to write a game's music in, as code rebuilt on every save under `dotnet watch`; `samples/HelloSynth` hosts it over a demo song.
+**Audio** — [`Loom.Audio`](Loom.Audio): set `AppOptions.Audio` and play through `LoomApplication.Audio`. Clips (WAV, Ogg Vorbis, FLAC), music streamed from Ogg Vorbis or FLAC as it plays, and game-written sources (software synthesizers, procedural music, sample by sample) play on pooled voices mixed through a tree of buses, with ducking between them and 3D voices placed for a listener the game feeds, on the platform's audio thread at its lowest latency: SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser. The game and audio threads share no lock, and the steady mix allocates nothing. `samples/HelloAudio` is a playable synthesizer, and [the audio guide](docs/audio.md) covers the API, the threading model and each platform. [`Loom.Audio.Synth`](Loom.Audio.Synth) builds synthesis on it, and renders sound offline to measure or save ([the synthesis guide](docs/synth.md)). 
+
+### Write music: `loom-workbench`
+
+`loom-workbench` ([`Loom.Audio.Workbench.App`](Loom.Audio.Workbench.App)) is where a game's music is written. It opens a music project (a class library of songs, patches, kits and cues: files it edits and C# for what they can't say), plays it, and compiles it again in-process with Roslyn on every save, the song swapped in at the next bar. Arrange the sections and steer the cues, edit a part on the piano roll, design a patch from its operators, sketch a beat on a kit, and eject any piece to C# or bring it back as data.
+
+```bash
+dotnet run --project Loom.Audio.Workbench.App -- samples/HelloSynth   # the sample music project
+dotnet run --project Loom.Audio.Workbench.App -- new ../MyTunes       # a project of your own, from it
+```
+
+A game adds its own mix and controls beside the music with an extension (`IWorkbenchExtension`), and an app can host the workbench itself ([`Loom.Audio.Workbench`](Loom.Audio.Workbench), a SUIsei view). [The synthesis guide](docs/synth.md), sections 10 and 11, has the rest; [`samples/HelloSynth/README.md`](samples/HelloSynth/README.md) walks through the sample.
 
 ## Packages
 

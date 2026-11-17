@@ -54,6 +54,8 @@
     <ProjectReference Include="..\Loom.Audio.Workbench.Projects\Loom.Audio.Workbench.Projects.csproj" />
     <!-- Driven in-process by MusicGeneratorTests, as a library rather than as this project's analyzer -->
     <ProjectReference Include="..\Loom.Audio.Music.Generator\Loom.Audio.Music.Generator.csproj" />
+    <!-- The sample music project, whose generated music is checked against its files -->
+    <ProjectReference Include="..\samples\HelloSynth\HelloSynth.csproj" />
   </ItemGroup>
 
   <!-- The demo gallery: the in-process golden/parity tests render its scenes offscreen (GPU-gated), and its
