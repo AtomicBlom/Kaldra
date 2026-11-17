@@ -534,7 +534,7 @@ Clips and game-written sources played on pooled voices, mixed through a tree of 
 | `SetVolume`, `SetPitch`, `SetPan`, `Stop(voice, fadeSeconds)`, `IsPlaying(voice)` | Steer a voice. Every change ramps across at least a block, so nothing clicks. A stale handle (its voice ended) is ignored. |
 | `CreateBus(name, parent)` → `AudioBus`, `SetBusVolume(bus, volume, fadeSeconds)`, `Master` | A tree of buses under the master; mix order follows from the tree. Made at load, never removed. |
 | `AudioEffect`, `AddEffect(bus, effect)` | Subclass for something that changes a bus's sound: `OnPrepare(sampleRate)` on the frame thread, `Process(left, right)` in place on the audio thread. Runs before the bus's volume, in the order added; `Bypass` turns it off. One bus per instance. At most `MaxEffectsPerBus` (8) a bus. |
-| `AddSend(from, to, level)` → `AudioSend`, `SetSendLevel`, `GetSendLevel` | A share of one bus mixed into another made before it (a reverb bus), besides its parent. At most `MaxSends` (16). |
+| `AddSend(from, to, level)` → `AudioSend`, `SetSendLevel`, `GetSendLevel` | A share of one bus mixed into another (a reverb bus), besides its parent; the engine derives the order to mix them in, and refuses a loop. At most `MaxSends` (16). |
 | `AudioSource` | Subclass for sound the game writes: `OnStart(sampleRate)` on the frame thread, `Render(left, right, in AudioRenderInfo)` on the audio thread (no allocation, locks or blocking; false ends the voice; an exception stops the voice and is thrown again from `Update`). One voice at a time: `IsPlaying` holds until the voice has ended, a stop's fade included. |
 | `AudioRenderInfo` | The block's `Frames`, the engine's `SampleRate`, and `FrameTime`, the audio clock a sequencer counts on. |
 | `AudioParameter` | A continuous control: the game sets `Value`; the source takes `Ramp(frames)` once a block and `Next()` once a sample, or `Snap()`. |
@@ -1861,8 +1861,8 @@ An effect changes the sound passing through a bus: a reverb, a limiter, a distor
 several buses share one reverb.
 
 ```csharp
-var space = Audio.CreateBus("space");          // made first: it receives sends
 var sfx = Audio.CreateBus("sfx");
+var space = Audio.CreateBus("space");          // the room several buses send to
 Audio.AddEffect(space, new Reverb());          // Loom.Audio.Synth.Effects; Wet 1, Dry 0 suit a bus fed by sends
 var toSpace = Audio.AddSend(sfx, space, 0.1f);
 Audio.AddEffect(Audio.Master, new Limiter());
@@ -1873,9 +1873,11 @@ Audio.SetSendLevel(toSpace, 0.4f, fadeSeconds: 0.2f); // more of the sound off t
 - **The order within a bus is its effects, then its volume, then its ducks.** Effects run on everything mixed into
   the bus, before its volume, so a reverb's tail is turned down by the bus's volume with everything else. They run in
   the order added. On the master bus they run before the focus volume and the final clip.
-- **A send's target is made before the bus that sends.** Buses are mixed from the last made back to the first, so the
-  target is finished after the sender, with the sent sound in it. A send to a bus made later, to itself, or to a bus it
-  is already mixed into throws. The sound sent is the bus's after its effects, volume and ducks.
+- **Buses and sends are made in any order.** The engine works out the order to mix them in from what feeds what: a bus
+  is finished before the bus it is mixed into and before the buses it sends to, so each receives the whole of what is
+  sent to it. A send that would make a loop (a bus sending to one mixed into it, or round through other sends), a send
+  to itself or to a bus it is already mixed into, and a send from the master throw. The sound sent is the bus's after
+  its effects, volume and ducks.
 - `Process` runs on the audio thread under the rules for a source's `Render` ([The rules for `Render`](#the-rules-for-render)):
   size buffers in `OnPrepare`, which `AddEffect` calls on the game thread. Its controls are `AudioParameter` and
   `SmoothedParameter` members of its own.
@@ -2006,7 +2008,10 @@ Audio.Play(_music, musicBus);
 - **The lead is latency.** A change to the inner source's controls is heard up to the lead later. Music can take that
   (the music player's `aheadSeconds`, [synth.md](synth.md)); a sound effect, a sound that follows the player's hands or a click
   of the UI should play directly.
-- **A play renders the whole lead at once,** on the frame thread, so it sounds from its first block.
+- **A play doesn't stall the frame.** With a worker, the worker renders the first lead and the source is silent until
+  it is waiting (a few milliseconds), which isn't counted as an underrun; rendering it on the frame thread cost a song of
+  nine tracks 9 ms there. With `AudioWork.Update` (tests, offline renders) the play renders the lead at once, so it
+  sounds from its first block and a render is the same however it is run.
 - **If the work falls behind,** the block plays silence where nothing waits, counted in `Underruns`, and the source
   carries on from where it stopped, none of it lost. `FramesHeard` and `FramesRendered` say how far each side has got.
 - **The inner source must not play on its own** while wrapped (a play of it throws), and its controls keep one reader:
@@ -2220,6 +2225,24 @@ The rules:
 - A frequency between two bins of `Spectrum` reads lower than its amplitude, by up to 1.4 dB with the Hann window.
   `LevelAt` reads any frequency exactly, so measure a known frequency with it.
 
+### Taking a sound apart: `Loom.Audio.Synth.Analysis`
+
+For designing a patch like a recording, or judging a change to a mix without ears. Each takes one channel (or
+interleaved stereo for a mix) and its rate, and, like `AudioAnalysis`, allocates.
+
+| Call | What it measures |
+|---|---|
+| `HitMeasures.Onsets` | Where each hit starts: a jump of 9 dB in the loudest of the last 20 ms |
+| `HitMeasures.Pitch` | The pitch under a frequency at given times, from its half-cycles: a kick's fall |
+| `HitMeasures.Tones` | The tones standing out of the body (`Tone`: hertz, level) |
+| `HitMeasures.Brightness` | The spectrum's centre over a window from a time: how the top fades |
+| `HitMeasures.Flatness`, `BandEnvelope` | Each band's noisiness (1 noise, near 0 a tone) and its level over time |
+| `HitMeasures.Tail` | How long until it stays under a share of its peak |
+| `NoteMeasures.Partials` | A note's partials (`Partial`), its fundamental, and whether they are harmonics |
+| `NoteMeasures.Ring` | How one partial rings (`PartialRing`): its peak and when, its fall early and late, how it beats |
+| `NoteMeasures.Strike` | How much brighter the first 15 ms are than 60 ms in |
+| `MixMeasures.Balance`, `Spread` | A mix's energy by band, its centre, its crest, how wide it is; a stretch in brief |
+
 ## 4. Building blocks: `Loom.Audio.Synth.Dsp`
 
 What an `AudioSource` is made of. The structs hold their own state and are meant to be **fields of a source**: set
@@ -2294,9 +2317,9 @@ defaults of the tables below.
 A reverb shared by several buses, through sends:
 
 ```csharp
-var space = Audio.CreateBus("space");     // made first: it receives sends
 var sfx = Audio.CreateBus("sfx");
 var music = Audio.CreateBus("music");
+var space = Audio.CreateBus("space");     // the room both send to: buses may be made in any order
 var reverb = new Reverb(size: 1.2f);
 Audio.AddEffect(space, reverb);
 var sfxToSpace = Audio.AddSend(sfx, space, 0.1f);
@@ -2426,7 +2449,8 @@ cubic into a hard clip), `Asymmetric` (tanh off centre, even harmonics) or `Fold
 `None`, `OneByTwelve` or `FourByTwelve`; oversampling is 1, 2 or 4. The dry sound is delayed by the oversampler's own
 `DryDelayFrames` so a mix lines up exactly. **Cost:** a stereo distortion at 4× with a cabinet is the dearest
 effect, about 1% of a core; like every effect it rests while silence goes in and comes out (`docs/audio.md`, "Effects
-and sends"), so on a song's group it costs that only while its tracks play.
+and sends"), so on a song's group it costs that only while its tracks play. Nearly all of that is the 4× oversampler's
+filters: at 1× (`oversampling: 1`, or `Fx.Distortion(…, oversampling: 1)`) it costs a fifth as much, and aliases.
 
 | Control | Default | Meaning |
 |---|---|---|
@@ -2705,7 +2729,9 @@ frets (`Power` and `Triad` too); `Spread(ms)` sets the time between strings (12 
 
 A song sets its `Tempo` (120), `Meter` (4/4; set it before placing any part, since parts are checked against it), `Scale`,
 `Voices` (32, its chip's), and the effects of its chip's sends and master (`SpaceEffects`, `EchoEffects`,
-`MasterEffects`, as factories). It holds at most 64 tracks.
+`MasterEffects`, as factories). It holds at most 64 tracks. Once a player has compiled it (`Play`, `Swap`) a song is
+fixed: changing it, its tracks, sections, macros or placements throws, since what plays was made from it. Build a new
+one to change it, as a rebuild does.
 
 A track is a patch or a kit, with its octave (degree 1's, 4 unless set), level, pan, `Humanise(timingMs, velocity)` (each
 note late by up to twice `timingMs`, `timingMs` on average, never early, the same every time), `Swing(ratio)` (0.667 a
@@ -2740,7 +2766,10 @@ never starts halfway.
 
 ### The player
 
-`MusicPlayer` plays one song at a time on a bus, a new one crossfading over the last; `Update()` once a frame. `Position`
+`MusicPlayer` plays one song at a time on a bus, a new one crossfading over the last; `Update()` once a frame.
+**Starting a song without a stall:** `Prepare(song)` compiles it and makes its chip, needs no engine and may run on any
+thread; `Play(prepared)` then starts it on the engine's. A game builds and prepares a level's song on a task as the level
+loads, and plays it when it is ready. `Position`
 says the section, bar and beat; `Jump`, `LoopSection`, `Mute`, `Solo`, `SetTrackGain` and `Force` (a placement held on or
 off) steer it; `IsActive` and `TrackPeak` read it, for a workbench. **`Swap(song)`** takes the song rebuilt at the next
 bar line, in the scale playing, carrying on in the section of the same name at the same bar (or the first section if that
@@ -2809,6 +2838,11 @@ protected override void Update(FrameTime time)
 	// ... CaptureState() saved to a file when it changes
 }
 ```
+
+The workbench uses only `Loom.Audio.Synth`'s public API, so a game can build a tool of its own the same way: a
+placement's `Section`, `Track`, `Condition` (whose `ToString` says it in words), `LevelCue` and `IsOnPhrase`; a cue's
+`OptionNames` and `OptionValue`; the player's `Get` and `Set` for any cue, `SectionTick` for a playhead, and
+`Pattern(placement)`, one pass of a part's notes as the sequencer plays them.
 
 `WorkbenchView.TransportExtras` is a panel at the end of the transport bar for the host's own controls (a toggle for a
 sound of the game's own to hear under the music, say). `CaptureState` and `RestoreState` keep the song, whether it
@@ -2917,6 +2951,14 @@ The mutes, solos, gains and forced placements carry over by name.
 - **Loom.Audio.PaddedIndex**: An index alone on its cache line, so two threads each writing their own (a queue's head and tail) don't slow each other down by sharing one. Not nested in : a type nested in a generic type is generic itself, and the runtime refuses explicit layout on a generic type.
 - **Loom.Audio.ParameterRamp**: A straight line across a block, from : call once a sample.
 - **Loom.Audio.SmoothedParameter**: A continuous control the game sets and an reads, eased toward its target with a time constant rather than in a straight line across one block: a motor's revs, a wind's strength, a gain the game sets each step. Use it for a value the game moves often and in steps (60 times a second), which an would follow as a staircase of short ramps; use where the game's value should be reached exactly within the block (a level set by a menu).
+- **Loom.Audio.Synth.Analysis.Balance**: A mix's balance ().
+- **Loom.Audio.Synth.Analysis.HitMeasures**: A struck sound taken apart, to design a patch like it: where each hit starts, how its pitch falls over its first moments, the tones that ring in it, how bright it is as it fades, each band's level over time and how noisy it is, and how long it takes to die. Measures of one channel of samples at a rate. Like , they allocate and are for tools and tests, never the audio thread.
+- **Loom.Audio.Synth.Analysis.MixMeasures**: A rendered mix measured, so a change to it can be judged without ears: where its energy lies, how bright, how squashed and how wide it is. Measures of interleaved stereo samples at a rate. Like , they allocate and are for tools and tests, never the audio thread.
+- **Loom.Audio.Synth.Analysis.NoteMeasures**: A pitched note taken apart, struck or plucked, to design a patch like it: its partials, each one's pitch and level, how each rings early and later and how much it beats, and how bright its strike is. Measures of one channel of samples at a rate. Like , they allocate and are for tools and tests, never the audio thread.
+- **Loom.Audio.Synth.Analysis.Partial**: A partial of a note ().
+- **Loom.Audio.Synth.Analysis.PartialRing**: How a partial rings (). NaN where the note is too short to tell.
+- **Loom.Audio.Synth.Analysis.Spread**: A stretch of a mix in brief ().
+- **Loom.Audio.Synth.Analysis.Tone**: A tone standing out in a sound's spectrum ().
 - **Loom.Audio.Synth.AudioAnalysis**: Measures of a rendered signal, for tests and reports: level, peak, the level at a frequency, the strongest frequency.
 - **Loom.Audio.Synth.Chip.ChipCore**: The rendering half of a : voices, groups and their effects, the two sends, the master. Not an , so a sequencer can drive one directly, sample-accurately, by handing it events between renders. Everything is allocated in ; handling events and rendering allocate nothing.
 - **Loom.Audio.Synth.Chip.ChipEvent**: One thing for the chip's core to do, from the game thread through the chip's queue, or from a sequencer driving a core directly. A struct, so posting one allocates nothing.
@@ -3011,9 +3053,12 @@ The mutes, solos, gains and forced placements carry over by name.
 - **Loom.Audio.Synth.Music.ParsedPart**: A part read against the song's meter: how long one pass of it is, and how it becomes events.
 - **Loom.Audio.Synth.Music.Part**: Something a track plays in a section: a of notes, a of drums, or a of chords. Each is written as a string and checked when it is placed ().
 - **Loom.Audio.Synth.Music.PartContext**: What a part needs to become events in one section on one track: the scale, the section's chords, the track's octave and kit, the tempo, and the track's swing.
+- **Loom.Audio.Synth.Music.PatternEvent**: A note or a hit of a .
 - **Loom.Audio.Synth.Music.Pitch**: A pitch as a MIDI note number, 69 being A 440; fractions bend it.
 - **Loom.Audio.Synth.Music.Placement**: A part a track plays in a section, and when: a condition, a level following a cue, a fill. Its setters chain.
+- **Loom.Audio.Synth.Music.PlacementPattern**: One pass of a placement's part as the sequencer plays it ().
 - **Loom.Audio.Synth.Music.PlacementState**: How a placement's playing is decided (): by its condition, or held on or off.
+- **Loom.Audio.Synth.Music.PreparedSong**: A song made ready to play (): compiled in its scale, its chip's voices and effects made. That is the costly part of starting a song, and needs no engine, so a game can do it on a thread of its own and hand the result to on the engine's. Played once.
 - **Loom.Audio.Synth.Music.Scale**: A scale: a root and the steps above it. Music is written in its degrees (1 the root, 8 the octave above), so a song moves to another key, or another mode, by being played in another scale.
 - **Loom.Audio.Synth.Music.Section**: A stretch of a song (a verse, a chorus) some bars long over its chords, and the parts its tracks play in it.
 - **Loom.Audio.Synth.Music.SectionChords**: A section's chords: bars separated by |, each one chord or two or four sharing the bar evenly. Fewer bars than the section has repeat to fill it.
