@@ -13,6 +13,8 @@
   <ItemGroup>
     <PackageReference Include="TUnit" />
     <PackageReference Include="Shouldly" />
+    <!-- Compiles the C# that PatchCode writes, to check it builds the patch it was written from -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
   <ItemGroup>
