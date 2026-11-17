@@ -29,7 +29,7 @@ internal static class DemoPatches
 		p.Mono();
 	});
 
-	/// <summary>A plucked string, rung by a burst of noise.</summary>
+	/// <summary>A plucked string, its pluck shaped at the pick point.</summary>
 	public static Patch Pluck => Patch.Build("pluck", p =>
 	{
 		p.Out(p.String(1f, decaySeconds: 2.5f, damping: 0.4f));
@@ -40,7 +40,9 @@ internal static class DemoPatches
 	/// <summary>A saw lead whose filter the Bright macro opens.</summary>
 	public static Patch SawLead => Patch.Build("saw lead", p =>
 	{
-		p.Out(p.Wave(Waveform.Saw, 1f, Env.Adsr(0.01f, 0.4f, 0.7f, 0.15f), 0.5f), p.Wave(Waveform.Saw, 1f, Env.Adsr(0.01f, 0.4f, 0.7f, 0.15f), 0.5f).Detune(9f));
+		// Each saw starting at a different place in its cycle: two starting together are one loud wave, a click
+		p.Out(p.Wave(Waveform.Saw, 1f, Env.Adsr(0.01f, 0.4f, 0.7f, 0.15f), 0.5f),
+			p.Wave(Waveform.Saw, 1f, Env.Adsr(0.01f, 0.4f, 0.7f, 0.15f), 0.5f).Detune(9f).Phase(0.37f));
 		p.Filter(Filter.LowPass(900f, q: 1.2f, envelopeOctaves: 1f, envelope: Env.Decay(0.5f)));
 		p.Macro(Bright, MacroTarget.FilterCutoff, 0.5f, 3f);
 		p.Vibrato(5f, 0.1f, 0.3f);
