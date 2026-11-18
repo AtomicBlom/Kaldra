@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The tracks, scrolling when there are many. A track: its name, mute and solo, its gain from −24 to +6 dB, a meter of its
+    level (48 dB across), and its parts under it, indented. A part: a dot lit while it plays, its name and condition (a
+    click shows it in the pattern), and auto, on and off.
+-->
+<ContentControl xmlns="https://github.com/AtomicBlom/SUIsei/ui"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:wb="using:Loom.Audio.Workbench"
+                xmlns:views="using:Loom.Audio.Workbench.Views"
+                x:Class="Loom.Audio.Workbench.Views.TrackList"
+                IsTabStop="False">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" Text="Tracks" FontSize="13" Foreground="{x:Static views:Theme.Dim}" Margin="0,0,0,6" />
+        <ScrollViewer Grid.Row="1">
+            <!-- Clear of the scroll bar, which lies over the content's right edge -->
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Tracks, Mode=OneWay}" Margin="0,0,14,0">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="wb:TrackViewModel">
+                        <StackPanel Margin="0,0,0,8">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="90" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{x:Bind Name}" FontSize="15" Foreground="{x:Static views:Theme.Ink}"
+                                           VerticalAlignment="Center" />
+                                <ToggleButton Grid.Column="1" IsChecked="{x:Bind Muted, Mode=TwoWay}" Width="34" Margin="0,0,4,0">
+                                    <TextBlock Text="M" FontSize="13" HorizontalAlignment="Center" />
+                                </ToggleButton>
+                                <ToggleButton Grid.Column="2" IsChecked="{x:Bind Solo, Mode=TwoWay}" Width="34" Margin="0,0,8,0">
+                                    <TextBlock Text="S" FontSize="13" HorizontalAlignment="Center" />
+                                </ToggleButton>
+                                <Slider Grid.Column="3" Minimum="-24" Maximum="6" StepFrequency="0.5" Height="30"
+                                        Value="{x:Bind GainDb, Mode=TwoWay}" />
+                                <Border Grid.Column="4" Height="8" Margin="10,0,0,0" CornerRadius="4" VerticalAlignment="Center"
+                                        Background="{x:Static views:Theme.Off}">
+                                    <Border HorizontalAlignment="Left" CornerRadius="4" Background="{x:Static views:Theme.Meter}"
+                                            Width="{x:Bind views:Display.Meter(Peak), Mode=OneWay}" />
+                                </Border>
+                            </Grid>
+                            <ItemsControl ItemsSource="{x:Bind Placements}" Margin="18,4,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="wb:PlacementViewModel">
+                                        <Grid Margin="0,0,0,3" Background="{x:Static views:Theme.Panel}">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="18" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Ellipse Grid.Column="0" Width="9" Height="9" VerticalAlignment="Center"
+                                                     Fill="{x:Bind views:Display.Lit(IsActive), Mode=OneWay}" />
+                                            <Button Grid.Column="1" Command="{x:Bind SelectCommand}" Margin="0,0,6,0">
+                                                <StackPanel Margin="6,2,6,3">
+                                                    <TextBlock Text="{x:Bind Name}" FontSize="13" Foreground="{x:Static views:Theme.Ink}" />
+                                                    <TextBlock Text="{x:Bind ConditionText}" Visibility="{x:Bind HasCondition}" FontSize="11"
+                                                               Foreground="{x:Static views:Theme.Dim}" />
+                                                </StackPanel>
+                                            </Button>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <ToggleButton IsChecked="{x:Bind IsAuto, Mode=TwoWay}" Width="46" Margin="0,0,3,0">
+                                                    <TextBlock Text="auto" FontSize="11" HorizontalAlignment="Center" />
+                                                </ToggleButton>
+                                                <ToggleButton IsChecked="{x:Bind IsOn, Mode=TwoWay}" Width="36" Margin="0,0,3,0">
+                                                    <TextBlock Text="on" FontSize="11" HorizontalAlignment="Center" />
+                                                </ToggleButton>
+                                                <ToggleButton IsChecked="{x:Bind IsOff, Mode=TwoWay}" Width="36">
+                                                    <TextBlock Text="off" FontSize="11" HorizontalAlignment="Center" />
+                                                </ToggleButton>
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</ContentControl>

@@ -1,5 +1,5 @@
 Loom 0.1.0-preview.1 — render-graph engine for .NET
-Generated: 2026-11-09
+Generated: 2026-11-17
 Source: https://github.com/AtomicBlom/Loom
 
 # Loom Architecture
@@ -60,6 +60,7 @@ Beside the engine tiers, all backend-neutral and free of graphics-API references
 | `Loom.Assets` | image + glTF loaders, and the material upload bridge |
 | `Loom.Concepts` | app-side helpers — `Camera`, `Frustum`, `Scene`. Deliberately **not** engine API |
 | `Loom.Input` | actions, bindings, layered event routing |
+| `Loom.Audio` | the mixer: buses, pooled voices, clips, game-written sources. Each host opens its output device behind `IAudioDevice` (SDL 3, AAudio, an AudioWorklet), so no platform audio API enters it; see [`audio.md`](audio.md) |
 | `Loom.UI.SUIsei` / `Loom.UI.ImGui` | UI bridges; both reach the GPU only through the neutral draw-list verb, so no backend references a UI library |
 
 In the browser, the host (`Loom.Backend.WebGPU/wwwroot/loom-webgpu.js`) keeps from the browser the keys it would also act
@@ -266,6 +267,33 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 ```
 
 `Backends.Available` is a list, not a dictionary — select by `Name`, never an indexer. Constructing a backend's `EngineSettings` subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads and registers that backend.
+
+### Input on the desktop (`Loom.Hosting.Desktop`)
+
+The host turns the window's devices into `Loom.Input`'s neutral `InputEvent` stream: keyboards and mice through
+GLFW (`DesktopInputPump`), gamepads through SDL 3 (`SdlGamepadPump`), or through GLFW where SDL is missing or won't start.
+
+| Member | Purpose |
+|---|---|
+| `HostOptions.Pads` (`--pads sdl\|glfw`) | Where gamepads are read from: `GamepadSource.Sdl` (default) or `GamepadSource.Glfw`. |
+| `SdlGamepadPump` | SDL's gamepad subsystem alone (no SDL window), pumped once a frame on the host's thread: SDL's own drivers where it has them (DualSense and DualShock over HID, with rumble; Switch pads; the Steam Controller without Steam), XInput and Windows.Gaming.Input pads otherwise. Pads keep the lowest free of the four slots while connected. The host's focus gates its events: unfocused, held buttons are released; focused again, each pad is read afresh. |
+| `DesktopInputPump(…, gamepads: false)` | Keyboards and mice alone, when SDL has the pads, so no pad is seen twice. |
+| `GamepadState.Type`, `.Family`, `.Vendor`, `.Product` | What a pad is, for prompts that name its buttons: a `GamepadType` (SDL's list: Xbox 360 and One, PS3–PS5, Switch Pro, Joy-Cons, GameCube, Steam, or `Unknown`), its `GamepadFamily` (whose labels its face buttons carry: Xbox, PlayStation, Nintendo, Steam), and its USB ids where the host has them. Carried by `InputEvent.GamepadConnected(pad, type, vendor, product)`: SDL gives the real type (behind Steam's virtual pad too), GLFW only its mapping's name, a browser its `Gamepad.id`; `GamepadIdentity` reads ids, names and ids' strings. |
+| `InputSnapshot.LastDevice`, `.LastPad` | The device the player last used (keyboard, mouse, a pad, touch), for prompts that follow what is in hand: moved by a key or button going down, the wheel, a mouse moved more than 8 px, a stick past 0.4 or a trigger past 0.3, never by drift. |
+| `Pad.Last` | The pad index meaning the pad last used (the first connected before any is). Every `Pad` helper and every implicit pad binding reads it, and so do `InputSnapshot.Down/Pressed/Released(GamepadButton)`, so whichever pad is picked up drives; `Pad.OnPad` pins a binding to one pad. |
+| `InputBinding.Controls()`, `InputControl` | A binding broken into the physical controls it reads, in order (a composite's keys; a stick; the trigger pair), for drawing a glyph per control. `InputControl.Name(GamepadType)` names one as the pad in hand prints it ("Cross", "R2", "Create" on a DualSense; "A", "RT", "View" on an Xbox pad; "Left grip" on a Steam Controller); `ToBinding()` makes a binding of one. |
+| `InputSnapshot.Touches`, `TouchPoint` | The touch contacts this frame, each by a stable `Id`: its `Position` now and at the frame's start (`Previous`, `Delta`), where it came down (`Start`), and its `Phase`: `Began` for the frame it came down in, then `Moved` or `Stationary`, then `Ended` or `Canceled` for one frame (`Gone`). A tap that comes and goes within one frame is reported once, ended, with `BeganThisFrame`. A touch is never a mouse: hosts send each finger as `InputEventKind.Touch`. |
+| `Win32TouchPump` (desktop host) | A touch screen on Windows, which GLFW doesn't read: the window's procedure subclassed for `WM_POINTER` messages, each finger a contact in client pixels, and a touch handled there never promoted to a mouse; the touch feedback Windows draws is turned off for the window. A pen and the mouse go on to GLFW. The browser host reads the canvas's pointer events instead, with `touch-action: none` over it. |
+| `InputActions.Press(action)` | Presses a button action from outside its bindings (an on-screen button, a tap on a prompt): the next `Resolve` finds it held, so it is pressed that frame and released the next, whatever its bindings are. |
+| `InputActions.Names`, `KindOf`, `Bindings`, `Defaults`, `ResetToDefaults`, `ActionsUsing(control)` | For a rebinding screen: each action and what it reads now and as defined; putting one or all back; which actions already read a control. |
+| `BindingCapture` | "Press a key": started from the snapshot as it is (whatever is held then is ignored until let go), polled each frame until a fresh key, mouse button, pad button, trigger past half way or stick direction past 0.6 from the families asked for (`Captured`, `Pad`), or the cancel key or button. |
+| `GamepadButton.Misc1`, `RightPaddle1`, `LeftPaddle1`, `RightPaddle2`, `LeftPaddle2`, `Touchpad` | The buttons past the standard fifteen: a DualSense's mic button and touchpad click, a Steam Controller's grips (paddle 1 each side), an Elite's or DualSense Edge's paddles. GLFW and the browser report none of them. |
+
+SDL 3 is not a package: `Loom.Hosting.Desktop/Sdl/Sdl3.targets` pins SDL's release (version and the SHA-256 of its
+`win32-x64` and `win32-arm64` zips), downloads it once per machine into `%LOCALAPPDATA%\Loom\native\SDL3\<version>`,
+and ships `runtimes/win-<arch>/native/SDL3.dll` and its licence beside the app. A hash that doesn't match fails the
+build; a download that fails warns, and the host reads pads through GLFW. Our own binding (`Sdl3`) is
+`[LibraryImport]` over blittable signatures only.
 
 ### `EngineSettings`
 
@@ -478,6 +506,7 @@ The UI libraries reach the GPU only through `DrawList`; each bridge is a stable 
 | Type (`namespace`) | Role |
 |---|---|
 | `UIPainter` (`Loom.UI.SUIsei`) | `UIPainter.Create(engine, host)` registers the `ui` technique and returns the painter for a SUIsei `UIHost`. Call `Prepare()` once per frame after the host composites and before `engine.Render`: it uploads the images the frame's slot tables newly name, writes the new pixels of a source whose pixels changed into its texture in place (`IEngine.UpdateTexture`) and releases one nothing references any more (after the frames in flight, through `IEngine.ReleaseTexture`). `Draw(ctx, surface)` inside a pass only binds and submits, as many times in the frame as it likes, and throws if `Prepare` did not run before the frame. `SetExternalTexture(tag, ITextureHandle)` binds a graph texture to every SUIsei `HostImageSource` with that tag; the UI pass declares it with `.Samples`, and a tag with no texture, or a colour space its format does not decode, fails `Prepare`. A source uploads as `Rgba8Srgb` or `Rgba8Unorm` by its colour space, and a straight-alpha one is premultiplied after filtering, as SUIsei's rasterizer does. Textures the host reports released (`UIHost.ReleasedTextures`) are released in `Prepare`; a `WriteableBitmap`'s texture is updated in place on each `Invalidate`. |
+| `SUIseiInputLayer` (`Loom.UI.SUIsei`) | The input half: an `IInputLayer` that queues a frame's pointer, key and text events into a `UIHost` and blocks the layers below from what the host reported it wants. `PadNavigation`, while the app sets it (a menu or page a pad can work is open), turns any pad's face buttons into SUIsei's `GamepadA`/`B`/`X`/`Y` and its d-pad and left stick into the d-pad's keys, a held direction repeating after 0.4 s every 0.09 s, and blocks the pad from the layers below: SUIsei moves focus by position on the d-pad, and `GamepadA` presses a button. A touch that comes down on UI content (`UIHost.HitsContent`) is the UI's until it lifts, sent as a touch pointer and kept from the layers below; any other is theirs for its life, so a finger on a button and another on the game work at once. The block on what the host wants covers the mouse (and a pen's moves), never a touch. |
 | `InWorldPanel` (`Loom.UI.SUIsei`) | A SUIsei surface rendered into its own texture and placed in the world: `Create(engine, width, height, worldTransform, billboard, layoutScale)`, then per frame `QueueScreenPointer`, `Tick`, `Render` (composite + prepare) and `Draw(ctx)` in the pass that renders the panel's target. |
 | `ImGuiPainter` (`Loom.UI.ImGui`) | `ImGuiPainter.Create(engine)` registers the `imgui` technique and uploads the font atlas; `Draw(ctx)` submits the frame's Dear ImGui draw data, plus the resource viewer's thumbnails (`SetThumbnails`, through `ResolveInspectable`) and debug lines (`SetDebugLines`). Desktop only. |
 
@@ -491,6 +520,28 @@ Screen-space SUIsei elements that follow points in the world — labels over obj
 | `anchors.Add(element, world, alignment, pixelOffset)` → `ScreenAnchorId` | Wrap `element` in a container pinned to `world`: `alignment` is the fraction of the element's size that sits on the point ((0.5, 1) the middle of its bottom edge), `pixelOffset` a further offset in layout units. |
 | `anchors.SetWorldPosition(id, world)` / `SetPlacement(id, alignment, pixelOffset)` / `Remove(id)` / `GetFade(id)` | Move, re-place, remove (a removed id throws if used again) and read an anchor's fade. |
 | `anchors.Update(viewProjection, framebufferSize, deltaSeconds)` | Each frame between the host's `Tick` and `Render`: move every container to its projected point through `UIElement.Translation` (no layout) and step its fade — out while the point is off the viewport (beyond `ViewportMargin`) or behind the eye, on the container, so the element's own opacity is untouched. Allocates nothing. `FadeSeconds` sets the fade's length. |
+
+## Audio (`Loom.Audio`)
+
+Clips and game-written sources played on pooled voices, mixed through a tree of buses on the platform's audio thread. Turned on by `AppOptions.Audio`; reached through `LoomApplication.Audio`. The guide, with the threading model and each platform's device, is [`audio.md`](audio.md).
+
+| Type / member | Role |
+|---|---|
+| `AppOptions.Audio` (`AudioOptions`) | Set in `Configure` to open the platform's output before `LoadContent`; null (the default) leaves audio off. `SampleRate` and `BufferFrames` default to 0: the device's own rate and its smallest buffer. `MaxVoices` (64), `MaxBuses` (16), `CommandCapacity` (4096). |
+| `LoomApplication.Audio` (`AudioEngine`) | The app's engine. Called from the frame thread only (another thread throws), except `CreateClip`/`LoadWav`. Updated each tick, paused while suspended, closed after `UnloadContent`. |
+| `CreateClip(samples, channels, sampleRate)`, `LoadWav(bytes)` → `AudioClip` | Sound decoded into memory and converted to the engine's rate. WAV: PCM 8/16/24/32-bit, float 32/64, mono or stereo. Any thread. |
+| `Play(clip, bus, volume, pitch, pan, loop)` / `Play(source, bus, volume, pan)` → `VoiceHandle` | Takes a voice from the pool; `VoiceHandle.None` when every voice is busy (counted in `Stats.DroppedVoices`). |
+| `SetVolume`, `SetPitch`, `SetPan`, `Stop(voice, fadeSeconds)`, `IsPlaying(voice)` | Steer a voice. Every change ramps across at least a block, so nothing clicks. A stale handle (its voice ended) is ignored. |
+| `CreateBus(name, parent)` → `AudioBus`, `SetBusVolume(bus, volume, fadeSeconds)`, `Master` | A tree of buses under the master; mix order follows from the tree. Made at load, never removed. |
+| `AudioEffect`, `AddEffect(bus, effect)` | Subclass for something that changes a bus's sound: `OnPrepare(sampleRate)` on the frame thread, `Process(left, right)` in place on the audio thread. Runs before the bus's volume, in the order added; `Bypass` turns it off. One bus per instance. At most `MaxEffectsPerBus` (8) a bus. |
+| `AddSend(from, to, level)` → `AudioSend`, `SetSendLevel`, `GetSendLevel` | A share of one bus mixed into another (a reverb bus), besides its parent; the engine derives the order to mix them in, and refuses a loop. At most `MaxSends` (16). |
+| `AudioSource` | Subclass for sound the game writes: `OnStart(sampleRate)` on the frame thread, `Render(left, right, in AudioRenderInfo)` on the audio thread (no allocation, locks or blocking; false ends the voice; an exception stops the voice and is thrown again from `Update`). One voice at a time: `IsPlaying` holds until the voice has ended, a stop's fade included. |
+| `AudioRenderInfo` | The block's `Frames`, the engine's `SampleRate`, and `FrameTime`, the audio clock a sequencer counts on. |
+| `AudioParameter` | A continuous control: the game sets `Value`; the source takes `Ramp(frames)` once a block and `Next()` once a sample, or `Snap()`. |
+| `SmoothedParameter` | A continuous control eased with a time constant, for a value set in steps many times a second: `Prepare(rate)` in `OnStart`, `Begin()` once a block, `Next()` once a sample or `Skip(frames)`, `Snap()`. |
+| `AudioEventQueue<T>` | A fixed-size, lock-free, one-producer one-consumer queue of struct events (note on, note off): `TryPost`/`Post` from the game, `TryTake` in `Render`. |
+| `AudioStats` (`Audio.Stats`) | The mix's clock, callbacks and buffer, active and dropped voices, peak level, and render load against the deadline. |
+| `IAudioDevice`, `IAudioRenderer`, `IHostControl.OpenAudioDevice` | The seam a host fills: SDL 3 (desktop), AAudio (Android), an AudioWorklet (browser). `NullAudioDevice` where there is no output; `OfflineAudioDevice` renders on the caller's thread, for tests and rendering to a file. |
 
 ---
 
@@ -725,7 +776,7 @@ This renders a mesh into an offscreen HDR buffer, then tone-maps that buffer to 
 
 Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings, nor hand-order them. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
 
-Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that `LOOM_BINDING(n)` numbers **every** descriptor (uniquely, in any order) while `register(bN)` counts **only constant buffers and starts at `b1`** (`b0` is reserved on DirectX 12), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
+Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that resources take **no binding numbers or registers** (Slang numbers them per target, in declaration order, and each backend binds by its reflection), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
 
 `Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer the pass `.Reads`, and a per-draw model matrix from the per-draw uniform block:
 
@@ -735,10 +786,10 @@ Every shader starts by including the platform module, which owns the places the 
 struct ViewProj { float4x4 viewProj; }   // filled from the app via engine.Write(viewProj, …)
 struct PerDraw  { float4x4 model; }      // staged by DrawCall.SetUniforms(ref block)
 
-// Descriptors 0 and 1 because that is what they are numbered — and registers b1/b2, since b0 is reserved.
+// No numbers: Slang gives each target its own, in declaration order.
 // Uniform slots fill in a defined order: the pass's .Reads constants first, then the per-draw block.
-LOOM_BINDING(0) ConstantBuffer<ViewProj> view : register(b1);
-LOOM_BINDING(1) ConstantBuffer<PerDraw>  draw : register(b2);
+ConstantBuffer<ViewProj> view;
+ConstantBuffer<PerDraw>  draw;
 
 struct VSOut { float4 pos : SV_Position; float3 normal : NORMAL; }
 
@@ -765,7 +816,7 @@ float4 fragmentMain(VSOut i) : SV_Target
 ```slang
 #include "loom_platform.module.slang"
 
-LOOM_BINDING(0) Sampler2D hdr;   // the pass's first .Samples input
+Sampler2D hdr;   // the pass's first .Samples input
 
 struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; }
 
