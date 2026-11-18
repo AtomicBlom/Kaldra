@@ -28,7 +28,7 @@ public class SdkXamlTests
 			.ShouldNotBeEmpty("SUIsei's generator wrote no XamlApp.Views.HelloView.g.cs");
 
 		// ...and the app runs it: the typed x:Name field holds what the XAML set.
-		var (run, runOutput) = Dotnet(app, Path.Combine(app, "bin", Configuration, "net10.0", "XamlApp.dll"));
+		var (run, runOutput) = Dotnet(app, Path.Combine(app, "bin", Configuration, "net11.0", "XamlApp.dll"));
 		run.ShouldBe(0, runOutput);
 		runOutput.ShouldContain("Hello from XAML");
 	}
@@ -57,7 +57,7 @@ public class SdkXamlTests
 				.ShouldContain(view, $"HelloView.xaml is not one of the app's {kind} items");
 	}
 
-	// The test run's own configuration, the folder above the target framework's: Loom.Tests\bin\<Configuration>\net10.0.
+	// The test run's own configuration, the folder above the target framework's: Loom.Tests\bin\<Configuration>\net11.0.
 	private static string Configuration =>
 		Path.GetFileName(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory)))!;
 

@@ -4,7 +4,7 @@
 
 ## Requirements
 
-- .NET 10 published as WebAssembly (`dotnet publish -r browser-wasm`)
+- .NET 11 published as WebAssembly (`dotnet publish -r browser-wasm`)
 - `Loom.Backend.WebGPU` (referenced transitively) and a browser with WebGPU support
 
 ## What's included

@@ -42,7 +42,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
 
       # Compiling the Slang shaders dominates a run, and checkout wipes obj/ so it happens every time. This restores
       # the compiled outputs from a directory on the runner's own disk, keyed by a hash of the shader sources, the

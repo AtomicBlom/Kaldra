@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <!-- Pure build-tool package: ships MSBuild props/targets + shader compile machinery; no runtime assembly. -->
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <!-- No code -> no symbols package needed. -->

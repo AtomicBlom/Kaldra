@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -13,6 +13,8 @@
   <ItemGroup>
     <PackageReference Include="TUnit" />
     <PackageReference Include="Shouldly" />
+    <!-- Compiles the C# that PatchCode writes, to check it builds the patch it was written from -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -49,6 +51,11 @@
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
     <ProjectReference Include="..\Loom.Audio.Synth\Loom.Audio.Synth.csproj" />
     <ProjectReference Include="..\Loom.Audio.Workbench\Loom.Audio.Workbench.csproj" />
+    <ProjectReference Include="..\Loom.Audio.Workbench.Projects\Loom.Audio.Workbench.Projects.csproj" />
+    <!-- Driven in-process by MusicGeneratorTests, as a library rather than as this project's analyzer -->
+    <ProjectReference Include="..\Loom.Audio.Music.Generator\Loom.Audio.Music.Generator.csproj" />
+    <!-- The sample music project, whose generated music is checked against its files -->
+    <ProjectReference Include="..\samples\HelloSynth\HelloSynth.csproj" />
   </ItemGroup>
 
   <!-- The demo gallery: the in-process golden/parity tests render its scenes offscreen (GPU-gated), and its

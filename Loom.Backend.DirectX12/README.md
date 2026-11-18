@@ -6,7 +6,7 @@
 
 - Windows 10/11 with a D3D12-capable GPU (feature level 12.0+)
 - Windows SDK / DXC for signed DXIL (shaders are pre-compiled and embedded)
-- .NET 10
+- .NET 11
 
 ## What's included
 

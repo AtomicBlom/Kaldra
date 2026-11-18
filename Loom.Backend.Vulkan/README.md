@@ -6,7 +6,7 @@
 
 - Vulkan 1.3 device with **dynamic rendering**, **synchronization2**, and **timeline semaphores** (enabled as device features — no fallback)
 - Windows, Linux, or macOS (via MoltenVK)
-- .NET 10
+- .NET 11
 
 ## What's included
 

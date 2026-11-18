@@ -1,12 +1,12 @@
 # Getting Started with Loom
 
-Loom is a declarative, render-graph-driven rendering engine for .NET 10, running on **Vulkan and DirectX 12 at pixel parity**. You declare *what* each pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient-memory aliasing, and CPU↔GPU synchronisation.
+Loom is a declarative, render-graph-driven rendering engine for .NET 11, running on **Vulkan and DirectX 12 at pixel parity**. You declare *what* each pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient-memory aliasing, and CPU↔GPU synchronisation.
 
 This guide takes you from an empty project to a two-pass render graph drawing a mesh to an offscreen HDR target and tone-mapping it to the screen. For the design rationale see [`docs/pillars.md`](pillars.md) and [`docs/architecture.md`](architecture.md); for the full feature list see [`README.md`](../README.md).
 
 ## Prerequisites
 
-- .NET 10 SDK
+- .NET 11 SDK
 - Windows (for DirectX 12 and signed DXIL compilation), or any platform (Vulkan only)
 - Vulkan SDK 1.4+ with validation layers (recommended for development)
 

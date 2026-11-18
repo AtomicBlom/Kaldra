@@ -57,7 +57,7 @@ own SDK and import Loom's by hand:
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
     <!-- The submodule sits inside the project directory; keep its sources out of the game's compile -->
     <DefaultItemExcludes>$(DefaultItemExcludes);Loom/**</DefaultItemExcludes>

@@ -4,7 +4,7 @@
 
 ## Requirements
 
-- .NET 10
+- .NET 11
 - A desktop Loom backend present in the app (`Loom.Backend.Vulkan` and/or `Loom.Backend.DirectX12`) — the host is backend-neutral and selects one at runtime
 
 ## What's included

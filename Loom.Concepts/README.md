@@ -4,7 +4,7 @@
 
 ## Requirements
 
-- .NET 10
+- .NET 11
 - No graphics-API reference
 
 ## What's included
