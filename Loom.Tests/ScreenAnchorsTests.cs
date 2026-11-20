@@ -258,10 +258,13 @@ public class ScreenAnchorsTests
 
 		Run(0, 240); // warm: every container laid out, faded, collapsed and back at least once
 		(shown, fading, hidden) = (0, 0, 0);
-		var before = GC.GetAllocatedBytesForCurrentThread();
-		Run(240, 480);
-		var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-		allocated.ShouldBe(0L, "placing, laying out and compositing moving anchors allocated on warm frames");
+		// Each window carries on from the last, so the camera keeps moving rather than jumping back.
+		var next = 240;
+		Allocations.ShouldAllocateNothing(() =>
+		{
+			Run(next, next + 240);
+			next += 240;
+		}, "placing, laying out and compositing moving anchors allocated on warm frames.");
 		shown.ShouldBeGreaterThan(0);
 		fading.ShouldBeGreaterThan(0);
 		hidden.ShouldBeGreaterThan(0);

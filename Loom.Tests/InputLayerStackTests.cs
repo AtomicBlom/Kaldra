@@ -197,12 +197,11 @@ public class InputLayerStackTests
 		for (var i = 0; i < 200; i++)
 			stack.Resolve(events);
 
-		var before = GC.GetAllocatedBytesForCurrentThread();
-		for (var i = 0; i < 1000; i++)
-			stack.Resolve(events);
-		var after = GC.GetAllocatedBytesForCurrentThread();
-
-		(after - before).ShouldBe(0);
+		Allocations.ShouldAllocateNothing(() =>
+		{
+			for (var i = 0; i < 1000; i++)
+				stack.Resolve(events);
+		});
 	}
 #endif
 

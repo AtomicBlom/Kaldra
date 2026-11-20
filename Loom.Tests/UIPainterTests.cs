@@ -226,15 +226,14 @@ public class UIPainterTests
 				engine.Render(Inputs);
 			}
 
-			var before = GC.GetAllocatedBytesForCurrentThread();
-			for (var frame = 0; frame < MeasuredFrames; frame++)
+			Allocations.ShouldAllocateNothing(() =>
 			{
-				painter.Prepare();
-				engine.Render(Inputs);
-			}
-			var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-			allocated.ShouldBe(0L, $"{backend.Name}: the painter's steady frame allocated {allocated} bytes over {MeasuredFrames} frames.");
+				for (var frame = 0; frame < MeasuredFrames; frame++)
+				{
+					painter.Prepare();
+					engine.Render(Inputs);
+				}
+			}, $"{backend.Name}: the painter's steady frame allocated, in windows of {MeasuredFrames} frames.");
 		}
 	}
 

@@ -42,13 +42,13 @@ public class AllocationRegressionTests
 			for (var frame = 0; frame < WarmupFrames; frame++)
 				engine.Render(inputs);
 
-			var before = GC.GetAllocatedBytesForCurrentThread();
-			for (var frame = 0; frame < MeasuredFrames; frame++)
-				engine.Render(inputs);
-			var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-			if (allocated != 0)
-				failures.Add($"{backend.Name}: {allocated} bytes over {MeasuredFrames} warm frames ({allocated / (double)MeasuredFrames:0.#} per frame).");
+			var allocated = Allocations.Allocated(() =>
+			{
+				for (var frame = 0; frame < MeasuredFrames; frame++)
+					engine.Render(inputs);
+			});
+			if (allocated is not null)
+				failures.Add($"{backend.Name}, windows of {MeasuredFrames} warm frames: {allocated}");
 		}
 
 		failures.ShouldBeEmpty("The steady per-frame render loop allocated managed memory:\n  " + string.Join("\n  ", failures));
