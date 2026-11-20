@@ -1,5 +1,5 @@
 Loom 0.1.0-preview.1 — render-graph engine for .NET
-Generated: 2026-11-17
+Generated: 2026-11-20
 Source: https://github.com/AtomicBlom/Loom
 
 # Loom Architecture
@@ -648,13 +648,13 @@ Not pillars, but engine guarantees worth knowing when working on the backends or
 
 # Getting Started with Loom
 
-Loom is a declarative, render-graph-driven rendering engine for .NET 10, running on **Vulkan and DirectX 12 at pixel parity**. You declare *what* each pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient-memory aliasing, and CPU↔GPU synchronisation.
+Loom is a declarative, render-graph-driven rendering engine for .NET 11, running on **Vulkan and DirectX 12 at pixel parity**. You declare *what* each pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient-memory aliasing, and CPU↔GPU synchronisation.
 
 This guide takes you from an empty project to a two-pass render graph drawing a mesh to an offscreen HDR target and tone-mapping it to the screen. For the design rationale see [`docs/pillars.md`](pillars.md) and [`docs/architecture.md`](architecture.md); for the full feature list see [`README.md`](../README.md).
 
 ## Prerequisites
 
-- .NET 10 SDK
+- .NET 11 SDK
 - Windows (for DirectX 12 and signed DXIL compilation), or any platform (Vulkan only)
 - Vulkan SDK 1.4+ with validation layers (recommended for development)
 
@@ -2545,6 +2545,17 @@ The tube is the touchiest. It must be blown at a sustain of 0.8 or more (a `Leve
 0.8) to speak below E4; it eases its own pressure below G#4 so low notes stay in their register, and it compensates
 its loop's filters' delay at each note, so it holds within 20 cents from G3 to C6.
 
+**A patch as data, and as code.** A built `Patch` is read-only data: its `Operators` (`OperatorSpec`, whose
+`Modulators` and `Drivers` name earlier operators by index), `Outputs`, `Filter`, the voice's settings and `Macros`.
+`PatchSpec.From(patch)` copies it into lists and settings a tool can change, and `spec.ToPatch()` builds it again
+through the builder, so every rule above is checked and a broken spec throws the same `PatchException`.
+`PatchCode.Write(patch)` writes the `Patch.Build` property that builds it, as a person would have written it: every
+operator up to the last that another reads gets a variable (so the builder makes them in the same order), defaults are
+left off, `Env.Decay` and `Env.Gate` are recognised, and a macro is named by the function given (`Macros.Bright`) or
+`new Macro(n)`. What it writes builds a patch equal to the one it was given. `SynthChip.Replace(instrument, patch)`
+swaps an instrument's patch while it plays: notes sounding finish on the old one, and its macros, gain and mute carry
+over. `AudioTap`, added to a bus with `AudioEngine.AddEffect`, keeps the latest frames through it for a tool to draw.
+
 ## 7. Samples and kits
 
 `SampleData` is a mono recording at its own rate (`SampleData.From(AudioDecoder.Decode(bytes))`). A `SampleZone` says
@@ -2664,7 +2675,9 @@ static class Groove
 		var chorus = song.Section("chorus", 4, "VI VII | i | VI VII | i");
 		chorus.Play(drums, Beat.Eighths((Kit.Kick, "x.x. x.x."), (Kit.Snare, "..X. ..X."), (Kit.Crash, "x... ....")));
 		chorus.Play(low, Line.Eighths("1 - 1 - 1 1 5, 1").OverChords());
-		song.Order(verse, verse, chorus);
+		verse.Exit(verse, Pass.Below(2));
+		verse.Then(chorus);
+		chorus.Then(verse);
 		return song;
 	}
 }
@@ -2746,11 +2759,13 @@ macros from `from` at the section's first bar to `to` at its end, over whatever 
 It is how a build opens or thins a filter towards a drop. In every other section the macro is the track's own again (0
 if the track never set it).
 
-`Order(a, a, b)` plays sections in turn, then from the first again; `Conduct(c => …)` chooses the next one in code, from
-the `Conductor`'s current section, its repeats and the cues. It is asked as each section starts and again a beat before
-it ends, and the later answer counts; the first stands if a long frame skips the last beat, so a hitch never repeats a
-section. Keep it a plain function of what it is given: it is called twice a section. One that throws is asked no more
-that section, which loops. With neither, the first section loops. A `Jump` lets go of what was sounding.
+**Each section says where the song goes as it ends**, by its exits: `verse.Exit(chorus, Energy.Above(0.7f))` goes to the
+chorus when the energy is up, `verse.Exit(verse, Pass.Below(2))` plays the verse once more, and `verse.Then(chorus)`, the
+last, goes there otherwise. They are tried in order as the section ends, by the sequencer itself on the audio thread,
+their conditions latched as a part's are; a section with none plays again. `Pass` is which pass of the section in a row
+this is, 1 the first time, compared exactly (`Pass.Above`, `Below`, `Is`), so its `>` and `<` are strict where a cue's
+hold at the level; a count below 1 is refused. A part can use it too, a fill on the fourth time round. `MusicPlayer.NextSection` and `NextExit` say where the section would go were it ending now, for a tool to
+show. The song starts at its first section. A `Jump` lets go of what was sounding.
 
 ### Cues and conditions
 
@@ -2793,27 +2808,186 @@ off the audio thread's deadline: the thread's load fell from 2.4% to 1.0% of it,
 
 ## 10. The workbench: `Loom.Audio.Workbench`
 
-A window for writing music in code, kept apart from `Loom.Audio.Synth` because it is UI (SUIsei) and the synth is not.
-A song stays C# in the game's own files. The workbench plays it, shows it, lets you steer it, and plays it again each time
-the file is saved under `dotnet watch`. [`samples/HelloSynth`](../samples/HelloSynth) is the sample: a demo song, four
-patches and a kit.
+A window for writing music, kept apart from `Loom.Audio.Synth` because it is UI (SUIsei) and the synth is not. A song
+stays in the game's own project, as files the workbench edits (section 11) and C# for what they can't say. The
+workbench plays it, shows it, lets you steer it, and plays it again each time a file is saved.
 
-What it shows:
-- **The transport.** The songs, play and stop, the position (section, bar, beat), the tempo and the scale.
-- **The sections**, one button each (a click jumps there at the next bar), and a loop on the section playing.
-- **The cues**, the catalog's whether the song uses them: a slider for a `Cue`, a button per value for a `Cue<T>`.
-- **The tracks.** Each with mute, solo, a gain and a level meter, and under it its placements: whether each is playing,
-  its condition, and auto, on and off to force it.
-- **The patch bench.** A patch or a kit, played from a two-octave keyboard, the computer's keys or the kit's pads, with
-  the patch's macros as sliders.
-- **The pattern** of the part selected, drawn as notes over the bar.
-- **A banner** with the error of a song that didn't build, while the last one plays on.
+Start it with `loom-workbench`, the app that opens a music project and compiles it again in-process with Roslyn on
+every save (below, "Opening a project"). From Loom's root:
 
-**The catalog.** A game hands the workbench a `WorkbenchCatalog`: its songs, patches and kits, each a name and a
-factory, and its cues. The factories matter. Hot reload changes what a factory returns, so the workbench calls it again
-after every edit rather than keeping what it made.
+```
+dotnet run --project Loom.Audio.Workbench.App -- samples/HelloSynth
+dotnet run --project Loom.Audio.Workbench.App -- new ../MyTunes        a project of your own, from HelloSynth, opened
+```
 
-**Hosting it.** HelloSynth's app, cut to what matters:
+[`samples/HelloSynth`](../samples/HelloSynth) is a music project to start from: a demo song, four patches, a kit, two
+cues and a macro. An app can also host the workbench itself over a catalog of its own ("Hosting the workbench in an
+app of your own", at the end of this section), though `loom-workbench` is the way a game's music is written.
+
+What it shows, one job at a time: a rail down the left gives the middle of the window to **Arrange**, **Patch**,
+**Kit** or **Files**, and the keyboard docked along the bottom plays what that mode has chosen.
+- **The transport.** The song chosen, play and stop, the position (section, bar, beat), the tempo and the scale, the
+  loop on the section playing, and the host's own controls. At its right, the last build's status as a pill: red when
+  the song didn't build, and a click opens its error over the view (the last song that built plays on).
+- **The library** (the rail's first button): the catalog's songs, patches and kits as lists under their kinds, each row
+  its kind's icon, filtered by the words typed; **+** on Songs and Patches makes a new file beside the project's others
+  (a patch blank or a copy of the one open), listed once the project builds again (the generator lists every file's
+  patch and song, `Patches.Files` and `SongFiles.All`). It opens over the view and folds away once something is chosen;
+  **Pin** keeps it open as a column.
+- **Arrange**, a board. Across the top each section's head: its name (chosen, it is shown in the inspector), a button
+  that plays it from the next bar, a ruler of its bars with each bar's chords (a click opens a picker: degree, flat or
+  sharp, kind, the bar split into two or four, a bar added or taken out of the progression), the bars that repeat the
+  progression dimmed, the bar playing lit and a playhead across the section, and its exits with where it goes next
+  marked (`MusicPlayer.NextExit`). Down the left each track's head: a stripe in its hue, mute, solo, gain and meter, and
+  a menu (right-click) to rename it, give it another instrument or take it out; **+ Track** adds one. Both heads stay
+  put over lanes that scroll both ways. Where a lane crosses a section, each part the track plays there: its title (a
+  click opens it in the roll and the inspector), its condition on a chip (a click edits it), auto, on and off, and under
+  them every pass of its part across the section in the track's hue, the pass playing lit, those to come dimmed, the
+  fill marked, all faded while the condition doesn't hold (`MusicPlayer.SectionPatternOf`, `PositionOf`); an empty cell
+  adds a part. **The inspector** beside the board changes the section or part chosen: a section's name, bars, chords and
+  exits (each a condition and where it goes, reordered, the last "otherwise"), a part's condition, the cue its level
+  follows, whether it waits for its phrase, its fill. A condition is edited as rows (a cue or the pass, a comparison, a
+  value) joined by all or any, or as text where rows can't hold it. Beside them **the cues**: a slider for a `Cue` with
+  the levels parts and exits wait on marked over it and what waits on each, a button per value for a `Cue<T>`; one the
+  song doesn't read is disabled. The part chosen is in the panel under the board, past a splitter.
+- **The roll.** When the song has a file (section 11) and the part chosen is data there, it is edited below in place of
+  its drawing. A line on rows by degree, three octaves of them to scroll through (the wheel, Shift for across), the part's
+  notes brought into view as it opens; a beat on a row for every piece of its kit: a click adds a note, a drag from a note's last step lengthens it, a drag
+  elsewhere (or off its row) moves it, a right-click or a second click deletes it. A beat's rows: a click cycles a step
+  through `x`, `X`, `o` and off. A strum: `D`, `U`, `d`, `u`, `x`, `_`. The roll's tools are glyphs over it, a hint under
+  them saying what a click and a drag do for the part: a line's flat, natural, sharp and slide, then accent and delete for
+  the note chosen, and a bar added or taken off the end, whole, so no edit can break a part's
+  notation (`NotationText` keeps the text's own spacing and changes a step's token; `RollEdits` are the edits). An edit
+  builds the song again from the file as edited (`SongFile.Load`, no compile) and is heard at the next bar; the file is
+  written 0.4 s after the edits pause (`SongEditor`), which the next compile takes up. Undo and Redo (Ctrl Z, Ctrl Y)
+  cover the session, a drag one edit; Revert puts the part back as the file had it when opened. A file changed
+  by something else is read again, and the undo history cleared. A part that is code, or a hook's, says so.
+  The patch designer writes its edits to the patch's `.patch.json` the same way, keeping the file's operator names.
+- **Patch**, the patch designer. The patch chosen as data (`PatchSpec`): its operators drawn as a graph in render order
+  (an operator a column right of the deepest it reads; modulation amber with its index, driving teal and dashed, the
+  heard to Out), the voice after them as a chain, and a scope and spectrum of what the bus plays (an `AudioTap` on it).
+  Beside it an inspector: the operator chosen (heard and at what level and pan, pitch, its kind's settings, level and
+  velocity, across the keyboard, modulated or driven only by an operator before it, the envelope; listen to it alone,
+  move it, delete it), the voice, the macros with their live values, and the C# that builds it (`PatchCode`), copied
+  through the host (`Workbench.CopyText`). Every edit builds the patch again as `Patch.Build` checks it and is heard
+  from the next note (`SynthChip.Replace`); what the builder refuses is shown while the last that built plays on. A
+  rebuild after a code change keeps the edits; Revert and "Hear its code" go back to the patch as its code has it. A
+  catalog names its macros for the code (`WorkbenchCatalog.MacroName`).
+- **Kit.** The kit chosen, a pad per piece; and the beat sketcher, a bar of sixteenths per piece (a click turns a step
+  to `x`, `X`, `o` or off), looped through the sequencer on a player of its own and copied as `Beat.Sixteenths(…)`.
+- **Eject and bring back.** In the roll, **Eject notation** makes the part's notation code (its condition and name stay
+  data) and **Eject placement** the whole placement: the C# that makes it (`PartCode`) is added to the song's own half of
+  its class and the file points at it (`"part": { "code": "Riff" }`, `"code": "Riff"`). In Patch, **Eject to code** does
+  the same for a patch (`PatchCode`, a `partial` property). A piece that is code says where it is; **Bring back as data**
+  writes what its code builds back to the file, if a file can say it, and takes its member out. The host does the C#
+  (`IMusicCode`; `Loom.Audio.Workbench.Projects`' `MusicCode`, with Roslyn), and what is ejected plays once the project
+  has compiled. A member renamed or taken out by hand fails the build at the generated call.
+- **Files** (the rail's last button): every song's and patch's file and the C# that is theirs; the one chosen shown as it
+  is, copied whole or a piece at a time: a C# file's class or any member (its indent taken off), a song's track, section
+  or part, a patch's operator, each written alone as its file writes it.
+- **The keyboard**, docked: three octaves round its octave (moved by Z and X or its buttons), what it plays, how hard, the
+  chip's load. Its keys light in the track's hue as the track it plays sounds them in the song (`MusicPlayer.Sounding`),
+  keys outside the song's scale are faded, and each C is named.
+- **The command palette** (Ctrl K): the catalog, the song's sections and the commands, found by every word typed.
+
+A host lays the window out at `WorkbenchView.FitScale(surface, displayScale)`: the display's scale, but never so large
+that the layout is smaller than the workbench needs, so a 1280 by 800 window on a 200% display is laid out at 1.
+
+**The catalog.** The workbench plays a `WorkbenchCatalog`: the songs, patches and kits, each a name and a factory, and
+the cues. The factories matter. A build changes what a factory returns, so the workbench calls it again after every
+build rather than keeping what it made. `loom-workbench` makes the catalog from the project's `[MusicCatalog]` class.
+
+What it was doing is kept and restored (`CaptureState`, `RestoreState`): the song, whether it played and in which
+section, the loop, a scale played in place of the song's, the cues, the mutes, solos, gains and forced placements, and
+the bench's patch, kit, octave and velocity, all by name, as JSON (`WorkbenchStateJson`).
+
+**Keys:** `A W S E D F T G Y H U J K` play an octave of notes on what the keyboard plays, C
+to C, as a piano's keys lie. `Z` and `X` move it down and up an octave. `Space` plays or stops, and `1` to `9` jump to a
+section. `Ctrl K` opens the command palette; `Escape` closes the palette, the library over the view, or a build's error.
+While a text field has the keys (the palette, the library's filter), the workbench leaves them alone.
+
+### Opening a project: `loom-workbench`
+
+`Loom.Audio.Workbench.App` builds `loom-workbench`, the workbench over any music project:
+
+```
+loom-workbench <project.csproj | its folder> [--extension <csproj>]
+                                                 the workbench over that project, with its extension
+loom-workbench new <folder>                      a project to start from (HelloSynth's, renamed), opened
+```
+
+Under `dotnet run` the arguments follow `--`, as above. A game can keep a one-line script beside its music that runs it
+(RubberTrack's `studio.ps1`). It isn't a `dotnet tool`: it is a Loom app, with native libraries (SDL 3) and compiled
+shaders beside it, built from the Loom it shares with the music it opens.
+
+A music project is an ordinary class library whose assembly names its catalog:
+`[assembly: MusicCatalog(typeof(Catalog))]` (`Loom.Audio.Synth.Music`). The workbench reads the class's public static
+`Songs`, `Patches` and `Kits` (lists of `(string Name, Func<T> Build)`), `Cues` (`IReadOnlyList<CueBase>`) and
+`string? MacroName(int id)`, whichever it has. The attribute is the synth's, not the workbench's, so a game's audio
+library carries it without referencing any UI.
+
+`Loom.Audio.Workbench.Projects` does the work, with no window, so tests and other hosts use it as the app does:
+- **`MusicProject.OpenAsync(csproj)`** asks a design-time build (`dotnet msbuild -t:PrepareResources;Compile` with
+  the compiler's execution skipped, out of process, restoring first if the project never was, in the host's
+  configuration when it says which) for the compiler's command line, and makes it a Roslyn project: sources,
+  references, embedded resources, analyzers and generators, editorconfigs and options. It asks again only when a
+  `.csproj`, `.props` or `.targets` changes or a file comes or goes.
+- **A save** (150 ms after the last write) updates that file in the compilation, compiles it whole, generators included,
+  emits it to memory with a portable PDB, and loads it into a new collectible `AssemblyLoadContext`. A whole compile has
+  no rude edits: a new type, a changed lambda's captures or a type's changed shape all reload. The newest build waits in
+  `TakeBuild()`; each frame, **`WorkbenchProject.Update()`** hands its catalog to the workbench
+  (`Workbench.UseCatalog`, which keeps the song, the selections and the cue values by name, swapping the song at the
+  next bar) or its errors to the build pill (`Workbench.ReportBuild`, "Songs/Tune.cs(12,5): error CS1002: ; expected"),
+  and releases the build before it, whose context unloads once nothing playing refers to it.
+- **Loom is shared, never loaded again.** A build's context resolves whatever the host can (Loom above all, whose types
+  the workbench and the music must share) from the host's own context, and the rest of the project's references from
+  their paths (a project reference from the assembly built beside its reference assembly). So every reference the host
+  has loaded must be the very build it runs: a project built against another Loom, or a reference rebuilt since the
+  workbench started, is refused with a message naming both files (`SharedReferences`, by module version id). A change
+  to the project's own references (another project of the game's) needs the workbench restarted.
+- **`ProjectTemplate.Create(folder)`** is what `new` writes: HelloSynth's C# and music files, its namespace renamed for
+  the folder. Its `.csproj` references `Loom.Audio.dll` and `Loom.Audio.Synth.dll` from the workbench's own folder, and
+  the music generator beside them as its analyzer, so they always match.
+- **What it was doing** is kept beside the project, in `.loom/workbench.json` (`WorkbenchStateFile.Beside`), restored
+  once the first build has played.
+
+**Extensions: a game's own tools.** A game that has more to offer than the music (its mix to play into, so a song
+sounds as it will in the game; its own controls; a recorded car under the music) writes an extension, in an assembly
+of its own: `[assembly: WorkbenchExtension(typeof(StudioExtras))]` on a public class implementing `IWorkbenchExtension`
+(in `Loom.Audio.Workbench`, so it needs no Roslyn or MSBuild):
+
+- `Output(AudioEngine)`: the bus the music plays into, or null for the workbench's own.
+- `Catalog`: its own build of the music, to play at once while the project's first compile runs, or null to wait.
+- `Attach(WorkbenchExtensionContext)`: its controls added to the transport's end, the command line the workbench didn't
+  take (`--recording race.zip`, read with `Option`).
+- `Update(seconds)` each frame; `MusicBuilt(Assembly)` with each new build of the music, for an extension that takes
+  something of the music's own from the build (RubberTrack's engine bench takes its engine's numbers from it, so a
+  change to them is heard as it is saved); `Dispose`.
+
+The music project names its extension's project with an MSBuild property,
+`<LoomWorkbenchExtension>../Game.Studio/Game.Studio.csproj</LoomWorkbenchExtension>`, or `--extension <csproj>` gives
+one (`--extension none` for none). `loom-workbench` builds it in its own configuration and loads it once into the
+default context before the window opens, where the music's builds share what it references, as they share Loom; its
+own references load from beside it. It is built without building its references again (`BuildProjectReferences`
+false), taking them as they were last built, so it shares the very Loom the workbench's own build made: a shared
+project built again is another build, even from the same sources, since its sources' paths are in it (a build started
+from `c:\` rather than `C:\` compiles it again). Only an extension whose references were never built is built with
+them. A game's script that starts the workbench builds the extension first, from the same path (RubberTrack's
+`studio.ps1`), so its own references are up to date. It isn't reloaded: a change to its project's sources is said beside the build pill
+("Game.Studio changed: restart to take it up"), and needs the workbench restarted. One built against
+another build of what the workbench runs is refused, as a project is (`SharedReferences`; a library built for several
+frameworks, SUIsei, is compared only between builds for the same framework). `loom-workbench` runs on the newest .NET
+installed (`RollForward` `LatestMajor`), so it opens a project, and loads an extension, that targets a newer .NET than
+Loom does.
+
+RubberTrack's audio library (its songs, patches, kits and their samples) opens and compiles in about 1.7 s, and compiles
+again after a save in 0.35 to 0.45 s on a Snapdragon X: well under a bar (2.2 s at 108 bpm).
+
+### Hosting the workbench in an app of your own
+
+An app can put the workbench in a window of its own over a catalog it makes itself, and run under `dotnet watch` for
+hot reload in place of `loom-workbench`'s compiles. It is the way to take the workbench somewhere `loom-workbench`
+can't go; for a game's own mix and controls beside the music, an extension (above) is simpler. Cut to what matters:
 
 ```csharp
 protected override void Configure(AppOptions options) => options.Audio = new AudioOptions();
@@ -2823,8 +2997,8 @@ protected override void LoadContent()
 	_ui = new UIHost();
 	_painter = UIPainter.Create(Engine, _ui);
 	_view = _ui.CreateRoot(UILayer.Default);
-	_workbench = new Workbench(Audio, Audio.CreateBus("music"), DemoCatalog.Make());
-	if (Load() is { } state)
+	_workbench = new Workbench(Audio, Audio.CreateBus("music"), MyCatalog.Make());
+	if (_state.Load() is { } state)                  // a WorkbenchStateFile
 		_workbench.RestoreState(state);              // where it was before a restart
 	_view.Root.Content = new WorkbenchView(_workbench.ViewModel);
 	PushInputLayer(new SUIseiInputLayer(_ui));
@@ -2835,25 +3009,22 @@ protected override void Update(FrameTime time)
 {
 	_workbench.HandleInput(Input);                   // the computer's keys
 	_workbench.Update(time.DeltaSeconds);            // the player, the meters, and a rebuild after an edit
-	// ... CaptureState() saved to a file when it changes
+	// ... _state.Save(_workbench.CaptureState()) once a second: written only when it changed
 }
 ```
 
-The workbench uses only `Loom.Audio.Synth`'s public API, so a game can build a tool of its own the same way: a
-placement's `Section`, `Track`, `Condition` (whose `ToString` says it in words), `LevelCue` and `IsOnPhrase`; a cue's
-`OptionNames` and `OptionValue`; the player's `Get` and `Set` for any cue, `SectionTick` for a playhead, and
-`Pattern(placement)`, one pass of a part's notes as the sequencer plays them.
-
-`WorkbenchView.TransportExtras` is a panel at the end of the transport bar for the host's own controls (a toggle for a
-sound of the game's own to hear under the music, say). `CaptureState` and `RestoreState` keep the song, whether it
-played and in which section, the loop, a scale played in place of the song's, the cues, the mutes, solos, gains and
-forced placements, and the bench's patch, kit, octave and velocity, all by name, as JSON (`WorkbenchStateJson`).
-
-**Keys:** `A W S E D F T G Y H U J K` play an octave of notes on the patch bench, C to
-C, as a piano's keys lie. `Z` and `X` move it down and up an octave. `Space` plays or stops, and `1` to `9` jump to a
-section.
+`loom-workbench`'s own app (`Loom.Audio.Workbench.App/WorkbenchApp.cs`) is this, with a `MusicProject` handing it
+each build (`WorkbenchProject`). `WorkbenchView.TransportExtras` is a panel for the host's own controls, on a row of
+its own across the transport bar once asked for, scrolling sideways if even that is too narrow. The workbench uses
+only `Loom.Audio.Synth`'s public API, so a game can build a tool of its own the
+same way: a placement's `Section`, `Track`, `Condition` (whose `ToString` says it in words), `LevelCue` and
+`IsOnPhrase`; a cue's `OptionNames` and `OptionValue`; the player's `Get` and `Set` for any cue, `SectionTick` for a
+playhead, and `Pattern(placement)`, one pass of a part's notes as the sequencer plays them.
 
 ### What hot reload can and can't do
+
+Under `dotnet watch`, in an app hosting the workbench itself. `loom-workbench` has none of these limits: it compiles the
+project whole and loads each build into a context of its own, whose static fields start afresh.
 
 - **A song, a patch and a kit are built by a method or a property, every time.** A `static readonly` field is
   initialised once and hot reload never runs its initialiser again.
@@ -2871,14 +3042,92 @@ The mutes, solos, gains and forced placements carry over by name.
 
 ---
 
-## 11. Not built yet
+## 11. Music as data
+
+A patch or a song can be a file rather than code: JSON a tool writes and reads back exactly, which Loom's music
+generator turns into the C# a person would have written as the project builds. The game builds and runs the C#, so
+NativeAOT and the browser are as they were; the workbench edits the files.
+
+**`loom-patch/1`** (`PatchFile`): a `PatchSpec` as JSON. Each operator is named and routed by name, and only what differs
+from a new spec's defaults is written, so `Write` then `Read` gives back the same spec, float for float.
+
+```json
+{
+  "format": "loom-patch/1",
+  "name": "electric-piano",
+  "about": "An electric piano: a tine's bell over a tone bar that barks when struck hard",
+  "operators": [
+    { "name": "strike", "kind": "sine", "ratio": 14, "envelope": "decay 0.06", "velocity": 0.8, "keyLevel": -4 },
+    { "name": "tine", "kind": "sine", "envelope": "adsr 0.002 2.2 0 0.2", "level": 0.35, "modulatedBy": [{ "op": "strike", "index": 0.7 }] }
+  ],
+  "out": [{ "op": "tine" }],
+  "sends": { "space": 0.2 },
+  "tremolo": { "rate": 4.5, "depth": 0.15 }
+}
+```
+
+A kind is `sine`, `saw`, `pulse`, `noise`, `level`, `string`, `tube` or `modes`; a sampled operator can't be data. An
+envelope is `"gate"`, `"decay s"` or `"adsr a d s r"`; a mode `"at ratio seconds [level]"` or `"fixed hz seconds
+[level]"`; a macro its number. `PatchSpec.About` carries `"about"`.
+
+**`loom-song/2`** (`SongFile`): a song, its patches, kits, cues and macros named, written a part to a line:
+`SongFile.Write(song, names)` from a built song (`SongNames` says what the catalog calls each patch, kit and macro, and
+gives a group's effects, which a built song can't), `ToJson` to add what a built song can't say before writing (its
+hooks), and `Load(json, bindings)` to build one at run time (`SongBindings` binds the names). A `loom-song/1` file,
+whose song-wide `order` or `conduct` chose the next section, is refused, saying how to move it to each section's exits.
+Its pieces:
+
+| Key | What it says |
+|---|---|
+| `tempo`, `meter`, `scale`, `voices` | The song's settings, defaults left out: `"scale": "F# minor"` |
+| `effects` | The space, echo and master sends' effects, if not the defaults |
+| `groups` | `{ "name", "effects": [{ "fx": "compressor", "thresholdDb": -18, "ratio": 3 }] }`: an effect is one of `Fx`'s factories, its arguments by their parameter names |
+| `tracks` | `{ "name", "patch" or "kit", "group", "octave", "level", "pan", "humanise": { "ms", "velocity" }, "swing": { "ratio", "step" }, "macros": [{ "macro", "follow", "from", "to" } or { "macro", "set" }] }` |
+| `sections` | `{ "name", "about", "bars", "chords", "parts": [...], "sweeps": [{ "track", "macro", "from", "to" }], "exits": [{ "when": "intensity > 0.7", "then": "open" }, { "then": "cruise" }] }`: the exits tried in order as it ends, the last, with no `when`, always |
+| a part | `{ "track", "name", ` a line `"line": "eighths", "notes", "overChords", "octave"`, a beat `"beat", "rows": { "kick": "x..." }`, a strum `"strum", "notes", "voicing", "spread"`, or code `"part": { "code": "Name" }`; then `"when"`, `"level"` (a cue), `"onPhrase"`, `"endWith"` (a part) `}`, or a whole placement as code `{ "track", "code": "Name" }` |
+| `hooks` | `["OnBuilt"]`: code of the game's own, run with the song and every section once the rest is built |
+
+A condition (`ConditionText`) is `"intensity > 0.6"`, `"intensity < 0.2"`, `"biome is Forest"` or the section's pass,
+`"pass < 2"`, joined by `and`, `or`, `not` and brackets.
+
+**The generator** (`Loom.Audio.Music.Generator`) reads a project's `AdditionalFiles` ending `.patch.json` and
+`.song.json`. Every patch file becomes a property of one `static partial class Patches` in the project's root namespace,
+named for its file (`electric-piano.patch.json` is `Patches.ElectricPiano`), written as `PatchCode` writes it. Every song
+file becomes `static partial class OpenRoad` (from `open-road.song.json`) with `public static Song Build()`, in the
+namespace of its folder. A name in a song is a member of the project's classes: `Patches.UprightBass`, `Kits.General`,
+`Cues.Intensity`, `Macros.Bright`; a choice cue's enum and an effect's argument types come from the compilation. What a
+file says that can't be code is an error, `LOOMMUSIC001`, at its line in the file.
+
+What a file can't say is code, declared by the generated class and written in the game's own half of it, so a missing or
+renamed member fails the build: a part (`private static partial Part Name();`), a placement (`private static partial
+Placement Name(Section section, SongTrack track);`), a patch (`public static partial Patch Name { get; }`), a hook
+(`static partial void OnBuilt(Song song, Section verse, Section chorus);`).
+
+```xml
+<ItemGroup>
+  <AdditionalFiles Include="Patches\*.patch.json;Songs\*.song.json" />
+  <CompilerVisibleProperty Include="RootNamespace" />
+  <CompilerVisibleProperty Include="ProjectDir" />
+  <ProjectReference Include="..\Loom\Loom.Audio.Music.Generator\Loom.Audio.Music.Generator.csproj"
+                    OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+</ItemGroup>
+```
+
+The classes the names are found in can be others (`LoomMusicPatches`, `LoomMusicKits`, `LoomMusicCues`,
+`LoomMusicMacros`, each made visible the same way). `MusicGeneratorTests` checks that the generated patch and song build
+what `PatchFile.Load` and `SongFile.Load` build from the same files; RubberTrack moved its 48 patches and ten songs onto
+the files and every render stayed bit-identical.
+
+---
+
+## 12. Not built yet
 
 - **Music in the browser costs too much to play.** There the mix runs on the frame thread, and a song of eight tracks
   costs several milliseconds of each frame; rendering it ahead on a worker (`AudioOptions.BrowserThread`) has hung the
   page. The chip, effects and offline rendering work there; a browser game should budget for music or leave it out.
 - **No tempo change within a song,** and no meter change: a song has one of each. A swap may bring another.
-- **The workbench is not a package.** An app references its project, and its pattern view shows a part's notes but
-  doesn't edit them: the song is edited in code.
+- **The workbench is not a package.** An app references its project. The roll edits a part only where its song has a
+  file; a song that is code alone is edited in code.
 - **No vectorised inner loops.** The oversampler's half-band filter and the voices' operators are scalar; making them
   wide changes the order of their sums, and so the bits a render gives.
 - **Measured on one machine.** The costs quoted here are a Snapdragon X laptop's. A denormal costs little on ARM and a
@@ -2919,6 +3168,7 @@ The mutes, solos, gains and forced placements carry over by name.
 - **Loom.Audio.AudioSpatial**: How a 3D voice () falls off with distance and shifts with motion. Distances are in the game's own units, the same as its positions.
 - **Loom.Audio.AudioStats**: How the mixer is doing, for a debug display or a test: read from .
 - **Loom.Audio.AudioStream**: Music decoded as it plays, rather than held decoded in memory as a clip is: an Ogg Vorbis or FLAC file, opened with and played like any source, with . Each play starts from the beginning. A looping stream plays until stopped, its end joined to its start without a gap.
+- **Loom.Audio.AudioTap**: An effect that changes nothing and keeps the latest frames of what passes through it (left and right mixed), for a tool on the game thread to draw: a scope, a spectrum. Add it to a bus with .
 - **Loom.Audio.AudioWork**: Where the engine's work off the audio thread runs: decoding streams ahead () and rendering sources ahead ().
 - **Loom.Audio.Decoding.Flac.FlacBitReader**: Reads a FLAC file's bits, most significant first, from a stream it buffers itself. Bits are taken through a 64-bit cache. The bytes from the on (the frame being decoded) stay in the buffer, so its checksums can be taken over them once it's read; the buffer only grows if a frame outgrows it.
 - **Loom.Audio.Decoding.Flac.FlacDecoder**: A FLAC decoder, from RFC 9639: reads the metadata when made, then decodes frames on demand into interleaved 32-bit float. Every frame's header and body are checked against their checksums, so a damaged file throws rather than playing noise. Once made it allocates nothing. It decodes native FLAC of 1 to 8 channels, 4 to 32 bits and fixed or variable block sizes; a file that changes its rate or channel count partway is refused, and FLAC inside Ogg isn't read.
@@ -2992,7 +3242,10 @@ The mutes, solos, gains and forced placements carry over by name.
 - **Loom.Audio.Synth.Chip.OutputTap**: One operator heard in a patch's output.
 - **Loom.Audio.Synth.Chip.Patch**: An instrument for a , as data: up to 16 operators, which of them are heard, and what the voice does after them (a filter, drive, gain, pan, sends, vibrato, a pitch drop, mono and glide, macros). Write one with . var bell = Patch.Build("bell", p => { var modulator = p.Sine(3.5f, Env.Decay(0.4f)); var carrier = p.Sine(1f, Env.Decay(1.5f)).ModulatedBy(modulator, 2f); p.Out(carrier); p.Send(ChipSend.Space, 0.3f); });
 - **Loom.Audio.Synth.Chip.PatchBuilder**: Writes a , handed to 's action. Each operator method adds an operator and returns it (an ) to route; the rest set what the voice does after its operators.
+- **Loom.Audio.Synth.Chip.PatchCode**: Writes a patch as the C# that builds it: a Patch.Build property, as a person would have written it, for a tool that designs patches to hand back as code. What it writes builds a patch equal to the one it was given.
 - **Loom.Audio.Synth.Chip.PatchException**: A patch that can't be played, thrown from : which patch, and what is wrong with it.
+- **Loom.Audio.Synth.Chip.PatchFile**: A patch as a file, loom-patch/1: everything a holds as JSON, each operator named and routed by name, and only what differs from a new spec's defaults written, so a patch reads back exactly as it was. Loom's music generator turns the same file into the C# writes. { "format": "loom-patch/1", "name": "electric piano", "operators": [ { "name": "tine", "kind": "sine", "ratio": 14, "envelope": "decay 0.12", "level": 0.6, "velocity": 0.8 }, { "name": "body", "kind": "sine", "envelope": "adsr 0.002 1.6 0.2 0.3", "modulatedBy": [{ "op": "tine", "index": 1.2 }] } ], "out": [{ "op": "body" }], "sends": { "space": 0.2 } } An envelope is "gate", "decay seconds" () or "adsr a d s r"; a mode is "at ratio seconds [level]" or "fixed hz seconds [level]". A file whose patch is code ("code": "Name", ejected) has no patch to read.
+- **Loom.Audio.Synth.Chip.PatchSpec**: A patch as data that can be changed: its operators (each an whose modulators and drivers name operators before it by index), what is heard of them, and what the voice does after. A tool edits one and builds a from it with , which checks every rule does.
 - **Loom.Audio.Synth.Chip.SampleData**: A recording for a operator: mono samples at their own rate. One with a loop plays to the loop's end and then round it for as long as the note is held, so a short recording sustains: a bowed note, an organ pipe, a pad. makes one whose loop joins without a click.
 - **Loom.Audio.Synth.Chip.SampleSet**: The recordings a operator picks from by note and velocity, with alternate takes of the same range played in turn.
 - **Loom.Audio.Synth.Chip.SampleZone**: A recording and the notes and velocities it plays for.
@@ -3025,46 +3278,69 @@ The mutes, solos, gains and forced placements carry over by name.
 - **Loom.Audio.Synth.Effects.IKeyedEffect**: An effect that listens to a sound other than the one it changes: a compressor that turns the bass down while the kick sounds. On a 's group, its sends or its master, it hears the chip's key (), what its patches send there.
 - **Loom.Audio.Synth.Effects.Limiter**: Keeps the output under a ceiling, for the end of a mix. It delays the sound by so its gain can come down before a peak arrives, and clamps whatever still gets past, so nothing exceeds the ceiling.
 - **Loom.Audio.Synth.Effects.Reverb**: A room's sound: a feedback delay network of eight lines behind four all-passes that smear the input, each line losing high frequencies as it goes round. Four of the lines slowly change length by a few samples, so a long tail doesn't ring on at a few frequencies of the network's own. Its defaults (all wet, no dry) suit a bus that only receives sends.
+- **Loom.Audio.Synth.Music.AboveCondition**: A level cue above a level.
+- **Loom.Audio.Synth.Music.AndCondition**: Both of two conditions.
 - **Loom.Audio.Synth.Music.Beat**: Drums on a grid, a row a piece, a step a character: x a hit (0.75), X an accent (1), o a ghost note (0.35), a digit 1 to 9 a hit at that many tenths (for a crescendo a step at a time), . a rest. Spaces and | are for reading and mean nothing. Beat.Eighths((Kit.Kick, "x... x.x. | x... x..."), (Kit.Snare, "..x. ..x. | ..x. ..xo"))
+- **Loom.Audio.Synth.Music.BelowCondition**: A level cue below a level.
 - **Loom.Audio.Synth.Music.Chord**: A chord on a degree of the scale, written as a Roman numeral: i, VI5, bVII, V7, ivsus4. Case means nothing: the scale decides whether a triad is major or minor.
+- **Loom.Audio.Synth.Music.ChordBar**: One bar of a section's progression: one chord, or two or four sharing the bar evenly, each as written and as read.
 - **Loom.Audio.Synth.Music.ChordKind**: What a stacks on its root.
+- **Loom.Audio.Synth.Music.CompiledExit**: A section's way out as the sequencer reads it: its condition's postfix steps (none: always) and the section's index it goes to.
 - **Loom.Audio.Synth.Music.CompiledPlacement**: A placement as the sequencer reads it: its events through the whole section, a fill's in its last bar.
 - **Loom.Audio.Synth.Music.CompiledSection**: A section as the sequencer reads it.
 - **Loom.Audio.Synth.Music.CompiledSong**: A song made into what the sequencer reads on the audio thread: arrays of structs, indexed by small integers, never changed once made. Made on the game thread in one scale.
 - **Loom.Audio.Synth.Music.CompiledTrack**: A track as the sequencer reads it.
-- **Loom.Audio.Synth.Music.Condition**: When a part plays (): a cue or a level, or a choice a value, combined with &, | and !.
+- **Loom.Audio.Synth.Music.Condition**: When a part plays () or a section is left by an exit (): a cue or a level, a choice a value, or the section's , combined with &, | and !.
 - **Loom.Audio.Synth.Music.ConditionOp**: One step of a condition compiled to postfix, run on a fixed stack by the sequencer.
 - **Loom.Audio.Synth.Music.ConditionOpKind**: What one step of a compiled condition does.
-- **Loom.Audio.Synth.Music.Conductor**: What a song's function is handed near the end of each section, to choose the next: the section playing, how many times in a row, and the cues.
+- **Loom.Audio.Synth.Music.ConditionText**: A condition as a song file writes it: "intensity > 0.6", "intensity < 0.2", "biome is Forest", joined by and, or and not, with brackets where the order needs them (and binds tighter than or). Cues are named as they name themselves; a choice cue's value by its option's name. pass is the section's pass in a row, 1 the first time (): "pass < 2", "pass > 1", "pass is 4", compared exactly; no cue may be called pass.
 - **Loom.Audio.Synth.Music.Cue**: A level the game tells the music, usually 0 to 1: how much is going on, how near the end is. Parts come and go on it (, ), a part's volume follows it (), and a patch's macro can follow it ().
 - **Loom.Audio.Synth.Music.CueBase**: Something the game tells the music, a (a level) or a (a choice). A cue is known by its object, not its name: a game keeps its cues in static fields, and every song uses those.
 - **Loom.Audio.Synth.Music.Cue`1**: A choice the game tells the music, one of an enum's values: which place the player is in, a mood.
+- **Loom.Audio.Synth.Music.EffectText**: An effect as a song file names it: one of 's factories and its arguments by their parameter names, { "fx": "compressor", "thresholdDb": -18, "ratio": 3 }, the rest left at the factory's defaults. Loom's music generator writes the same call (Fx.Compressor(thresholdDb: -18f, ratio: 3f)).
+- **Loom.Audio.Synth.Music.IsCondition**: A choice cue at one of its options, or any cue at one value.
+- **Loom.Audio.Synth.Music.JsonText**: JSON as the music files are written: indented with two spaces, and anything that fits on a line (a part, a track, a row of a beat) kept on one, so a file reads a part to a line and a diff shows the part that changed.
 - **Loom.Audio.Synth.Music.Line**: A melody or a bass line, by degree of the scale, a step a token: Line.Eighths("1 3 5 - 4 3 2 . | 1' - 7 5 ^6 5 3~ 2")1 to 9 are degrees (8 the octave above 1); ' or , after one moves it an octave up or down each; b or # before one a semitone down or up each; ^ first accents it; ~ last slides it into the next; - holds the note before a step more; . rests; | ends a bar.
 - **Loom.Audio.Synth.Music.MacroFollow**: A macro a track's song steers: from a cue's slot, or held (slot −1, From = To).
 - **Loom.Audio.Synth.Music.Meter**: A time signature: notes of 1/ a bar.
+- **Loom.Audio.Synth.Music.MusicCatalogAttribute**: Names the static class a tool finds an assembly's music in, as [assembly: MusicCatalog(typeof(Catalog))]: a workbench opening the project reads its public static Songs, Patches and Kits (each a list of (string Name, Func<T> Build)), Cues (IReadOnlyList<CueBase>) and, if it has one, MacroName (string? MacroName(int id)), whichever it has. It lives here, not in the workbench, so a game's audio library can carry it without referencing any UI.
 - **Loom.Audio.Synth.Music.MusicCommand**: One command from the game thread to the sequencer, copied through its queue.
 - **Loom.Audio.Synth.Music.MusicCommandKind**: What a asks the sequencer to do.
 - **Loom.Audio.Synth.Music.MusicPlayer**: Plays songs on a bus: one at a time, a new one crossfading over the last. The game tells it cues, and it plays the song's parts as they say; a rebuilt song is swapped in at the next bar line without a break. var music = new MusicPlayer(Audio, musicBus); music.Play(Groove.Build()); music.Set(Groove.Energy, energy); // each frame, 0 to 1 music.Update(); // each frame
 - **Loom.Audio.Synth.Music.MusicPosition**: Where a song is: its section, the bar in it and the beat in that, from 1, and the bars since it began, from 0.
 - **Loom.Audio.Synth.Music.MusicSource**: The sequencer: plays a compiled song on a chip core, on the audio clock. Each render it splits the block at every event, bar line and section end, handing the core its notes between slices, so timing is exact to the frame. Everything it needs comes made (); it allocates nothing.
+- **Loom.Audio.Synth.Music.NotCondition**: A condition not holding.
 - **Loom.Audio.Synth.Music.Notation**: What the notations share: splitting a text into tokens with their columns, and checking its bars.
 - **Loom.Audio.Synth.Music.NotationException**: A mistake in a notation (a line, a beat, a strum, a section's chords), thrown when the song is built. Its message quotes the text and says where: Line "1 2 3": bar 1 has 3 steps; a bar of 4/4 in quarters has 4 (column 5).
+- **Loom.Audio.Synth.Music.NotationText**: A part's notation as an editor changes it: its steps, each a token (a line's "5", "-", "."; a beat's or a strum's one character), between the text's own spaces and bar lines, which are kept as they were. An edit replaces a step's token, so every bar keeps its steps and the text still parses; written back unedited it is the text it was read from, character for character.
 - **Loom.Audio.Synth.Music.Note**: A pitch class, the twelve notes of the octave from C, sharps for the black keys.
+- **Loom.Audio.Synth.Music.NoteToken**: One note of a as its notation writes it: ^b3'~ is an accented flat third an octave up, sliding into the next. In order: ^ accent, b or # each a semitone, the degree 1 to 9, ' or , each an octave, ~ slide.
+- **Loom.Audio.Synth.Music.OrCondition**: Either of two conditions.
 - **Loom.Audio.Synth.Music.ParsedPart**: A part read against the song's meter: how long one pass of it is, and how it becomes events.
 - **Loom.Audio.Synth.Music.Part**: Something a track plays in a section: a of notes, a of drums, or a of chords. Each is written as a string and checked when it is placed ().
+- **Loom.Audio.Synth.Music.PartCode**: Writes a part, or a whole placement, as the C# that makes it, as writes a patch: for a tool that hands a piece of a song back as code (ejecting it from the song's file), which builds the same piece.
 - **Loom.Audio.Synth.Music.PartContext**: What a part needs to become events in one section on one track: the scale, the section's chords, the track's octave and kit, the tempo, and the track's swing.
+- **Loom.Audio.Synth.Music.Pass**: Conditions on which pass of its section in a row this is, 1 the first time: Pass.Below(2) for a section's exit back to itself once more, Pass.Is(4) for a part on the fourth time round. A song file writes them pass < 2, pass > 1, pass is 4. Whole numbers compare exactly, so > and < are strict here, where a cue's level holds at its threshold. A count below 1 is refused (): passes count from 1, so it could never hold, or always would.
+- **Loom.Audio.Synth.Music.PassComparison**: How a compares the section's pass with its count.
+- **Loom.Audio.Synth.Music.PassCondition**: Which pass of its section in a row this is, 1 the first time ( makes it): an exit taken after the second time round, a fill played only on the last pass. Whole numbers compare exactly, so Above and Below are strict.
 - **Loom.Audio.Synth.Music.PatternEvent**: A note or a hit of a .
 - **Loom.Audio.Synth.Music.Pitch**: A pitch as a MIDI note number, 69 being A 440; fractions bend it.
 - **Loom.Audio.Synth.Music.Placement**: A part a track plays in a section, and when: a condition, a level following a cue, a fill. Its setters chain.
 - **Loom.Audio.Synth.Music.PlacementPattern**: One pass of a placement's part as the sequencer plays it ().
+- **Loom.Audio.Synth.Music.PlacementPosition**: Where a placement's part is in the section playing (): which pass of the part, from 0, of how many fit before the section's end (or before its fill, which takes the last bar), the tick within that pass, and whether the fill is playing. is false while another section plays.
 - **Loom.Audio.Synth.Music.PlacementState**: How a placement's playing is decided (): by its condition, or held on or off.
 - **Loom.Audio.Synth.Music.PreparedSong**: A song made ready to play (): compiled in its scale, its chip's voices and effects made. That is the costly part of starting a song, and needs no engine, so a game can do it on a thread of its own and hand the result to on the engine's. Played once.
 - **Loom.Audio.Synth.Music.Scale**: A scale: a root and the steps above it. Music is written in its degrees (1 the root, 8 the octave above), so a song moves to another key, or another mode, by being played in another scale.
-- **Loom.Audio.Synth.Music.Section**: A stretch of a song (a verse, a chorus) some bars long over its chords, and the parts its tracks play in it.
+- **Loom.Audio.Synth.Music.Section**: A stretch of a song (a verse, a chorus) some bars long over its chords, the parts its tracks play in it, and where the song goes as it ends ().
 - **Loom.Audio.Synth.Music.SectionChords**: A section's chords: bars separated by |, each one chord or two or four sharing the bar evenly. Fewer bars than the section has repeat to fill it.
-- **Loom.Audio.Synth.Music.Song**: A piece of music as code: its tempo, meter and scale, its tracks (patches and kits, in groups of effects), its sections and the parts played in each, and the order they come in. Build one in a method that makes it anew each time (so hot reload rebuilds it), then hand it to a . var song = new Song("groove") { Tempo = 128, Scale = Scale.Minor(Note.E) }; var drums = song.Track("drums", kit); var bass = song.Track("bass", bassPatch).Octave(2); var verse = song.Section("verse", 4, "i | VI | III | VII"); verse.Play(drums, Beat.Eighths((Kit.Kick, "x... x..."), (Kit.Snare, "..x. ..x."))); verse.Play(bass, Line.Eighths("1 1 . 1 5, 1 . 1").OverChords()); song.Order(verse);
+- **Loom.Audio.Synth.Music.SectionExit**: One way out of a section (, ): to , when holds as the section ends, or always where it is null.
+- **Loom.Audio.Synth.Music.SectionPattern**: What a placement plays through its whole section (): every pass of its part, each sounding over the chords under it, and the fill in the last bar where it has one (from , -1 for none). is one pass, whole bars.
+- **Loom.Audio.Synth.Music.Song**: A piece of music as code: its tempo, meter and scale, its tracks (patches and kits, in groups of effects), its sections and the parts played in each, and where each section goes as it ends (). Build one in a method that makes it anew each time (so hot reload rebuilds it), then hand it to a . var song = new Song("groove") { Tempo = 128, Scale = Scale.Minor(Note.E) }; var drums = song.Track("drums", kit); var bass = song.Track("bass", bassPatch).Octave(2); var verse = song.Section("verse", 4, "i | VI | III | VII"); verse.Play(drums, Beat.Eighths((Kit.Kick, "x... x..."), (Kit.Snare, "..x. ..x."))); verse.Play(bass, Line.Eighths("1 1 . 1 5, 1 . 1").OverChords()); var chorus = song.Section("chorus", 4, "VI | VII | i | i"); chorus.Play(drums, Beat.Eighths((Kit.Kick, "x.x. x.x."), (Kit.Snare, "..x. ..x."))); verse.Exit(verse, Pass.Below(2)); verse.Then(chorus); chorus.Then(verse);
+- **Loom.Audio.Synth.Music.SongBindings**: What the names in a song file stand for when it is loaded at run time (): its patches, kits, cues and macros, and the pieces of it that are code. The generated C# binds the same names at compile time instead.
 - **Loom.Audio.Synth.Music.SongEvent**: One note or hit of a compiled placement, in ticks from its section's start.
+- **Loom.Audio.Synth.Music.SongFile**: A song as a file, loom-song/2: everything a is, its patches, kits, cues and macros named, written a part to a line. Loom's music generator turns the same file into the C# a person would have written; at run time builds it with the names bound by a . { "format": "loom-song/2", "name": "open-road", "tempo": 108, "scale": "G major", "groups": [{ "name": "wide", "effects": [{ "fx": "chorus", "mix": 0.4 }] }], "tracks": [ { "name": "drums", "kit": "general", "level": -9, "humanise": { "ms": 6, "velocity": 0.1 } }, { "name": "keys", "patch": "electric-piano", "group": "wide", "level": -5 } ], "sections": [ { "name": "cruise", "bars": 8, "chords": "I | I | IV | I", "parts": [ { "track": "keys", "line": "eighths", "notes": "5 - 3 5 6 - 5 3", "onPhrase": true, "name": "the tune" }, { "track": "drums", "beat": "eighths", "rows": { "kick": "x... x.x.", "snare": "..x. ..xo" }, "when": "intensity > 0.25" } ], "exits": [{ "when": "intensity > 0.7", "then": "open" }, { "then": "cruise" }] } ] } A track's defaults (octave 4, level 0, no pan, no looseness, straight time) and a song's (4/4, 32 voices) are left out. A part is a line ("line": "eighths", "notes", "overChords", "octave"), a beat ("beat", "rows"), a strum ("strum", "notes", "voicing", "spread") or code ("part": { "code": "Name" }); a whole placement can be code ("code": "Name"). Conditions are 's. As a section ends the song goes where the first of its "exits" whose condition holds says, the last of them with no "when" where it has one, or plays it again where none holds (); "hooks": ["OnBuilt"] hands the built song to code of the game's own. A loom-song/1 file, whose song-wide "order" or "conduct" chose the next section, is refused, naming how to move it.
 - **Loom.Audio.Synth.Music.SongGroup**: A group of a song's tracks sharing effects (guitars through a distortion): a chip group ().
+- **Loom.Audio.Synth.Music.SongNames**: How a song file names what a built song holds by reference (): its patches, kits and macros by the names a game's catalog gives them, and its groups' effects, which a built song can't say.
 - **Loom.Audio.Synth.Music.SongState**: A compiled song and every array the sequencer needs to play it, made on the game thread so the audio thread takes it whole (at the start, or at a swap) and allocates nothing.
 - **Loom.Audio.Synth.Music.SongTrack**: One instrument of a song: a patch or a drum kit, with its octave, level, pan, feel and macros. Its setters chain.
 - **Loom.Audio.Synth.Music.Strum**: Chords strummed across a guitar's strings, a step a character, each chord the section's at that step: D down (low string to high), U up (the top four, high to low), d and u softer, x a muted chuck, . let ring, _ stop the strings. Spaces and | mean nothing. Strum.Eighths("D.DU .UDU").Voicing(Voicing.Open)
@@ -3302,30 +3578,62 @@ The mutes, solos, gains and forced placements carry over by name.
 - **SUIsei.Controls.ButtonBase**: The clickable-control base: the bubbling routed event synthesized from a pointer press+release over the control (or Enter/Space when focused), the common pointer visual states (Normal/PointerOver/Pressed), and WinUI / support. A concrete button supplies its look via a ; is the single override point (e.g. a toggle).
 - **SUIsei.Controls.Canvas**: Absolute positioning by the attached /: children measure unconstrained and arrange at their (Left, Top) with their desired size; the Canvas itself desires nothing.
 - **SUIsei.Controls.CheckBox**: A with a check-box look: a square box hosting an inner fill glyph, beside a label. The glyph is hidden when unchecked, the accent fill when checked, and a dimmer fill when indeterminate, and the box border picks up the accent while (in)determinate. The box itself reacts to the pointer through a CommonStates group (hover lightens it, press darkens it). As in WinUI's default template, the row behind box and label paints the check box's , and the label its ; the box keeps its own look. (A drawn check mark awaits a glyph in the font atlas; the filled box is the representation used.)
+- **SUIsei.Controls.ComboBox**: One choice from a list that drops down, as WinUI's ComboBox: a box showing (through , or as text; while there is none) and a chevron, under an optional . A click, Enter, Space, F4, Alt+Down or the pad's A opens the list of (or ) below it, at least as wide as the box, the choice focused; a click, Enter or Space there chooses, Escape or a press outside closes it. opens and closes it from code. Closed, Up and Down step the choice. and are dependency properties with change events, so they bind TwoWay, and the choice follows an items source that changes (), kept where its item is still there. The box takes the ComboBoxBackground, ComboBoxBackgroundPointerOver, ComboBoxBackgroundPressed and ComboBoxPlaceHolderForeground resources, and the list ComboBoxDropDownBackground and ComboBoxDropDownBorderBrush.
 - **SUIsei.Controls.ContentControl**: Hosts a single . Without a it hosts the content directly (a as-is; a string wrapped in a ) and paints behind it. With a template, the control's visual tree comes from the template and a {TemplateBinding Content} () routes into the template's , live, until the template is replaced. Either way the text it shows inherits and unless something between sets its own.
 - **SUIsei.Controls.ContentHelper**: Shared content-hosting policy: a is hosted as-is; a string (or any other object) is wrapped in a . Used by both and so the rule lives in one place.
 - **SUIsei.Controls.ContentPresenter**: Presents a single — the lightweight presenter a control template points at. When a is set, the content is realized through that ; otherwise a is hosted as-is and any other value is wrapped in a (the shared policy). and are inherited, as in WinUI, by that text and by any text in the content, unless it sets its own; unset here, the presenter passes on the values from above it. An optional lets it stand in for a panel.
 - **SUIsei.Controls.Control**: The base of templatable controls. Sets to true by default so all controls participate in Tab navigation. A defines the visual tree: it is applied lazily on first measure, becomes the control's single visual child, and carries the groups.
 - **SUIsei.Controls.ControlTemplate**: Defines a control's visual tree. The — generated from a <ControlTemplate>, or hand-written — news the subtree given the templated control, wiring its {TemplateBinding}s and groups at instantiation.
 - **SUIsei.Controls.DataTemplate**: Defines the visual tree for a data item — used by and items controls to realize one subtree per item. The news the subtree given the item and wires its template-scoped {x:Bind}s against the item.
+- **SUIsei.Controls.ExpandDirection**: Which way an 's content opens from its header, as WinUI's ExpandDirection.
+- **SUIsei.Controls.Expander**: A header that opens and closes the content beside it, as WinUI's Expander: the header row (its and a chevron pointing the way it will open) is clicked, or Enter, Space or the pad's A pressed while the expander has focus, to flip , which shows or collapses below the header, or above it with Up. Input in the content is the content's own: a click or a key there never flips it. and say which way it went; lets it bind TwoWay. The header takes ExpanderHeaderBackground and the content ExpanderContentBackground.
+- **SUIsei.Controls.ExpanderCollapsedEventArgs**: An has closed, as WinUI's ExpanderCollapsedEventArgs.
+- **SUIsei.Controls.ExpanderExpandingEventArgs**: An is opening, as WinUI's ExpanderExpandingEventArgs.
+- **SUIsei.Controls.Flyout**: A flyout holding any , as WinUI's Flyout: shown on a rounded panel against its target (). The panel's look comes from the FlyoutPresenterBackground and FlyoutBorderThemeBrush resources found from the target up, as WinUI's lightweight styling does.
 - **SUIsei.Controls.FrameworkTemplate**: The base of the compile-time templates. A template is a generated factory that news a subtree — never reflection — so and differ only in what the factory is handed (the templated control vs the data item).
 - **SUIsei.Controls.Grid**: A row/column grid: Pixel tracks are fixed, Auto tracks size to their largest child, and Star tracks share the leftover space by weight after Pixel/Auto are subtracted. Children select a cell with the attached / and may span tracks with /. An empty definition list defaults to one Star track. Limitation: a spanning child does not drive Auto-track sizing (only single-cell children do).
 - **SUIsei.Controls.IDataTemplateBindings**: The live {x:Bind}s (Mode=OneWay or TwoWay) of one element a built, tracking its item. The generator emits one per realized template that has them and hands it to ; it has pushed the item's values once already, and listens to the item only while the element is in a live tree, so a container an items control drops, recycles or replaces lets its item go.
 - **SUIsei.Controls.IItemContainerSource**: The contract a virtualizing panel pulls item containers from — implemented by . The panel realizes only the containers in its viewport and recycles the rest, so a large list never materializes all its containers at once.
 - **SUIsei.Controls.IVirtualizingItemsHost**: A panel that virtualizes its children by pulling them from an . An detects this on its panel and hands it the source instead of pushing all the containers itself.
 - **SUIsei.Controls.Image**: Draws an , scaled into its layout bounds per and cut at them. Measures to the source's natural pixel size (in DIPs) so an unconstrained image takes its intrinsic size; an explicit Width/Height on the element overrides that as usual. Its content is a rectangle filled by a , centred, except that keeps the image at the top left.
+- **SUIsei.Controls.InfoBar**: A message in the page rather than over it, as WinUI's InfoBar: its and on a panel edged in its 's colour, an optional , and a close button while . It shows while . However it closes, by its close button (which raises first) or by set false, it raises , which may keep it open, then , each with the reason. lets it bind TwoWay. The panel takes InfoBarInformationalSeverityBackgroundBrush, InfoBarSuccessSeverityBackgroundBrush, InfoBarWarningSeverityBackgroundBrush or InfoBarErrorSeverityBackgroundBrush by its severity, and its edge the InfoBar*SeverityIconBackground ones.
+- **SUIsei.Controls.InfoBarCloseReason**: What closed an , as WinUI's InfoBarCloseReason.
+- **SUIsei.Controls.InfoBarClosedEventArgs**: An has closed, as WinUI's InfoBarClosedEventArgs.
+- **SUIsei.Controls.InfoBarClosingEventArgs**: An is about to close, as WinUI's InfoBarClosingEventArgs: setting keeps it open.
+- **SUIsei.Controls.InfoBarSeverity**: How much an 's message matters, as WinUI's InfoBarSeverity, which colours it.
 - **SUIsei.Controls.InheritedText**: The text properties WinUI passes down the tree, FontSize and Foreground, and the dependency property each element holds them as: a 's own, a 's or a 's. So text in a control's template, or made for its string content, is sized and painted by the presenter or control above it unless it sets its own. A built-in control's look sets its own (), as WinUI's default styles do, so a page's text properties don't reach it.
-- **SUIsei.Controls.ItemsControl**: Lays out one container per item of in an . Each container is realized through (a ) or, with no template, by wrapping the item. When the source implements the realized containers are updated incrementally (add/remove/replace/move/reset) rather than rebuilt.
+- **SUIsei.Controls.ItemClickEventArgs**: An item clicked or invoked in a , as WinUI's ItemClickEventArgs.
+- **SUIsei.Controls.ItemClickEventHandler**: Handles an item clicked in a , as WinUI's ItemClickEventHandler.
+- **SUIsei.Controls.ItemsControl**: Lays out one container per item of in an . Each container is realized through (a ) or, with no template, by wrapping the item. When the source implements the realized containers are updated incrementally (add/remove/replace/move/reset) rather than rebuilt; the control listens only while it is in a live tree, so a long-lived collection never keeps a removed one alive, and joining a tree again lays the items out anew if the source changed while it was out.
 - **SUIsei.Controls.ItemsPanelTemplate**: Builds the an lays its item containers out in. The default is a vertical ; a virtualizing list supplies a instead.
-- **SUIsei.Controls.ListView**: An that wraps each item in a selectable . Clicking an item selects it (driving the item's SelectionStates visual); single selection is supported (full multi-select is a later refinement).
-- **SUIsei.Controls.ListViewItem**: The container a wraps each item in. A SelectionStates group shows a selection highlight behind the content, holding the item's background at the selection brush while it is selected, faded in and out; the owning list calls when the selection changes. Unselected, the item paints its own . While disabled, a CommonStatesDisabled state holds the item's , which its content's text inherits, at the disabled text brush, and a selected item shows SelectedDisabled, a highlight without the accent, in place of Selected.
+- **SUIsei.Controls.ListView**: An that wraps each item in a selectable , in a of its own, as WinUI's. A primary click or tap on an item selects it, and so does moving through the list with the keyboard or a pad from an item that has focus: Up and Down (the d-pad's too), Home, End, Page Up and Page Down, passing over items whose content is collapsed (a filtered list); keys a control inside an item handles (a text box's Home and End) stay with it. and are dependency properties with change events, so they bind both ways. With , a click (a press and release on the same item), Enter, Space or the pad's A on an item raises . Single selection. A list laid out by a has no scroll viewer, as that panel scrolls itself, and moving the keyboard through it reaches only the items it has realized.
+- **SUIsei.Controls.ListViewItem**: The container a wraps each item in, as WinUI's. Its built-in template is one , as WinUI's default style is: the content laid out across the row inside the item's , over the item's (clear unless set, but drawn, so the whole row takes the pointer), with a highlight as the pointer passes over or presses it and while it is selected. A page recolours the highlights with WinUI's ListViewItemBackgroundPointerOver, ListViewItemBackgroundPressed, ListViewItemBackgroundSelected, ListViewItemBackgroundSelectedPointerOver, ListViewItemBackgroundSelectedPressed and ListViewItemForegroundSelected resources, read as the template is built. Disabled, its text takes the disabled text brush, and a selected item shows a highlight without the accent. is settable, as WinUI's, and selects the item in its list. An item whose content is collapsed takes no room, so a list filtered by hiding its items' content closes up. A template set on the item replaces the presenter, and the item's states with it.
 - **SUIsei.Controls.MenuBar**: A horizontal bar of s — the classic application menu (File, Edit, …). Items lay out left to right over a solid bar ; the bar keeps at most one item's drop-down open at a time, closing the previous one when another opens.
 - **SUIsei.Controls.MenuBarItem**: A top-level entry in a : a showing a that, when invoked, opens its as a anchored below it. The flat template highlights on hover/press through a CommonStates group, and, as WinUI's default template, paints the item's , and , and its label in ; the owning keeps at most one item's menu open at a time.
-- **SUIsei.Controls.MenuFlyout**: A context menu: opens a list of in the root's overlay layer just below the target, with a full-surface light-dismiss layer behind it. Invoking an item (which fires its / ) or pressing outside closes it.
+- **SUIsei.Controls.MenuFlyout**: A menu, as WinUI's MenuFlyout: its in a list that scrolls where it doesn't fit, opened below its target with their left edges lined up by default (), or at the pointer as an element's . Invoking an item (which fires its / ) or pressing outside closes it.
 - **SUIsei.Controls.MenuFlyoutItem**: A single command row in a : a with a label and a flat full-width template that highlights on hover. As in WinUI's default template, the row paints the item's , and , and the label its . Click invocation and come from the base; the flyout closes itself on invoke.
+- **SUIsei.Controls.NumberBox**: A number typed or stepped, as WinUI's NumberBox: a text box showing , which takes what is typed as Enter is pressed or focus leaves (a number in the current culture or the invariant one; anything else puts the value back), clamped to and . Up and Down step it by , Page Up and Page Down by , and so does the wheel while it has focus; the spin buttons show where asks. NaN is no value, shown empty. lets it bind TwoWay. The value is shown in full, with at least as many decimals as has (up to four), so 0.25 stepped by 1 shows as 0.25 and 3 stepped by 0.1 as 3.0.
+- **SUIsei.Controls.NumberBoxSpinButtonPlacementMode**: Where a 's up and down buttons show, as WinUI's NumberBoxSpinButtonPlacementMode: not at all (the keys and wheel still step it), or inside the box at its right. shows them as does.
+- **SUIsei.Controls.NumberBoxValueChangedEventArgs**: A 's value changed, as WinUI's NumberBoxValueChangedEventArgs.
 - **SUIsei.Controls.Panel**: The base of multi-child layout containers: owns the collection and an optional . Subclasses implement the measure/arrange policy.
 - **SUIsei.Controls.Popup**: A transient overlay: when is set, its is composited above the root's content at (, ) and hit-tested on top. The popup element itself occupies no layout space. With a full-surface layer behind the child closes the popup on an outside press. The popup must be attached to a live root (in the element tree) for to take effect; drives the overlay imperatively.
-- **SUIsei.Controls.ScrollViewer**: A clipping viewport over a single oversized . Measures the content unbounded in the scroll axis to learn its extent, arranges it offset by the scroll position, and clips to the viewport. Scrolls by mouse wheel, by keyboard (Page/Home/End/arrows when a descendant is focused), and programmatically; the offset is always clamped to /. Pairs with , which reports its full extent for exactly this viewport.
+- **SUIsei.Controls.Primitives.AnchoredPlacement**: Where something opened against an anchor goes (a tooltip, a flyout): on the side asked for, a gap clear of the anchor, turned to the opposite side when it would leave the bounds there and fits better on that side, and then slid along to stay inside the bounds. All in the root's DIPs.
+- **SUIsei.Controls.Primitives.EdgeAlignment**: How something placed beside an anchor lines up along that side: centred on it, or with its start (left or top) or end (right or bottom) edge on the anchor's.
+- **SUIsei.Controls.Primitives.FlyoutBase**: What a flyout is, as WinUI's FlyoutBase: something opened over the page against a target, by , a 's click or an element's . Its presenter goes in the target's root's overlay layer, on 's side of the target (turned to the other side where there is no room, slid along to stay on the surface, and no taller or wider than the room on its side, a presenter that scrolls scrolling), over a light-dismiss layer: a press outside closes it, as does Escape. Opening it focuses the first tab stop inside, and closing it gives focus back to what had it. One shows per flyout; opening it again moves it.
+- **SUIsei.Controls.Primitives.FlyoutPlacementMode**: Where a flyout opens against its target, as WinUI's FlyoutPlacementMode: on a side, centred on the target or with an edge lined up with the target's, turned to the other side where there is no room. is . , covering the window, is not provided: a flyout set to it throws as it opens.
+- **SUIsei.Controls.Primitives.FlyoutShowOptions**: How a flyout is shown, as WinUI's FlyoutShowOptions: at a point in its target (a context menu at the pointer), or against the whole target where is null; on 's side, or the flyout's own.
+- **SUIsei.Controls.Primitives.ListViewItemPresenter**: The whole look of a , as WinUI's ListViewItemPresenter: the item's built-in template is this one element, which shows the item's content inside over a background that follows the item's state. At rest it paints its own (the item's); hovered, pressed or selected it paints the brush its properties give for that state, faded by its , and a selected item's text takes where one is given. A state shows by the presenter swapping which brush it paints, with no storyboard per item. Disabled, a selected item shows and the text dims to the shared disabled brush, rather than fading the item, which SUIsei's built-in looks never do. Not provided: WinUI's check mark and selection indicator, focus visuals, reveal, and DisabledOpacity.
+- **SUIsei.Controls.Primitives.ListViewItemState**: What a list item shows: whether it is selected, hovered, pressed and enabled.
+- **SUIsei.Controls.Primitives.Marks**: The small stroked marks built-in looks draw (a chevron, a cross, an arrow), each a of rounded strokes in a box of its own size.
+- **SUIsei.Controls.Primitives.PlacementMode**: Where a tooltip or a flyout opens against what it belongs to, as WinUI's PlacementMode: on the named side, turned to the other side where there is no room, or at the pointer.
+- **SUIsei.Controls.Primitives.Pressable**: The pointer and key handling a control that acts on a press takes from without being one (a toggle switch, an expander's header): whether the pointer is over its and pressed on it, and a primary press released over it, or Enter, Space or the pad's A while the control itself has focus, each acting once. A right or middle press is left alone, for a context menu. The control shows and in its CommonStates, told as they move.
+- **SUIsei.Controls.Primitives.SourceSubscription**: A control's hold on its items source's , taken only while the control is in a live tree, so a long-lived collection (a view model's) never keeps a removed control alive. Joining a tree again re-reads the source, since changes made while it was out were not heard.
+- **SUIsei.Controls.RadioButton**: One of a set of choices, as WinUI's RadioButton: a click checks it, never unchecks it, and checking it unchecks the others in its group, those sharing its under the same root, or with none, those sharing its parent. The built-in look is a ring with a dot while checked, beside its content; a template replaces it (a segmented row of toggles is a CheckStates template).
+- **SUIsei.Controls.RadioButtons**: A set of choices of which one is chosen, as WinUI's RadioButtons: a per item of (or ), shown through or as text, under an optional , in up to columns filled top to bottom, then left to right, as WinUI's. Choosing one sets and , dependency properties with change events, so they bind TwoWay. The set is one tab stop, the chosen button (the first while none is chosen); from it Up and Down (and the d-pad's) move the choice to the item before or after, and Left and Right to the next column. Items added before it is in a live tree, as markup adds them, are laid out once it is.
+- **SUIsei.Controls.ScrollBarVisibility**: Whether a scrolls along an axis and shows its thumb, as WinUI's ScrollBarVisibility. SUIsei's scroll bar is a thumb alone, with no track, so shows as does: there is no thumb when there is nothing to scroll.
+- **SUIsei.Controls.ScrollMode**: Whether a finger panning a scrolls it along an axis, as WinUI's ScrollMode. It governs only panning: whether the content is laid out to scroll that way at all is the axis's , and the wheel, the keys and a thumb scroll whatever is laid out to scroll.
+- **SUIsei.Controls.ScrollViewer**: A clipping viewport over a single oversized , as WinUI's. Along each axis whose scroll bar visibility isn't (vertical by default, as WinUI's) it measures the content unbounded to learn its extent; it arranges the content offset by the scroll position and clips to the viewport. Scrolls by mouse wheel, by a thumb, by keyboard (Page/Home/End/arrows when a descendant is focused), by a finger where the axis's lets it, and programmatically; the offset is always clamped to /. A wheel it can't scroll any further is left unhandled, so an enclosing viewer scrolls instead. Pairs with , which reports its full extent for exactly this viewport.
+- **SUIsei.Controls.ScrollViewerViewChangedEventArgs**: A 's view moved, as WinUI's ScrollViewerViewChangedEventArgs. SUIsei's scrolling has no inertia, so a change is never intermediate.
 - **SUIsei.Controls.SelectionChangedEventArgs**: What a selection change took away and added, as WinUI's SelectionChangedEventArgs: the items deselected and the items selected, in the order they changed.
 - **SUIsei.Controls.SelectionChangedEventHandler**: Handles a selection change, as WinUI's SelectionChangedEventHandler.
 - **SUIsei.Controls.SelectionMode**: How many items a allows selected at once.
@@ -3336,6 +3644,9 @@ The mutes, solos, gains and forced placements carry over by name.
 - **SUIsei.Controls.TextBlock**: A run of text. Measures and emits glyphs against its root's font (, the embedded unless the host sets one) through that atlas's shaper, with the OpenType features its settings name, and hands the same font and features to the the compositor lays out into draws, so the run draws in the width layout measured. and are inherited, as in WinUI: unless set here (locally, by a style or by an animation), they are those of the nearest , or text block above, so the text a control's template or its string content shows takes the control's size and brush. The text breaks into lines at its line breaks and, with , at spaces to keep inside the width it is measured at; cuts a line still too wide short with an ellipsis; and places each line across the width the text block is arranged at.
 - **SUIsei.Controls.TextBox**: A single-line editable text field. Consumes the host's and events (the input pipeline already routes them to the focused element) to drive a caret + selection over : insert/overtype, Backspace/Delete, arrow/Home/End motion (Shift extends the selection), Select-All, and cut/copy/paste through a process-wide clipboard (an OS clipboard is a later host seam). is a dependency property with a event, so it participates in TwoWay {x:Bind}. IME is deferred — committed characters only.
 - **SUIsei.Controls.ToggleButton**: A that holds a checked state — the base for . A click cycles (two-state, or three-state through null when is set), raising // and driving the CheckStates visual-state group. Subclasses reflect the state in template parts via .
+- **SUIsei.Controls.ToggleSwitch**: A switch that is on or off, as WinUI's ToggleSwitch: a pill-shaped track whose knob sits left when off and right, on the accent, when on, beside or , under an optional . A click, Enter, Space or the pad's A flips , raising ; lets it bind TwoWay. The track and knob take the ToggleSwitchFillOn, ToggleSwitchStrokeOff, ToggleSwitchKnobFillOn and ToggleSwitchKnobFillOff resources. Disabled, the track and knob take the shared disabled brushes, on or off, and the text dims.
+- **SUIsei.Controls.ToolTip**: The small panel shows over an element the pointer rests on: its , text or an element, on a rounded panel no wider than 320 DIPs unless its MaxWidth is set. It never takes the pointer, so what is under it stays hovered. A page recolours it with the ToolTipBackground, ToolTipBorderBrush and ToolTipForeground resources, as WinUI's lightweight styling does.
+- **SUIsei.Controls.ToolTipService**: An element's tooltip, as WinUI's ToolTipService: ToolTipService.ToolTip="Undo (Ctrl Z)" in XAML, or any element or . Once the pointer has rested on the element (or anything inside it without a tooltip of its own) for 0.6 s, the host shows it by the element's side; it goes as the pointer leaves, presses, scrolls or a key is pressed, and doesn't come back until the pointer leaves and returns.
 - **SUIsei.Controls.UIElementCollection**: The ordered child collection of a ; adds re-parent the child and invalidate the owner's measure.
 - **SUIsei.Controls.VirtualizingStackPanel**: A vertical items panel that realizes only the containers intersecting its viewport. It assumes one uniform row height (, suisei:Virtualization.RowHeight in XAML), so the visible window is pure arithmetic from ; containers that scroll out are recycled back to the . It reports the full extent (ItemCount × row height) so an outer scroller sees the true size. It has no variable-height virtualization, scroll chrome, or wheel and scrollbar input: the offset is set directly.
 - **SUIsei.CornerRadius**: The radii of a rectangle's four corners in DIPs, as WinUI's CornerRadius, clockwise from the top left. Each corner is a circular arc of its own radius.
@@ -3383,6 +3694,8 @@ The mutes, solos, gains and forced placements carry over by name.
 - **SUIsei.Drawing.TransformStretch**: How much a 2D transform stretches lengths: the largest and smallest factors over all directions, the singular values of its linear part. A uniform scale s stretches every direction by s and a rotation by 1; a non-uniform scale or a skew stretches some directions more than others. Translation stretches nothing.
 - **SUIsei.Drawing.VectorVertex**: One corner of a tessellated triangle: its position in the path's local space, the four signed distances a renderer turns into antialiased coverage, and its arc length along the stroke.
 - **SUIsei.Extensions.Clipping**: Clipping to an element's own bounds, set in XAML as suisei:Clipping.ClipToBounds="True". WinUI has no such property: it clips with UIElement.Clip, a geometry. Here the element's composition node clips its subtree to the element's layout bounds. Controls that always clip (ScrollViewer, TextBox) do so whatever this says.
+- **SUIsei.Extensions.GridResizeDirection**: Which tracks a resizes: worked out from its shape (wider than tall, rows), rows, or columns.
+- **SUIsei.Extensions.GridSplitter**: A bar in a that resizes the tracks either side of it as it is dragged, as the Windows Community Toolkit's GridSplitter (WinUI has none, so it is <suisei:GridSplitter>). Placed in a row of its own (a thin Auto or pixel row) it resizes the rows above and below; in a column, the columns left and right. says which where its shape doesn't. As a primary drag starts both tracks become pixel tracks of the sizes they had, and they keep the sizes the drag leaves them, each no smaller than ; says so as it ends, and a drag whose capture is lost ends there. The bar paints the control's (a faint line unless set), with a grip while the pointer is over it or dragging it.
 - **SUIsei.Extensions.HostImageSource**: An image whose texels the host supplies, named by : a render target, a video frame, anything the host draws itself. SUIsei-only (WinUI has no such source) and code-only. It has a size, so it lays out and is placed by a brush's stretch like any image, but no texels: is empty, and a host binds its own texture for the tag to the source's slot (Loom: UIPainter.SetExternalTexture), reading it as and declare. A host that has nothing for the tag fails loud. The CPU rasterizer skips what samples it and counts the commands it skipped. The host owns the texture, so a released or disposed host image tells the host to stop binding it, not to destroy it. Its size is fixed: to show a resized target, make a new source with the same tag.
 - **SUIsei.Extensions.InputPane**: Keeps content clear of an on-screen keyboard. Set suisei:InputPane.AvoidsKeyboard="True" on the element whose area the keyboard may cover, typically the page's main Border or Grid: while the keyboard is up, the element is arranged shorter by however much of it lies under the keyboard, so its * rows, a ScrollViewer or anything stretched inside it shrinks to the part still visible, and a text field at its bottom rises above the keyboard. Elements without it are left where they are, under the keyboard if that is where they are.
 - **SUIsei.Extensions.SafeArea**: Keeps content clear of the parts of the screen that hide it: a phone's camera cutout, its rounded corners. Set suisei:SafeArea.Edges="All" (or Top, Left, …) on the element whose content must stay visible, typically the page's root: it is arranged inset by however much of it lies in the unsafe band along each edge it names, so a background can still run to the very edge of the screen while its content stays clear.
@@ -3525,6 +3838,8 @@ The mutes, solos, gains and forced placements carry over by name.
 - **SUIsei.TextWrapping**: Whether a text block's lines break where they would run past its width, set by : WinUI's TextWrapping. A line breaks after the last space that keeps it inside the width; a word wider than the width alone stays whole, on a line of its own, past it (unless cuts it).
 - **SUIsei.TextureResidency**: The texture sources a 's surfaces draw, counted across them, and those its last render let go of. A source is held exactly while the current draw list of one of the host's surfaces names it in its slot table, so one reported in is named by no list the host is about to draw. A disposed source is found at the start of the next render, and the surfaces that drew it are redrawn without it in that render, which therefore releases it. is never counted or reported: a host keeps it for its whole life. Sources keep no reference to the hosts that hold them, so a long-lived source (the default font atlas, a cached image) never keeps a host or its trees alive, and disposing a source on another thread touches no host state.
 - **SUIsei.Thickness**: Per-edge spacing in DIPs — used for Margin, Padding, and border thickness (WinUI Thickness).
+- **SUIsei.ToolTipPresenter**: A host's tooltips (): ticked once a frame after input, it finds the element with a tooltip nearest the pointer's leaf, counts how long the pointer has rested on it, and shows the tooltip in that element's root's overlay layer, placed against it. One shows at a time. A press, a wheel turn or a key hides it, and it stays hidden until the pointer moves to another element. A steady frame allocates nothing; showing one makes its panel.
+- **SUIsei.TypedEventHandler`2**: A handler of an event that passes its sender as its own type, as WinUI's TypedEventHandler (Expander.Expanding, NumberBox.ValueChanged, InfoBar.Closed).
 - **SUIsei.UIDrawList**: A surface's retained draw-list builder — the analog of ImGui's ImDrawList. Bakes the composed transform into vertex positions and merges consecutive primitives that share (kind, texture slot, clip) into one indexed draw command (atlas-everything + state-run batching). It keeps two sets and fills them in turn, so the list it built last stays readable (for damage, and for a host still holding it) while the next one builds, and a surface stops allocating once both sets have grown to its size. Each list is handed out through a ring of reused views. Indices are 16-bit and relative to a window of at most vertices, which each command names by its . When a primitive would not fit in the current window, the open run is flushed at that primitive boundary and continues in a new window starting at the primitive's first vertex, so a surface can hold any number of vertices.
 - **SUIsei.UIDrawList.GradientVectorEmitter**: Writes a tessellated path's triangles into the draw list, each cut into the gradient's bands: measured along the line, or along the stroke over length when it is above 0.
 - **SUIsei.UIDrawList.KeptVectorEmitter**: Writes a tessellated path's triangles into the draw list, each cut to a box.

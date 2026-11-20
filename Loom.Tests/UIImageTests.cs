@@ -229,10 +229,12 @@ public class UIImageTests
 				g.Present(screen);
 			}));
 
+			// Each frame's bytes split by phase, so a failure says which of the three allocated.
 			long hostBytes = 0, prepareBytes = 0, renderBytes = 0;
-			for (var frame = 0; frame < WarmupFrames + MeasuredFrames; frame++)
+			var frame = 0;
+			void Frame()
 			{
-				bitmap.PixelBuffer.Span[0] = (byte)frame;
+				bitmap.PixelBuffer.Span[0] = (byte)frame++;
 				var t0 = GC.GetAllocatedBytesForCurrentThread();
 				bitmap.Invalidate();
 				host.Tick(1.0 / 60.0, 0f, new Vector2(W, H));
@@ -242,16 +244,21 @@ public class UIImageTests
 				var t2 = GC.GetAllocatedBytesForCurrentThread();
 				engine.Render(Inputs);
 				var t3 = GC.GetAllocatedBytesForCurrentThread();
-				if (frame < WarmupFrames)
-					continue;
 				hostBytes += t1 - t0;
 				prepareBytes += t2 - t1;
 				renderBytes += t3 - t2;
 			}
 
-			hostBytes.ShouldBe(0L, $"{backend.Name}: invalidating and compositing the bitmap allocated {hostBytes} bytes over {MeasuredFrames} frames.");
-			prepareBytes.ShouldBe(0L, $"{backend.Name}: updating the bitmap's texture allocated {prepareBytes} bytes over {MeasuredFrames} frames.");
-			renderBytes.ShouldBe(0L, $"{backend.Name}: the frame drawing the bitmap allocated {renderBytes} bytes over {MeasuredFrames} frames.");
+			for (var i = 0; i < WarmupFrames; i++)
+				Frame();
+			var allocated = Allocations.Allocated(() =>
+			{
+				(hostBytes, prepareBytes, renderBytes) = (0, 0, 0);
+				for (var i = 0; i < MeasuredFrames; i++)
+					Frame();
+			});
+			allocated.ShouldBeNull($"{backend.Name}: of the last window of {MeasuredFrames} frames, invalidating and compositing the bitmap " +
+				$"allocated {hostBytes} bytes, updating its texture {prepareBytes} and the frame drawing it {renderBytes}.");
 		}
 	}
 
