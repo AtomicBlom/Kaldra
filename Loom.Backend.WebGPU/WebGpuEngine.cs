@@ -209,7 +209,15 @@ internal sealed partial class WebGpuEngine : EngineBase
 		RebuildGraphReadbacks(authored);
 	}
 
-	protected override void GrowStorage(int id, int newByteSize) => _transients!.GrowStorage(id, newByteSize);
+	// A grown storage resource is a new GPU buffer, and the old one is destroyed: a cached bind group naming the old one
+	// fails every submit that uses it (WebGPU's "used in submit while destroyed"), blanking the frame from then on, and
+	// once its handle is reissued would bind an unrelated buffer. Growth is rare (geometric), so rebuilding every group
+	// costs nothing worth keeping, as on a resize.
+	protected override void GrowStorage(int id, int newByteSize)
+	{
+		_context.ClearBindGroups();
+		_transients!.GrowStorage(id, newByteSize);
+	}
 
 	public override void Resize(int width, int height)
 	{
