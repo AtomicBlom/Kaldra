@@ -25,13 +25,6 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
-  <!-- The AAudio callback shim (Native/loom_aaudio.c), prebuilt per ABI by Native/build.ps1 so building needs no NDK.
-       Packed into the library, and so into every app that references it. -->
-  <ItemGroup>
-    <AndroidNativeLibrary Include="Native\lib\arm64-v8a\libloomaaudio.so" Abi="arm64-v8a" />
-    <AndroidNativeLibrary Include="Native\lib\x86_64\libloomaaudio.so" Abi="x86_64" />
-  </ItemGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
     <ProjectReference Include="..\Loom.Backend.Vulkan\Loom.Backend.Vulkan.csproj" />

@@ -4,6 +4,7 @@
        desktop build, but present here so Roslyn tooling can load and analyse the Android projects. -->
   <Project Path="external/SUIsei/SUIsei/SUIsei.csproj" />
   <Project Path="Loom.Assets/Loom.Assets.csproj" />
+  <Project Path="Loom.Audio.Android/Loom.Audio.Android.csproj" />
   <Project Path="Loom.Audio/Loom.Audio.csproj" />
   <Project Path="Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj" />
   <Project Path="Loom.Concepts/Loom.Concepts.csproj" />

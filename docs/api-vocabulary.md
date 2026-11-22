@@ -388,12 +388,14 @@ Screen-space SUIsei elements that follow points in the world — labels over obj
 
 ## Audio (`Loom.Audio`)
 
-Clips and game-written sources played on pooled voices, mixed through a tree of buses on the platform's audio thread. Turned on by `AppOptions.Audio`; reached through `LoomApplication.Audio`. The guide, with the threading model and each platform's device, is [`audio.md`](audio.md).
+Clips and game-written sources played on pooled voices, mixed through a tree of buses on the platform's audio thread. Apart from the engine: an app registers its platform's output (`Loom.Audio.Sdl`, `Loom.Audio.Android`, `Loom.Audio.Web`) and makes its own `AudioEngine` over it. The guide, with the threading model and each platform's device, is [`audio.md`](audio.md).
 
 | Type / member | Role |
 |---|---|
-| `AppOptions.Audio` (`AudioOptions`) | Set in `Configure` to open the platform's output before `LoadContent`; null (the default) leaves audio off. `SampleRate` and `BufferFrames` default to 0: the device's own rate and its smallest buffer. `MaxVoices` (64), `MaxBuses` (16), `CommandCapacity` (4096). |
-| `LoomApplication.Audio` (`AudioEngine`) | The app's engine. Called from the frame thread only (another thread throws), except `CreateClip`/`LoadWav`. Updated each tick, paused while suspended, closed after `UnloadContent`. |
+| `SdlAudio.Register()`, `AndroidAudio.Register()`, `await WebAudio.RegisterAsync()` | Each platform's output, registered once by the app's entry point for that platform, before anything opens audio. |
+| `AudioOutput.Open(AudioOptions)` → `IAudioDevice`, `AudioOutput.Register(name, open)` | The first registered output that opens, or a `NullAudioDevice` saying why none did. |
+| `AudioOptions` | `SampleRate` and `BufferFrames` default to 0: the device's own rate and its smallest buffer. `MaxVoices` (64), `MaxBuses` (16), `CommandCapacity` (4096). |
+| `new AudioEngine(device, options)` | The app's engine, which starts the device. Called from the frame thread only (another thread throws), except `CreateClip`/`LoadWav`. The app calls `Update()` once a frame (which pumps the device: the browser's mix is sent then), `Pause()`/`Resume()` as it leaves the screen and comes back, `SetFocused` as focus changes, and `Dispose()` as it closes. |
 | `CreateClip(samples, channels, sampleRate)`, `LoadWav(bytes)` → `AudioClip` | Sound decoded into memory and converted to the engine's rate. WAV: PCM 8/16/24/32-bit, float 32/64, mono or stereo. Any thread. |
 | `Play(clip, bus, volume, pitch, pan, loop)` / `Play(source, bus, volume, pan)` → `VoiceHandle` | Takes a voice from the pool; `VoiceHandle.None` when every voice is busy (counted in `Stats.DroppedVoices`). |
 | `SetVolume`, `SetPitch`, `SetPan`, `Stop(voice, fadeSeconds)`, `IsPlaying(voice)` | Steer a voice. Every change ramps across at least a block, so nothing clicks. A stale handle (its voice ended) is ignored. |
@@ -406,4 +408,4 @@ Clips and game-written sources played on pooled voices, mixed through a tree of 
 | `SmoothedParameter` | A continuous control eased with a time constant, for a value set in steps many times a second: `Prepare(rate)` in `OnStart`, `Begin()` once a block, `Next()` once a sample or `Skip(frames)`, `Snap()`. |
 | `AudioEventQueue<T>` | A fixed-size, lock-free, one-producer one-consumer queue of struct events (note on, note off): `TryPost`/`Post` from the game, `TryTake` in `Render`. |
 | `AudioStats` (`Audio.Stats`) | The mix's clock, callbacks and buffer, active and dropped voices, peak level, and render load against the deadline. |
-| `IAudioDevice`, `IAudioRenderer`, `IHostControl.OpenAudioDevice` | The seam a host fills: SDL 3 (desktop), AAudio (Android), an AudioWorklet (browser). `NullAudioDevice` where there is no output; `OfflineAudioDevice` renders on the caller's thread, for tests and rendering to a file. |
+| `IAudioDevice`, `IAudioRenderer` | The seam each output fills: SDL 3 (desktop), AAudio (Android), an AudioWorklet (browser), whose `Pump` renders and sends the mix once a frame. `NullAudioDevice` where there is no output; `OfflineAudioDevice` renders on the caller's thread, for tests and rendering to a file. |

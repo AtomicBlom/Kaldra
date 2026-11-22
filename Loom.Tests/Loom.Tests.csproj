@@ -50,6 +50,7 @@
     <ProjectReference Include="..\Loom.Concepts\Loom.Concepts.csproj" />
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
     <ProjectReference Include="..\Loom.Audio.Synth\Loom.Audio.Synth.csproj" />
+    <ProjectReference Include="..\Loom.Audio.Sdl\Loom.Audio.Sdl.csproj" />
     <ProjectReference Include="..\Loom.Audio.Workbench\Loom.Audio.Workbench.csproj" />
     <ProjectReference Include="..\Loom.Audio.Workbench.Projects\Loom.Audio.Workbench.Projects.csproj" />
     <!-- Driven in-process by MusicGeneratorTests, as a library rather than as this project's analyzer -->

@@ -7,6 +7,7 @@
   <Project Path="build/Loom.Sdk/Loom.Sdk.csproj" />
   <Project Path="Loom.Assets/Loom.Assets.csproj" />
   <Project Path="Loom.Audio/Loom.Audio.csproj" />
+  <Project Path="Loom.Audio.Sdl/Loom.Audio.Sdl.csproj" />
   <Project Path="Loom.Audio.Synth/Loom.Audio.Synth.csproj" />
   <Project Path="Loom.Audio.Workbench/Loom.Audio.Workbench.csproj" />
   <Project Path="Loom.Audio.Music.Generator/Loom.Audio.Music.Generator.csproj" />
