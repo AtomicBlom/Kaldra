@@ -31,7 +31,7 @@ pwsh Scripts/Verification/diff.ps1 -A vk.png -B dx12.png -Out diff.png
 # vk.png vs dx12.png: mean=0.31/255  max=12  pixels>16: 0.0%  -> diff.png
 ```
 
-Cross-backend parity bar (`Loom.Tests/ImageComparison.cs`): within **4/255
+Cross-backend parity bar (`Loom.Gallery.Tests/ImageComparison.cs`): within **4/255
 per channel** and **< 0.5%** of pixels over threshold.
 
 ## web-capture.ps1
