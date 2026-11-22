@@ -107,6 +107,15 @@ $entry = Join-Path $Root $key
 
 if ($Mode -eq "restore") {
 	Remove-StaleEntries
+	# An entry holding anything but escaped obj\shaders paths is damaged, as one was when a concurrent save moved its
+	# staging directory inside it: it is dropped and the build compiles, rather than failing the run on every restore
+	if (Test-Path -LiteralPath $entry) {
+		$bad = @(Get-ChildItem -LiteralPath $entry -Directory | Where-Object { $_.Name.Replace("__", "\") -notmatch '\\obj\\shaders$' })
+		if ($bad.Count -gt 0) {
+			Write-Host "[shader-cache] $key holds $($bad[0].Name), not an output directory; dropping the entry."
+			Remove-Item -LiteralPath $entry -Recurse -Force
+		}
+	}
 	if (-not (Test-Path -LiteralPath $entry)) {
 		Set-StepOutput "hit" "false"
 		Write-Host "[shader-cache] miss $key — the build will compile shaders."
@@ -161,7 +170,9 @@ try {
 	}
 	New-Item -ItemType Directory -Path $Root -Force | Out-Null
 	try {
-		Move-Item -LiteralPath $staging -Destination $entry
+		# Directory.Move, not Move-Item: onto a directory that exists, Move-Item moves the staging directory inside it,
+		# which leaves the entry holding a stray .partial directory that every restore refuses. Directory.Move throws.
+		[System.IO.Directory]::Move($staging, $entry)
 	}
 	catch {
 		# Another job on this runner stored the same key while this one was staging. Identical content by
