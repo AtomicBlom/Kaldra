@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Loom.Tests" />
+    <InternalsVisibleTo Include="Loom.Gallery.Tests" />
   </ItemGroup>
 
   <ItemGroup>

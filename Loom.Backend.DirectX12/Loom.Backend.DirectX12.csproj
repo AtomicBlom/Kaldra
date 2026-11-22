@@ -20,6 +20,7 @@
   <ItemGroup>
     <!-- The root signature's registers resolved over every shipped shader (DirectX12RegistersTests) -->
     <InternalsVisibleTo Include="Loom.Tests" />
+    <InternalsVisibleTo Include="Loom.Gallery.Tests" />
   </ItemGroup>
 
   <PropertyGroup Label="NuGet">
