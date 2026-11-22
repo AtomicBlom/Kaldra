@@ -12,8 +12,9 @@ namespace Loom.Hosting.Desktop.Sdl;
 /// opens a device or rumbles does. Declarations follow SDL 3.4's headers (flibit's SDL3-CS for reference).
 /// </summary>
 /// <remarks>
-/// SDL3.dll ships beside the app under <c>runtimes/win-&lt;arch&gt;/native/</c> (<c>Sdl3.targets</c>), which the app's
-/// deps.json doesn't list, so <see cref="Resolve"/> finds it there; <see cref="TryLoad"/> is the one place that asks.
+/// SDL3.dll comes from the <c>BinaryVibrance.Kaldra.SDL3</c> package: under <c>runtimes/win-&lt;arch&gt;/native/</c>
+/// beside a build without a runtime identifier, beside the executable in a publish for one. <see cref="Resolve"/> looks
+/// in both before the default probe; <see cref="TryLoad"/> is the one place that asks.
 /// </remarks>
 internal static unsafe partial class Sdl3
 {

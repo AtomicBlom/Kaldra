@@ -89,6 +89,6 @@ public class SdlGamepadTests
 			return;   // SDL is fetched for Windows only; elsewhere pads come through GLFW
 		Sdl3.TryLoad(out var reason).ShouldBeTrue(reason);
 		int v = Sdl3.SDL_GetVersion();
-		$"{v / 1000000}.{v / 1000 % 1000}.{v % 1000}".ShouldBe("3.4.20");   // Sdl3.targets' LoomSdl3Version
+		$"{v / 1000000}.{v / 1000 % 1000}.{v % 1000}".ShouldBe("3.4.20");   // BinaryVibrance.Kaldra.SDL3's version, in Directory.Packages.props
 	}
 }
