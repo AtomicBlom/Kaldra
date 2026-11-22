@@ -107,7 +107,7 @@ Everything here rides existing verbs (`.Samples`/`.Draw`/`.Blends`/compute + `.R
 
 - **Stand up a dedicated backend tests project.** Backend integration tests (the kind recently removed when some backend-smoke demos were deleted from the sandbox) and the device-free CPU-testable slices of the backends (pipeline/descriptor hash-key equality, neutral-decision→barrier/PSO translation tables, placed-resource alias-offset math) belong in their own test project — run under NativeAOT — not as sandbox demos. This is the home for closing the "backends have zero unit tests" gap.
 - **Small genuinely-open code items** (low-risk, tracked in [`CODE_REVIEW.md`](CODE_REVIEW.md)): `VertexLayout` offsets ignore attribute alignment; Grid Auto-then-Star measure ordering; the backends have zero CPU unit tests; no compute→compute / ping-pong barrier-derivation test; one SourceGen diagnostic uses a zero-length span.
-- **Gamepads through SDL 3 beyond Windows.** The desktop host reads pads through SDL 3 (`SdlGamepadPump`), fetched from SDL's own Windows release builds by `Sdl3.targets`. SDL publishes no Linux builds and only a framework for macOS, so there the host still reads pads through GLFW: a natives package built from SDL's source release would close it. GLFW tells a pad's type only from its mapping's name.
+- **Gamepads through SDL 3 beyond Windows.** The desktop host reads pads through SDL 3 (`SdlGamepadPump`), from SDL's own Windows release builds, packaged as `BinaryVibrance.Kaldra.SDL3`. SDL publishes no Linux builds and only a framework for macOS, so there the host still reads pads through GLFW: building SDL from source for those platforms into that package would close it. GLFW tells a pad's type only from its mapping's name.
 - **Comment hygiene** (tracked in [`COMMENT_REVIEW.md`](COMMENT_REVIEW.md)): the in-source milestone/section/`PlanningUI.md §…` tags must be stripped to satisfy the self-contained-comment rule — a large but mechanical sweep, concentrated in `external/SUIsei` and the Vulkan backend.
 
 ---
@@ -133,7 +133,7 @@ Every new feature is proven the way the existing ones were:
 1. A focused `Loom.Sandbox` demo.
 2. A deterministic offscreen render in `Loom.Tests` — the sandbox is interactive-only, so verification runs in-process (`GalleryCapture`) rather than through a capture flag.
 3. **Cross-backend pixel diff** — Vulkan vs DirectX 12 within tolerance (4/255 per channel, <0.5% of pixels), via `Scripts/Verification/diff.ps1`; the automated `GalleryParityTests` asserts it (GPU-gated).
-4. Golden-image regression (`GalleryGoldenTests` against the committed baselines under `Loom.Tests/Goldens/`; `LOOM_GOLDEN_UPDATE` regenerates them) guards against drift.
+4. Golden-image regression (`GalleryGoldenTests` against the committed baselines under `Loom.Gallery.Tests/Goldens/`; `LOOM_GOLDEN_UPDATE` regenerates them) guards against drift.
 5. Validation layers / DX12 info-queue stay clean.
 
 The debug spine (channel viewer, GPU timing) exists to make this loop fast for the heavier §5.1 features.

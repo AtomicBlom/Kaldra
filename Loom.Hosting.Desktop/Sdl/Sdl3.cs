@@ -12,8 +12,9 @@ namespace Loom.Hosting.Desktop.Sdl;
 /// opens a device or rumbles does. Declarations follow SDL 3.4's headers (flibit's SDL3-CS for reference).
 /// </summary>
 /// <remarks>
-/// SDL3.dll ships beside the app under <c>runtimes/win-&lt;arch&gt;/native/</c> (<c>Sdl3.targets</c>), which the app's
-/// deps.json doesn't list, so <see cref="Resolve"/> finds it there; <see cref="TryLoad"/> is the one place that asks.
+/// SDL3.dll comes from the <c>BinaryVibrance.Kaldra.SDL3</c> package: under <c>runtimes/win-&lt;arch&gt;/native/</c>
+/// beside a build without a runtime identifier, beside the executable in a publish for one. <see cref="Resolve"/> looks
+/// in both before the default probe; <see cref="TryLoad"/> is the one place that asks.
 /// </remarks>
 internal static unsafe partial class Sdl3
 {
@@ -87,48 +88,16 @@ internal static unsafe partial class Sdl3
 	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
 	public static partial byte SDL_RumbleGamepad(nint gamepad, ushort lowFrequency, ushort highFrequency, uint durationMs);
 
-	public const uint InitAudio = 0x00000010;              // SDL_INIT_AUDIO: implies SDL_INIT_EVENTS
-	public const uint AudioF32 = 0x8120;                 // SDL_AUDIO_F32LE: 32-bit float, little-endian
-	public const uint AudioDeviceDefaultPlayback = 0xFFFFFFFF; // SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK
-
-	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-	public static partial byte SDL_InitSubSystem(uint flags);
-
 	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
 	public static partial void SDL_QuitSubSystem(uint flags);
 
 	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
 	public static partial uint SDL_WasInit(uint flags);
 
-	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-	public static partial byte SDL_GetAudioDeviceFormat(uint device, SdlAudioSpec* spec, int* sampleFrames);
-
-	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-	public static partial nint SDL_OpenAudioDeviceStream(uint device, SdlAudioSpec* spec, delegate* unmanaged[Cdecl]<nint, nint, int, int, void> callback, nint userdata);
-
-	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-	public static partial uint SDL_GetAudioStreamDevice(nint stream);
-
-	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-	public static partial byte* SDL_GetAudioDeviceName(uint device);
-
-	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-	public static partial byte SDL_PauseAudioStreamDevice(nint stream);
-
-	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-	public static partial byte SDL_ResumeAudioStreamDevice(nint stream);
-
-	// Not SuppressGCTransition: it takes the stream's lock, which the device's thread may hold
-	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-	public static partial byte SDL_PutAudioStreamData(nint stream, void* buffer, int length);
-
-	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-	public static partial void SDL_DestroyAudioStream(nint stream);
-
 	/// <summary>
 	/// Stops the subsystems in <paramref name="flags"/>, and SDL itself once nothing else uses it. SDL counts each
-	/// subsystem's starts, so the gamepad pump and the audio device each stop only what they started and neither shuts
-	/// the other down.
+	/// subsystem's starts, so the gamepad pump stops only what it started, and an audio library in the same process using
+	/// SDL keeps playing.
 	/// </summary>
 	public static void QuitSubSystem(uint flags)
 	{

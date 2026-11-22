@@ -1,5 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- The shaders the engine's render tests draw with (Shaders/: a probe, a comparison sampler's probe, a depth ramp),
+       compiled to loose content under shaders\ beside the test assembly, as an app's are: the shader machinery only,
+       not the full SDK -->
+  <Import Project="..\build\Loom.Sdk\Loom.Shaders.props" />
+
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -8,25 +13,21 @@
     <!-- TUnit runs on Microsoft.Testing.Platform, whose source generator emits the executable entry point.
          `dotnet test` is routed to MTP (not the removed VSTest bridge) by the repo-root dotnet.config. -->
     <OutputType>Exe</OutputType>
+    <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
+    <LoomShaderOutputMode>Content</LoomShaderOutputMode>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="TUnit" />
     <PackageReference Include="Shouldly" />
-    <!-- Compiles the C# that PatchCode writes, to check it builds the patch it was written from -->
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <!-- Hermetic slangc + hermetic DXC (for signing the DXIL), build-machine only -->
+    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Include="Microsoft.Direct3D.DXC" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="TUnit.Core" />
     <Using Include="Shouldly" />
-  </ItemGroup>
-
-  <!-- Golden-image baselines: committed reference PNGs, copied beside the test assembly so GalleryGoldenTests
-       can read them at runtime. LOOM_GOLDEN_UPDATE (or tools/golden.ps1 -Update) regenerates them in the source tree. -->
-  <ItemGroup>
-    <Content Include="Goldens\**\*.png" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="AudioFixtures\*.ogg;AudioFixtures\*.s16;AudioFixtures\*.flac" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Apps SdkXamlTests builds through the Loom SDK, each its own project (in no solution): none of their sources,
@@ -36,10 +37,10 @@
     <None Remove="SdkFixtures\**" />
   </ItemGroup>
 
-  <!-- The committed rigged-bar glTF (one source of truth in the gallery's assets), linked beside the test
-       assembly so GltfSkinningLoadTests can load it through GltfLoader. -->
+  <!-- A rigged-bar glTF, beside the test assembly so GltfSkinningLoadTests can load it through GltfLoader: a copy of the
+       gallery's (Loom.Gallery/Assets), since the gallery is not the engine's -->
   <ItemGroup>
-    <Content Include="..\Loom.Gallery\Assets\rigged_bar.glb" Link="rigged_bar.glb" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\rigged_bar.glb" Link="rigged_bar.glb" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Describe + Execute layers: both backend-neutral, never the Vulkan backend. -->
@@ -49,24 +50,9 @@
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <ProjectReference Include="..\Loom.Concepts\Loom.Concepts.csproj" />
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
-    <ProjectReference Include="..\Loom.Audio.Synth\Loom.Audio.Synth.csproj" />
-    <ProjectReference Include="..\Loom.Audio.Workbench\Loom.Audio.Workbench.csproj" />
-    <ProjectReference Include="..\Loom.Audio.Workbench.Projects\Loom.Audio.Workbench.Projects.csproj" />
-    <!-- Driven in-process by MusicGeneratorTests, as a library rather than as this project's analyzer -->
-    <ProjectReference Include="..\Loom.Audio.Music.Generator\Loom.Audio.Music.Generator.csproj" />
-    <!-- The sample music project, whose generated music is checked against its files -->
-    <ProjectReference Include="..\samples\HelloSynth\HelloSynth.csproj" />
-  </ItemGroup>
-
-  <!-- The demo gallery: the in-process golden/parity tests render its scenes offscreen (GPU-gated), and its
-       compiled shaders (+ signed DXIL) flow beside the test assembly under shaders\ through this reference. -->
-  <ItemGroup>
-    <ProjectReference Include="..\Loom.Gallery\Loom.Gallery.csproj" />
-  </ItemGroup>
-
-  <!-- SUIsei's software rasterizer, the CPU oracle for every UI prim: the vector prim's GPU render is diffed against
-       it (VectorPrimRenderTests), which is what holds ui.slang to the same maths. -->
-  <ItemGroup>
+    <!-- The SUIsei adapter: its painter, input layer and screen anchors -->
+    <ProjectReference Include="..\Loom.UI.SUIsei\Loom.UI.SUIsei.csproj" />
+    <!-- SUIsei's software rasterizer, the CPU oracle UIImageTests checks the painter's images against -->
     <ProjectReference Include="..\external\SUIsei\SUIsei.Rasterizer\SUIsei.Rasterizer.csproj" />
   </ItemGroup>
 
@@ -83,5 +69,7 @@
     <ProjectReference Include="..\Loom.Backend.Vulkan\Loom.Backend.Vulkan.csproj" />
     <ProjectReference Include="..\Loom.Backend.DirectX12\Loom.Backend.DirectX12.csproj" />
   </ItemGroup>
+
+  <Import Project="..\build\Loom.Sdk\Loom.Shaders.targets" />
 
 </Project>

@@ -2,7 +2,6 @@ using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
-using Loom.Audio;
 using Loom.Core.Diagnostics;
 using Loom.Core.Hosting;
 using Loom.Hosting.Desktop.Sdl;
@@ -110,7 +109,7 @@ public sealed class DesktopAppHost : IAppHost
 		// The host reports the initial size before the first frame, exactly like every later resize.
 		driver.Resize(window.FramebufferSize.X, window.FramebufferSize.Y);
 
-		// Gamepads through SDL 3 where it is there and starts (Sdl3.targets ships it), GLFW's otherwise, never both.
+		// Gamepads through SDL 3 where it is there and starts (the BinaryVibrance.Kaldra.SDL3 package ships it), GLFW's otherwise, never both.
 		SdlGamepadPump? padPump = null;
 		if (hostOptions.Pads == GamepadSource.Sdl)
 		{
@@ -371,9 +370,5 @@ public sealed class DesktopAppHost : IAppHost
 				throw new FileNotFoundException($"The app has no content at '{path}' (looked for {file}).", file);
 			return File.OpenRead(file);
 		}
-
-		// Through SDL 3 where it ships (Sdl3.targets) and a device is there; silent, saying why, otherwise
-		public IAudioDevice OpenAudioDevice(AudioOptions options) =>
-			SdlAudioDevice.TryOpen(options, out var reason) ?? (IAudioDevice)new NullAudioDevice(options.SampleRate > 0 ? options.SampleRate : 48_000, reason);
 	}
 }

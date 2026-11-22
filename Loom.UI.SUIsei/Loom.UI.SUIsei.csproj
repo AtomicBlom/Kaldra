@@ -36,6 +36,7 @@
        would never produce. -->
   <ItemGroup>
     <InternalsVisibleTo Include="Loom.Tests" />
+    <InternalsVisibleTo Include="Loom.Gallery.Tests" />
   </ItemGroup>
 
   <!-- Glue between the standalone SUIsei UI runtime and the Loom render graph. References both sides;

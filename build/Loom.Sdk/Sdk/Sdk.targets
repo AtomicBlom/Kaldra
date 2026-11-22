@@ -125,22 +125,6 @@
     <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Hosting.Desktop\Loom.Hosting.Desktop.csproj" />
     <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Hosting.Desktop" Version="$(LoomPackageVersion)" />
   </ItemGroup>
-  <!--
-    A publish for one runtime keeps only that runtime's native libraries from a host built from source. The host
-    project is built without the app's RID (the SDK drops it for a library), so it hands up a library for every
-    runtime it has one for, each under runtimes\<rid>\native\ (SDL 3's, in Sdl3.targets); the others are dropped here,
-    where the app's RID is known, as a package's runtimes/<rid>/native assets are resolved. Custom metadata does not
-    cross a project reference, so the folder is what says which runtime a file is for. A package's own native assets
-    are already flattened beside the app in such a publish, so only files laid out this way remain under runtimes\.
-  -->
-  <Target Name="_LoomPublishOwnRuntimeNatives" AfterTargets="ComputeResolvedFilesToPublishList"
-          Condition="'$(_LoomFromSource)' == 'true' and '$(RuntimeIdentifier)' != ''">
-    <ItemGroup>
-      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
-                             Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '^runtimes[\\/][^\\/]+[\\/]native[\\/]'))
-                                        and !$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '^runtimes[\\/]$(RuntimeIdentifier)[\\/]'))" />
-    </ItemGroup>
-  </Target>
   <ItemGroup Condition="'$(_LoomTargetsAndroid)' == 'true' and '$(UseLoomHost)' != 'false'">
     <ProjectReference Condition="'$(_LoomFromSource)' == 'true'" Include="$(_LoomRepoRoot)Loom.Hosting.Android\Loom.Hosting.Android.csproj" />
     <PackageReference Condition="'$(_LoomFromSource)' != 'true'" Include="Loom.Hosting.Android" Version="$(LoomPackageVersion)" />
@@ -169,7 +153,7 @@
     source-mode (in-repo) consumers; a packaged consumer gets the same target auto-imported by NuGet from the
     Loom.Hosting.Web package's build/ folder.
   -->
-  <Import Project="$(_LoomRepoRoot)Loom.Hosting.Web\build\Loom.Hosting.Web.targets"
+  <Import Project="$(_LoomRepoRoot)Loom.Hosting.Web\build\Loom.Hosting.Web.props"
           Condition="'$(_LoomFromSource)' == 'true' and '$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseLoomHost)' != 'false'" />
 
   <!--

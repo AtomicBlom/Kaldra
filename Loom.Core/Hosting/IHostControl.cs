@@ -1,5 +1,3 @@
-using Loom.Audio;
-
 namespace Loom.Core.Hosting;
 
 /// <summary>
@@ -92,14 +90,4 @@ public interface IHostControl
 	/// </summary>
 	Stream OpenContent(string path) =>
 		throw new NotSupportedException("This host does not read packaged content.");
-
-	/// <summary>
-	/// Open the platform's audio output for <paramref name="options"/>, at the lowest latency the platform offers: the
-	/// desktop host through SDL 3, the Android host through AAudio, the browser host through an AudioWorklet. The device is
-	/// handed to the app's <see cref="AudioEngine"/>, which starts it. A host that can't open one (no output, or the
-	/// platform's library missing) returns a <see cref="NullAudioDevice"/> naming why, so the app runs on, silent; that is
-	/// the default, for a host with no audio at all.
-	/// </summary>
-	IAudioDevice OpenAudioDevice(AudioOptions options) =>
-		new NullAudioDevice(options.SampleRate > 0 ? options.SampleRate : 48_000, "this host has no audio output");
 }

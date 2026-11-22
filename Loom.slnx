@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/external/" />
+  <Folder Name="/external/SUIsei/" />
+  <Folder Name="/samples/" />
   <Folder Name="/Solution Items/">
     <File Path="CLAUDE.md" />
     <File Path="Planning.md" />
@@ -7,9 +10,12 @@
   <Project Path="build/Loom.Sdk/Loom.Sdk.csproj" />
   <Project Path="Loom.Assets/Loom.Assets.csproj" />
   <Project Path="Loom.Audio/Loom.Audio.csproj" />
+  <Project Path="Loom.Audio.Sdl/Loom.Audio.Sdl.csproj" />
   <Project Path="Loom.Audio.Synth/Loom.Audio.Synth.csproj" />
+  <Project Path="Loom.Audio.Workbench.Tests/Loom.Audio.Workbench.Tests.csproj" />
   <Project Path="Loom.Audio.Workbench/Loom.Audio.Workbench.csproj" />
   <Project Path="Loom.Audio.Music.Generator/Loom.Audio.Music.Generator.csproj" />
+  <Project Path="Loom.Audio.Tests/Loom.Audio.Tests.csproj" />
   <Project Path="Loom.Audio.Workbench.App/Loom.Audio.Workbench.App.csproj" />
   <Project Path="Loom.Audio.Workbench.Projects/Loom.Audio.Workbench.Projects.csproj" />
   <Project Path="Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj" />
@@ -17,6 +23,7 @@
   <Project Path="Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj" />
   <Project Path="Loom.Core/Loom.Core.csproj" />
   <Project Path="Loom.Concepts/Loom.Concepts.csproj" />
+  <Project Path="Loom.Gallery.Tests/Loom.Gallery.Tests.csproj" />
   <Project Path="Loom.Gallery/Loom.Gallery.csproj" />
   <Project Path="Loom.Graph/Loom.Graph.csproj" />
   <Project Path="Loom.Hosting.Desktop/Loom.Hosting.Desktop.csproj" />
