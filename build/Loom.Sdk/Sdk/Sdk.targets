@@ -153,7 +153,7 @@
     source-mode (in-repo) consumers; a packaged consumer gets the same target auto-imported by NuGet from the
     Loom.Hosting.Web package's build/ folder.
   -->
-  <Import Project="$(_LoomRepoRoot)Loom.Hosting.Web\build\Loom.Hosting.Web.targets"
+  <Import Project="$(_LoomRepoRoot)Loom.Hosting.Web\build\Loom.Hosting.Web.props"
           Condition="'$(_LoomFromSource)' == 'true' and '$(_LoomTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseLoomHost)' != 'false'" />
 
   <!--

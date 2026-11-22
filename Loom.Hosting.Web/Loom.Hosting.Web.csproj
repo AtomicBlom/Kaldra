@@ -5,7 +5,7 @@
        the reusable browser boot helper served at _content/Loom.Hosting.Web/loom-boot.js. The default HTML shell
        (build/defaults/index.html + main.js) is NOT a static web asset (those land under _content/); it is
        injected into a consuming app's wwwroot ROOT, only when the app authored none of its own, by the
-       copy-if-absent target in build/Loom.Hosting.Web.targets. No Razor components are compiled here. -->
+       copy-if-absent items in build/Loom.Hosting.Web.props (not .targets: the Razor SDK packs a build/Loom.Hosting.Web.targets of its own, for the static web assets). No Razor components are compiled here. -->
 
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
@@ -36,10 +36,10 @@
   </ItemGroup>
 
   <!-- Package the default-shell files + the injection target so a NuGet consumer gets copy-if-absent behaviour
-       auto-imported (build/<PackageId>.targets convention). In-repo consumers import the same target explicitly
+       auto-imported (build/<PackageId>.props convention). In-repo consumers import the same target explicitly
        via the Loom SDK. -->
   <ItemGroup>
-    <None Include="build\Loom.Hosting.Web.targets" Pack="true" PackagePath="build\Loom.Hosting.Web.targets" />
+    <None Include="build\Loom.Hosting.Web.props" Pack="true" PackagePath="build\Loom.Hosting.Web.props" />
     <None Include="build\defaults\index.html" Pack="true" PackagePath="build\defaults\index.html" />
     <None Include="build\defaults\main.js" Pack="true" PackagePath="build\defaults\main.js" />
   </ItemGroup>
