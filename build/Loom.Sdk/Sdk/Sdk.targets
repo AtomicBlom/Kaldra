@@ -135,6 +135,16 @@
   </ItemGroup>
 
   <!--
+    An app that manages its package versions centrally may not put a Version on a PackageReference (NU1008): the
+    packages above take theirs as a VersionOverride there, as Slang.Sdk's does, so the app's Directory.Packages.props
+    needn't list them.
+  -->
+  <ItemGroup Condition="'$(ManagePackageVersionsCentrally)' == 'true' and '$(_LoomFromSource)' != 'true'">
+    <PackageReference Update="Loom.Backend.Vulkan;Loom.Backend.DirectX12;Loom.Backend.WebGPU;Loom.UI.SUIsei;Loom.UI.ImGui;Loom.Hosting.Desktop;Loom.Hosting.Android;Loom.Hosting.Web;SUIsei"
+                      VersionOverride="%(Version)" Version="" />
+  </ItemGroup>
+
+  <!--
     Game content: the files an app lists as LoomContent, read at run time with LoomApplication.OpenContent by their path
     under the folder the item's wildcard starts from (<LoomContent Include="Content\**" /> makes Content\levels\1.json
     "levels/1.json"). Packed where each host reads it: a content\ folder beside a desktop exe, and the assets of an
