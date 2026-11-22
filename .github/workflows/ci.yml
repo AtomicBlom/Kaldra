@@ -37,8 +37,9 @@ jobs:
           GH_PAT: ${{ secrets.PAT }}
         shell: bash
         run: |
-          git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/"
-          git submodule update --init --recursive external/SUIsei external/VMASharp
+          # The PAT for this one command (and the clones it starts), not written to the runner user's global config:
+          # jobs on one machine share that file, and two writing it at once fail to lock it
+          git -c url."https://${GH_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init --recursive external/SUIsei external/VMASharp
 
       - uses: actions/setup-dotnet@v5
         with:
