@@ -155,11 +155,10 @@ GLFW (`DesktopInputPump`), gamepads through SDL 3 (`SdlGamepadPump`), or through
 | `BindingCapture` | "Press a key": started from the snapshot as it is (whatever is held then is ignored until let go), polled each frame until a fresh key, mouse button, pad button, trigger past half way or stick direction past 0.6 from the families asked for (`Captured`, `Pad`), or the cancel key or button. |
 | `GamepadButton.Misc1`, `RightPaddle1`, `LeftPaddle1`, `RightPaddle2`, `LeftPaddle2`, `Touchpad` | The buttons past the standard fifteen: a DualSense's mic button and touchpad click, a Steam Controller's grips (paddle 1 each side), an Elite's or DualSense Edge's paddles. GLFW and the browser report none of them. |
 
-SDL 3 is not a package: `Loom.Hosting.Desktop/Sdl/Sdl3.targets` pins SDL's release (version and the SHA-256 of its
-`win32-x64` and `win32-arm64` zips), downloads it once per machine into `%LOCALAPPDATA%\Loom\native\SDL3\<version>`,
-and ships `runtimes/win-<arch>/native/SDL3.dll` and its licence beside the app. A hash that doesn't match fails the
-build; a download that fails warns, and the host reads pads through GLFW. Our own binding (`Sdl3`) is
-`[LibraryImport]` over blittable signatures only.
+SDL 3 comes from the `BinaryVibrance.Kaldra.SDL3` package ([Kaldra.SDL3](https://github.com/AtomicBlom/Kaldra.SDL3)):
+SDL's own release builds of `SDL3.dll` for win-x64 and win-arm64, with its licence, versioned as SDL is (3.4.20 is SDL
+3.4.20). It carries no bindings. Where it has no build (anywhere but Windows), the host reads pads through GLFW. Our
+own binding (`Sdl3`) is `[LibraryImport]` over blittable signatures only.
 
 ### `EngineSettings`
 

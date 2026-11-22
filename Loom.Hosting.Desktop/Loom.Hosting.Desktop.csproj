@@ -34,8 +34,10 @@
     <PackageReference Include="Silk.NET.Input" />
     <PackageReference Include="Silk.NET.Maths" />
     <PackageReference Include="Silk.NET.DXGI" />
-  </ItemGroup>
+    <!-- SDL 3's native libraries for win-x64 and win-arm64, for the gamepads (SdlGamepadPump) and the audio device
+         (SdlAudioDevice). Elsewhere it carries none, and the host reads pads through GLFW and runs silent. -->
 
-  <Import Project="Sdl\Sdl3.targets" />
+    <PackageReference Include="BinaryVibrance.Kaldra.SDL3" />
+  </ItemGroup>
 
 </Project>
