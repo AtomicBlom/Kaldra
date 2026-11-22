@@ -35,7 +35,7 @@ The test never publishes: publishing takes minutes, so it reads `LOOM_WEB_PUBLIS
 | Piece | Job |
 |---|---|
 | `Scripts/Verification/web-capture.ps1` | Serves a published `Loom.Web`, drives the browser once per demo, saves each posted PNG |
-| `Loom.Tests/WebGpuParityTests.cs` | Renders the Vulkan reference, diffs, decides skip-vs-fail |
+| `Loom.Gallery.Tests/WebGpuParityTests.cs` | Renders the Vulkan reference, diffs, decides skip-vs-fail |
 | `tools/web-parity.ps1` | Publishes, sets `LOOM_WEB_PUBLISH`, runs the test |
 
 The tolerance is the same `ImageComparison.Compare` bar the desktop leg uses — a pixel fails if **any** channel
