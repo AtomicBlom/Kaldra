@@ -36,16 +36,12 @@ jobs:
         run: git submodule update --init --recursive external/VMASharp
 
       # Vysara, the UI library the Vysara adapter and its tests build on, from a checkout beside this one (..\Vysara,
-      # where build/Vysara.Source.props looks): its main branch. While Vysara is private its clone takes the PAT
-      # secret (contents:read on AtomicBlom/Vysara), which a fork's pull request doesn't get.
+      # where build/Vysara.Source.props looks): its main branch.
       - name: Check out Vysara beside the engine
-        env:
-          GH_PAT: ${{ secrets.PAT }}
         shell: bash
         run: |
-          if [ -n "$GH_PAT" ]; then auth=(-c url."https://${GH_PAT}@github.com/".insteadOf="https://github.com/"); else auth=(); fi
           rm -rf ../Vysara
-          git "${auth[@]}" clone --depth 1 https://github.com/AtomicBlom/Vysara.git ../Vysara
+          git clone --depth 1 https://github.com/AtomicBlom/Vysara.git ../Vysara
 
       - uses: actions/setup-dotnet@v5
         with:
