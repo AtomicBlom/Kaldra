@@ -1,0 +1,238 @@
+<Project>
+
+  <!--
+    The app-facing Kaldra MSBuild SDK (Milestone 8) — targets half. See Sdk.props for usage.
+
+    Pulls in the shared shader-compile machinery (Content mode for an app) and selects which rendering
+    backend(s) the app references. Merely referencing a backend assembly loads it, and its [ModuleInitializer]
+    self-registers it into Backends.Available — so backend choice is just a ProjectReference toggle.
+
+    Only apps import this file, so a backend reference can never reach BinaryVibrance.Kaldra.Core/BinaryVibrance.Kaldra.Graph (the cardinal
+    backend-isolation invariant). The guarantee is "absence of import" — no opt-in guard property needed.
+  -->
+
+  <!--
+    Android, chosen by the target framework (net11.0-android) rather than a RID, and so decided here: a single-target
+    project sets its TargetFramework in its body, after Sdk.props. An Android app runs on Vulkan alone, embeds its
+    shaders (an APK has no folder beside the app to hold loose ones), and is hosted by BinaryVibrance.Kaldra.Hosting.Android. Set
+    before the shader targets are imported, which read the output mode and the DXIL switch.
+  -->
+  <PropertyGroup>
+    <_KaldraTargetsAndroid Condition="'$(TargetFramework)' != '' and '$([MSBuild]::GetTargetPlatformIdentifier($(TargetFramework)))' == 'android'">true</_KaldraTargetsAndroid>
+    <_KaldraTargetsAndroid Condition="'$(_KaldraTargetsAndroid)' == ''">false</_KaldraTargetsAndroid>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(_KaldraTargetsAndroid)' == 'true'">
+    <UseDirectX12>false</UseDirectX12>
+    <KaldraEmitDxil>false</KaldraEmitDxil>
+    <KaldraShaderOutputMode Condition="'$(_KaldraShaderOutputModeDefaulted)' == 'true'">Embed</KaldraShaderOutputMode>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)..\Kaldra.Shaders.targets" />
+
+  <!--
+    Source vs. packaged. In the repo, this file lives at build/BinaryVibrance.Kaldra.Sdk/Sdk/ and the sibling Kaldra projects exist
+    beside it — so it references them as ProjectReferences. Shipped inside the BinaryVibrance.Kaldra.Sdk MSBuild-SDK package (and
+    resolved via Sdk="BinaryVibrance.Kaldra.Sdk"), those projects don't exist, so it references the sibling Kaldra NuGet packages by
+    version instead. Detected by whether BinaryVibrance.Kaldra.Core's csproj is reachable from here.
+  -->
+  <PropertyGroup>
+    <_KaldraRepoRoot>$(MSBuildThisFileDirectory)..\..\..\</_KaldraRepoRoot>
+    <_KaldraFromSource Condition="Exists('$(_KaldraRepoRoot)BinaryVibrance.Kaldra.Core\BinaryVibrance.Kaldra.Core.csproj')">true</_KaldraFromSource>
+    <!-- Version for sibling Kaldra package references in packaged mode (matches Version.props / the pack version). -->
+    <KaldraPackageVersion Condition="'$(KaldraPackageVersion)' == ''">0.1.0-preview.1</KaldraPackageVersion>
+    <!-- slangc version for any consumer that does not take it from the Kaldra repo's Directory.Packages.props, which
+         pins the same version; _KaldraCheckSlangVersion below fails the repo's own builds if the two drift apart. -->
+    <KaldraSlangVersion Condition="'$(KaldraSlangVersion)' == ''">0.5.1</KaldraSlangVersion>
+    <!-- Vysara's package version for packaged mode (BinaryVibrance.Vysara, from Vysara's repository). -->
+    <KaldraVysaraVersion Condition="'$(KaldraVysaraVersion)' == ''">0.1.0-preview.1</KaldraVysaraVersion>
+  </PropertyGroup>
+
+  <!-- slangc, to compile this app's own shaders. Only the Kaldra repo's own apps, whose central package management is
+       the repo's Directory.Packages.props, take the version from there. Any other consumer gets the pinned version,
+       so it needs no Slang reference of its own: as a VersionOverride under central package management of its own
+       (a packaged consumer, or a game with Kaldra as a submodule), where a version-less reference would fail restore
+       with NU1010 unless the game listed Slang.Sdk itself, and as a plain Version without it. -->
+  <PropertyGroup>
+    <_KaldraPackageVersionsFile>$([MSBuild]::NormalizePath('$(_KaldraRepoRoot)', 'Directory.Packages.props'))</_KaldraPackageVersionsFile>
+    <_KaldraOwnPackageVersions Condition="'$(_KaldraFromSource)' == 'true' and '$(ManagePackageVersionsCentrally)' == 'true' and '$(DirectoryPackagesPropsPath)' == '$(_KaldraPackageVersionsFile)'">true</_KaldraOwnPackageVersions>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Condition="'$(_KaldraOwnPackageVersions)' == 'true'" Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Condition="'$(_KaldraOwnPackageVersions)' != 'true' and '$(ManagePackageVersionsCentrally)' == 'true'" Include="Slang.Sdk" VersionOverride="$(KaldraSlangVersion)" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Condition="'$(ManagePackageVersionsCentrally)' != 'true'" Include="Slang.Sdk" Version="$(KaldraSlangVersion)" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
+  <!-- The repo's own builds hold KaldraSlangVersion to the Slang.Sdk version in Directory.Packages.props, so a bump to
+       one that misses the other fails here rather than giving a packaged consumer a different slangc than Kaldra's own
+       shaders were built with. -->
+  <Target Name="_KaldraCheckSlangVersion" BeforeTargets="CollectPackageReferences" Condition="'$(_KaldraOwnPackageVersions)' == 'true'">
+    <ItemGroup>
+      <_KaldraSlangPackageVersion Include="@(PackageVersion)" Condition="'%(Identity)' == 'Slang.Sdk'" />
+    </ItemGroup>
+    <Error Condition="'@(_KaldraSlangPackageVersion->'%(Version)')' != '$(KaldraSlangVersion)'"
+           Text="Directory.Packages.props pins Slang.Sdk at '@(_KaldraSlangPackageVersion->'%(Version)')', but build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.targets pins KaldraSlangVersion at '$(KaldraSlangVersion)'. Keep the two the same." />
+  </Target>
+
+  <!-- Backends by RID/flags: ProjectReference in the repo, versioned PackageReference when packaged. -->
+  <ItemGroup Condition="'$(UseVulkan)' == 'true' and '$(_KaldraTargetsBrowser)' != 'true'">
+    <ProjectReference Condition="'$(_KaldraFromSource)' == 'true'" Include="$(_KaldraRepoRoot)BinaryVibrance.Kaldra.Backend.Vulkan\BinaryVibrance.Kaldra.Backend.Vulkan.csproj" />
+    <PackageReference Condition="'$(_KaldraFromSource)' != 'true'" Include="BinaryVibrance.Kaldra.Backend.Vulkan" Version="$(KaldraPackageVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseDirectX12)' == 'true' and '$(_KaldraTargetsBrowser)' != 'true'">
+    <ProjectReference Condition="'$(_KaldraFromSource)' == 'true'" Include="$(_KaldraRepoRoot)BinaryVibrance.Kaldra.Backend.DirectX12\BinaryVibrance.Kaldra.Backend.DirectX12.csproj" />
+    <PackageReference Condition="'$(_KaldraFromSource)' != 'true'" Include="BinaryVibrance.Kaldra.Backend.DirectX12" Version="$(KaldraPackageVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseWebGPU)' == 'true'">
+    <ProjectReference Condition="'$(_KaldraFromSource)' == 'true'" Include="$(_KaldraRepoRoot)BinaryVibrance.Kaldra.Backend.WebGPU\BinaryVibrance.Kaldra.Backend.WebGPU.csproj" />
+    <PackageReference Condition="'$(_KaldraFromSource)' != 'true'" Include="BinaryVibrance.Kaldra.Backend.WebGPU" Version="$(KaldraPackageVersion)" />
+  </ItemGroup>
+
+  <!-- UI bridges, same shape as the backends. Both reach the GPU only through the neutral draw-list verb, so
+       neither drags a UI library into a backend. Vysara brings the XAML runtime transitively (and its generator,
+       below); ImGui brings ImGui.NET. -->
+  <ItemGroup Condition="'$(UseVysara)' == 'true'">
+    <ProjectReference Condition="'$(_KaldraFromSource)' == 'true'" Include="$(_KaldraRepoRoot)BinaryVibrance.Kaldra.UI.Vysara\BinaryVibrance.Kaldra.UI.Vysara.csproj" />
+    <PackageReference Condition="'$(_KaldraFromSource)' != 'true'" Include="BinaryVibrance.Kaldra.UI.Vysara" Version="$(KaldraPackageVersion)" />
+  </ItemGroup>
+
+  <!--
+    Vysara's XAML. Turning Vysara on also gives the app Vysara's XAML → typed control-tree generator, so it can
+    author .xaml views: every *.xaml under the project (or under VysaraXamlSourceDir) becomes an input the generator
+    compiles into its partial x:Class, with XAML errors reported at the .xaml's file and line, and a dotnet watch
+    input, so an edit hot-reloads. VysaraXamlEnable=false keeps the runtime without the generator.
+    From source this imports Vysara's own build files, which reference the generator project as an analyzer. This
+    file is imported after the project body, so UseVysara is already final here. Packaged, the Vysara package carries
+    the generator and the same .xaml registration, but a package's analyzers and build files do not flow to an app
+    through BinaryVibrance.Kaldra.UI.Vysara's dependency on it, so the app references the Vysara package itself.
+  -->
+  <PropertyGroup Condition="'$(UseVysara)' == 'true' and '$(_KaldraFromSource)' == 'true'">
+    <_KaldraNeedsVysaraSource>true</_KaldraNeedsVysaraSource>
+  </PropertyGroup>
+  <Import Project="$(_KaldraRepoRoot)build\Vysara.Source.props" Condition="'$(UseVysara)' == 'true' and '$(_KaldraFromSource)' == 'true' and '$(_KaldraVysaraSourceProps)' != 'true'" />
+  <Import Project="$(VysaraSource)build\Vysara.props" Condition="'$(UseVysara)' == 'true' and '$(_KaldraFromSource)' == 'true' and Exists('$(VysaraSource)build\Vysara.props')" />
+  <Import Project="$(VysaraSource)build\Vysara.targets" Condition="'$(UseVysara)' == 'true' and '$(_KaldraFromSource)' == 'true' and Exists('$(VysaraSource)build\Vysara.targets')" />
+  <ItemGroup Condition="'$(UseVysara)' == 'true' and '$(_KaldraFromSource)' != 'true'">
+    <PackageReference Include="BinaryVibrance.Vysara" Version="$(KaldraVysaraVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseImGui)' == 'true'">
+    <ProjectReference Condition="'$(_KaldraFromSource)' == 'true'" Include="$(_KaldraRepoRoot)BinaryVibrance.Kaldra.UI.ImGui\BinaryVibrance.Kaldra.UI.ImGui.csproj" />
+    <PackageReference Condition="'$(_KaldraFromSource)' != 'true'" Include="BinaryVibrance.Kaldra.UI.ImGui" Version="$(KaldraPackageVersion)" />
+  </ItemGroup>
+
+  <!--
+    Application host by RID. The desktop host runs on any non-browser target (it selects whichever desktop
+    backend shipped at runtime); the web host runs for browser-wasm. Referencing the host is what makes
+    KaldraApplication.Run resolve a host (each self-registers via a module initializer), so an app writes only its
+    KaldraApplication + one KaldraApplication.Run(...) line, no platform bootstrap.
+  -->
+  <ItemGroup Condition="'$(_KaldraTargetsBrowser)' != 'true' and '$(_KaldraTargetsAndroid)' != 'true' and '$(UseKaldraHost)' != 'false'">
+    <ProjectReference Condition="'$(_KaldraFromSource)' == 'true'" Include="$(_KaldraRepoRoot)BinaryVibrance.Kaldra.Hosting.Desktop\BinaryVibrance.Kaldra.Hosting.Desktop.csproj" />
+    <PackageReference Condition="'$(_KaldraFromSource)' != 'true'" Include="BinaryVibrance.Kaldra.Hosting.Desktop" Version="$(KaldraPackageVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(_KaldraTargetsAndroid)' == 'true' and '$(UseKaldraHost)' != 'false'">
+    <ProjectReference Condition="'$(_KaldraFromSource)' == 'true'" Include="$(_KaldraRepoRoot)BinaryVibrance.Kaldra.Hosting.Android\BinaryVibrance.Kaldra.Hosting.Android.csproj" />
+    <PackageReference Condition="'$(_KaldraFromSource)' != 'true'" Include="BinaryVibrance.Kaldra.Hosting.Android" Version="$(KaldraPackageVersion)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(_KaldraTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseKaldraHost)' != 'false'">
+    <ProjectReference Condition="'$(_KaldraFromSource)' == 'true'" Include="$(_KaldraRepoRoot)BinaryVibrance.Kaldra.Hosting.Web\BinaryVibrance.Kaldra.Hosting.Web.csproj" />
+    <PackageReference Condition="'$(_KaldraFromSource)' != 'true'" Include="BinaryVibrance.Kaldra.Hosting.Web" Version="$(KaldraPackageVersion)" />
+  </ItemGroup>
+
+  <!--
+    An app that manages its package versions centrally may not put a Version on a PackageReference (NU1008): the
+    packages above take theirs as a VersionOverride there, as Slang.Sdk's does, so the app's Directory.Packages.props
+    needn't list them.
+  -->
+  <ItemGroup Condition="'$(ManagePackageVersionsCentrally)' == 'true' and '$(_KaldraFromSource)' != 'true'">
+    <PackageReference Update="BinaryVibrance.Kaldra.Backend.Vulkan;BinaryVibrance.Kaldra.Backend.DirectX12;BinaryVibrance.Kaldra.Backend.WebGPU;BinaryVibrance.Kaldra.UI.Vysara;BinaryVibrance.Kaldra.UI.ImGui;BinaryVibrance.Kaldra.Hosting.Desktop;BinaryVibrance.Kaldra.Hosting.Android;BinaryVibrance.Kaldra.Hosting.Web;BinaryVibrance.Vysara"
+                      VersionOverride="%(Version)" Version="" />
+  </ItemGroup>
+
+  <!--
+    Game content: the files an app lists as KaldraContent, read at run time with KaldraApplication.OpenContent by their path
+    under the folder the item's wildcard starts from (<KaldraContent Include="Content\**" /> makes Content\levels\1.json
+    "levels/1.json"). Packed where each host reads it: a content\ folder beside a desktop exe, and the assets of an
+    Android APK, which has no folder beside the app. The browser host does not read content yet.
+  -->
+  <ItemGroup Condition="'$(_KaldraTargetsBrowser)' != 'true' and '$(_KaldraTargetsAndroid)' != 'true'">
+    <Content Include="@(KaldraContent)" Link="content\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(_KaldraTargetsAndroid)' == 'true'">
+    <AndroidAsset Include="@(KaldraContent)" Link="Assets\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!--
+    Default web shell injection (copy-if-absent): for a browser app that authored no wwwroot/index.html, the web
+    host provides a runnable full-screen index.html + main.js at the app's wwwroot root. Imported here for
+    source-mode (in-repo) consumers; a packaged consumer gets the same target auto-imported by NuGet from the
+    BinaryVibrance.Kaldra.Hosting.Web package's build/ folder.
+  -->
+  <Import Project="$(_KaldraRepoRoot)BinaryVibrance.Kaldra.Hosting.Web\build\BinaryVibrance.Kaldra.Hosting.Web.props"
+          Condition="'$(_KaldraFromSource)' == 'true' and '$(_KaldraTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true' and '$(UseKaldraHost)' != 'false'" />
+
+  <!--
+    Host registration bootstrap. The app names no host type (that's the whole point — it writes only a
+    KaldraApplication + KaldraApplication.Run), so nothing forces the host assembly to load and register. Generate a
+    tiny [ModuleInitializer] into the app that registers the selected host: reliable on desktop (JIT), and a
+    harmless fast-path on the browser (where KaldraApplication.Current is the real mechanism, since WASM-AOT module
+    initializers are unreliable). The host type is chosen by the same RID/flags that added the host reference.
+  -->
+  <PropertyGroup Condition="'$(UseKaldraHost)' != 'false'">
+    <_KaldraHostType Condition="'$(_KaldraTargetsBrowser)' == 'true' and '$(UseWebGPU)' == 'true'">BinaryVibrance.Kaldra.Hosting.Web.WebAppHost</_KaldraHostType>
+    <_KaldraHostType Condition="'$(_KaldraTargetsAndroid)' == 'true'">BinaryVibrance.Kaldra.Hosting.Android.AndroidAppHost</_KaldraHostType>
+    <_KaldraHostType Condition="'$(_KaldraTargetsBrowser)' != 'true' and '$(_KaldraTargetsAndroid)' != 'true'">BinaryVibrance.Kaldra.Hosting.Desktop.DesktopAppHost</_KaldraHostType>
+  </PropertyGroup>
+
+  <Target Name="_KaldraGenerateHostBootstrap" BeforeTargets="CoreCompile" Condition="'$(_KaldraHostType)' != ''">
+    <PropertyGroup>
+      <_KaldraHostBootstrapFile>$(IntermediateOutputPath)KaldraHostBootstrap.g.cs</_KaldraHostBootstrapFile>
+      <!-- One line; MSBuild-escaped: %3B = ';', %3E = '>'. Registers the SDK-selected host at module init. -->
+      <_KaldraHostBootstrapCode>namespace BinaryVibrance.Kaldra.Generated { internal static class KaldraHostBootstrap { [System.Runtime.CompilerServices.ModuleInitializer] internal static void Register() =%3E BinaryVibrance.Kaldra.Core.Hosting.AppHost.Register(new $(_KaldraHostType)())%3B } }</_KaldraHostBootstrapCode>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_KaldraHostBootstrapFile)" Lines="$(_KaldraHostBootstrapCode)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(_KaldraHostBootstrapFile)" />
+      <FileWrites Include="$(_KaldraHostBootstrapFile)" />
+    </ItemGroup>
+  </Target>
+
+  <!--
+    Backend registration bootstrap. Referencing a backend assembly makes its module initializer run under JIT
+    (first type touch triggers it lazily), but a NativeAOT-published app may never touch a backend type directly —
+    it only ever sees Backends.Available through the host — so nothing forces the constructor to run and the
+    backend never registers. Generate a tiny [ModuleInitializer] into the app that forces each SELECTED backend's
+    module constructor via a compile-time typeof (no Assembly.LoadFrom, so this stays AOT-safe: no reflection-emit,
+    no probing the output directory). Each backend's own module initializer still runs its IsSupported() probe
+    before registering, so forcing it here doesn't bypass that gate — an unsupported backend still won't register.
+  -->
+  <PropertyGroup>
+    <_KaldraBackendBootstrapCalls Condition="'$(UseVulkan)' == 'true' and '$(_KaldraTargetsBrowser)' != 'true'">$(_KaldraBackendBootstrapCalls)System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(typeof(BinaryVibrance.Kaldra.Backend.Vulkan.VulkanBackend).Module.ModuleHandle)%3B </_KaldraBackendBootstrapCalls>
+    <_KaldraBackendBootstrapCalls Condition="'$(UseDirectX12)' == 'true' and '$(_KaldraTargetsBrowser)' != 'true'">$(_KaldraBackendBootstrapCalls)System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(typeof(BinaryVibrance.Kaldra.Backend.DirectX12.DirectX12Backend).Module.ModuleHandle)%3B </_KaldraBackendBootstrapCalls>
+    <_KaldraBackendBootstrapCalls Condition="'$(UseWebGPU)' == 'true'">$(_KaldraBackendBootstrapCalls)System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(typeof(BinaryVibrance.Kaldra.Backend.WebGPU.WebGpuBackend).Module.ModuleHandle)%3B </_KaldraBackendBootstrapCalls>
+  </PropertyGroup>
+
+  <Target Name="_KaldraGenerateBackendBootstrap" BeforeTargets="CoreCompile" Condition="'$(_KaldraBackendBootstrapCalls)' != ''">
+    <PropertyGroup>
+      <_KaldraBackendBootstrapFile>$(IntermediateOutputPath)KaldraBackendBootstrap.g.cs</_KaldraBackendBootstrapFile>
+      <!-- MSBuild-escaped: %3B = ';'. Forces every selected backend's module constructor at app module init. -->
+      <_KaldraBackendBootstrapCode>namespace BinaryVibrance.Kaldra.Generated { internal static class KaldraBackendBootstrap { [System.Runtime.CompilerServices.ModuleInitializer] internal static void Register() { $(_KaldraBackendBootstrapCalls) } } }</_KaldraBackendBootstrapCode>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_KaldraBackendBootstrapFile)" Lines="$(_KaldraBackendBootstrapCode)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(_KaldraBackendBootstrapFile)" />
+      <FileWrites Include="$(_KaldraBackendBootstrapFile)" />
+    </ItemGroup>
+  </Target>
+
+  <!--
+    Close out the RID-conditional base-SDK delegation started in Sdk.props (same guard properties, still in
+    scope — MSBuild properties persist across one project's whole evaluation). For the traditional
+    fixed-outer-Sdk usage (e.g. the gallery's BinaryVibrance.Kaldra.Sandbox) both imports are skipped: the outer Sdk="Microsoft.NET.Sdk"
+    already resolved Microsoft.NET.Sdk's real targets, which MSBuild auto-imports last regardless, so nothing
+    here would run anyway. For the bare-<Project> usage this is the only place the real base SDK's targets get
+    imported at all, since there's no outer Sdk to do it implicitly.
+  -->
+  <Import Sdk="Microsoft.NET.Sdk.WebAssembly" Project="Sdk.targets" Condition="'$(_KaldraTargetsBrowser)' == 'true' and '$(_KaldraSdkImportsWebAssembly)' == 'true'" />
+  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.targets" Condition="'$(_KaldraTargetsBrowser)' != 'true' and '$(_KaldraSdkImportsNetSdk)' == 'true'" />
+
+</Project>

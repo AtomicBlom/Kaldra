@@ -1,4 +1,4 @@
-// Loom LLM documentation generator.
+// Kaldra LLM documentation generator.
 // Usage: dotnet run --file tools/generate-llms-docs.cs [--level minimal|standard|full|all]
 //
 // Generates orientation files for LLMs at three token-budget levels:
@@ -33,7 +33,7 @@ string Doc(string name) => docs.TryGetValue(name, out var s) ? s : $"<!-- {name}
 var xmlSummaries = new List<(string Member, string Summary)>();
 // Only include key consumer-facing assemblies in XML summaries (keeps full output manageable)
 var keyAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    { "Loom.Core", "Loom.Graph", "Loom.Assets", "BinaryVibrance.Vysara" };
+    { "BinaryVibrance.Kaldra.Core", "BinaryVibrance.Kaldra.Graph", "BinaryVibrance.Kaldra.Assets", "BinaryVibrance.Vysara" };
 // Every project that references an assembly copies its XML doc into its own output, so one assembly's doc is on disk
 // many times over. Read each assembly once, from its newest copy, so the output depends on the sources rather than on
 // how many projects happen to have been built.
@@ -84,9 +84,9 @@ foreach (var xmlPath in xmlPaths)
 // --- Assemble levels -------------------------------------------------------
 
 var header = $"""
-    Loom {GetLoomVersion(repoRoot)} — render-graph engine for .NET
+    Kaldra {GetKaldraVersion(repoRoot)} — render-graph engine for .NET
     Generated: {DateTimeOffset.UtcNow:yyyy-MM-dd}
-    Source: https://github.com/AtomicBlom/Loom
+    Source: https://github.com/AtomicBlom/Kaldra
     """;
 
 if (level is "minimal" or "all")
@@ -218,17 +218,17 @@ static string FindRepoRoot(string start)
     var dir = start;
     while (dir is not null)
     {
-        if (File.Exists(Path.Combine(dir, "Loom.slnx")))
+        if (File.Exists(Path.Combine(dir, "BinaryVibrance.Kaldra.slnx")))
             return dir;
         dir = Path.GetDirectoryName(dir);
     }
     return start;
 }
 
-static string GetLoomVersion(string root)
+static string GetKaldraVersion(string root)
 {
     var versionProps = Path.Combine(root, "Version.props");
     if (!File.Exists(versionProps)) return "0.0.0";
-    var match = Regex.Match(File.ReadAllText(versionProps), @"<LoomVersion>(.*?)</LoomVersion>");
+    var match = Regex.Match(File.ReadAllText(versionProps), @"<KaldraVersion>(.*?)</KaldraVersion>");
     return match.Success ? match.Groups[1].Value : "0.0.0";
 }

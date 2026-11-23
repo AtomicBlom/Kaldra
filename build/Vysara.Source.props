@@ -8,14 +8,14 @@
     Sdk.targets for an app.
   -->
   <PropertyGroup>
-    <_LoomVysaraSourceProps>true</_LoomVysaraSourceProps>
+    <_KaldraVysaraSourceProps>true</_KaldraVysaraSourceProps>
     <VysaraSource Condition="'$(VysaraSource)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\Vysara\'))</VysaraSource>
     <VysaraSource Condition="!HasTrailingSlash('$(VysaraSource)')">$(VysaraSource)\</VysaraSource>
   </PropertyGroup>
 
   <!-- A missing checkout said plainly, rather than as a project that can't be found -->
-  <Target Name="_LoomCheckVysaraSource" BeforeTargets="CollectPackageReferences;ResolveProjectReferences"
-          Condition="'$(_LoomNeedsVysaraSource)' == 'true' and !Exists('$(VysaraSource)BinaryVibrance.Vysara\BinaryVibrance.Vysara.csproj')">
+  <Target Name="_KaldraCheckVysaraSource" BeforeTargets="CollectPackageReferences;ResolveProjectReferences"
+          Condition="'$(_KaldraNeedsVysaraSource)' == 'true' and !Exists('$(VysaraSource)BinaryVibrance.Vysara\BinaryVibrance.Vysara.csproj')">
     <Error Text="This builds on Vysara from a checkout, and there is none at VysaraSource '$(VysaraSource)': clone github.com/AtomicBlom/Vysara beside the engine's checkout, or set VysaraSource (an environment variable reaches every repository)." />
   </Target>
 

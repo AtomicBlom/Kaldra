@@ -1,19 +1,19 @@
-Loom 0.1.0-preview.1 — render-graph engine for .NET
+Kaldra 0.1.0-preview.1 — render-graph engine for .NET
 Generated: 2026-11-23
-Source: https://github.com/AtomicBlom/Loom
+Source: https://github.com/AtomicBlom/Kaldra
 
-# Loom Architecture
+# Kaldra Architecture
 
-Loom is a **declarative, render-graph-driven rendering engine for .NET**. You describe *what* each pass reads and writes; the engine derives execution order, GPU barriers, image-layout transitions, transient-resource aliasing, and CPU↔GPU synchronisation.
+Kaldra is a **declarative, render-graph-driven rendering engine for .NET**. You describe *what* each pass reads and writes; the engine derives execution order, GPU barriers, image-layout transitions, transient-resource aliasing, and CPU↔GPU synchronisation.
 
 ## Three layers
 
 ```
-Loom.Core  ──(Describe)──►  Loom.Graph  ──(Execute)──►  Loom.Backend.Vulkan
-(your code)                                              Loom.Backend.DirectX12
+BinaryVibrance.Kaldra.Core  ──(Describe)──►  BinaryVibrance.Kaldra.Graph  ──(Execute)──►  BinaryVibrance.Kaldra.Backend.Vulkan
+(your code)                                              BinaryVibrance.Kaldra.Backend.DirectX12
 ```
 
-### Describe — `Loom.Core`
+### Describe — `BinaryVibrance.Kaldra.Core`
 
 Immutable, hashable, fluent builders. You call `RenderGraph.Define` once per structural change and get back an immutable `RenderGraph` value that encodes your full intent:
 
@@ -26,13 +26,13 @@ Immutable, hashable, fluent builders. You call `RenderGraph.Define` once per str
 
 No graphics-API type appears here. This layer allocates freely and is safe to call from any thread.
 
-### Execute — `Loom.Graph`
+### Execute — `BinaryVibrance.Kaldra.Graph`
 
 Per-frame: topological sort from the read/write edges, barrier/layout-transition derivation, transient-resource aliasing, lifetime analysis. Produces backend-neutral scheduling decisions. Both backends consume the same schedule.
 
 `EngineBase` owns the shared engine lifecycle: technique registration, shader hot-reload, GPU-timing decode, and frame capture. Backend-specific execution (command recording) stays in each backend.
 
-### Bake + Record — `Loom.Backend.Vulkan` / `Loom.Backend.DirectX12`
+### Bake + Record — `BinaryVibrance.Kaldra.Backend.Vulkan` / `BinaryVibrance.Kaldra.Backend.DirectX12`
 
 Translate the neutral schedule into real GPU work. Backends:
 
@@ -40,39 +40,39 @@ Translate the neutral schedule into real GPU work. Backends:
 - Emit `vkCmdPipelineBarrier2` (Vulkan 1.3) or D3D12 resource transitions
 - Call into your pass `.Draw` / `.Dispatch` closures to record draw calls
 
-No graphics-API type leaks into `Loom.Core` or `Loom.Graph`. Introducing one is the cardinal architectural violation.
+No graphics-API type leaks into `BinaryVibrance.Kaldra.Core` or `BinaryVibrance.Kaldra.Graph`. Introducing one is the cardinal architectural violation.
 
 ## Dependency direction
 
 ```
-                       ┌──► Loom.Backend.Vulkan    ─┐
-your app ──► host ─────┼──► Loom.Backend.DirectX12 ─┼──► Loom.Graph ──► Loom.Core
-             │         └──► Loom.Backend.WebGPU    ─┘
+                       ┌──► BinaryVibrance.Kaldra.Backend.Vulkan    ─┐
+your app ──► host ─────┼──► BinaryVibrance.Kaldra.Backend.DirectX12 ─┼──► BinaryVibrance.Kaldra.Graph ──► BinaryVibrance.Kaldra.Core
+             │         └──► BinaryVibrance.Kaldra.Backend.WebGPU    ─┘
              │
-             └── Loom.Hosting.Desktop (window, surface, frame loop, CLI flags)
-                 Loom.Hosting.Web     (browser, paired with the WebGPU backend)
+             └── BinaryVibrance.Kaldra.Hosting.Desktop (window, surface, frame loop, CLI flags)
+                 BinaryVibrance.Kaldra.Hosting.Web     (browser, paired with the WebGPU backend)
 ```
 
 Beside the engine tiers, all backend-neutral and free of graphics-API references:
 
 | Project | Role |
 |---|---|
-| `Loom.Assets` | image + glTF loaders, and the material upload bridge |
-| `Loom.Concepts` | app-side helpers — `Camera`, `Frustum`, `Scene`. Deliberately **not** engine API |
-| `Loom.Input` | actions, bindings, layered event routing |
-| `Loom.UI.Vysara` / `Loom.UI.ImGui` | UI bridges; both reach the GPU only through the neutral draw-list verb, so no backend references a UI library |
+| `BinaryVibrance.Kaldra.Assets` | image + glTF loaders, and the material upload bridge |
+| `BinaryVibrance.Kaldra.Concepts` | app-side helpers — `Camera`, `Frustum`, `Scene`. Deliberately **not** engine API |
+| `BinaryVibrance.Kaldra.Input` | actions, bindings, layered event routing |
+| `BinaryVibrance.Kaldra.UI.Vysara` / `BinaryVibrance.Kaldra.UI.ImGui` | UI bridges; both reach the GPU only through the neutral draw-list verb, so no backend references a UI library |
 
-In the browser, the host (`Loom.Backend.WebGPU/wwwroot/loom-webgpu.js`) keeps from the browser the keys it would also act
+In the browser, the host (`BinaryVibrance.Kaldra.Backend.WebGPU/wwwroot/kaldra-webgpu.js`) keeps from the browser the keys it would also act
 on but which mean nothing to an app being played in its canvas: F1, F3, F7, F9 and F10 (help, find, caret browsing,
 reader view, the menu), Tab (focus leaving the canvas) and a lone Alt. Only while the key's target is the canvas, or the
 page with nothing else focused: in the page's own text fields, buttons and links the browser keeps every key. Shift+Tab
 (the way out of an embedding iframe by keyboard), F6, Shift+F10, F5, F11, F12 and anything with Ctrl or Meta held
-(paste) stay the browser's, and `runLoom({ captureKeys: false })` leaves it every key. The app is sent every key either
+(paste) stay the browser's, and `runKaldra({ captureKeys: false })` leaves it every key. The app is sent every key either
 way.
 
 ## Shader pipeline
 
-Shaders are written in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) by the `Loom.Sdk` MSBuild targets at build time. Reflection JSON is emitted alongside each compiled shader; the backend reads it at `DefineTechnique` time to derive descriptor-binding layouts without you specifying them. The Slang-side contract — the platform macros and the binding rules — is [`shader-authoring.md`](shader-authoring.md).
+Shaders are written in **Slang** and compiled offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU) by the `BinaryVibrance.Kaldra.Sdk` MSBuild targets at build time. Reflection JSON is emitted alongside each compiled shader; the backend reads it at `DefineTechnique` time to derive descriptor-binding layouts without you specifying them. The Slang-side contract — the platform macros and the binding rules — is [`shader-authoring.md`](shader-authoring.md).
 
 Engine shaders (blit, tonemap, auto-exposure) are **embedded** in the backend assemblies. Your app's shaders compile to **loose files** (`.spv`/`.dxil`/`.json`) copied to `shaders/` in the output directory.
 
@@ -80,7 +80,7 @@ Engine shaders (blit, tonemap, auto-exposure) are **embedded** in the backend as
 
 Backends self-register via `[ModuleInitializer]` into `Backends.Available` (an `IReadOnlyList<IRenderBackend>`). Including a backend assembly in your project is enough to make it available; which one runs is a runtime decision — the host picks a registered backend by name (`Backends.Available.FirstOrDefault(b => b.Name == settings.PreferredBackend)`) and calls `backend.Create(surface, width, height, settings)`, handing over the window's native surface (Vulkan `IVkSurface` / DirectX 12 `HWND`).
 
-When using `Loom.Sdk` (NuGet or submodule), the `UseVulkan` / `UseDirectX12` / `UseWebGPU` MSBuild properties control which backend assemblies are referenced and therefore which `[ModuleInitializer]` calls fire; `UseVysara` / `UseImGui` do the same for the UI bridges.
+When using `BinaryVibrance.Kaldra.Sdk` (NuGet or submodule), the `UseVulkan` / `UseDirectX12` / `UseWebGPU` MSBuild properties control which backend assemblies are referenced and therefore which `[ModuleInitializer]` calls fire; `UseVysara` / `UseImGui` do the same for the UI bridges.
 
 ## Threading: one thread records
 
@@ -96,7 +96,7 @@ This is worth knowing before refactoring a backend toward parallel command recor
 
 ## What a new backend has to write
 
-Most of a backend is not API code. The per-frame sequence, the derived plan's interpretation, and the draw-list state machine are the same everywhere, so they live once — in `EngineBase` and in `Loom.Core.Hosting` — and a backend inherits them.
+Most of a backend is not API code. The per-frame sequence, the derived plan's interpretation, and the draw-list state machine are the same everywhere, so they live once — in `EngineBase` and in `BinaryVibrance.Kaldra.Core.Hosting` — and a backend inherits them.
 
 `EngineBase.RecordFrame` owns the frame's shape: flush the app-writable buffer shadows, then per pass its debug-label scope, its derived transitions, its timestamps and its own recording, then close the trailing labels, copy the readback targets, and finish the frame. The order is the point. Each step has to happen in that sequence on every backend — a pass's barriers before its opening timestamp, because those barriers are the cost of the transition rather than of the pass; the readback copies before the frame's tail, because the tail may transition the very targets being copied — and a transliterated sequence is a sequence that can drift. It had: two backends recorded readback then capture and the third recorded capture then readback.
 
@@ -112,7 +112,7 @@ So a new backend implements hooks, not a loop:
 | `BeginLabel` / `EndLabel` | Open and close a named scope for a capture tool (or empty, deliberately) |
 | `BeginFrameTimestamps` / `WritePassBeginTimestamp` / `WritePassEndTimestamp` / `EndFrameTimestamps` | Per-pass GPU timing (virtual — a backend with no timer implements none) |
 
-`RecordRasterPass` stays whole to the backend rather than being templated further. Its attachment descriptors, formats and views are almost entirely API structs, and forcing them into one signature is exactly what would push graphics types into `Loom.Graph`. What it inherits instead is the loop around it, the label bookkeeping, the transition emission, the timing index arithmetic, and `GraphPass.ResourceIdsWith` for the buffers a pass reads.
+`RecordRasterPass` stays whole to the backend rather than being templated further. Its attachment descriptors, formats and views are almost entirely API structs, and forcing them into one signature is exactly what would push graphics types into `BinaryVibrance.Kaldra.Graph`. What it inherits instead is the loop around it, the label bookkeeping, the transition emission, the timing index arithmetic, and `GraphPass.ResourceIdsWith` for the buffers a pass reads.
 
 Draw lists are handled the same way. `DrawListWalker` decodes a submission's `DrawCommand` stream into steps — `Draw`, `BeginLayer`, `EndLayer` — and owns the group-opacity nesting, the nesting cap and its symmetric suppression, the scissor, the fully-clipped skip, and the per-command texture memoisation. `DrawListGeometry` answers the geometry: a layer's bounds, its target-pixel area, the composite quad, and the marker tag values the producer encodes. A backend's `DrawList` is then a `while (walker.MoveNext())` over three cases, each one just the API calls that step needs. A layer's identity is its **depth** — every backend's layer pool is indexed by depth already, so none of them keeps a stack of its own.
 
@@ -131,11 +131,11 @@ The neutral floors a backend can rely on rather than re-check are in `GraphLimit
 
 ---
 
-# Loom API Vocabulary
+# Kaldra API Vocabulary
 
-A reference for every key type in Loom's public API — *how to use it*. You author against `Loom.Core` (the Describe layer); the engine derives ordering, barriers, layout transitions, and aliasing for you. Verbs read as intent — you state what a pass reads and writes, never the order.
+A reference for every key type in Kaldra's public API — *how to use it*. You author against `BinaryVibrance.Kaldra.Core` (the Describe layer); the engine derives ordering, barriers, layout transitions, and aliasing for you. Verbs read as intent — you state what a pass reads and writes, never the order.
 
-## Graph description (`Loom.Core.Graph`)
+## Graph description (`BinaryVibrance.Kaldra.Core.Graph`)
 
 A graph is built once with `RenderGraph.Define(g => { … })` and set on the engine with `engine.SetGraph`. The closure receives a `GraphBuilder` (`g`); you declare domains, resources, and passes on it.
 
@@ -190,7 +190,7 @@ You declare intent; the engine derives ordering, barriers, and layout transition
 
 So a target is declared `g.Screen.Color("hdr", Format.Rgba16F)` or `g.Screen.Depth("depth", Format.Depth32F)`.
 
-### `Format` (render-graph attachment formats, `Loom.Core.Graph`)
+### `Format` (render-graph attachment formats, `BinaryVibrance.Kaldra.Core.Graph`)
 
 The complete set of attachment/target formats:
 
@@ -209,7 +209,7 @@ The complete set of attachment/target formats:
 
 `format.BytesPerTexel` and `format.IsFilterableFloat` (`FormatExtensions`) answer the two questions every backend needs the same answer to: a readback's texel size, and whether a shader can read the format through a filtering float sampler on every backend (false for `Depth32F`, `R32Uint` and `R32F`).
 
-### `Queue` (`Loom.Core.Graph`)
+### `Queue` (`BinaryVibrance.Kaldra.Core.Graph`)
 
 `Queue.Graphics` (the default for every pass) and `Queue.AsyncCompute`. `AsyncCompute` is reserved for a future multi-queue scheduler — assigning it currently fails loudly at derive time rather than silently running on the graphics queue.
 
@@ -245,7 +245,7 @@ engine.SetGraph(graph);
 
 Ping-pong (bloom, JFA) is just two handles and a `(read, write)` tuple swapped in a normal loop — the graph follows the handles. View, light, and time data flow in through `g.Constants`/`g.Storage` channels a pass `.Reads`; the engine names no game concept.
 
-## Engine hosting (`Loom.Core.Hosting`)
+## Engine hosting (`BinaryVibrance.Kaldra.Core.Hosting`)
 
 | Type | Role |
 |---|---|
@@ -255,7 +255,7 @@ Ping-pong (bloom, JFA) is just two handles and a `(read, write)` tuple swapped i
 | `IRenderContext` | The per-frame execution context passed to `.Draw` / `.Dispatch`. Closures *pull* from it rather than capturing. |
 | `EngineSettings` | Backend-neutral engine config (subclass per backend). |
 | `FrameInputs` | The per-frame host data handed to `IEngine.Render`. |
-| `TechniqueDescriptor` | A backend-neutral technique definition (`Loom.Core.Materials`), registered with `IEngine.DefineTechnique`. |
+| `TechniqueDescriptor` | A backend-neutral technique definition (`BinaryVibrance.Kaldra.Core.Materials`), registered with `IEngine.DefineTechnique`. |
 
 ### Selecting a backend and creating the engine
 
@@ -267,9 +267,9 @@ using var engine = backend.Create(window.Surface, width, height, settings);
 
 `Backends.Available` is a list, not a dictionary — select by `Name`, never an indexer. Constructing a backend's `EngineSettings` subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads and registers that backend.
 
-### Input on the desktop (`Loom.Hosting.Desktop`)
+### Input on the desktop (`BinaryVibrance.Kaldra.Hosting.Desktop`)
 
-The host turns the window's devices into `Loom.Input`'s neutral `InputEvent` stream: keyboards and mice through
+The host turns the window's devices into `BinaryVibrance.Kaldra.Input`'s neutral `InputEvent` stream: keyboards and mice through
 GLFW (`DesktopInputPump`), gamepads through SDL 3 (`SdlGamepadPump`), or through GLFW where SDL is missing or won't start.
 
 | Member | Purpose |
@@ -362,7 +362,7 @@ A fresh value per frame (a `readonly record struct`, no allocation). The single 
 
 View-projections, light, and time-of-day data are *not* here — publish them through `g.Constants`/`g.Storage` with `engine.Write(handle, value)` and read them in a pass with `.Reads`.
 
-### `TechniqueDescriptor` (`Loom.Core.Materials`)
+### `TechniqueDescriptor` (`BinaryVibrance.Kaldra.Core.Materials`)
 
 A record naming a shader *logically* and stating its pipeline intent; descriptor-binding counts are reflected from the shader, so you never hand-count them.
 
@@ -401,10 +401,10 @@ Shaders are authored in **Slang** and compiled offline to SPIR-V (Vulkan), signe
 
 | Enum (`namespace`) | Members |
 |---|---|
-| `BlendMode` (`Loom.Core.Graph`) | `None`, `AlphaOver`, `Additive`, `PremultipliedAlpha`, `Multiply`. |
-| `CullMode` (`Loom.Core.Graph`) | `None`, `Back`, `Front` (front faces are counter-clockwise). |
-| `DepthCompare` (`Loom.Core.Graph`) | `Never`, `Less`, `Equal`, `LessOrEqual`, `Greater`, `NotEqual`, `GreaterOrEqual`, `Always`. |
-| `SamplerAddress` (`Loom.Core.Materials`) | `Clamp`, `Repeat`, `MirrorRepeat`, `ClampToBorder`, `MirrorClampToEdge`. |
+| `BlendMode` (`BinaryVibrance.Kaldra.Core.Graph`) | `None`, `AlphaOver`, `Additive`, `PremultipliedAlpha`, `Multiply`. |
+| `CullMode` (`BinaryVibrance.Kaldra.Core.Graph`) | `None`, `Back`, `Front` (front faces are counter-clockwise). |
+| `DepthCompare` (`BinaryVibrance.Kaldra.Core.Graph`) | `Never`, `Less`, `Equal`, `LessOrEqual`, `Greater`, `NotEqual`, `GreaterOrEqual`, `Always`. |
+| `SamplerAddress` (`BinaryVibrance.Kaldra.Core.Materials`) | `Clamp`, `Repeat`, `MirrorRepeat`, `ClampToBorder`, `MirrorClampToEdge`. |
 
 ### Reversed-Z
 
@@ -421,7 +421,7 @@ Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projec
 
 **Depth bias is only partly portable.** `DepthBias.SlopeScale` means the same thing on every backend. `DepthBias.Constant` does not: Vulkan multiplies it by an implementation-defined `r`, D3D12 applies `Constant × 2^(exponent−23)` for a float depth buffer. Prefer the slope-scaled term, or tune the constant per backend.
 
-## Drawing, instancing, skinning (`Loom.Core.Hosting`)
+## Drawing, instancing, skinning (`BinaryVibrance.Kaldra.Core.Hosting`)
 
 `ctx.Draw(in DrawCall)` is the unified raster draw verb. `DrawCall` is a `ref struct`; build the common case with `DrawCall.Create(mesh, technique)`, or use an object initializer for richer calls.
 
@@ -449,23 +449,23 @@ Viewport `MinDepth`/`MaxDepth` stay `0`/`1` — the reversal lives in the projec
 
 | Type (`namespace`) | Role |
 |---|---|
-| `Mesh` (`Loom.Core.Geometry`) | An opaque handle to uploaded geometry from `IEngine.CreateMesh` / `CreateSkinnedMesh`. Survives graph swaps; dies at `IEngine.ReleaseMesh`. |
-| `InstanceBuffer` (`Loom.Core.Geometry`) | A handle to instances uploaded once by `IEngine.CreateInstances`: its count and stride, stored as a mesh is. Dies at `IEngine.ReleaseInstances`. |
-| `Vertex` (`Loom.Core.Geometry`) | The canonical interleaved vertex — `record struct (Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Tangent)`, 48 bytes. |
-| `SkinnedVertex` (`Loom.Core.Animation`) | The skinned bind-pose vertex — `Vertex` fields plus four bone indices (`Joint0..3`) + `Vector4 Weights`, 80 bytes. |
-| `OverlayVertex` (`Loom.Core.Geometry`) | The 2D overlay vertex (position, uv, premultiplied RGBA16F colour, custom) used by draw lists. |
-| `viewProjection.TryProjectToScreen(world, viewportSize, clipSpaceCorrection, out screen, out depth)` (`Loom.Core.Geometry`) | Extension member on `Matrix4x4`: a world point → viewport pixels (top-left origin, +Y down) and NDC depth, through the view-projection an app hands its shaders. `clipSpaceCorrection` is `IEngine.ClipSpaceCorrection`, which says which way the backend's NDC Y runs, so the pixel is the same on every backend. False when the point is on or behind the eye's plane. |
-| `viewProjection.TryUnprojectFromScreen(screen, depth, viewportSize, clipSpaceCorrection, out world)` (`Loom.Core.Geometry`) | The inverse: the world point under a viewport pixel at an NDC depth (0 and 1 give the near and far ends of its ray). |
-| `viewProjection.GetFrustumCorners()` / `ToFrustum()` (`Loom.Core.Geometry`) | Extension members on `Matrix4x4`: the eight world-space frustum corners, and the six planes as a `Frustum`. |
-| `VertexLayout` (`Loom.Core.Geometry`) | A backend-neutral per-stream attribute layout. Built-ins: `MeshStandard`, `MeshSkinned`, `Overlay`, `Transform` (the standard per-instance 4×4 matrix stream). |
-| `Material` (`Loom.Core.Materials`) | An opaque `record struct (int Id)` — an ordered `Texture` bundle from `IEngine.CreateMaterial` that fills a technique's reflected sampler slots. |
-| `Texture` (`Loom.Core.Materials`) | An opaque handle to an uploaded texture from `IEngine.CreateTexture`. Survives graph swaps; dies at `IEngine.ReleaseTexture`. Ids start at 1, so `default(Texture)` names nothing and is refused. |
-| `TextureData` (`Loom.Core.Materials`) | A neutral image description (pixel data + mip chain). Built via `FromRgba8`, `FromRgba16F`, `FromCubeFaces`; carries `Format` (`TextureFormat`), `Width`, `Height`, `Levels`, `IsCube`. |
-| `TextureFormat` (`Loom.Core.Materials`) | Source-image encoding (distinct from `Format`): `Rgba8Srgb`, `Rgba8Unorm`, `Rgba16F`. |
+| `Mesh` (`BinaryVibrance.Kaldra.Core.Geometry`) | An opaque handle to uploaded geometry from `IEngine.CreateMesh` / `CreateSkinnedMesh`. Survives graph swaps; dies at `IEngine.ReleaseMesh`. |
+| `InstanceBuffer` (`BinaryVibrance.Kaldra.Core.Geometry`) | A handle to instances uploaded once by `IEngine.CreateInstances`: its count and stride, stored as a mesh is. Dies at `IEngine.ReleaseInstances`. |
+| `Vertex` (`BinaryVibrance.Kaldra.Core.Geometry`) | The canonical interleaved vertex — `record struct (Vector3 Position, Vector3 Normal, Vector2 Uv, Vector4 Tangent)`, 48 bytes. |
+| `SkinnedVertex` (`BinaryVibrance.Kaldra.Core.Animation`) | The skinned bind-pose vertex — `Vertex` fields plus four bone indices (`Joint0..3`) + `Vector4 Weights`, 80 bytes. |
+| `OverlayVertex` (`BinaryVibrance.Kaldra.Core.Geometry`) | The 2D overlay vertex (position, uv, premultiplied RGBA16F colour, custom) used by draw lists. |
+| `viewProjection.TryProjectToScreen(world, viewportSize, clipSpaceCorrection, out screen, out depth)` (`BinaryVibrance.Kaldra.Core.Geometry`) | Extension member on `Matrix4x4`: a world point → viewport pixels (top-left origin, +Y down) and NDC depth, through the view-projection an app hands its shaders. `clipSpaceCorrection` is `IEngine.ClipSpaceCorrection`, which says which way the backend's NDC Y runs, so the pixel is the same on every backend. False when the point is on or behind the eye's plane. |
+| `viewProjection.TryUnprojectFromScreen(screen, depth, viewportSize, clipSpaceCorrection, out world)` (`BinaryVibrance.Kaldra.Core.Geometry`) | The inverse: the world point under a viewport pixel at an NDC depth (0 and 1 give the near and far ends of its ray). |
+| `viewProjection.GetFrustumCorners()` / `ToFrustum()` (`BinaryVibrance.Kaldra.Core.Geometry`) | Extension members on `Matrix4x4`: the eight world-space frustum corners, and the six planes as a `Frustum`. |
+| `VertexLayout` (`BinaryVibrance.Kaldra.Core.Geometry`) | A backend-neutral per-stream attribute layout. Built-ins: `MeshStandard`, `MeshSkinned`, `Overlay`, `Transform` (the standard per-instance 4×4 matrix stream). |
+| `Material` (`BinaryVibrance.Kaldra.Core.Materials`) | An opaque `record struct (int Id)` — an ordered `Texture` bundle from `IEngine.CreateMaterial` that fills a technique's reflected sampler slots. |
+| `Texture` (`BinaryVibrance.Kaldra.Core.Materials`) | An opaque handle to an uploaded texture from `IEngine.CreateTexture`. Survives graph swaps; dies at `IEngine.ReleaseTexture`. Ids start at 1, so `default(Texture)` names nothing and is refused. |
+| `TextureData` (`BinaryVibrance.Kaldra.Core.Materials`) | A neutral image description (pixel data + mip chain). Built via `FromRgba8`, `FromRgba16F`, `FromCubeFaces`; carries `Format` (`TextureFormat`), `Width`, `Height`, `Levels`, `IsCube`. |
+| `TextureFormat` (`BinaryVibrance.Kaldra.Core.Materials`) | Source-image encoding (distinct from `Format`): `Rgba8Srgb`, `Rgba8Unorm`, `Rgba16F`. |
 
-## Assets (`Loom.Assets`)
+## Assets (`BinaryVibrance.Kaldra.Assets`)
 
-Neutral loaders beside `Loom.Core` (no graphics-API reference). They emit `TextureData` / `Vertex` arrays / a `Skeleton` / `AnimationClip`s; the app turns those into engine meshes, textures, and materials.
+Neutral loaders beside `BinaryVibrance.Kaldra.Core` (no graphics-API reference). They emit `TextureData` / `Vertex` arrays / a `Skeleton` / `AnimationClip`s; the app turns those into engine meshes, textures, and materials.
 
 | Member | Role |
 |---|---|
@@ -476,7 +476,7 @@ Neutral loaders beside `Loom.Core` (no graphics-API reference). They emit `Textu
 | `LoadedModel` | `Primitives` (`IReadOnlyList<ModelPrimitive>`), `Skeleton?`, `Clips` (`IReadOnlyList<AnimationClip>`). |
 | `ModelPrimitive` | `Vertices` (`Vertex[]`), `Indices` (`uint[]`), `Material` (`ModelMaterial?`), `SkinnedVertices` (`SkinnedVertex[]?`), `IsSkinned`. |
 
-## Overlay draw lists (`Loom.Core.Hosting`)
+## Overlay draw lists (`BinaryVibrance.Kaldra.Core.Hosting`)
 
 The cross-backend verb behind overlay/UI-style rendering (game UI via Vysara, ImGui, debug lines): a pass stages a per-frame, variable-size indexed vertex stream and submits it with `ctx.DrawList<TVertex>(...)`. There is no `FrameInputs`/`ctx` channel for this — a pass gets its geometry from whatever stable producer it holds as pass state (a painter), reading its live contents each frame.
 
@@ -503,12 +503,12 @@ The UI libraries reach the GPU only through `DrawList`; each bridge is a stable 
 
 | Type (`namespace`) | Role |
 |---|---|
-| `UIPainter` (`Loom.UI.Vysara`) | `UIPainter.Create(engine, host)` registers the `ui` technique and returns the painter for a Vysara `UIHost`. Call `Prepare()` once per frame after the host composites and before `engine.Render`: it uploads the images the frame's slot tables newly name, writes the new pixels of a source whose pixels changed into its texture in place (`IEngine.UpdateTexture`) and releases one nothing references any more (after the frames in flight, through `IEngine.ReleaseTexture`). `Draw(ctx, surface)` inside a pass only binds and submits, as many times in the frame as it likes, and throws if `Prepare` did not run before the frame. `SetExternalTexture(tag, ITextureHandle)` binds a graph texture to every Vysara `HostImageSource` with that tag; the UI pass declares it with `.Samples`, and a tag with no texture, or a colour space its format does not decode, fails `Prepare`. A source uploads as `Rgba8Srgb` or `Rgba8Unorm` by its colour space, and a straight-alpha one is premultiplied after filtering, as Vysara's rasterizer does. Textures the host reports released (`UIHost.ReleasedTextures`) are released in `Prepare`; a `WriteableBitmap`'s texture is updated in place on each `Invalidate`. |
-| `VysaraInputLayer` (`Loom.UI.Vysara`) | The input half: an `IInputLayer` that queues a frame's pointer, key and text events into a `UIHost` and blocks the layers below from what the host reported it wants. `PadNavigation`, while the app sets it (a menu or page a pad can work is open), turns any pad's face buttons into Vysara's `GamepadA`/`B`/`X`/`Y` and its d-pad and left stick into the d-pad's keys, a held direction repeating after 0.4 s every 0.09 s, and blocks the pad from the layers below: Vysara moves focus by position on the d-pad, and `GamepadA` presses a button. A touch that comes down on UI content (`UIHost.HitsContent`) is the UI's until it lifts, sent as a touch pointer and kept from the layers below; any other is theirs for its life, so a finger on a button and another on the game work at once. The block on what the host wants covers the mouse (and a pen's moves), never a touch. |
-| `InWorldPanel` (`Loom.UI.Vysara`) | A Vysara surface rendered into its own texture and placed in the world: `Create(engine, width, height, worldTransform, billboard, layoutScale)`, then per frame `QueueScreenPointer`, `Tick`, `Render` (composite + prepare) and `Draw(ctx)` in the pass that renders the panel's target. |
-| `ImGuiPainter` (`Loom.UI.ImGui`) | `ImGuiPainter.Create(engine)` registers the `imgui` technique and uploads the font atlas; `Draw(ctx)` submits the frame's Dear ImGui draw data, plus the resource viewer's thumbnails (`SetThumbnails`, through `ResolveInspectable`) and debug lines (`SetDebugLines`). Desktop only. |
+| `UIPainter` (`BinaryVibrance.Kaldra.UI.Vysara`) | `UIPainter.Create(engine, host)` registers the `ui` technique and returns the painter for a Vysara `UIHost`. Call `Prepare()` once per frame after the host composites and before `engine.Render`: it uploads the images the frame's slot tables newly name, writes the new pixels of a source whose pixels changed into its texture in place (`IEngine.UpdateTexture`) and releases one nothing references any more (after the frames in flight, through `IEngine.ReleaseTexture`). `Draw(ctx, surface)` inside a pass only binds and submits, as many times in the frame as it likes, and throws if `Prepare` did not run before the frame. `SetExternalTexture(tag, ITextureHandle)` binds a graph texture to every Vysara `HostImageSource` with that tag; the UI pass declares it with `.Samples`, and a tag with no texture, or a colour space its format does not decode, fails `Prepare`. A source uploads as `Rgba8Srgb` or `Rgba8Unorm` by its colour space, and a straight-alpha one is premultiplied after filtering, as Vysara's rasterizer does. Textures the host reports released (`UIHost.ReleasedTextures`) are released in `Prepare`; a `WriteableBitmap`'s texture is updated in place on each `Invalidate`. |
+| `VysaraInputLayer` (`BinaryVibrance.Kaldra.UI.Vysara`) | The input half: an `IInputLayer` that queues a frame's pointer, key and text events into a `UIHost` and blocks the layers below from what the host reported it wants. `PadNavigation`, while the app sets it (a menu or page a pad can work is open), turns any pad's face buttons into Vysara's `GamepadA`/`B`/`X`/`Y` and its d-pad and left stick into the d-pad's keys, a held direction repeating after 0.4 s every 0.09 s, and blocks the pad from the layers below: Vysara moves focus by position on the d-pad, and `GamepadA` presses a button. A touch that comes down on UI content (`UIHost.HitsContent`) is the UI's until it lifts, sent as a touch pointer and kept from the layers below; any other is theirs for its life, so a finger on a button and another on the game work at once. The block on what the host wants covers the mouse (and a pen's moves), never a touch. |
+| `InWorldPanel` (`BinaryVibrance.Kaldra.UI.Vysara`) | A Vysara surface rendered into its own texture and placed in the world: `Create(engine, width, height, worldTransform, billboard, layoutScale)`, then per frame `QueueScreenPointer`, `Tick`, `Render` (composite + prepare) and `Draw(ctx)` in the pass that renders the panel's target. |
+| `ImGuiPainter` (`BinaryVibrance.Kaldra.UI.ImGui`) | `ImGuiPainter.Create(engine)` registers the `imgui` technique and uploads the font atlas; `Draw(ctx)` submits the frame's Dear ImGui draw data, plus the resource viewer's thumbnails (`SetThumbnails`, through `ResolveInspectable`) and debug lines (`SetDebugLines`). Desktop only. |
 
-## World-anchored UI (`Loom.UI.Vysara`)
+## World-anchored UI (`BinaryVibrance.Kaldra.UI.Vysara`)
 
 Screen-space Vysara elements that follow points in the world — labels over objects, markers along a path. App-side: the engine names no anchor; this sits in the Vysara bridge on top of `TryProjectToScreen`.
 
@@ -521,9 +521,9 @@ Screen-space Vysara elements that follow points in the world — labels over obj
 
 ---
 
-# Loom's Pillars of Design
+# Kaldra's Pillars of Design
 
-These are the load-bearing rules behind Loom's design. Each is easy to break without a compiler error and hard to notice once broken — violate one and the design quietly stops working. Hold them when adding or changing anything in the engine.
+These are the load-bearing rules behind Kaldra's design. Each is easy to break without a compiler error and hard to notice once broken — violate one and the design quietly stops working. Hold them when adding or changing anything in the engine.
 
 ## Derived, not declared
 
@@ -546,9 +546,9 @@ The barrier derivation depends on the distinction. Getting them swapped produces
 
 ## Backend isolation / portability
 
-All procedural, struct-heavy, graphics-API code lives in the backends (`Loom.Backend.Vulkan`, `Loom.Backend.DirectX12`). `Loom.Core` and `Loom.Graph` carry no Vulkan or D3D12 type.
+All procedural, struct-heavy, graphics-API code lives in the backends (`BinaryVibrance.Kaldra.Backend.Vulkan`, `BinaryVibrance.Kaldra.Backend.DirectX12`). `BinaryVibrance.Kaldra.Core` and `BinaryVibrance.Kaldra.Graph` carry no Vulkan or D3D12 type.
 
-The dependency direction enforces it: `Sandbox → Backend → Graph → Core`. A reference the other way (Core → Backend) is the cardinal violation — it breaks portability and blocks a new backend from joining. Loom runs on Vulkan and DirectX 12 in parallel at pixel parity today, with Metal and WebGPU under investigation; that future depends on this isolation staying clean, so every new GPU feature must land in (or be capability-gated for) every backend.
+The dependency direction enforces it: `Sandbox → Backend → Graph → Core`. A reference the other way (Core → Backend) is the cardinal violation — it breaks portability and blocks a new backend from joining. Kaldra runs on Vulkan and DirectX 12 in parallel at pixel parity today, with Metal and WebGPU under investigation; that future depends on this isolation staying clean, so every new GPU feature must land in (or be capability-gated for) every backend.
 
 ## Pure per-frame closures
 
@@ -590,7 +590,7 @@ A `foreach` over an interface, a LINQ chain, a closure capture, or a boxed struc
 
 ## The engine names no game concepts
 
-There is no `Camera`, `Sun`, `Scene`, or `Cascade` in `Loom.Core` or `Loom.Graph`. View, light, and time data ride in through neutral channels — the `Constants` and `Storage` buffers a pass reads, and the `FrameInputs` the app fills — and the app names its own views with its own keys. `Camera`, `Frustum`, and `Scene` exist only as app-side helpers in `Loom.Concepts`: convenience, not engine vocabulary.
+There is no `Camera`, `Sun`, `Scene`, or `Cascade` in `BinaryVibrance.Kaldra.Core` or `BinaryVibrance.Kaldra.Graph`. View, light, and time data ride in through neutral channels — the `Constants` and `Storage` buffers a pass reads, and the `FrameInputs` the app fills — and the app names its own views with its own keys. `Camera`, `Frustum`, and `Scene` exist only as app-side helpers in `BinaryVibrance.Kaldra.Concepts`: convenience, not engine vocabulary.
 
 When a feature seems to need a named game concept in the engine, generalise it into a neutral channel the app fills instead.
 
@@ -622,9 +622,9 @@ Not pillars, but engine guarantees worth knowing when working on the backends or
 
 ---
 
-# Getting Started with Loom
+# Getting Started with Kaldra
 
-Loom is a declarative, render-graph-driven rendering engine for .NET 11, running on **Vulkan and DirectX 12 at pixel parity**. You declare *what* each pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient-memory aliasing, and CPU↔GPU synchronisation.
+Kaldra is a declarative, render-graph-driven rendering engine for .NET 11, running on **Vulkan and DirectX 12 at pixel parity**. You declare *what* each pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient-memory aliasing, and CPU↔GPU synchronisation.
 
 This guide takes you from an empty project to a two-pass render graph drawing a mesh to an offscreen HDR target and tone-mapping it to the screen. For the design rationale see [`docs/pillars.md`](pillars.md) and [`docs/architecture.md`](architecture.md); for the full feature list see [`README.md`](../README.md).
 
@@ -639,10 +639,10 @@ This guide takes you from an empty project to a two-pass render graph drawing a 
 Add the SDK package to your `.csproj`:
 
 ```xml
-<PackageReference Include="Loom.Sdk" Version="0.1.0-preview.1" />
+<PackageReference Include="BinaryVibrance.Kaldra.Sdk" Version="0.1.0-preview.1" />
 ```
 
-`Loom.Sdk` auto-injects the props and targets that pull in the backends. Select which backends to reference with MSBuild flags, set before the reference (or in `Directory.Build.props`):
+`BinaryVibrance.Kaldra.Sdk` auto-injects the props and targets that pull in the backends. Select which backends to reference with MSBuild flags, set before the reference (or in `Directory.Build.props`):
 
 ```xml
 <PropertyGroup>
@@ -654,12 +654,12 @@ Add the SDK package to your `.csproj`:
 </PropertyGroup>
 ```
 
-Setting a flag to `true` adds the matching `PackageReference` automatically — you never reference `Loom.Backend.Vulkan` or `Loom.UI.Vysara` directly, and `Loom.Core` / `Loom.Graph` / `Loom.Assets` arrive transitively. `UseVysara` also brings Vysara's XAML generator: every `.xaml` view in the project compiles into its partial `x:Class`, XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. To compile your app's Slang shaders at build time, add:
+Setting a flag to `true` adds the matching `PackageReference` automatically — you never reference `BinaryVibrance.Kaldra.Backend.Vulkan` or `BinaryVibrance.Kaldra.UI.Vysara` directly, and `BinaryVibrance.Kaldra.Core` / `BinaryVibrance.Kaldra.Graph` / `BinaryVibrance.Kaldra.Assets` arrive transitively. `UseVysara` also brings Vysara's XAML generator: every `.xaml` view in the project compiles into its partial `x:Class`, XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. To compile your app's Slang shaders at build time, add:
 
 ```xml
 <PropertyGroup>
-  <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
-  <LoomShaderOutputMode>Content</LoomShaderOutputMode>
+  <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</KaldraShaderSourceDir>
+  <KaldraShaderOutputMode>Content</KaldraShaderOutputMode>
 </PropertyGroup>
 ```
 
@@ -668,24 +668,24 @@ Slang sources in `Shaders/` compile to `.spv` / `.dxil` / `.json` under `shaders
 ## Consumption mode 2: Git submodule (for contributors or engine modifications)
 
 ```bash
-git submodule add https://github.com/AtomicBlom/Loom external/Loom
+git submodule add https://github.com/AtomicBlom/Kaldra external/Kaldra
 git submodule update --init --recursive
 ```
 
 Consume the SDK by writing the two import lines yourself:
 
 ```xml
-<Import Project="external/Loom/build/Loom.Sdk/Sdk/Sdk.props" />
+<Import Project="external/Kaldra/build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.props" />
 
 <PropertyGroup>
   <UseVulkan>true</UseVulkan>
-  <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
-  <LoomShaderOutputMode>Content</LoomShaderOutputMode>
+  <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</KaldraShaderSourceDir>
+  <KaldraShaderOutputMode>Content</KaldraShaderOutputMode>
 </PropertyGroup>
 
 <!-- … project body … -->
 
-<Import Project="external/Loom/build/Loom.Sdk/Sdk/Sdk.targets" />
+<Import Project="external/Kaldra/build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.targets" />
 ```
 
 The submodule model gives you full engine source and the ability to modify the engine alongside your game. Both modes are first-class; there is no functional difference at runtime.
@@ -694,21 +694,21 @@ The submodule model gives you full engine source and the ability to modify the e
 
 A backend is the factory for an `IEngine`. Each referenced backend assembly self-registers an `IRenderBackend` into `Backends.Available` as it loads, so the host discovers what is available at runtime and selects one by name. **Constructing a backend's settings subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads that backend's assembly** and fires its registration — it is the one sanctioned place a backend type appears in app code.
 
-The host hands the backend the window's native surface *opaquely* — Loom names no windowing type. For Vulkan that is the window's `IVkSurface`; for DirectX 12 it is the window's `HWND`. Using Silk.NET for windowing:
+The host hands the backend the window's native surface *opaquely* — Kaldra names no windowing type. For Vulkan that is the window's `IVkSurface`; for DirectX 12 it is the window's `HWND`. Using Silk.NET for windowing:
 
 ```csharp
-using Loom.Core.Hosting;
-using Loom.Backend.Vulkan;
+using BinaryVibrance.Kaldra.Core.Hosting;
+using BinaryVibrance.Kaldra.Backend.Vulkan;
 
 // A Vulkan-capable window (Silk.NET).
-var options = WindowOptions.DefaultVulkan with { Size = new Vector2D<int>(1280, 720), Title = "My Loom app" };
+var options = WindowOptions.DefaultVulkan with { Size = new Vector2D<int>(1280, 720), Title = "My Kaldra app" };
 var window = Window.Create(options);
 window.Initialize();
 
 if (window.VkSurface is null)
     throw new InvalidOperationException("The windowing platform did not expose a Vulkan surface.");
 
-// Constructing VulkanEngineSettings loads Loom.Backend.Vulkan, which registers the backend.
+// Constructing VulkanEngineSettings loads BinaryVibrance.Kaldra.Backend.Vulkan, which registers the backend.
 var settings = new VulkanEngineSettings
 {
     EnableValidation = true,        // Vulkan validation layers (dev)
@@ -723,10 +723,10 @@ var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.Preferre
 using var engine = backend.Create(window.VkSurface, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 ```
 
-For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `Loom.Backend.DirectX12`), and pass the window's `HWND` as the surface:
+For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `BinaryVibrance.Kaldra.Backend.DirectX12`), and pass the window's `HWND` as the surface:
 
 ```csharp
-using Loom.Backend.DirectX12;
+using BinaryVibrance.Kaldra.Backend.DirectX12;
 
 var settings = new DirectX12EngineSettings
 {
@@ -752,12 +752,12 @@ This renders a mesh into an offscreen HDR buffer, then tone-maps that buffer to 
 
 Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings, nor hand-order them. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
 
-Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that resources take **no binding numbers or registers** (Slang numbers them per target, in declaration order, and each backend binds by its reflection), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
+Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that resources take **no binding numbers or registers** (Slang numbers them per target, in declaration order, and each backend binds by its reflection), and that a shader writing clip space directly uses a `KALDRA_*_POS` macro rather than doing it by hand.
 
 `Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer the pass `.Reads`, and a per-draw model matrix from the per-draw uniform block:
 
 ```slang
-#include "loom_platform.module.slang"
+#include "kaldra_platform.module.slang"
 
 struct ViewProj { float4x4 viewProj; }   // filled from the app via engine.Write(viewProj, …)
 struct PerDraw  { float4x4 model; }      // staged by DrawCall.SetUniforms(ref block)
@@ -790,7 +790,7 @@ float4 fragmentMain(VSOut i) : SV_Target
 `Shaders/tonemap.slang` — a fullscreen pass that samples the HDR target and maps it to display range. A fullscreen technique fabricates its own triangle, so it has no vertex input:
 
 ```slang
-#include "loom_platform.module.slang"
+#include "kaldra_platform.module.slang"
 
 Sampler2D hdr;   // the pass's first .Samples input
 
@@ -799,11 +799,11 @@ struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; }
 [shader("vertex")]
 VSOut vertexMain(uint id : SV_VertexID)
 {
-    // Fullscreen triangle from the vertex id — no mesh. LOOM_FULLSCREEN_POS applies the NDC-Y convention this
+    // Fullscreen triangle from the vertex id — no mesh. KALDRA_FULLSCREEN_POS applies the NDC-Y convention this
     // target needs; writing `uv * 2 - 1` by hand renders upside down on WebGPU.
     float2 uv = float2((id << 1) & 2, id & 2);
     VSOut o;
-    o.pos = LOOM_FULLSCREEN_POS(uv);
+    o.pos = KALDRA_FULLSCREEN_POS(uv);
     o.uv = uv;
     return o;
 }
@@ -822,7 +822,7 @@ float4 fragmentMain(VSOut i) : SV_Target
 A technique names its shader *logically* and states its pipeline intent. `HasVertexInput: true` means the technique reads a mesh's vertex stream; left default, the technique fabricates a fullscreen triangle (the tone-map). Register both up front, before the graph draws with them:
 
 ```csharp
-using Loom.Core.Materials;
+using BinaryVibrance.Kaldra.Core.Materials;
 
 engine.DefineTechnique("scene", new TechniqueDescriptor("scene", HasVertexInput: true));
 engine.DefineTechnique("tonemap", new TechniqueDescriptor("tonemap"));
@@ -836,8 +836,8 @@ The graph is immutable and cached by hash, so re-setting a structurally identica
 
 ```csharp
 using System.Numerics;
-using Loom.Core.Graph;
-using Loom.Core.Hosting;
+using BinaryVibrance.Kaldra.Core.Graph;
+using BinaryVibrance.Kaldra.Core.Hosting;
 
 var graph = RenderGraph.Define(g =>
 {
@@ -899,7 +899,7 @@ window.Render += delta =>
 {
     elapsed += delta;
 
-    // Publish the matrix the "scene" pass reads. (Loom.Concepts.Camera folds in the
+    // Publish the matrix the "scene" pass reads. (BinaryVibrance.Kaldra.Concepts.Camera folds in the
     // clip-space correction so the same matrix is correct on both backends.)
     engine.Write(viewProj, camera.ViewProjection);
 

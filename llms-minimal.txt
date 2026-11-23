@@ -1,6 +1,6 @@
-Loom 0.1.0-preview.1 — render-graph engine for .NET
+Kaldra 0.1.0-preview.1 — render-graph engine for .NET
 Generated: 2026-11-23
-Source: https://github.com/AtomicBlom/Loom
+Source: https://github.com/AtomicBlom/Kaldra
 
 ## Pillars of Design (abbreviated)
 
@@ -14,11 +14,11 @@ Ping-pong via handle swap
 Fail loud, never silently degrade
 Other load-bearing properties
 
-# Loom API Vocabulary
+# Kaldra API Vocabulary
 
-A reference for every key type in Loom's public API — *how to use it*. You author against `Loom.Core` (the Describe layer); the engine derives ordering, barriers, layout transitions, and aliasing for you. Verbs read as intent — you state what a pass reads and writes, never the order.
+A reference for every key type in Kaldra's public API — *how to use it*. You author against `BinaryVibrance.Kaldra.Core` (the Describe layer); the engine derives ordering, barriers, layout transitions, and aliasing for you. Verbs read as intent — you state what a pass reads and writes, never the order.
 
-## Graph description (`Loom.Core.Graph`)
+## Graph description (`BinaryVibrance.Kaldra.Core.Graph`)
 
 A graph is built once with `RenderGraph.Define(g => { … })` and set on the engine with `engine.SetGraph`. The closure receives a `GraphBuilder` (`g`); you declare domains, resources, and passes on it.
 

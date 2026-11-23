@@ -5,7 +5,7 @@ signal over a rendered frame without opening it in a viewer (and, for an agent, 
 image bytes into context). They use `System.Drawing` (`LockBits`), so they run anywhere .NET is present.
 
 Golden-image and cross-backend parity are ordinary GPU-gated unit tests (`GalleryGoldenTests` /
-`GalleryParityTests` in Kaldra.Gallery's `Loom.Gallery.Tests`): they render the gallery demos offscreen in-process and
+`GalleryParityTests` in Kaldra.Gallery's `BinaryVibrance.Kaldra.Gallery.Tests`): they render the gallery demos offscreen in-process and
 compare them, with no window or capture flags. These helpers are for **ad-hoc** inspection of any PNG
 you have on hand — a test-produced capture, a one-off `IEngine.RequestCapture` output, a bug repro.
 

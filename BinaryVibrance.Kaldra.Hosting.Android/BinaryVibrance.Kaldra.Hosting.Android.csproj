@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Android application host: a KaldraActivity whose SurfaceView carries the Vulkan swapchain, frames paced by the
+       Choreographer on the UI thread, and touch/keys fed into the app's neutral input queue. Like the web host, it
+       constructs its one backend directly (Vulkan is the only GPU API Kaldra runs on Android). Kept out of BinaryVibrance.Kaldra.slnx,
+       in BinaryVibrance.Kaldra.Android.slnx, so the desktop build never needs the android workload. -->
+
+  <PropertyGroup>
+    <!-- net11.0-android: CoreCLR is the Android runtime from .NET 11 (Mono before), the same runtime the desktop runs on. -->
+    <TargetFramework>net11.0-android</TargetFramework>
+    <!-- Android 10: the first to answer VK_SUBOPTIMAL_KHR for a rotated surface, which the swapchain relies on. The
+         Vulkan 1.3 requirement narrows the devices further at runtime. -->
+    <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- The ANativeWindow / vkCreateAndroidSurfaceKHR interop is pointer-based. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.Hosting.Android</PackageId>
+    <Description>Android application host for the Kaldra render-graph engine: a KaldraActivity with a Vulkan surface, a Choreographer-paced frame loop and touch input behind KaldraApplication.Run.</Description>
+    <PackageTags>android;vulkan;rendergraph;gamedev;hosting;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Core\BinaryVibrance.Kaldra.Core.csproj" />
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Backend.Vulkan\BinaryVibrance.Kaldra.Backend.Vulkan.csproj" />
+  </ItemGroup>
+
+</Project>

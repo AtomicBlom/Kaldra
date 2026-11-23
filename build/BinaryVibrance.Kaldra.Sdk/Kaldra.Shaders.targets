@@ -1,0 +1,536 @@
+<Project>
+
+  <!--
+    Kaldra shared shader-compile machinery (Milestone 8) — targets.
+
+    Imported AFTER the project body (so $(KaldraShaderSourceDir) is already set). Compiles *.slang -> SPIR-V
+    (+ a reflection-JSON sidecar) hermetically via the slangc bundled in Slang.Sdk, then registers the
+    outputs in one of two modes:
+      Content -> loose <Content> copied to the output under shaders\  (an app, e.g. the gallery's BinaryVibrance.Kaldra.Sandbox)
+      Embed   -> <EmbeddedResource> with a stable manifest name        (the engine, BinaryVibrance.Kaldra.Backend.Vulkan)
+
+    When $(KaldraEmitHlsl) is set (the DirectX12 backend is in the build) it ALSO emits per-stage HLSL beside the
+    SPIR-V — <name>.vs.hlsl / <name>.ps.hlsl / <name>.cs.hlsl. Slang's HLSL target is per-entry-point (a
+    combined multi-entry module duplicates the shared structs and won't compile), so each stage is emitted
+    on its own; the stages are the fixed vs/fragment/compute set, so no per-shader entry enumeration is
+    needed. The DirectX12 backend resolves the stage files it needs and compiles each.
+  -->
+
+  <PropertyGroup>
+    <SlangCompiler Condition="'$(SlangCompiler)' == ''">$(PkgSlang_Sdk)\runtimes\$(SlangRid)\native\slangc.exe</SlangCompiler>
+  </PropertyGroup>
+
+  <!-- Top-level (evaluated when KaldraShaderSourceDir is known). Entry shaders compile standalone;
+       *.module.slang are shared imports (tracked for incremental, never compiled on their own). The glob is
+       over SOURCE .slang (which exist at evaluation); the .spv/.json are referenced only as transforms. -->
+  <!-- Per-shader entry-point names, defaulting to the conventional ones every shader in this repo uses. A project
+       overrides one per shader with item metadata:
+
+         <ItemGroup>
+           <KaldraSlangEntry Update="Shaders\reduce.slang" ComputeEntry="reduceMain" />
+         </ItemGroup>
+
+       That ItemGroup MUST come AFTER this file is imported — the glob below is what creates the items an Update
+       attaches to, and an Update naming an item that does not exist yet is silently ignored. These defaults are an
+       ItemDefinitionGroup rather than conditional metadata so an explicit value on the item always wins. -->
+  <ItemDefinitionGroup Condition="'$(KaldraShaderOutputMode)' != 'None'">
+    <KaldraSlangEntry>
+      <VertexEntry>vertexMain</VertexEntry>
+      <FragmentEntry>fragmentMain</FragmentEntry>
+      <ComputeEntry>computeMain</ComputeEntry>
+      <Stages></Stages>
+    </KaldraSlangEntry>
+    <!-- Every shader compiled, the entries and their variants (_KaldraCollectShaders): a variant takes these defaults, an
+         entry keeps its own -->
+    <_KaldraShader>
+      <VertexEntry>vertexMain</VertexEntry>
+      <FragmentEntry>fragmentMain</FragmentEntry>
+      <ComputeEntry>computeMain</ComputeEntry>
+      <Stages></Stages>
+      <DefineArgs></DefineArgs>
+    </_KaldraShader>
+  </ItemDefinitionGroup>
+
+  <!-- A variant is an entry compiled again under another name with macros defined, as a shadow caster is its lit shader
+       compiled with CAST:
+
+         <ItemGroup>
+           <KaldraSlangVariant Include="Shaders\terrain.slang;Shaders\car.slang" Suffix="_cast" Defines="CAST" />
+         </ItemGroup>
+
+       makes terrain_cast and car_cast beside terrain and car, each a shader of its own to a backend. Defines is a list
+       (A;B=2). The stages are found in the source as an entry's are; VertexEntry, FragmentEntry, ComputeEntry and Stages
+       may be set on the variant as on an entry. Declare variants before this file is imported, so the IDE's up-to-date
+       check below sees their outputs; the build finds them wherever they are. -->
+
+  <!-- An app with no shaders of its own (no KaldraShaderSourceDir: it draws with a library's) compiles nothing; an empty
+       directory would make these globs search the drive root. -->
+  <ItemGroup Condition="'$(KaldraShaderOutputMode)' != 'None' and '$(KaldraShaderSourceDir)' != ''">
+    <KaldraSlangEntry  Include="$(KaldraShaderSourceDir)\**\*.slang" Exclude="$(KaldraShaderSourceDir)\**\*.module.slang;$(KaldraShaderExclude)" />
+    <KaldraSlangModule Include="$(KaldraShaderSourceDir)\**\*.module.slang" />
+    <!-- Shared includes (the kaldra_platform.module.slang header) live outside app shader dirs;
+         track them as modules so editing one rebuilds every dependent shader. Duplicates (when the
+         source dir IS the include dir, i.e. the engine) are harmless in an Inputs list. -->
+    <KaldraSlangModule Include="$(KaldraShaderIncludeDir)\*.module.slang" Condition="Exists('$(KaldraShaderIncludeDir)')" />
+    <KaldraSlangSource Include="@(KaldraSlangEntry);@(KaldraSlangModule)" />
+
+    <!-- Keep the IDE FastUpToDateCheck aware of shader inputs/outputs so it never skips a build and runs
+         stale SPIR-V (the classic "my shader edit did nothing" trap) — applies to embedded resources too. -->
+    <UpToDateCheckInput Include="@(KaldraSlangSource)" />
+    <UpToDateCheckBuilt Include="@(KaldraSlangEntry->'$(KaldraShaderOutDir)%(Filename).spv')" />
+    <UpToDateCheckBuilt Include="@(KaldraSlangEntry->'$(KaldraShaderOutDir)%(Filename).json')" />
+    <UpToDateCheckBuilt Include="@(KaldraSlangEntry->'$(KaldraShaderOutDir)%(Filename).wgsl')" Condition="'$(KaldraEmitWgsl)' == 'true'" />
+    <UpToDateCheckBuilt Include="@(KaldraSlangEntry->'$(KaldraShaderOutDir)%(Filename).wgsl.json')" Condition="'$(KaldraEmitWgsl)' == 'true'" />
+    <UpToDateCheckBuilt Include="@(KaldraSlangVariant->'$(KaldraShaderOutDir)%(Filename)%(Suffix).spv')" />
+    <UpToDateCheckBuilt Include="@(KaldraSlangVariant->'$(KaldraShaderOutDir)%(Filename)%(Suffix).wgsl')" Condition="'$(KaldraEmitWgsl)' == 'true'" />
+    <UpToDateCheckBuilt Include="@(KaldraSlangEntry->'$(KaldraShaderOutDir)%(Filename).dxil.json')" Condition="'$(KaldraEmitDxil)' == 'true'" />
+    <UpToDateCheckBuilt Include="@(KaldraSlangVariant->'$(KaldraShaderOutDir)%(Filename)%(Suffix).dxil.json')" Condition="'$(KaldraEmitDxil)' == 'true'" />
+  </ItemGroup>
+
+  <!-- An item's own Stages (see the DXIL emit below), an entry's or a variant's, normalised and checked before anything
+       compiles: tokens are trimmed and lower-cased ("Vertex; fragment" is "vertex;fragment"), and any token that is not
+       vertex, fragment or compute, or a Stages that names none, fails the build. Dropping an unknown token ("pixel")
+       instead would build a shader with no fragment DXIL, which DirectX 12 finds missing only at run time. Runs ahead of
+       the compile's up-to-date check, so a bad Stages fails even a build with nothing to compile. -->
+  <Target Name="_KaldraResolveShaderStages" Condition="'$(KaldraShaderOutputMode)' != 'None'">
+    <ItemGroup>
+      <KaldraSlangEntry Condition="'%(KaldraSlangEntry.Stages)' != ''">
+        <_StagesGiven>%(KaldraSlangEntry.Stages)</_StagesGiven>
+        <Stages>$([System.Text.RegularExpressions.Regex]::Replace($([System.Text.RegularExpressions.Regex]::Replace('%(KaldraSlangEntry.Stages)', '\s*;\s*', ';').Trim().ToLowerInvariant()), ';+', ';').Trim(';'))</Stages>
+      </KaldraSlangEntry>
+      <KaldraSlangEntry Condition="'%(KaldraSlangEntry._StagesGiven)' != ''">
+        <_StagesValid>$([System.Text.RegularExpressions.Regex]::IsMatch('%(KaldraSlangEntry.Stages)', '^(vertex|fragment|compute)(;(vertex|fragment|compute))*$'))</_StagesValid>
+      </KaldraSlangEntry>
+      <KaldraSlangVariant Condition="'%(KaldraSlangVariant.Stages)' != ''">
+        <_StagesGiven>%(KaldraSlangVariant.Stages)</_StagesGiven>
+        <Stages>$([System.Text.RegularExpressions.Regex]::Replace($([System.Text.RegularExpressions.Regex]::Replace('%(KaldraSlangVariant.Stages)', '\s*;\s*', ';').Trim().ToLowerInvariant()), ';+', ';').Trim(';'))</Stages>
+      </KaldraSlangVariant>
+      <KaldraSlangVariant Condition="'%(KaldraSlangVariant._StagesGiven)' != ''">
+        <_StagesValid>$([System.Text.RegularExpressions.Regex]::IsMatch('%(KaldraSlangVariant.Stages)', '^(vertex|fragment|compute)(;(vertex|fragment|compute))*$'))</_StagesValid>
+      </KaldraSlangVariant>
+    </ItemGroup>
+    <Error Condition="'%(KaldraSlangEntry._StagesGiven)' != '' And '%(KaldraSlangEntry._StagesValid)' != 'True'"
+           Text="%(KaldraSlangEntry.Filename).slang has Stages=&quot;%(KaldraSlangEntry._StagesGiven)&quot;, but Stages is a semicolon-separated list of one or more of vertex, fragment and compute." />
+    <Error Condition="'%(KaldraSlangVariant._StagesGiven)' != '' And '%(KaldraSlangVariant._StagesValid)' != 'True'"
+           Text="The %(KaldraSlangVariant.Suffix) variant of %(KaldraSlangVariant.Filename).slang has Stages=&quot;%(KaldraSlangVariant._StagesGiven)&quot;, but Stages is a semicolon-separated list of one or more of vertex, fragment and compute." />
+  </Target>
+
+  <!-- Every shader to compile, by the name a backend looks it up by (ShaderName): each entry under its own, and each
+       variant under its entry's with its suffix, with its macros as slangc's arguments (DefineArgs). In a target, so the
+       Updates a project makes after the import, and its variants wherever they are, are all seen. -->
+  <Target Name="_KaldraCollectShaders" Condition="'$(KaldraShaderOutputMode)' != 'None'" DependsOnTargets="_KaldraResolveShaderStages">
+    <ItemGroup>
+      <_KaldraShader Remove="@(_KaldraShader)" />
+      <_KaldraShader Include="@(KaldraSlangEntry)" ShaderName="%(KaldraSlangEntry.Filename)" />
+      <_KaldraShader Include="@(KaldraSlangVariant)" ShaderName="%(KaldraSlangVariant.Filename)%(KaldraSlangVariant.Suffix)"
+                   DefineArgs="$([System.String]::Copy(';%(KaldraSlangVariant.Defines)').Replace(';', ' -D').Trim())" />
+      <!-- What the compile must have produced for it to count as up to date: the SPIR-V, the WGSL when it is emitted,
+           and the DXIL a shader's own Stages promise. With the SPIR-V alone, an output folder that already held another
+           build's SPIR-V (a desktop build of the same project) skipped the compile, and the WGSL was never made; and
+           adding Stages to a shader whose SPIR-V was already up to date left its DXIL unmade. -->
+      <_KaldraShaderOutput Remove="@(_KaldraShaderOutput)" />
+      <_KaldraShaderOutput Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).spv')" />
+      <_KaldraShaderOutput Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).wgsl')" Condition="'$(KaldraEmitWgsl)' == 'true'" />
+    </ItemGroup>
+    <ItemGroup Condition="'$(KaldraEmitDxil)' == 'true'">
+      <!-- The DXIL compile's own reflection, the registers DirectX 12's root signature is built at: written by each
+           stage's compile, which all agree, since Slang lays out a module's parameters once for all its entry points -->
+      <_KaldraShaderOutput Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).dxil.json')" />
+      <_KaldraShaderOutput Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).vs.dxil')" Condition="$([System.String]::Copy(';%(_KaldraShader.Stages);').Contains(';vertex;'))" />
+      <_KaldraShaderOutput Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).ps.dxil')" Condition="$([System.String]::Copy(';%(_KaldraShader.Stages);').Contains(';fragment;'))" />
+      <_KaldraShaderOutput Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).cs.dxil')" Condition="$([System.String]::Copy(';%(_KaldraShader.Stages);').Contains(';compute;'))" />
+    </ItemGroup>
+    <!-- KaldraShaderForce: an output that is never made, so the compile runs however new its outputs are, and every run in it -->
+    <PropertyGroup>
+      <_KaldraForcedOutput Condition="'$(KaldraShaderForce)' == 'true'">$(KaldraShaderOutDir)kaldra-shaders-forced.never</_KaldraForcedOutput>
+    </PropertyGroup>
+    <Error Condition="'@(KaldraSlangVariant)' != '' And '%(KaldraSlangVariant.Suffix)' == ''" Text="The variant of %(KaldraSlangVariant.Identity) has no Suffix, so it would be compiled under its entry's own name." />
+  </Target>
+
+  <!-- Incremental in two steps. The target runs when ANY .slang (entry OR shared module) or the project file (the items'
+       metadata: Stages, an entry point's name) is newer than ANY output. Then KaldraRunSlang runs only the compiles that are
+       out of date by their own dependency files: editing a shared *.module.slang remakes the shaders that import it, and
+       no others. -->
+  <Target Name="KaldraCompileShaders"
+          Condition="'$(KaldraShaderOutputMode)' != 'None'"
+          DependsOnTargets="_KaldraCollectShaders"
+          Inputs="@(KaldraSlangSource);$(MSBuildProjectFullPath)"
+          Outputs="@(_KaldraShaderOutput);$(_KaldraForcedOutput)">
+    <Error Condition="'$(PkgSlang_Sdk)' == ''"
+           Text="KaldraShaderOutputMode='$(KaldraShaderOutputMode)' but Slang.Sdk is not referenced in this project. Add a Slang.Sdk PackageReference with GeneratePathProperty=&quot;true&quot;." />
+    <Error Condition="!Exists('$(SlangCompiler)')"
+           Text="slangc not found at '$(SlangCompiler)'. Is Slang.Sdk restored for RID '$(SlangRid)'? (Only win-x64 / win-arm64 are packaged.)" />
+    <MakeDir Directories="$(KaldraShaderOutDir)" />
+    <!-- Every compile is gathered as a run of slangc (_KaldraSlangRun: its arguments, and what it makes) and they all run
+         at once at the end (KaldraRunSlang), each a process of its own: slangc spends most of each run starting up, so
+         one after another they took minutes. -->
+    <ItemGroup>
+      <_KaldraSlangRun Remove="@(_KaldraSlangRun)" />
+      <!-- Reflection JSON beside the SPIR-V (M7-B4): the backend reads it at DefineTechnique to derive the
+           descriptor-binding layout, so the app states only pipeline intent. -->
+      <_KaldraSlangRun Include="%(_KaldraShader.ShaderName) SPIR-V"
+                     Outputs="$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).spv;$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).json" Depfile="$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).spv.d"
+                     Arguments="&quot;%(_KaldraShader.FullPath)&quot; -target spirv %(_KaldraShader.DefineArgs) -I &quot;$(KaldraShaderIncludeDir)&quot; -o &quot;$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).spv&quot; -reflection-json &quot;$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).json&quot;" />
+    </ItemGroup>
+
+    <!-- DirectX12: also emit SIGNED DXIL here (same target as SPIR-V, so the single KaldraCompileShaders dependency
+         covers BOTH and the registration below always sees every produced stage — a separate emit target
+         ordered before/after caused register to snapshot mid-emit and miss .ps/.cs). Resolve the architecture-
+         matched Windows SDK dxc dir for slangc's -dxc-path (forward slashes so a trailing "\" doesn't escape the
+         quote in cmd). One Exec per stage, run ONLY for the entry points the shader actually declares
+         (detected from its source). A missing stage is skipped — no error to swallow — and a stage that IS
+         declared but fails to compile to DXIL HARD-FAILS the build, instead of being silently dropped and
+         leaving DirectX12 to fall back to a stand-in (the exact cross-backend break this layer guards against). -->
+    <!-- DXC resolution: hermetic NuGet package first ($(PkgMicrosoft_Direct3D_DXC) set via GeneratePathProperty
+         on a Microsoft.Direct3D.DXC PackageReference), then Windows SDK as a fallback for machines where the
+         package is not referenced. Forward-slashes: a trailing backslash escapes the closing quote in cmd. -->
+    <PropertyGroup Condition="'$(KaldraEmitDxil)' == 'true' And '$(KaldraDxcPath)' == '' And '$(PkgMicrosoft_Direct3D_DXC)' != ''">
+      <KaldraDxcPath>$(PkgMicrosoft_Direct3D_DXC)\build\native\bin\$(KaldraDxcArch)</KaldraDxcPath>
+      <KaldraDxcPath>$(KaldraDxcPath.Replace('\','/'))</KaldraDxcPath>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(KaldraEmitDxil)' == 'true' And '$(KaldraDxcPath)' == ''">
+      <_KaldraDxcDll Include="$(MSBuildProgramFiles32)\Windows Kits\10\bin\**\$(KaldraDxcArch)\dxcompiler.dll" />
+    </ItemGroup>
+    <PropertyGroup Condition="'$(KaldraEmitDxil)' == 'true' And '$(KaldraDxcPath)' == ''">
+      <KaldraDxcPath>@(_KaldraDxcDll->'%(RootDir)%(Directory)'->Distinct())</KaldraDxcPath>
+      <KaldraDxcPath>$(KaldraDxcPath.Replace('\','/'))</KaldraDxcPath>
+    </PropertyGroup>
+    <Warning Condition="'$(KaldraEmitDxil)' == 'true' And '$(KaldraDxcPath)' == ''"
+             Text="KaldraEmitDxil is on but no DXC found (neither Microsoft.Direct3D.DXC NuGet package nor Windows SDK '$(KaldraDxcArch)' bin). Add a Microsoft.Direct3D.DXC PackageReference with GeneratePathProperty=true to this project, or set $(KaldraDxcPath)." />
+    <!-- Which stages to emit comes from the [shader("...")] attributes the source declares, and the entry-point name
+         for each comes from item metadata defaulting to the conventional name. Matching the attribute rather than
+         searching for the entry name keeps a mention in a comment (or a substring of another identifier) from
+         requesting a stage the module has no entry for. The file text is passed as a nested property-function result,
+         never embedded in the expression, so quotes/parens/semicolons in the shader cannot break argument parsing.
+
+         The scan is per-file and does not follow #include, so a stage declared in an imported module is invisible
+         here. That is caught by the entry-presence check below rather than silently dropping the stage, unless the
+         item names its stages itself (Stages, below). -->
+    <ItemGroup Condition="'$(KaldraEmitDxil)' == 'true'">
+      <!-- VertexEntry/FragmentEntry/ComputeEntry ride along from KaldraSlangEntry or KaldraSlangVariant (the ItemDefinitionGroup default,
+           or a per-shader override) — a transform copies the source item's metadata. -->
+      <_KaldraDxilEntry Include="@(_KaldraShader)">
+        <HasVertex>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\[\s*shader\s*\(\s*"vertex"\s*\)\s*\]'))</HasVertex>
+        <HasFragment>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\[\s*shader\s*\(\s*"fragment"\s*\)\s*\]'))</HasFragment>
+        <HasCompute>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\[\s*shader\s*\(\s*"compute"\s*\)\s*\]'))</HasCompute>
+      </_KaldraDxilEntry>
+      <!-- A declared stage whose named entry function is absent would compile to nothing, leaving DirectX 12 to fail
+           at technique registration with a missing-artifact error far from the cause. Detect it here instead. -->
+      <_KaldraDxilEntry>
+        <VertexOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(VertexEntry)\s*\('))</VertexOk>
+        <FragmentOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(FragmentEntry)\s*\('))</FragmentOk>
+        <ComputeOk>$([System.Text.RegularExpressions.Regex]::IsMatch($([System.IO.File]::ReadAllText('%(FullPath)')), '\b%(ComputeEntry)\s*\('))</ComputeOk>
+      </_KaldraDxilEntry>
+      <!-- A shader whose entry points come from an #include (a stage declared in a module it includes, or by a macro it
+           expands: one source compiled twice, a variant defining a macro and including the other) declares its stages on
+           the item, an entry's or a variant's, since the scan above can't see them:
+             <KaldraSlangEntry Update="Shaders\wall.slang" Stages="vertex;fragment" />
+           Its entry functions are then taken on trust; slangc fails the compile if one is missing. Its Stages arrive
+           here checked and normalised by _KaldraResolveShaderStages. -->
+      <_KaldraDxilEntry Condition="'%(_KaldraDxilEntry.Stages)' != ''">
+        <HasVertex>$([System.String]::Copy(';%(_KaldraDxilEntry.Stages);').Contains(';vertex;'))</HasVertex>
+        <HasFragment>$([System.String]::Copy(';%(_KaldraDxilEntry.Stages);').Contains(';fragment;'))</HasFragment>
+        <HasCompute>$([System.String]::Copy(';%(_KaldraDxilEntry.Stages);').Contains(';compute;'))</HasCompute>
+        <VertexOk>True</VertexOk>
+        <FragmentOk>True</FragmentOk>
+        <ComputeOk>True</ComputeOk>
+      </_KaldraDxilEntry>
+    </ItemGroup>
+    <Error Condition="'$(KaldraEmitDxil)' == 'true' And '%(_KaldraDxilEntry.HasVertex)' == 'True' And '%(_KaldraDxilEntry.VertexOk)' != 'True'" Text="%(_KaldraDxilEntry.Filename).slang declares a [shader(&quot;vertex&quot;)] entry point, but no function named '%(_KaldraDxilEntry.VertexEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;KaldraSlangEntry Update=&quot;%(_KaldraDxilEntry.Identity)&quot; VertexEntry=&quot;yourEntry&quot; /&gt;." />
+    <Error Condition="'$(KaldraEmitDxil)' == 'true' And '%(_KaldraDxilEntry.HasFragment)' == 'True' And '%(_KaldraDxilEntry.FragmentOk)' != 'True'" Text="%(_KaldraDxilEntry.Filename).slang declares a [shader(&quot;fragment&quot;)] entry point, but no function named '%(_KaldraDxilEntry.FragmentEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;KaldraSlangEntry Update=&quot;%(_KaldraDxilEntry.Identity)&quot; FragmentEntry=&quot;yourEntry&quot; /&gt;." />
+    <Error Condition="'$(KaldraEmitDxil)' == 'true' And '%(_KaldraDxilEntry.HasCompute)' == 'True' And '%(_KaldraDxilEntry.ComputeOk)' != 'True'" Text="%(_KaldraDxilEntry.Filename).slang declares a [shader(&quot;compute&quot;)] entry point, but no function named '%(_KaldraDxilEntry.ComputeEntry)' is defined in that file. Rename the function, or name the entry on the item: &lt;KaldraSlangEntry Update=&quot;%(_KaldraDxilEntry.Identity)&quot; ComputeEntry=&quot;yourEntry&quot; /&gt;." />
+    <!-- One run per stage. Each stage's compile can write the DXIL reflection: the same parameters and registers, but
+         its own entry point. Run at once they would write the one file together, so only the last stage a shader has
+         (vertex, fragment, compute) writes it, as the last one written did when they ran one after another. -->
+    <ItemGroup Condition="'$(KaldraEmitDxil)' == 'true'">
+      <_KaldraDxilEntry>
+        <VertexJson Condition="'%(_KaldraDxilEntry.HasVertex)' == 'True' And '%(_KaldraDxilEntry.HasFragment)' != 'True' And '%(_KaldraDxilEntry.HasCompute)' != 'True'">$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).dxil.json</VertexJson>
+        <VertexReflection Condition="'%(_KaldraDxilEntry.HasVertex)' == 'True' And '%(_KaldraDxilEntry.HasFragment)' != 'True' And '%(_KaldraDxilEntry.HasCompute)' != 'True'">-reflection-json &quot;$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).dxil.json&quot;</VertexReflection>
+        <FragmentJson Condition="'%(_KaldraDxilEntry.HasFragment)' == 'True' And '%(_KaldraDxilEntry.HasCompute)' != 'True'">$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).dxil.json</FragmentJson>
+        <FragmentReflection Condition="'%(_KaldraDxilEntry.HasFragment)' == 'True' And '%(_KaldraDxilEntry.HasCompute)' != 'True'">-reflection-json &quot;$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).dxil.json&quot;</FragmentReflection>
+        <ComputeJson Condition="'%(_KaldraDxilEntry.HasCompute)' == 'True'">$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).dxil.json</ComputeJson>
+        <ComputeReflection Condition="'%(_KaldraDxilEntry.HasCompute)' == 'True'">-reflection-json &quot;$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).dxil.json&quot;</ComputeReflection>
+      </_KaldraDxilEntry>
+      <_KaldraSlangRun Include="%(_KaldraDxilEntry.ShaderName) DXIL vertex" Condition="'%(_KaldraDxilEntry.HasVertex)' == 'True'"
+                     Outputs="$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).vs.dxil;%(_KaldraDxilEntry.VertexJson)" Depfile="$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).vs.dxil.d"
+                     Arguments="&quot;%(_KaldraDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(KaldraDxcPath)&quot; %(_KaldraDxilEntry.DefineArgs) -I &quot;$(KaldraShaderIncludeDir)&quot; -entry %(_KaldraDxilEntry.VertexEntry) -stage vertex -o &quot;$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).vs.dxil&quot; %(_KaldraDxilEntry.VertexReflection)" />
+      <_KaldraSlangRun Include="%(_KaldraDxilEntry.ShaderName) DXIL fragment" Condition="'%(_KaldraDxilEntry.HasFragment)' == 'True'"
+                     Outputs="$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).ps.dxil;%(_KaldraDxilEntry.FragmentJson)" Depfile="$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).ps.dxil.d"
+                     Arguments="&quot;%(_KaldraDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(KaldraDxcPath)&quot; %(_KaldraDxilEntry.DefineArgs) -I &quot;$(KaldraShaderIncludeDir)&quot; -entry %(_KaldraDxilEntry.FragmentEntry) -stage fragment -o &quot;$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).ps.dxil&quot; %(_KaldraDxilEntry.FragmentReflection)" />
+      <_KaldraSlangRun Include="%(_KaldraDxilEntry.ShaderName) DXIL compute" Condition="'%(_KaldraDxilEntry.HasCompute)' == 'True'"
+                     Outputs="$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).cs.dxil;%(_KaldraDxilEntry.ComputeJson)" Depfile="$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).cs.dxil.d"
+                     Arguments="&quot;%(_KaldraDxilEntry.FullPath)&quot; -target dxil -profile sm_6_0 -dxc-path &quot;$(KaldraDxcPath)&quot; %(_KaldraDxilEntry.DefineArgs) -I &quot;$(KaldraShaderIncludeDir)&quot; -entry %(_KaldraDxilEntry.ComputeEntry) -stage compute -o &quot;$(KaldraShaderOutDir)%(_KaldraDxilEntry.ShaderName).cs.dxil&quot; %(_KaldraDxilEntry.ComputeReflection)" />
+    </ItemGroup>
+
+    <!-- WebGPU: also emit WGSL (whole module — Slang's WGSL target handles multi-entry) plus the
+         WGSL-target reflection sidecar. -DKALDRA_WGSL lowers the push-constant block to an ordinary uniform (WGSL has
+         no push constants). Shaders name no bindings, so Slang numbers WGSL's in declaration order, as it does
+         SPIR-V's and DXIL's registers; the WebGPU backend derives its bind-group layouts from the emitted WGSL text +
+         this sidecar. -->
+    <ItemGroup Condition="'$(KaldraEmitWgsl)' == 'true'">
+      <_KaldraSlangRun Include="%(_KaldraShader.ShaderName) WGSL"
+                     Outputs="$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).wgsl;$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).wgsl.json" Depfile="$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).wgsl.d"
+                     Arguments="&quot;%(_KaldraShader.FullPath)&quot; -target wgsl -DKALDRA_WGSL %(_KaldraShader.DefineArgs) -I &quot;$(KaldraShaderIncludeDir)&quot; -o &quot;$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).wgsl&quot; -reflection-json &quot;$(KaldraShaderOutDir)%(_KaldraShader.ShaderName).wgsl.json&quot;" />
+    </ItemGroup>
+
+    <KaldraRunSlang Compiler="$(SlangCompiler)" Runs="@(_KaldraSlangRun)" Parallelism="$(KaldraShaderParallelism)" Force="$(KaldraShaderForce)" />
+  </Target>
+
+  <!-- Runs slangc once for each of Runs (its Arguments) that is out of date, as many at once as Parallelism (the
+       processors, unless the property KaldraShaderParallelism says otherwise; 1 runs them one after another).
+
+       A run is up to date when every file it makes (Outputs) is there and newer than every file it read, as slangc
+       listed them in its dependency file (Depfile: the shader, every module it imports) and the compiler itself, and its
+       arguments are those it was last made with (kept beside the dependency file), so a changed define, stage or entry
+       point remakes it. Force (KaldraShaderForce) runs every one.
+
+       Each run's output goes through MSBuild's reading of canonical errors and warnings ("file(line): error N: ...") as
+       Exec's does, a run's lines kept together; any run that fails fails the build, after every run has finished, and
+       is run again next time. -->
+  <UsingTask TaskName="KaldraRunSlang" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Compiler ParameterType="System.String" Required="true" />
+      <Runs ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <Parallelism ParameterType="System.String" />
+      <Force ParameterType="System.String" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.Diagnostics" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Text" />
+      <Using Namespace="System.Threading.Tasks" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        int parallelism;
+        if (!int.TryParse(Parallelism, out parallelism) || parallelism < 1) parallelism = Environment.ProcessorCount;
+        bool force = string.Equals(Force, "true", StringComparison.OrdinalIgnoreCase);
+        DateTime compiler = File.GetLastWriteTimeUtc(Compiler);
+
+        // The files a dependency file lists after its target: Makefile's escapes undone (\ before a space, a colon, a
+        // backslash; a backslash ending a line continues it)
+        Func<string, List<string>> depends = path =>
+        {
+            var words = new List<string>();
+            var word = new StringBuilder();
+            string text = File.ReadAllText(path);
+            for (int c = 0; c < text.Length; c++)
+            {
+                char ch = text[c];
+                if (ch == '\\' && c + 1 < text.Length && text[c + 1] != '\r' && text[c + 1] != '\n') { word.Append(text[++c]); continue; }
+                if (ch == '\\' || char.IsWhiteSpace(ch))
+                {
+                    if (word.Length > 0) { words.Add(word.ToString()); word.Clear(); }
+                    continue;
+                }
+                word.Append(ch);
+            }
+            if (word.Length > 0) words.Add(word.ToString());
+            int after = words.FindIndex(w => w.EndsWith(":"));
+            return after < 0 ? new List<string>() : words.Skip(after + 1).ToList();
+        };
+
+        Func<ITaskItem, bool> stale = run =>
+        {
+            if (force) return true;
+            string depfile = run.GetMetadata("Depfile"), args = depfile + ".args";
+            var outputs = run.GetMetadata("Outputs").Split(';').Where(o => o.Trim().Length > 0).ToList();
+            if (depfile.Length == 0 || outputs.Count == 0 || !File.Exists(depfile) || !File.Exists(args)) return true;
+            if (File.ReadAllText(args) != run.GetMetadata("Arguments")) return true;
+            if (outputs.Any(o => !File.Exists(o))) return true;
+            DateTime made = outputs.Min(o => File.GetLastWriteTimeUtc(o));
+            if (compiler > made) return true;
+            foreach (var input in depends(depfile))
+                if (!File.Exists(input) || File.GetLastWriteTimeUtc(input) > made) return true;
+            return false;
+        };
+
+        var todo = Runs.Where(stale).ToArray();
+        var codes = new int[todo.Length];
+        var outputs = new string[todo.Length];
+        var watch = Stopwatch.StartNew();
+        Parallel.For(0, todo.Length, new ParallelOptions { MaxDegreeOfParallelism = parallelism }, i =>
+        {
+            string depfile = todo[i].GetMetadata("Depfile");
+            string arguments = todo[i].GetMetadata("Arguments") + (depfile.Length > 0 ? " -depfile \"" + depfile + "\"" : "");
+            if (depfile.Length > 0 && File.Exists(depfile + ".args")) File.Delete(depfile + ".args");
+            var start = new ProcessStartInfo(Compiler, arguments)
+            {
+                UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
+            };
+            using (var process = Process.Start(start))
+            {
+                var error = process.StandardError.ReadToEndAsync();
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                codes[i] = process.ExitCode;
+                outputs[i] = (output + "\n" + error.Result).Trim();
+            }
+            if (codes[i] != 0) return;
+            // Its files stamped as made now: slangc leaves an output that comes out the same as it was (a WGSL) unwritten,
+            // which would look older than what it read forever after
+            var now = DateTime.UtcNow;
+            foreach (var made in todo[i].GetMetadata("Outputs").Split(';'))
+                if (made.Trim().Length > 0 && File.Exists(made)) File.SetLastWriteTimeUtc(made, now);
+            // Its arguments kept only once it made its files, so a failed run runs again
+            if (depfile.Length > 0) File.WriteAllText(depfile + ".args", todo[i].GetMetadata("Arguments"));
+        });
+        bool failed = false;
+        for (int i = 0; i < todo.Length; i++)
+        {
+            Log.LogMessage(MessageImportance.High, "Slang -> " + todo[i].ItemSpec);
+            foreach (var line in outputs[i].Split('\n'))
+                if (line.Trim().Length > 0) Log.LogMessageFromText(line.TrimEnd('\r'), MessageImportance.High);
+            if (codes[i] != 0)
+            {
+                failed = true;
+                Log.LogError("slangc failed (exit code " + codes[i] + ") making " + todo[i].ItemSpec);
+            }
+        }
+        Log.LogMessage(MessageImportance.High, "Slang: " + todo.Length + " of " + Runs.Length + " compiles out of date, made in " +
+                       watch.Elapsed.TotalSeconds.ToString("F1") + " s, " + parallelism + " at a time");
+        return !failed && !Log.HasLoggedErrors;
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <!-- No Inputs/Outputs => ALWAYS runs (even when the compile targets are up to date), so the outputs are
+       always registered and never silently dropped from the assembly/output on incremental builds. The
+       EmbeddedResource/Content items are added HERE (in a target), not in a top-level ItemGroup, because at
+       evaluation time the .spv/.hlsl don't exist yet — a static glob over obj\shaders\ would embed nothing.
+
+       Anchor: BeforeTargets="AssignTargetPaths" for BOTH modes. AssignTargetPaths runs before the resource
+       pipeline (SplitResourcesByCulture -> CreateManifestResourceNames) and before Content target-path
+       assignment, so items added here flow to Csc (Embed) / to the output (Content). Anchoring at
+       BeforeCompile/CoreCompile is TOO LATE for EmbeddedResource — CreateManifestResourceNames has already
+       snapshotted @(EmbeddedResource) by then, so the late items never reach the compiler. -->
+  <Target Name="KaldraRegisterShaders"
+          Condition="'$(KaldraShaderOutputMode)' != 'None'"
+          DependsOnTargets="KaldraCompileShaders"
+          BeforeTargets="AssignTargetPaths">
+
+    <!-- The per-stage signed-DXIL files actually produced. Enumerated via a Directory.GetFiles property function,
+         NOT a "$(KaldraShaderOutDir)*.dxil" wildcard Include: MSBuild caches a wildcard item's evaluation (it can
+         snapshot a stale/partial directory and miss stages), whereas the property function reads the filesystem
+         fresh here — after KaldraCompileShaders (via DependsOnTargets) has emitted every stage. -->
+    <ItemGroup Condition="'$(KaldraEmitDxil)' == 'true'">
+      <KaldraDxilFile Include="$([System.IO.Directory]::GetFiles('$(KaldraShaderOutDir)', '*.dxil'))" />
+      <KaldraDxilFile Include="$([System.IO.Directory]::GetFiles('$(KaldraShaderOutDir)', '*.dxil.json'))" />
+    </ItemGroup>
+
+    <!-- Content (app/UI package): loose .spv/.json (+ signed DXIL) copied to shaders\ in the project output,
+         flowing via P2P project references to consuming app's bin.
+
+         PackagePath is set so NuGet packs each file into contentFiles/any/any/shaders/ — the explicit
+         PackagePath overrides NuGet's default path calculation (which would otherwise use the obj\shaders\
+         relative path as the target). PackageCopyToOutput=true maps to copyToOutput="true" in the nuspec
+         <contentFiles> section so the files are copied to a consuming project's output at restore time.
+
+         Do NOT add Pack=false here: that would add the files to _PackageFilesToExclude, which blacklists
+         them from appearing in the package even when re-added via other item groups. -->
+    <ItemGroup Condition="'$(KaldraShaderOutputMode)' == 'Content'">
+      <Content Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).spv')">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(_KaldraShader.ShaderName).spv</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(_KaldraShader.ShaderName).spv</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
+        <Visible>false</Visible>
+      </Content>
+      <Content Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).json')">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(_KaldraShader.ShaderName).json</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(_KaldraShader.ShaderName).json</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
+        <Visible>false</Visible>
+      </Content>
+      <Content Include="@(KaldraDxilFile)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(Filename)%(Extension)</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(Filename)%(Extension)</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
+        <Visible>false</Visible>
+      </Content>
+      <Content Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).wgsl')" Condition="'$(KaldraEmitWgsl)' == 'true' and '$(KaldraEmbedWgsl)' != 'true'">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(_KaldraShader.ShaderName).wgsl</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(_KaldraShader.ShaderName).wgsl</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
+        <Visible>false</Visible>
+      </Content>
+      <Content Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).wgsl.json')" Condition="'$(KaldraEmitWgsl)' == 'true' and '$(KaldraEmbedWgsl)' != 'true'">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>shaders\%(_KaldraShader.ShaderName).wgsl.json</Link>
+        <PackagePath>contentFiles/any/any/shaders/%(_KaldraShader.ShaderName).wgsl.json</PackagePath>
+        <PackageCopyToOutput>true</PackageCopyToOutput>
+        <Visible>false</Visible>
+      </Content>
+    </ItemGroup>
+
+    <!-- Content with KaldraEmbedWgsl (a library's shaders, as BinaryVibrance.Kaldra.UI.Vysara's): the WGSL is embedded while the rest stay
+         loose, because a browser app has no shader folder to look in. The web host finds it by the library's
+         "<AssemblyName>.Shaders." prefix. -->
+    <ItemGroup Condition="'$(KaldraShaderOutputMode)' == 'Content' and '$(KaldraEmitWgsl)' == 'true' and '$(KaldraEmbedWgsl)' == 'true'">
+      <EmbeddedResource Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).wgsl')">
+        <LogicalName>$(KaldraEmbedManifestPrefix)%(_KaldraShader.ShaderName).wgsl</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).wgsl.json')">
+        <LogicalName>$(KaldraEmbedManifestPrefix)%(_KaldraShader.ShaderName).wgsl.json</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+    </ItemGroup>
+
+    <!-- Content with KaldraEmbedSpirv (a library's shaders, as BinaryVibrance.Kaldra.UI.Vysara's): the SPIR-V and its reflection JSON are
+         embedded as well as copied loose, because an Android app has no shader folder beside it either; the loose
+         copies keep the desktop's shader folder and hot reload as they were. The Vulkan backend's ShaderResolver finds
+         them by the library's "<AssemblyName>.Shaders." prefix. -->
+    <ItemGroup Condition="'$(KaldraShaderOutputMode)' == 'Content' and '$(KaldraEmbedSpirv)' == 'true'">
+      <EmbeddedResource Include="@(KaldraSlangEntry->'$(KaldraShaderOutDir)%(Filename).spv')">
+        <LogicalName>$(KaldraEmbedManifestPrefix)%(Filename).spv</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(KaldraSlangEntry->'$(KaldraShaderOutDir)%(Filename).json')">
+        <LogicalName>$(KaldraEmbedManifestPrefix)%(Filename).json</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+    </ItemGroup>
+
+    <!-- Embed (engine): .spv/.json (+ HLSL) become EmbeddedResource with a STABLE flat manifest name the engine
+         reads via Assembly.GetManifestResourceStream("<prefix><name>.spv"). The LogicalName is mandatory:
+         without it MSBuild derives the name from the obj\shaders\ path (ugly + build-config-dependent). -->
+    <ItemGroup Condition="'$(KaldraShaderOutputMode)' == 'Embed'">
+      <EmbeddedResource Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).spv')">
+        <LogicalName>$(KaldraEmbedManifestPrefix)%(_KaldraShader.ShaderName).spv</LogicalName>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).json')">
+        <LogicalName>$(KaldraEmbedManifestPrefix)%(_KaldraShader.ShaderName).json</LogicalName>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <!-- WithCulture=false is REQUIRED: a stage suffix like ".ps"/".cs" (blit.ps.dxil, exposure.cs.dxil) is a
+           valid culture code (Pashto / Czech), so MSBuild's AssignCulture would otherwise treat the file as a
+           satellite-assembly resource and drop it from the main manifest — leaving only ".vs" (not a culture). -->
+      <EmbeddedResource Include="@(KaldraDxilFile)">
+        <LogicalName>$(KaldraEmbedManifestPrefix)%(Filename)%(Extension)</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).wgsl')" Condition="'$(KaldraEmitWgsl)' == 'true'">
+        <LogicalName>$(KaldraEmbedManifestPrefix)%(_KaldraShader.ShaderName).wgsl</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="@(_KaldraShader->'$(KaldraShaderOutDir)%(ShaderName).wgsl.json')" Condition="'$(KaldraEmitWgsl)' == 'true'">
+        <LogicalName>$(KaldraEmbedManifestPrefix)%(_KaldraShader.ShaderName).wgsl.json</LogicalName>
+        <WithCulture>false</WithCulture>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+    </ItemGroup>
+  </Target>
+
+
+</Project>

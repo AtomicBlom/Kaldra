@@ -1,0 +1,35 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.Core</PackageId>
+    <Description>Declarative, render-graph-driven rendering engine for .NET. Describe what each pass reads and writes; the engine derives ordering, barriers, layout transitions, and GPU sync.</Description>
+    <PackageTags>vulkan;directx12;rendergraph;gamedev;graphics;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Suppress missing-XML-doc warnings until the XML doc pass is complete. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- The input subsystem is a BCL-only leaf carrying no graphics-API type, so this downward reference leaves backend
+       portability untouched while giving the hosting layer a neutral input model. -->
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Input\BinaryVibrance.Kaldra.Input.csproj" />
+  </ItemGroup>
+
+  <!-- Ship the standard-level LLM orientation file as a NuGet content file so it surfaces in
+       NuGet Package Explorer and IDE package viewers. Conditioned so `dotnet pack` without a prior
+       generate-llms-docs run still succeeds (CI generates it before packing). -->
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\..\llms.txt')">
+    <None Include="$(MSBuildProjectDirectory)\..\llms.txt"
+          Pack="true"
+          PackagePath="contentFiles/any/any/llms.txt"
+          PackageCopyToOutput="false"
+          Visible="false" />
+  </ItemGroup>
+
+</Project>

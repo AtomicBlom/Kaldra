@@ -1,0 +1,15 @@
+<Project Sdk="BinaryVibrance.Kaldra.Sdk">
+
+  <!-- The whole build configuration for a Kaldra app. Sdk="BinaryVibrance.Kaldra.Sdk" (pinned in global.json) makes one project
+       build a native desktop exe (dotnet build) or a WebGPU browser app (dotnet publish -r browser-wasm) from
+       the same source: the RID selects the base SDK, backend, host, and shader output mode. Point
+       KaldraShaderSourceDir at your Slang shaders; everything else is defaulted. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</KaldraShaderSourceDir>
+  </PropertyGroup>
+
+</Project>

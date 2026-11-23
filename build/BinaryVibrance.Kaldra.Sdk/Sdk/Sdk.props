@@ -1,0 +1,90 @@
+<Project>
+
+  <!--
+    The app-facing Kaldra MSBuild SDK (Milestone 8) — props half.
+
+    An app that already knows its target (desktop only, e.g. the gallery's BinaryVibrance.Kaldra.Sandbox) consumes it the traditional way,
+    with its own fixed outer Sdk and two manual imports:
+        <Project Sdk="Microsoft.NET.Sdk">
+          <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Sdk\Sdk.props" />
+          ... body ...
+          <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Sdk\Sdk.targets" />
+        </Project>
+    Here the outer Sdk has already resolved Microsoft.NET.Sdk before this file even runs, so the
+    RID-conditional delegation below (UsingMicrosoftNETSdk is already true) is a guaranteed no-op — this usage
+    is unaffected by anything below.
+
+    An app that wants ONE project to build as either a desktop exe or a browser-wasm app, picked purely by RID
+    (-r browser-wasm vs. no RID / a desktop RID), consumes it with NO outer Sdk at all — a bare <Project> — so
+    this file's own conditional import is what resolves the real base SDK, not an already-fixed outer choice:
+        <Project>
+          <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Sdk\Sdk.props" />
+          ... body ...
+          <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Sdk\Sdk.targets" />
+        </Project>
+    Both forms are equivalent to declaring Sdk="BinaryVibrance.Kaldra.Sdk" once the SDK is packaged (the nested Sdk/ folder
+    mirrors a real MSBuild SDK package, so the promotion is import-line-only) — the bare-<Project> form is
+    simply what makes the RID switch meaningful, since there's no other outer Sdk pre-empting it.
+
+    It brings in the shared shader-compile machinery (here) and the UseVulkan/UseDirectX12/UseWebGPU
+    backend-reference selection (in Sdk.targets). The engine feature flags + their compile constants are NOT
+    here — they live in the repo-root Directory.Build.props because they must also reach the engine assembly's
+    own compile.
+  -->
+
+  <!--
+    RID-conditional base-SDK delegation. '$(RuntimeIdentifier)' must already be visible as a global/command-line
+    property (-r browser-wasm / -p:RuntimeIdentifier=browser-wasm) by the time this file runs — a default set
+    in Directory.Build.props can't reach here in time, because Directory.Build.props's own auto-import is
+    provided BY whichever base SDK gets chosen below, so it hasn't happened yet at this decision point.
+
+    Guarded with the exact idiom Microsoft.NET.Sdk.WebAssembly's own Sdk.props uses (UsingMicrosoftNETSdk /
+    UsingMicrosoftNETSdkWebAssembly, verified against the installed SDK's
+    Sdks\Microsoft.NET.Sdk.WebAssembly\Sdk\Sdk.props) so a project that already resolved its own outer Sdk
+    before additively importing this file never gets a redundant, order-sensitive second import — that's what
+    makes the traditional fixed-outer-Sdk usage above a true no-op.
+  -->
+  <PropertyGroup>
+    <_KaldraTargetsBrowser Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">true</_KaldraTargetsBrowser>
+    <_KaldraTargetsBrowser Condition="'$(_KaldraTargetsBrowser)' == ''">false</_KaldraTargetsBrowser>
+    <_KaldraSdkImportsWebAssembly Condition="'$(UsingMicrosoftNETSdkWebAssembly)' != 'true'">true</_KaldraSdkImportsWebAssembly>
+    <_KaldraSdkImportsNetSdk Condition="'$(UsingMicrosoftNETSdk)' != 'true' and '$(UsingMicrosoftNETSdkWebAssembly)' != 'true'">true</_KaldraSdkImportsNetSdk>
+  </PropertyGroup>
+
+  <Import Sdk="Microsoft.NET.Sdk.WebAssembly" Project="Sdk.props" Condition="'$(_KaldraTargetsBrowser)' == 'true' and '$(_KaldraSdkImportsWebAssembly)' == 'true'" />
+  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.props" Condition="'$(_KaldraTargetsBrowser)' != 'true' and '$(_KaldraSdkImportsNetSdk)' == 'true'" />
+
+  <!-- The web host provides a hand-authored index.html (its <script>/canvas are fixed, not templated), so tell
+       the static-web-assets pipeline not to rewrite HTML asset placeholders. Harmless for an app that authored
+       its own index.html too. -->
+  <PropertyGroup Condition="'$(_KaldraTargetsBrowser)' == 'true'">
+    <OverrideHtmlAssetPlaceholders Condition="'$(OverrideHtmlAssetPlaceholders)' == ''">true</OverrideHtmlAssetPlaceholders>
+  </PropertyGroup>
+
+  <!--
+    RID-based defaults, so an app consumed as Sdk="BinaryVibrance.Kaldra.Sdk" needs no backend flags at all — the RID picks the
+    backend (Vulkan on desktop, WebGPU in the browser) and the shader output mode (loose Content files beside a
+    desktop exe; Embedded resources in the wasm bundle). These run AFTER the base SDK import above (so a consumer
+    Directory.Build.props, and the repo-root one for in-repo apps, have already had their say) and only fill
+    what's still unset — an app that set a flag itself (e.g. the gallery's BinaryVibrance.Kaldra.Sandbox, or an app wanting both desktop
+    backends) keeps its choice. Must precede the Kaldra.Shaders.props import, which derives KaldraEmit* from these.
+  -->
+  <PropertyGroup Label="RID-based defaults">
+    <UseWebGPU Condition="'$(UseWebGPU)' == '' and '$(_KaldraTargetsBrowser)' == 'true'">true</UseWebGPU>
+    <UseVulkan Condition="'$(UseVulkan)' == '' and '$(_KaldraTargetsBrowser)' != 'true'">true</UseVulkan>
+    <UseVulkan     Condition="'$(UseVulkan)'     == ''">false</UseVulkan>
+    <UseDirectX12  Condition="'$(UseDirectX12)'  == ''">false</UseDirectX12>
+    <UseWebGPU     Condition="'$(UseWebGPU)'     == ''">false</UseWebGPU>
+    <!-- UI bridges are opt-in: a game that draws no UI pays for neither. -->
+    <UseVysara     Condition="'$(UseVysara)'     == ''">false</UseVysara>
+    <UseImGui      Condition="'$(UseImGui)'      == ''">false</UseImGui>
+    <KaldraShaderOutputMode Condition="'$(KaldraShaderOutputMode)' == '' and '$(_KaldraTargetsBrowser)' == 'true'">Embed</KaldraShaderOutputMode>
+    <!-- Noted so Sdk.targets can embed instead for an Android target, which is only known there (the target framework
+         of a single-target project is set in its body, after this file). An app that chose Content itself keeps it. -->
+    <_KaldraShaderOutputModeDefaulted Condition="'$(KaldraShaderOutputMode)' == ''">true</_KaldraShaderOutputModeDefaulted>
+    <KaldraShaderOutputMode Condition="'$(KaldraShaderOutputMode)' == ''">Content</KaldraShaderOutputMode>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)..\Kaldra.Shaders.props" />
+
+</Project>

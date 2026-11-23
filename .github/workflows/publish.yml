@@ -43,38 +43,38 @@ jobs:
         with:
           dotnet-version: '11.0.x'
 
-      # Restore only the projects that get packed — Loom.Tests and the samples are excluded
+      # Restore only the projects that get packed — BinaryVibrance.Kaldra.Tests and the samples are excluded
       # to avoid compiling their demo shaders (not publish artifacts).
       - name: Restore
         shell: pwsh
         run: |
           $projects = @(
-            "Loom.Concepts/Loom.Concepts.csproj",
-            "Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj",
-            "Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj",
-            "Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj",
-            "Loom.UI.Vysara/Loom.UI.Vysara.csproj",
-            "Loom.UI.ImGui/Loom.UI.ImGui.csproj",
-            "build/Loom.Sdk/Loom.Sdk.csproj"
+            "BinaryVibrance.Kaldra.Concepts/BinaryVibrance.Kaldra.Concepts.csproj",
+            "BinaryVibrance.Kaldra.Backend.Vulkan/BinaryVibrance.Kaldra.Backend.Vulkan.csproj",
+            "BinaryVibrance.Kaldra.Backend.DirectX12/BinaryVibrance.Kaldra.Backend.DirectX12.csproj",
+            "BinaryVibrance.Kaldra.Backend.WebGPU/BinaryVibrance.Kaldra.Backend.WebGPU.csproj",
+            "BinaryVibrance.Kaldra.UI.Vysara/BinaryVibrance.Kaldra.UI.Vysara.csproj",
+            "BinaryVibrance.Kaldra.UI.ImGui/BinaryVibrance.Kaldra.UI.ImGui.csproj",
+            "build/BinaryVibrance.Kaldra.Sdk/BinaryVibrance.Kaldra.Sdk.csproj"
           )
           foreach ($p in $projects) { dotnet restore $p }
 
-      # Build only packable projects. Transitive ProjectReferences (Loom.Core, Loom.Graph,
-      # Loom.Assets, VMASharp) build automatically — no need to list them explicitly.
+      # Build only packable projects. Transitive ProjectReferences (BinaryVibrance.Kaldra.Core, BinaryVibrance.Kaldra.Graph,
+      # BinaryVibrance.Kaldra.Assets, VMASharp) build automatically — no need to list them explicitly.
       # UseDebugVisualization is disabled for published packages (arm64 marshal workaround pending).
       - name: Build
         shell: pwsh
         run: |
           $flags = "-c", "Release", "--no-restore", "-p:UseDebugVisualization=false"
-          dotnet build Loom.Concepts/Loom.Concepts.csproj                 @flags
-          dotnet build Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj     @flags
-          dotnet build Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj @flags
-          dotnet build Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj     @flags
-          dotnet build Loom.UI.Vysara/Loom.UI.Vysara.csproj @flags
-          dotnet build Loom.UI.ImGui/Loom.UI.ImGui.csproj   @flags
-          dotnet build build/Loom.Sdk/Loom.Sdk.csproj       @flags
+          dotnet build BinaryVibrance.Kaldra.Concepts/BinaryVibrance.Kaldra.Concepts.csproj                 @flags
+          dotnet build BinaryVibrance.Kaldra.Backend.Vulkan/BinaryVibrance.Kaldra.Backend.Vulkan.csproj     @flags
+          dotnet build BinaryVibrance.Kaldra.Backend.DirectX12/BinaryVibrance.Kaldra.Backend.DirectX12.csproj @flags
+          dotnet build BinaryVibrance.Kaldra.Backend.WebGPU/BinaryVibrance.Kaldra.Backend.WebGPU.csproj     @flags
+          dotnet build BinaryVibrance.Kaldra.UI.Vysara/BinaryVibrance.Kaldra.UI.Vysara.csproj @flags
+          dotnet build BinaryVibrance.Kaldra.UI.ImGui/BinaryVibrance.Kaldra.UI.ImGui.csproj   @flags
+          dotnet build build/BinaryVibrance.Kaldra.Sdk/BinaryVibrance.Kaldra.Sdk.csproj       @flags
 
-      # Generate LLM orientation files before packing (llms.txt is included in Loom.nupkg).
+      # Generate LLM orientation files before packing (llms.txt is included in Kaldra.nupkg).
       - name: Generate LLM docs
         run: dotnet run --file tools/generate-llms-docs.cs
 
@@ -87,21 +87,21 @@ jobs:
           $noBuild  = "-c", "Release", "--no-build", "-o", "out/"
           $withBuild = "-c", "Release", "-o", "out/"
           # Core chain
-          dotnet pack Loom.Core/Loom.Core.csproj                               $noBuild
-          dotnet pack Loom.Graph/Loom.Graph.csproj                             $noBuild
-          dotnet pack Loom.Assets/Loom.Assets.csproj                           $noBuild
-          dotnet pack Loom.Concepts/Loom.Concepts.csproj                       $noBuild
+          dotnet pack BinaryVibrance.Kaldra.Core/BinaryVibrance.Kaldra.Core.csproj                               $noBuild
+          dotnet pack BinaryVibrance.Kaldra.Graph/BinaryVibrance.Kaldra.Graph.csproj                             $noBuild
+          dotnet pack BinaryVibrance.Kaldra.Assets/BinaryVibrance.Kaldra.Assets.csproj                           $noBuild
+          dotnet pack BinaryVibrance.Kaldra.Concepts/BinaryVibrance.Kaldra.Concepts.csproj                       $noBuild
           # Backends (embed shaders as EmbeddedResource — no runtime Content items needed)
-          dotnet pack Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj           $noBuild
-          dotnet pack Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj     $noBuild
-          dotnet pack Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj           $noBuild
-          # UI integrations: Content-mode shaders are added by LoomRegisterShaders (a Build target),
+          dotnet pack BinaryVibrance.Kaldra.Backend.Vulkan/BinaryVibrance.Kaldra.Backend.Vulkan.csproj           $noBuild
+          dotnet pack BinaryVibrance.Kaldra.Backend.DirectX12/BinaryVibrance.Kaldra.Backend.DirectX12.csproj     $noBuild
+          dotnet pack BinaryVibrance.Kaldra.Backend.WebGPU/BinaryVibrance.Kaldra.Backend.WebGPU.csproj           $noBuild
+          # UI integrations: Content-mode shaders are added by KaldraRegisterShaders (a Build target),
           # so --no-build would skip that target and produce a package with no shaders.
           # The build step above already compiled everything; this incremental build is instant.
-          dotnet pack Loom.UI.Vysara/Loom.UI.Vysara.csproj                    $withBuild
-          dotnet pack Loom.UI.ImGui/Loom.UI.ImGui.csproj                       $withBuild
+          dotnet pack BinaryVibrance.Kaldra.UI.Vysara/BinaryVibrance.Kaldra.UI.Vysara.csproj                    $withBuild
+          dotnet pack BinaryVibrance.Kaldra.UI.ImGui/BinaryVibrance.Kaldra.UI.ImGui.csproj                       $withBuild
           # MSBuild SDK entry point (pure metadata, no build output)
-          dotnet pack build/Loom.Sdk/Loom.Sdk.csproj                          $noBuild
+          dotnet pack build/BinaryVibrance.Kaldra.Sdk/BinaryVibrance.Kaldra.Sdk.csproj                          $noBuild
         shell: pwsh
 
       - name: List packages

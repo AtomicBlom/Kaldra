@@ -1,19 +1,19 @@
 using Android.App;
 using Android.Content.PM;
 
-using Loom.Core.Hosting;
-using Loom.Hosting.Android;
+using BinaryVibrance.Kaldra.Core.Hosting;
+using BinaryVibrance.Kaldra.Hosting.Android;
 
 namespace HelloUI;
 
 /// <summary>The Android entry point: Android starts the app by creating this activity, which runs <see cref="HelloUIApp"/>.</summary>
 [Activity(
-	Label = "Loom Hello UI",
+	Label = "Kaldra Hello UI",
 	MainLauncher = true,
-	ConfigurationChanges = LoomActivity.HandledConfigChanges,
-	Theme = LoomActivity.FullscreenTheme,
+	ConfigurationChanges = KaldraActivity.HandledConfigChanges,
+	Theme = KaldraActivity.FullscreenTheme,
 	ScreenOrientation = ScreenOrientation.FullUser)]
-public sealed class MainActivity : LoomActivity
+public sealed class MainActivity : KaldraActivity
 {
-	protected override LoomApplication CreateApplication() => new HelloUIApp();
+	protected override KaldraApplication CreateApplication() => new HelloUIApp();
 }

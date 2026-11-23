@@ -1,6 +1,6 @@
-# Getting Started with Loom
+# Getting Started with Kaldra
 
-Loom is a declarative, render-graph-driven rendering engine for .NET 11, running on **Vulkan and DirectX 12 at pixel parity**. You declare *what* each pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient-memory aliasing, and CPU↔GPU synchronisation.
+Kaldra is a declarative, render-graph-driven rendering engine for .NET 11, running on **Vulkan and DirectX 12 at pixel parity**. You declare *what* each pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient-memory aliasing, and CPU↔GPU synchronisation.
 
 This guide takes you from an empty project to a two-pass render graph drawing a mesh to an offscreen HDR target and tone-mapping it to the screen. For the design rationale see [`docs/pillars.md`](pillars.md) and [`docs/architecture.md`](architecture.md); for the full feature list see [`README.md`](../README.md).
 
@@ -15,10 +15,10 @@ This guide takes you from an empty project to a two-pass render graph drawing a 
 Add the SDK package to your `.csproj`:
 
 ```xml
-<PackageReference Include="Loom.Sdk" Version="0.1.0-preview.1" />
+<PackageReference Include="BinaryVibrance.Kaldra.Sdk" Version="0.1.0-preview.1" />
 ```
 
-`Loom.Sdk` auto-injects the props and targets that pull in the backends. Select which backends to reference with MSBuild flags, set before the reference (or in `Directory.Build.props`):
+`BinaryVibrance.Kaldra.Sdk` auto-injects the props and targets that pull in the backends. Select which backends to reference with MSBuild flags, set before the reference (or in `Directory.Build.props`):
 
 ```xml
 <PropertyGroup>
@@ -30,12 +30,12 @@ Add the SDK package to your `.csproj`:
 </PropertyGroup>
 ```
 
-Setting a flag to `true` adds the matching `PackageReference` automatically — you never reference `Loom.Backend.Vulkan` or `Loom.UI.Vysara` directly, and `Loom.Core` / `Loom.Graph` / `Loom.Assets` arrive transitively. `UseVysara` also brings Vysara's XAML generator: every `.xaml` view in the project compiles into its partial `x:Class`, XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. To compile your app's Slang shaders at build time, add:
+Setting a flag to `true` adds the matching `PackageReference` automatically — you never reference `BinaryVibrance.Kaldra.Backend.Vulkan` or `BinaryVibrance.Kaldra.UI.Vysara` directly, and `BinaryVibrance.Kaldra.Core` / `BinaryVibrance.Kaldra.Graph` / `BinaryVibrance.Kaldra.Assets` arrive transitively. `UseVysara` also brings Vysara's XAML generator: every `.xaml` view in the project compiles into its partial `x:Class`, XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. To compile your app's Slang shaders at build time, add:
 
 ```xml
 <PropertyGroup>
-  <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
-  <LoomShaderOutputMode>Content</LoomShaderOutputMode>
+  <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</KaldraShaderSourceDir>
+  <KaldraShaderOutputMode>Content</KaldraShaderOutputMode>
 </PropertyGroup>
 ```
 
@@ -44,7 +44,7 @@ Slang sources in `Shaders/` compile to `.spv` / `.dxil` / `.json` under `shaders
 ## Consumption mode 2: Git submodule (for contributors or engine modifications)
 
 ```bash
-git submodule add https://github.com/AtomicBlom/Loom external/Loom
+git submodule add https://github.com/AtomicBlom/Kaldra external/Kaldra
 git submodule update --init --recursive
 ```
 
@@ -54,17 +54,17 @@ An app with `UseVysara` builds Vysara from a checkout too: by default `Vysara` b
 Consume the SDK by writing the two import lines yourself:
 
 ```xml
-<Import Project="external/Loom/build/Loom.Sdk/Sdk/Sdk.props" />
+<Import Project="external/Kaldra/build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.props" />
 
 <PropertyGroup>
   <UseVulkan>true</UseVulkan>
-  <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
-  <LoomShaderOutputMode>Content</LoomShaderOutputMode>
+  <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</KaldraShaderSourceDir>
+  <KaldraShaderOutputMode>Content</KaldraShaderOutputMode>
 </PropertyGroup>
 
 <!-- … project body … -->
 
-<Import Project="external/Loom/build/Loom.Sdk/Sdk/Sdk.targets" />
+<Import Project="external/Kaldra/build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.targets" />
 ```
 
 The submodule model gives you full engine source and the ability to modify the engine alongside your game. Both modes are first-class; there is no functional difference at runtime.
@@ -73,21 +73,21 @@ The submodule model gives you full engine source and the ability to modify the e
 
 A backend is the factory for an `IEngine`. Each referenced backend assembly self-registers an `IRenderBackend` into `Backends.Available` as it loads, so the host discovers what is available at runtime and selects one by name. **Constructing a backend's settings subclass (`VulkanEngineSettings` / `DirectX12EngineSettings`) is what loads that backend's assembly** and fires its registration — it is the one sanctioned place a backend type appears in app code.
 
-The host hands the backend the window's native surface *opaquely* — Loom names no windowing type. For Vulkan that is the window's `IVkSurface`; for DirectX 12 it is the window's `HWND`. Using Silk.NET for windowing:
+The host hands the backend the window's native surface *opaquely* — Kaldra names no windowing type. For Vulkan that is the window's `IVkSurface`; for DirectX 12 it is the window's `HWND`. Using Silk.NET for windowing:
 
 ```csharp
-using Loom.Core.Hosting;
-using Loom.Backend.Vulkan;
+using BinaryVibrance.Kaldra.Core.Hosting;
+using BinaryVibrance.Kaldra.Backend.Vulkan;
 
 // A Vulkan-capable window (Silk.NET).
-var options = WindowOptions.DefaultVulkan with { Size = new Vector2D<int>(1280, 720), Title = "My Loom app" };
+var options = WindowOptions.DefaultVulkan with { Size = new Vector2D<int>(1280, 720), Title = "My Kaldra app" };
 var window = Window.Create(options);
 window.Initialize();
 
 if (window.VkSurface is null)
     throw new InvalidOperationException("The windowing platform did not expose a Vulkan surface.");
 
-// Constructing VulkanEngineSettings loads Loom.Backend.Vulkan, which registers the backend.
+// Constructing VulkanEngineSettings loads BinaryVibrance.Kaldra.Backend.Vulkan, which registers the backend.
 var settings = new VulkanEngineSettings
 {
     EnableValidation = true,        // Vulkan validation layers (dev)
@@ -102,10 +102,10 @@ var backend = Backends.Available.FirstOrDefault(b => b.Name == settings.Preferre
 using var engine = backend.Create(window.VkSurface, window.FramebufferSize.X, window.FramebufferSize.Y, settings);
 ```
 
-For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `Loom.Backend.DirectX12`), and pass the window's `HWND` as the surface:
+For DirectX 12, create a context-less window (`API = GraphicsAPI.None`), construct `DirectX12EngineSettings` (which loads `BinaryVibrance.Kaldra.Backend.DirectX12`), and pass the window's `HWND` as the surface:
 
 ```csharp
-using Loom.Backend.DirectX12;
+using BinaryVibrance.Kaldra.Backend.DirectX12;
 
 var settings = new DirectX12EngineSettings
 {
@@ -131,12 +131,12 @@ This renders a mesh into an offscreen HDR buffer, then tone-maps that buffer to 
 
 Author shaders in **Slang**; the SDK compiles them offline to SPIR-V (Vulkan), signed DXIL (DirectX 12), and WGSL (WebGPU), and the backend derives descriptor-binding layouts from the emitted reflection JSON — you never hand-count bindings, nor hand-order them. The technique descriptor's default entry points are `vertexMain` / `fragmentMain`, so name your stages to match.
 
-Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that resources take **no binding numbers or registers** (Slang numbers them per target, in declaration order, and each backend binds by its reflection), and that a shader writing clip space directly uses a `LOOM_*_POS` macro rather than doing it by hand.
+Every shader starts by including the platform module, which owns the places the three targets disagree. [`shader-authoring.md`](shader-authoring.md) is the full contract; the two rules you need here are that resources take **no binding numbers or registers** (Slang numbers them per target, in declaration order, and each backend binds by its reflection), and that a shader writing clip space directly uses a `KALDRA_*_POS` macro rather than doing it by hand.
 
 `Shaders/scene.slang` — a lit mesh. It reads the per-frame view-projection from a constants buffer the pass `.Reads`, and a per-draw model matrix from the per-draw uniform block:
 
 ```slang
-#include "loom_platform.module.slang"
+#include "kaldra_platform.module.slang"
 
 struct ViewProj { float4x4 viewProj; }   // filled from the app via engine.Write(viewProj, …)
 struct PerDraw  { float4x4 model; }      // staged by DrawCall.SetUniforms(ref block)
@@ -169,7 +169,7 @@ float4 fragmentMain(VSOut i) : SV_Target
 `Shaders/tonemap.slang` — a fullscreen pass that samples the HDR target and maps it to display range. A fullscreen technique fabricates its own triangle, so it has no vertex input:
 
 ```slang
-#include "loom_platform.module.slang"
+#include "kaldra_platform.module.slang"
 
 Sampler2D hdr;   // the pass's first .Samples input
 
@@ -178,11 +178,11 @@ struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; }
 [shader("vertex")]
 VSOut vertexMain(uint id : SV_VertexID)
 {
-    // Fullscreen triangle from the vertex id — no mesh. LOOM_FULLSCREEN_POS applies the NDC-Y convention this
+    // Fullscreen triangle from the vertex id — no mesh. KALDRA_FULLSCREEN_POS applies the NDC-Y convention this
     // target needs; writing `uv * 2 - 1` by hand renders upside down on WebGPU.
     float2 uv = float2((id << 1) & 2, id & 2);
     VSOut o;
-    o.pos = LOOM_FULLSCREEN_POS(uv);
+    o.pos = KALDRA_FULLSCREEN_POS(uv);
     o.uv = uv;
     return o;
 }
@@ -201,7 +201,7 @@ float4 fragmentMain(VSOut i) : SV_Target
 A technique names its shader *logically* and states its pipeline intent. `HasVertexInput: true` means the technique reads a mesh's vertex stream; left default, the technique fabricates a fullscreen triangle (the tone-map). Register both up front, before the graph draws with them:
 
 ```csharp
-using Loom.Core.Materials;
+using BinaryVibrance.Kaldra.Core.Materials;
 
 engine.DefineTechnique("scene", new TechniqueDescriptor("scene", HasVertexInput: true));
 engine.DefineTechnique("tonemap", new TechniqueDescriptor("tonemap"));
@@ -215,8 +215,8 @@ The graph is immutable and cached by hash, so re-setting a structurally identica
 
 ```csharp
 using System.Numerics;
-using Loom.Core.Graph;
-using Loom.Core.Hosting;
+using BinaryVibrance.Kaldra.Core.Graph;
+using BinaryVibrance.Kaldra.Core.Hosting;
 
 var graph = RenderGraph.Define(g =>
 {
@@ -278,7 +278,7 @@ window.Render += delta =>
 {
     elapsed += delta;
 
-    // Publish the matrix the "scene" pass reads. (Loom.Concepts.Camera folds in the
+    // Publish the matrix the "scene" pass reads. (BinaryVibrance.Kaldra.Concepts.Camera folds in the
     // clip-space correction so the same matrix is correct on both backends.)
     engine.Write(viewProj, camera.ViewProjection);
 
@@ -297,13 +297,13 @@ Because the graph captures only the stable `viewProj` handle, `engine.Write` upd
 
 ## Loading assets
 
-`Loom.Assets` provides neutral, graphics-API-free loaders that produce engine-boundary types (`TextureData`, `Vertex[]`). Hand those to the engine to mint stable `Texture`, `Mesh`, and `Material` handles, each living for the engine's lifetime.
+`BinaryVibrance.Kaldra.Assets` provides neutral, graphics-API-free loaders that produce engine-boundary types (`TextureData`, `Vertex[]`). Hand those to the engine to mint stable `Texture`, `Mesh`, and `Material` handles, each living for the engine's lifetime.
 
 **Images → textures → materials.** `ImageLoader.Load` decodes a PNG/JPG to `TextureData` (with a CPU-generated mip chain); pass `TextureFormat.Rgba8Srgb` for colour/albedo or `TextureFormat.Rgba8Unorm` for data such as normal maps. `CreateMaterial` bundles textures in the order the technique's shader binds them:
 
 ```csharp
-using Loom.Assets;
-using Loom.Core.Materials;
+using BinaryVibrance.Kaldra.Assets;
+using BinaryVibrance.Kaldra.Core.Materials;
 
 var albedoData = ImageLoader.Load("textures/albedo.png", TextureFormat.Rgba8Srgb);
 var normalData = ImageLoader.Load("textures/normal.png", TextureFormat.Rgba8Unorm);
@@ -314,7 +314,7 @@ var normal = engine.CreateTexture(normalData);
 var material = engine.CreateMaterial(albedo, normal);   // texture 0 → sampler slot 0, …
 ```
 
-**glTF → meshes.** `GltfLoader.Load` walks the node graph, bakes world transforms, and flattens the model to drawable primitives. Each `ModelPrimitive` carries `Vertices` (Loom's canonical position/normal/uv/tangent `Vertex`) and `Indices`, ready for `CreateMesh`:
+**glTF → meshes.** `GltfLoader.Load` walks the node graph, bakes world transforms, and flattens the model to drawable primitives. Each `ModelPrimitive` carries `Vertices` (Kaldra's canonical position/normal/uv/tangent `Vertex`) and `Indices`, ready for `CreateMesh`:
 
 ```csharp
 var model = GltfLoader.Load("models/character.glb");

@@ -1,10 +1,10 @@
 # Porting from OpenGL
 
-How to move a game that draws with raw OpenGL onto Loom: what each GL habit becomes, the places where a direct
+How to move a game that draws with raw OpenGL onto Kaldra: what each GL habit becomes, the places where a direct
 translation silently gives the wrong picture, and how to check the port frame by frame against the original.
 
 The worked example throughout is [RubberTrack](https://github.com/AtomicBlom/RubberTrack), a procedural racing
-game ported from OpenGL 3.3 (through Silk.NET) to Loom: a physics-driven band, a generated landscape, a banked road
+game ported from OpenGL 3.3 (through Silk.NET) to Kaldra: a physics-driven band, a generated landscape, a banked road
 with walls and bridges, a translucent sea, a 2D radar-chart overlay and a headless screenshot mode. Its GL renderers
 were the usual kind — a shader wrapper over GLSL strings, a VBO re-uploaded every draw, each renderer setting its own
 blend/depth state around its draws, one `RenderScene` calling them in order.
@@ -15,10 +15,10 @@ blend/depth state around its draws, one `RenderScene` calling them in order.
 
 ## 1. The shape of the change
 
-| OpenGL                                                  | Loom                                                                                                                                          |
+| OpenGL                                                  | Kaldra                                                                                                                                          |
 |---------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
 | You own the frame: clear, bind, set state, draw         | You declare a render graph once — passes, and what each reads and writes. Each pass's `.Draw` closure runs every frame.                        |
-| A window with `Load` / `Update` / `Render` events       | A `LoomApplication`: `Configure`, `LoadContent`, `FixedUpdate`, `Update`, `BeforeRender`, `UnloadContent`. `LoomApplication.Run(app, args)`.   |
+| A window with `Load` / `Update` / `Render` events       | A `KaldraApplication`: `Configure`, `LoadContent`, `FixedUpdate`, `Update`, `BeforeRender`, `UnloadContent`. `KaldraApplication.Run(app, args)`.   |
 | Input event handlers                                    | Polling `Input` (an `InputSnapshot`) in `Update`                                                                                               |
 | Your own fixed-step accumulator                         | `AppOptions.FixedStepHz` and `FixedUpdate`                                                                                                     |
 | GLSL strings compiled at run time                       | Slang files compiled at build time to SPIR-V and signed DXIL; a *technique* names one                                                          |
@@ -39,9 +39,9 @@ The rest of this guide goes through those rows, then the two things a port gets 
 
 ## 2. Setting up
 
-With the `Loom.Sdk` package, follow [`getting-started.md`](getting-started.md). With Loom as a **git submodule** inside
+With the `BinaryVibrance.Kaldra.Sdk` package, follow [`getting-started.md`](getting-started.md). With Kaldra as a **git submodule** inside
 your game's directory, which is the easier way to move engine and game together during a port, keep your project's
-own SDK and import Loom's by hand:
+own SDK and import Kaldra's by hand:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -53,24 +53,24 @@ own SDK and import Loom's by hand:
     <UseVysara>true</UseVysara>
   </PropertyGroup>
 
-  <Import Project="Loom/build/Loom.Sdk/Sdk/Sdk.props" />
+  <Import Project="Kaldra/build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.props" />
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net11.0</TargetFramework>
-    <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
+    <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</KaldraShaderSourceDir>
     <!-- The submodule sits inside the project directory; keep its sources out of the game's compile -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);Loom/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Kaldra/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Signs the DXIL the DirectX 12 backend loads; build machine only -->
     <PackageReference Include="Microsoft.Direct3D.DXC" Version="1.9.2609.5" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="all" />
     <!-- Camera and other app-side helpers are not brought in by the SDK -->
-    <ProjectReference Include="Loom/Loom.Concepts/Loom.Concepts.csproj" />
+    <ProjectReference Include="Kaldra/BinaryVibrance.Kaldra.Concepts/BinaryVibrance.Kaldra.Concepts.csproj" />
   </ItemGroup>
 
-  <Import Project="Loom/build/Loom.Sdk/Sdk/Sdk.targets" />
+  <Import Project="Kaldra/build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.targets" />
 
 </Project>
 ```
@@ -89,11 +89,11 @@ Remove the Silk.NET OpenGL, windowing and input packages; the desktop host bring
 
 ## 3. The application
 
-The window, the device and the frame loop belong to Loom's host. The game is a `LoomApplication`, and `Program.cs`
+The window, the device and the frame loop belong to Kaldra's host. The game is a `KaldraApplication`, and `Program.cs`
 is one line:
 
 ```csharp
-LoomApplication.Run(new Game(), args);
+KaldraApplication.Run(new Game(), args);
 ```
 
 | GL-era code                                   | Where it goes                                                                                              |
@@ -113,7 +113,7 @@ rate computed as `1 / (1.0 / 60)` can come out an ulp off, and a driver ticking 
 steps one frame and two the next.
 
 The desktop host parses its own launch options (`--backend vulkan|dx12`, `--no-vsync`, …) and hands the rest to
-the app as `AppArgs`. `HostOptions.Parse(args)` (in `Loom.Hosting.Desktop`) is public, for a `Program.cs` that wants
+the app as `AppArgs`. `HostOptions.Parse(args)` (in `BinaryVibrance.Kaldra.Hosting.Desktop`) is public, for a `Program.cs` that wants
 to act on its own flags before the host starts — RubberTrack's `--capture` does (§11).
 
 ---
@@ -121,7 +121,7 @@ to act on its own flags before the host starts — RubberTrack's `--capture` doe
 ## 4. A frame
 
 GL's frame is one function that clears, then has each renderer upload its geometry, set its uniforms and state, and
-draw. In Loom it comes apart into three:
+draw. In Kaldra it comes apart into three:
 
 1. **The graph, declared once.** Passes in order, with what each reads and writes. The engine derives everything
    else — barriers, layout transitions, which targets can share memory. The order of draws inside a pass is the
@@ -161,14 +161,14 @@ Write the closures as `static` lambdas over a stable object (`Draw(this, static 
 built once; a closure that captured a per-frame *value* would freeze it, and a `static` lambda can't. Reading the
 game's *live* state through the object is the intended pattern.
 
-Renderers change shape accordingly. A GL renderer owned GL objects and drew immediately. A Loom renderer defines its
+Renderers change shape accordingly. A GL renderer owned GL objects and drew immediately. A Kaldra renderer defines its
 techniques in its constructor, fills arrays in `Prepare(...)`, and draws in `Record(ctx)`.
 
 ---
 
 ## 5. Colour: the backbuffer is sRGB
 
-**This is the trap.** GL's default framebuffer shows shader output as it is. Loom's backbuffer is sRGB on every
+**This is the trap.** GL's default framebuffer shows shader output as it is. Kaldra's backbuffer is sRGB on every
 backend (Vulkan `B8G8R8A8_SRGB`, an `_SRGB` view on DirectX 12): it treats shader output as *linear light* and
 gamma-encodes it. Every colour a GL game chose by eye comes out brighter and washed out. RubberTrack's dark void
 (0.08) arrived at 79/255 instead of 20, and its first frames differed from GL's in every pixel by ~45/255 on average.
@@ -184,7 +184,7 @@ values *and* blending are exactly GL's, 8-bit quantisation included. A final ful
 backbuffer, whose encode returns the same 8-bit values:
 
 ```hlsl
-#include "loom_platform.module.slang"
+#include "kaldra_platform.module.slang"
 
 Sampler2D scene;
 
@@ -195,7 +195,7 @@ VsOut vertexMain(uint vertexId : SV_VertexID)
 {
     float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
     VsOut output;
-    output.position = LOOM_FULLSCREEN_POS(uv);
+    output.position = KALDRA_FULLSCREEN_POS(uv);
     output.uv = uv;
     return output;
 }
@@ -220,7 +220,7 @@ The third option is re-grading every colour for linear light, which is a design 
 GLSL becomes Slang (HLSL-flavoured). The full contract is [`shader-authoring.md`](shader-authoring.md); what a GL
 port runs into:
 
-- **Start every shader with `#include "loom_platform.module.slang"`.**
+- **Start every shader with `#include "kaldra_platform.module.slang"`.**
 - **Uniforms become constant buffers, filled in a fixed order:** the pass's `.Reads(...)` blocks first, then the
   draw's per-draw block. In the shader they take no binding or register, only their order:
 
@@ -319,7 +319,7 @@ var quad = Engine.CreateMesh<Vector2>([new(0, 0), new(1, 0), new(0, 1), new(1, 1
 
 ### Lines, strips and fans
 
-Loom draws triangle lists only. A technique has no primitive topology.
+Kaldra draws triangle lists only. A technique has no primitive topology.
 
 - **Lines** become one quad instance per segment, widened in the vertex shader. Project both ends, find the
   segment's direction on screen, push each corner out across it by half the width in pixels (plus one, for an
@@ -345,7 +345,7 @@ Loom draws triangle lists only. A technique has no primitive topology.
 
 ## 8. Fixed-function state
 
-| GL                                          | Loom                                                                                                                                  |
+| GL                                          | Kaldra                                                                                                                                  |
 |---------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
 | `glBlendFunc(SRC_ALPHA, ONE_MINUS_SRC_ALPHA)` | `Blend: BlendMode.AlphaOver` on the technique, in a pass that `.Blends` its target                                                   |
 | `glDepthFunc`                               | `DepthTest:` on the technique                                                                                                          |
@@ -365,8 +365,8 @@ that tests depth without writing it fixed that.
 
 ## 9. Depth and the camera
 
-GL's clip-space depth is `[-1, 1]`; Loom's is `[0, 1]`. A hand-built GL perspective matrix is wrong as it stands.
-Use `Loom.Concepts.Camera`, which builds a right-handed `[0, 1]` projection and composes the engine's clip-space
+GL's clip-space depth is `[-1, 1]`; Kaldra's is `[0, 1]`. A hand-built GL perspective matrix is wrong as it stands.
+Use `BinaryVibrance.Kaldra.Concepts.Camera`, which builds a right-handed `[0, 1]` projection and composes the engine's clip-space
 correction:
 
 ```csharp
@@ -384,7 +384,7 @@ plane. All three pieces must agree, or occlusion inverts without an error. The s
 nearer is *greater*, so GL's `glPolygonOffset(-1, -2)` becomes `DepthBias(Constant: 2, SlopeScale: 1)`.
 
 **Better precision will expose things GL hid.** RubberTrack drew its band 0.3 m above the road it turns into; with
-GL's 24-bit depth and polygon offset the road won anyway, unevenly, and the band seemed to disappear into it. Loom
+GL's 24-bit depth and polygon offset the road won anyway, unevenly, and the band seemed to disappear into it. Kaldra
 honoured the lift, and the band ran as a yellow line round the whole finished track. Compare frames against the GL
 build, not just against what the code says (§12), and expect to make a few such accidents deliberate.
 
@@ -396,11 +396,11 @@ On Vulkan and DirectX 12, clip space is **y-down** (DirectX 12 through a negativ
 top of the screen, so GL-style overlay coordinates (NDC, y up) come out upside down. WebGPU's clip space is y-up, so
 no one hand-written convention is right on all three. Lay overlays out in pixels from the top-left, the space Vysara
 lays out in, and always go through the platform macros, which flip y where the backend needs it:
-`LOOM_OVERLAY_POS(pixel, 2.0 / viewport, float2(-1, -1))` for pixels, `LOOM_CLIP_POS(ndc)` for a position already in
-y-down clip space, and `LOOM_FULLSCREEN_POS(uv)` for a fullscreen triangle (all in `loom_platform.module.slang`).
+`KALDRA_OVERLAY_POS(pixel, 2.0 / viewport, float2(-1, -1))` for pixels, `KALDRA_CLIP_POS(ndc)` for a position already in
+y-down clip space, and `KALDRA_FULLSCREEN_POS(uv)` for a fullscreen triangle (all in `kaldra_platform.module.slang`).
 Overlay and UI then line up without any conversion between them, on every backend.
 
-A GL game without text can have it now. Vysara, drawn by `Loom.UI.Vysara`'s `UIPainter` in a pass of its own, sets
+A GL game without text can have it now. Vysara, drawn by `BinaryVibrance.Kaldra.UI.Vysara`'s `UIPainter` in a pass of its own, sets
 labels on a `Canvas` of `TextBlock`s in a few lines:
 
 ```csharp
@@ -420,7 +420,7 @@ edge nearest the chart rather than centring it on its direction, or neighbours r
 ## 11. Screenshots and headless runs
 
 The desktop host always opens a window: it has no hidden or headless mode. To render without one, bring an engine up
-on an offscreen surface and drive your `LoomApplication` yourself, the way the host would:
+on an offscreen surface and drive your `KaldraApplication` yourself, the way the host would:
 
 ```csharp
 using var engine = backend.Create(Surface.Offscreen(1280, 720), 1280, 720, new EngineSettings { EnableValidation = false });
@@ -459,7 +459,7 @@ while the queue is not empty) as each queued shot poses the camera for its own f
 
 ---
 
-## 13. Where Loom is thin for a port
+## 13. Where Kaldra is thin for a port
 
 Worth knowing before you start, each with the workaround used above:
 

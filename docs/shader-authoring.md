@@ -1,28 +1,28 @@
 # Shader authoring
 
-The Slang-side contract: what a shader must declare so Loom's backends can bind it, and why the rules are what they are.
+The Slang-side contract: what a shader must declare so Kaldra's backends can bind it, and why the rules are what they are.
 
 [`api-vocabulary.md`](api-vocabulary.md) documents the C# surface. This is the other half — the part written in `.slang` — and until now it lived only in backend source comments, which is a poor place for a contract app authors have to satisfy.
 
-One source compiles to **SPIR-V** (Vulkan), **signed DXIL** (DirectX 12), and **WGSL** (WebGPU). The targets number their bindings differently, so a shader numbers none of them: Slang does, per target, and each backend binds by what that target's reflection says (§2). What the targets still disagree about is quarantined in one file — `Loom.Shaders/Shaders/loom_platform.module.slang` — behind macros.
+One source compiles to **SPIR-V** (Vulkan), **signed DXIL** (DirectX 12), and **WGSL** (WebGPU). The targets number their bindings differently, so a shader numbers none of them: Slang does, per target, and each backend binds by what that target's reflection says (§2). What the targets still disagree about is quarantined in one file — `BinaryVibrance.Kaldra.Shaders/Shaders/kaldra_platform.module.slang` — behind macros.
 
 ---
 
 ## 1. The platform macros
 
-`#include "loom_platform.module.slang"` first, then use these instead of writing a target conditional yourself.
+`#include "kaldra_platform.module.slang"` first, then use these instead of writing a target conditional yourself.
 
 | Macro | Purpose |
 |---|---|
-| `LOOM_PUSH_CONSTANT` | Marks the small inline scalar block. `[[vk::push_constant]]` for SPIR-V/DXIL; lowers to an ordinary `uniform` for WGSL, which has no push constants. |
-| `LOOM_FULLSCREEN_POS(uv)` | Clip position for a fullscreen triangle fabricated from `SV_VertexID`, given its 0..2 uv. |
-| `LOOM_CLIP_POS(xy)` | Clip position for geometry already authored in NDC (−1..1) — the same job as above for a shader that isn't fullscreen-shaped. |
-| `LOOM_OVERLAY_POS(px, scale, translate)` | Clip position for a 2D overlay/UI vertex in surface pixels. |
-| `LOOM_CLIP_TO_UV(clip)` | Screen uv (0..1, top-left origin) of a clip-space position, for reprojecting a world point to sample a G-buffer there. |
+| `KALDRA_PUSH_CONSTANT` | Marks the small inline scalar block. `[[vk::push_constant]]` for SPIR-V/DXIL; lowers to an ordinary `uniform` for WGSL, which has no push constants. |
+| `KALDRA_FULLSCREEN_POS(uv)` | Clip position for a fullscreen triangle fabricated from `SV_VertexID`, given its 0..2 uv. |
+| `KALDRA_CLIP_POS(xy)` | Clip position for geometry already authored in NDC (−1..1) — the same job as above for a shader that isn't fullscreen-shaped. |
+| `KALDRA_OVERLAY_POS(px, scale, translate)` | Clip position for a 2D overlay/UI vertex in surface pixels. |
+| `KALDRA_CLIP_TO_UV(clip)` | Screen uv (0..1, top-left origin) of a clip-space position, for reprojecting a world point to sample a G-buffer there. |
 
 The four position macros all exist for one reason: **NDC-Y**. Vulkan and DirectX 12 present a Y-down NDC (DX12 via a negative-height viewport), WebGPU a Y-up one with no negative viewport. A shader that goes through the camera never notices, because `Camera.ViewProjection` composes `IEngineClipSpace.ClipSpaceCorrection`. A shader that writes clip space *directly* has no camera to carry that correction, so the convention has to be applied at the point of emission — which is what these macros do.
 
-> **Invariant:** `loom_platform.module.slang` is the only shader in the repository containing an `#ifdef LOOM_WGSL`. If you find yourself writing one, the macro you need is missing — add it there rather than branching in place. `grep -rl LOOM_WGSL --include=*.slang` should return exactly that one file.
+> **Invariant:** `kaldra_platform.module.slang` is the only shader in the repository containing an `#ifdef KALDRA_WGSL`. If you find yourself writing one, the macro you need is missing — add it there rather than branching in place. `grep -rl KALDRA_WGSL --include=*.slang` should return exactly that one file.
 
 ---
 
@@ -62,7 +62,7 @@ Everything lands in **set 0**, and `VulkanTechnique.CreateSetLayout` builds one 
 
 The root signature is, in order: an optional 32-bit root-constants block, then one root CBV per reflected constant buffer, then an optional SRV descriptor table with a static sampler per sampled input, then any storage-buffer root SRVs (a compute technique's read-write storage goes in a UAV table, or a root UAV for a raw buffer). Each is built at the register the DXIL sidecar gives its parameter (`DirectX12Registers`), one descriptor range per texture, so the registers need not be contiguous.
 
-The root-constants block is the shader's `LOOM_PUSH_CONSTANT` block, which D3D lays out as an ordinary constant buffer in declaration order: the backend finds it as the one constant buffer the SPIR-V sidecar doesn't list as a descriptor. A technique with root constants and no push block puts them after the shader's last constant buffer, where they overlap nothing.
+The root-constants block is the shader's `KALDRA_PUSH_CONSTANT` block, which D3D lays out as an ordinary constant buffer in declaration order: the backend finds it as the one constant buffer the SPIR-V sidecar doesn't list as a descriptor. A technique with root constants and no push block puts them after the shader's last constant buffer, where they overlap nothing.
 
 ---
 
@@ -92,30 +92,30 @@ Slang assigns WGSL bindings in declaration order, a combined `Sampler2D` taking 
 
 The three sidecars are *different index spaces for the same source*. A `ShaderReflection` records which one it holds, and building a Vulkan or DirectX 12 layout from a WGSL reflection throws rather than producing a layout that looks plausible and binds the wrong things.
 
-Consequences worth knowing: WGSL has no push constants (`LOOM_PUSH_CONSTANT` becomes a uniform), and vertex-input locations may be permuted relative to stream order, which is why the backend parses them rather than assuming.
+Consequences worth knowing: WGSL has no push constants (`KALDRA_PUSH_CONSTANT` becomes a uniform), and vertex-input locations may be permuted relative to stream order, which is why the backend parses them rather than assuming.
 
 ---
 
 ## 7. The per-material parameter block
 
-A shader opts into per-material parameters by declaring a constant buffer under the reserved name **`loomMaterial`**:
+A shader opts into per-material parameters by declaring a constant buffer under the reserved name **`kaldraMaterial`**:
 
 ```hlsl
-struct LoomMaterial
+struct KaldraMaterial
 {
     float4 baseColor;
     float4 emissive;
     float4 metallicRoughness;
 };
 
-ConstantBuffer<LoomMaterial> loomMaterial;
+ConstantBuffer<KaldraMaterial> kaldraMaterial;
 ```
 
 Reflection reports which uniform slot it is and how many bytes it occupies; the engine stages a material's bytes into that slot on every draw using it. Convention is to declare it last, but nothing depends on that — it binds at whatever slot reflection reports.
 
 **Lay the struct out in 16-byte-aligned rows.** HLSL constant-buffer packing and WGSL uniform layout agree on `float4` and disagree on tighter shapes, so a bare `float3` or a trailing `float` lands at different offsets on different backends. Pack loose scalars into a `float4` instead.
 
-The engine has no opinion about what the bytes mean — `GltfMaterialFactors` in `Loom.Assets` is one possible shape, not a privileged one.
+The engine has no opinion about what the bytes mean — `GltfMaterialFactors` in `BinaryVibrance.Kaldra.Assets` is one possible shape, not a privileged one.
 
 ---
 
@@ -125,11 +125,11 @@ Name them `vertexMain` / `fragmentMain` / `computeMain` and mark them with `[sha
 
 A compute technique states its entry once via `TechniqueDescriptor.Compute("shader")`. What the compiled artifact ends up calling that entry internally is the backend's problem — Vulkan resolves the real SPIR-V entry from the module, so a toolchain that renames the sole entry to `main` is handled without the author knowing.
 
-**Variants.** One source compiled again with macros defined, under a name of its own, is a `LoomSlangVariant`, not a second file that defines the macro and includes the first:
+**Variants.** One source compiled again with macros defined, under a name of its own, is a `KaldraSlangVariant`, not a second file that defines the macro and includes the first:
 
 ```xml
 <ItemGroup>
-  <LoomSlangVariant Include="Shaders\terrain.slang;Shaders\car.slang" Suffix="_cast" Defines="CAST" />
+  <KaldraSlangVariant Include="Shaders\terrain.slang;Shaders\car.slang" Suffix="_cast" Defines="CAST" />
 </ItemGroup>
 ```
 
@@ -143,7 +143,7 @@ That makes `terrain_cast` and `car_cast` beside `terrain` and `car`, on every ba
 
 | The shader declares | The span goes to | Bound |
 |---|---|---|
-| `LOOM_PUSH_CONSTANT` block (`HasFragmentPush: true`) | push constants / root constants | **16 floats** — the block's fixed size |
+| `KALDRA_PUSH_CONSTANT` block (`HasFragmentPush: true`) | push constants / root constants | **16 floats** — the block's fixed size |
 | a descriptor-bound `ConstantBuffer<T>` instead | the next free uniform slot, via the per-frame ring | **that buffer's declared size** (CSM's is 68 floats wide, and it pushes 68) |
 
 A technique has one or the other, so the same bytes are offered to both channels and the technique's binding model takes whichever it declares.

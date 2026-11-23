@@ -1,0 +1,16 @@
+<Solution>
+  <!-- The Android half of Kaldra: the Android host, the Android sample, and the engine layers they reference. Kept
+       separate from BinaryVibrance.Kaldra.slnx so the android workload (net11.0-android) stays off the desktop build, but present here so
+       Roslyn tooling can load and analyse the Android projects. -->
+  <Project Path="../Vysara/BinaryVibrance.Vysara/BinaryVibrance.Vysara.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Assets/BinaryVibrance.Kaldra.Assets.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Backend.Vulkan/BinaryVibrance.Kaldra.Backend.Vulkan.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Concepts/BinaryVibrance.Kaldra.Concepts.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Core/BinaryVibrance.Kaldra.Core.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Graph/BinaryVibrance.Kaldra.Graph.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Hosting.Android/BinaryVibrance.Kaldra.Hosting.Android.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Input/BinaryVibrance.Kaldra.Input.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.UI.ImGui/BinaryVibrance.Kaldra.UI.ImGui.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.UI.Vysara/BinaryVibrance.Kaldra.UI.Vysara.csproj" />
+  <Project Path="samples/HelloUI/HelloUI.csproj" />
+</Solution>

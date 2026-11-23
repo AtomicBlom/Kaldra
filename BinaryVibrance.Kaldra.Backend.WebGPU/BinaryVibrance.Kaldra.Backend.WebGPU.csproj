@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <!-- The browser WebGPU backend. Like the other backends it owns the engine's infrastructure shaders as
+       embedded resources, but compiled to WGSL (the only shader language browsers accept) instead of SPIR-V.
+       All GPU work is issued through a JavaScript shim (wwwroot/kaldra-webgpu.js) reached via [JSImport]: object
+       creation as individual calls at bake time, per-frame work as ONE binary command buffer replayed on the
+       JS side — so the WASM↔JS boundary is crossed once per frame, not per draw.
+
+       Razor SDK (not plain Sdk) so the JS shim ships as a static web asset: the [JSImport("…","kaldra-webgpu")]
+       surface in WebGpuInterop is dead without it, so it must travel with this backend wherever it's
+       referenced (a host framework OR an embedder using the backend with their own bootstrap). It surfaces in
+       a consuming WASM app at _content/BinaryVibrance.Kaldra.Backend.WebGPU/kaldra-webgpu.js — the RCL default base path. No
+       Razor components are compiled here; this SDK is purely for the static-web-asset pipeline. -->
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- System.Runtime.InteropServices.JavaScript is browser-only; declaring the platform lets the
+       CA1416 analyzer verify every interop call is properly guarded. -->
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.Backend.WebGPU</PackageId>
+    <Description>Browser WebGPU backend for the Kaldra render-graph engine. Runs under .NET WebAssembly; WGSL shaders embedded; GPU work batched across the JS interop boundary once per frame.</Description>
+    <PackageTags>webgpu;wasm;browser;rendergraph;gamedev;graphics;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Same shared engine shaders as the other backends, compiled to WGSL only (no SPIR-V/DXIL artifacts in
+         this assembly) and embedded under "BinaryVibrance.Kaldra.Backend.WebGPU.Shaders.". -->
+    <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\..\BinaryVibrance.Kaldra.Shaders\Shaders</KaldraShaderSourceDir>
+    <KaldraShaderOutputMode>Embed</KaldraShaderOutputMode>
+    <KaldraEmitDxil>false</KaldraEmitDxil>
+    <KaldraEmitWgsl>true</KaldraEmitWgsl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Graph\BinaryVibrance.Kaldra.Graph.csproj" />
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Assets\BinaryVibrance.Kaldra.Assets.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Hermetic slangc for compiling the engine's own shaders to WGSL (build-machine only). -->
+    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.targets" />
+
+</Project>

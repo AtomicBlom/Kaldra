@@ -1,4 +1,4 @@
-# Vendored third-party code. Loom's conventions stop at this directory.
+# Vendored third-party code. Kaldra's conventions stop at this directory.
 #
 # `root = true` ends the upward .editorconfig search here, so the repo-root file's rules — tabs, BOM-less UTF-8,
 # sorted usings, a final newline — do not reach anything under external/. A vendored subtree brings its own style,
@@ -7,8 +7,8 @@
 root = true
 
 # `dotnet format` skips files marked as generated, which is the .editorconfig-level way to say "not ours to
-# restyle". This matters because external/VMASharp is not listed in Loom.slnx but IS a ProjectReference from
-# Loom.Backend.Vulkan, so a solution-wide `dotnet format Loom.slnx` loads and rewrites it anyway: stripping its
+# restyle". This matters because external/VMASharp is not listed in BinaryVibrance.Kaldra.slnx but IS a ProjectReference from
+# BinaryVibrance.Kaldra.Backend.Vulkan, so a solution-wide `dotnet format BinaryVibrance.Kaldra.slnx` loads and rewrites it anyway: stripping its
 # UTF-8 BOMs, re-sorting its usings, and adding final newlines. That left the submodule permanently dirty with
 # churn nobody asked for and no way to tell real local patches from formatter noise.
 #

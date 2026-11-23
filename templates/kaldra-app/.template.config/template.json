@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "AtomicBlom",
+  "classifications": [ "Kaldra", "Graphics", "Game", "Desktop", "WebAssembly" ],
+  "identity": "BinaryVibrance.Kaldra.Templates.App",
+  "name": "Kaldra Application",
+  "description": "A minimal cross-platform Kaldra app: one project that builds a native desktop exe (dotnet build) or a WebGPU browser app (dotnet publish -r browser-wasm) from the same source.",
+  "shortName": "kaldra",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "TriangleApp",
+  "preferNameDirectory": true
+}

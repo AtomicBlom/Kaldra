@@ -13,7 +13,7 @@
 
   Restore DELETES each destination before copying, rather than merging into it. That is the point: the shader
   targets enumerate the output directory to find the DXIL files they package
-  (Directory.GetFiles in Loom.Shaders.targets), so a stale .dxil left behind by a renamed or deleted shader would
+  (Directory.GetFiles in Kaldra.Shaders.targets), so a stale .dxil left behind by a renamed or deleted shader would
   be picked up and shipped. A restored tree is exactly what its key's sources produce — nothing extra can survive.
 
   The key covers the shader sources, the package versions (which pin the Slang compiler and DXC), and the shader
@@ -22,18 +22,18 @@
 .EXAMPLE
   pwsh tools/shader-cache.ps1 -Mode restore   # copy a matching cached tree in, if there is one
   pwsh tools/shader-cache.ps1 -Mode save      # store this build's outputs under the current key
-  pwsh tools/shader-cache.ps1 -Mode restore -Root D:\loom-cache -PruneDays 30
+  pwsh tools/shader-cache.ps1 -Mode restore -Root D:\kaldra-cache -PruneDays 30
 #>
 param(
 	[Parameter(Mandatory)][ValidateSet("restore", "save")][string]$Mode,
-	[string]$Root = $(if ($env:LOOM_SHADER_CACHE) { $env:LOOM_SHADER_CACHE } else { Join-Path $env:LOCALAPPDATA "Loom\ShaderCache" }),
+	[string]$Root = $(if ($env:KALDRA_SHADER_CACHE) { $env:KALDRA_SHADER_CACHE } else { Join-Path $env:LOCALAPPDATA "Kaldra\ShaderCache" }),
 	[int]$PruneDays = 14
 )
 $ErrorActionPreference = "Stop"
 
 $repo = Split-Path -Parent $PSScriptRoot
-if (-not (Test-Path (Join-Path $repo "Loom.slnx"))) {
-	throw "shader-cache: '$repo' does not look like the Loom repository root (no Loom.slnx)."
+if (-not (Test-Path (Join-Path $repo "BinaryVibrance.Kaldra.slnx"))) {
+	throw "shader-cache: '$repo' does not look like the Kaldra repository root (no BinaryVibrance.Kaldra.slnx)."
 }
 
 # Everything that can change a compiled shader. Sources by content, so a touched-but-identical file is still a hit;
@@ -50,7 +50,7 @@ function Get-CacheKey {
 		$parts.Add("$rel=$((Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash)")
 	}
 
-	foreach ($rel in @("Directory.Packages.props", "build\Loom.Sdk\Loom.Shaders.props", "build\Loom.Sdk\Loom.Shaders.targets")) {
+	foreach ($rel in @("Directory.Packages.props", "build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.props", "build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.targets")) {
 		$path = Join-Path $repo $rel
 		if (Test-Path -LiteralPath $path) {
 			$parts.Add("$($rel.ToLowerInvariant())=$((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash)")
@@ -64,7 +64,7 @@ function Get-CacheKey {
 }
 
 # Every compiled-shader output directory in the tree, as repo-relative paths — the unit this caches. Named
-# "obj\shaders" by Loom.Shaders.props; a project may add a runtime-identifier subdirectory below it, which the
+# "obj\shaders" by Kaldra.Shaders.props; a project may add a runtime-identifier subdirectory below it, which the
 # whole-directory copy carries along.
 function Get-OutputDirs {
 	Get-ChildItem -Path $repo -Recurse -Directory -Filter shaders -ErrorAction SilentlyContinue |

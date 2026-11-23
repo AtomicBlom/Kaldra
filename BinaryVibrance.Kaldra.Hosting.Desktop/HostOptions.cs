@@ -1,0 +1,231 @@
+using System.Globalization;
+
+using BinaryVibrance.Kaldra.Core.Hosting;
+
+namespace BinaryVibrance.Kaldra.Hosting.Desktop;
+
+/// <summary>
+/// <see cref="DesktopAppHost"/>'s command-line launch-option parser — the runtime flags a shipped, desktop-hosted
+/// <see cref="KaldraApplication"/> gets for free (backend selection, presentation, dev shader-watching) without the
+/// app author writing any parsing of its own. Scoped to what a real interactive game actually consumes at launch;
+/// test-only affordances (frame capture, fixed frame-count runs) live in the test tooling, not the production host,
+/// because a real game's frames aren't deterministic and it never wants those flags.
+/// <para>
+/// Parsing is deliberately tiny and dependency-free: <c>--key value</c>, <c>--key=value</c>, and bare
+/// <c>--flag</c> (optionally <c>--flag=false</c>). Any argument this parser does not recognize as one of its own
+/// flags is copied verbatim into <see cref="AppArgs"/> instead of rejected, so the app's own flags (e.g. a demo
+/// selector) survive untouched and in order.
+/// </para>
+/// </summary>
+public sealed record HostOptions
+{
+	/// <summary>
+	/// The backend to select, as the canonical <see cref="IRenderBackend.Name"/> (<c>"Vulkan"</c> or
+	/// <c>"DirectX12"</c>), or null when <c>--backend</c> was not given — in which case the app's own
+	/// <see cref="EngineSettings.PreferredBackend"/> (set in <c>Configure</c>, or left null for auto-select) stands.
+	/// </summary>
+	public string? Backend { get; init; }
+
+	/// <summary>Present with v-sync (default on); <c>--no-vsync</c> or <c>--vsync off</c> selects the low-latency mode. Maps onto <see cref="EngineSettings.VSync"/>.</summary>
+	public bool VSync { get; init; } = true;
+
+	/// <summary>Frame-rate cap for the host's render loop (0 = unlimited). Maps onto <see cref="EngineSettings.MaxFramesPerSecond"/>, which the host applies to the window.</summary>
+	public double MaxFramesPerSecond { get; init; }
+
+	/// <summary>Request true HDR (scRGB) display output. Maps onto <see cref="EngineSettings.HdrOutput"/>.</summary>
+	public bool HdrOutput { get; init; }
+
+	/// <summary>Watch the loose shader directory and hot-reload rebuilt artifacts (dev only). Maps onto <see cref="EngineSettings.WatchShaderDirectory"/>.</summary>
+	public bool WatchShaderDirectory { get; init; }
+
+	/// <summary>Request a CPU/software rendering adapter (DX12 WARP; a Vulkan CPU device) for GPU-less CI or
+	/// deterministic software rendering. Maps onto <see cref="EngineSettings.PreferSoftwareAdapter"/>.</summary>
+	public bool SoftwareAdapter { get; init; }
+
+	/// <summary>
+	/// Where gamepads are read from: SDL 3 (the default, falling back to GLFW where SDL3.dll is missing or won't start),
+	/// or GLFW's own gamepad mapping, for comparing the two. <c>--pads sdl|glfw</c>.
+	/// </summary>
+	public GamepadSource Pads { get; init; } = GamepadSource.Sdl;
+
+	/// <summary>Print usage and exit. Set by <c>--help</c>/<c>-h</c> or by any parse error.</summary>
+	public bool ShowHelp { get; init; }
+
+	/// <summary>
+	/// Every argument this parser did not recognize as one of its own flags, verbatim and in original order — the
+	/// hosted app's own command line (e.g. the sandbox's <c>--demo</c>). An app that wants its own options parses
+	/// this array exactly as it would have parsed the raw <c>args</c>.
+	/// </summary>
+	public string[] AppArgs { get; init; } = [];
+
+	public static string Usage =>
+		"""
+		Kaldra desktop host — reusable launch options for a KaldraApplication.
+
+		Usage: dotnet run --project <app> -- [host options] [app options]
+
+		Backend:
+		  --backend <vulkan|dx12>   Backend to run on (default: the app's own preference, or the first available).
+
+		Presentation:
+		  --no-vsync                Use the low-latency present mode (v-sync is on by default).
+		  --vsync <on|off>          Explicit form of the above.
+		  --max-fps <n>             Frame-rate cap for the render loop (0 = unlimited).
+		  --hdr                     Request true HDR (scRGB) display output.
+
+		Input:
+		  --pads <sdl|glfw>         Read gamepads through SDL 3 (default; GLFW if SDL3.dll is missing) or GLFW.
+
+		Dev / debug:
+		  --watch-shaders           Hot-reload rebuilt shader artifacts.
+		  --software-adapter        Force a CPU/software rendering adapter (DX12 WARP; a Vulkan CPU device) for
+		                            GPU-less CI or deterministic software rendering.
+
+		  -h, --help                Show this help.
+
+		Any option not listed above is passed through unchanged to the app.
+		""";
+
+	/// <summary>
+	/// Parse <paramref name="args"/> into options. Recognized flags are consumed; everything else — including a
+	/// value that follows an unrecognized flag — is copied into <see cref="AppArgs"/> untouched. On a malformed
+	/// value for one of <em>this</em> parser's own flags, writes the reason to stderr and returns a value with
+	/// <see cref="ShowHelp"/> set so the caller can print usage and exit.
+	/// </summary>
+	public static HostOptions Parse(string[] args)
+	{
+		ArgumentNullException.ThrowIfNull(args);
+
+		string? backend = null;
+		var vsync = true;
+		var maxFps = 0.0;
+		var hdr = false;
+		var watchShaders = false;
+		var softwareAdapter = false;
+		var pads = GamepadSource.Sdl;
+		var help = false;
+		var appArgs = new List<string>();
+
+		HostOptions Fail(string message)
+		{
+			Console.Error.WriteLine($"[kaldra] {message}");
+			return new HostOptions { ShowHelp = true };
+		}
+
+		for (var i = 0; i < args.Length; i++)
+		{
+			var arg = args[i];
+			var key = arg;
+			string? inlineValue = null;
+			if (arg.StartsWith("--", StringComparison.Ordinal) && arg.IndexOf('=') is var eq && eq > 0)
+			{
+				key = arg[..eq];
+				inlineValue = arg[(eq + 1)..];
+			}
+
+			// A value option reads its inline "=value" or the next token; throws (caught below) if neither exists.
+			string Value()
+			{
+				if (inlineValue is not null)
+					return inlineValue;
+				if (i + 1 < args.Length)
+					return args[++i];
+				throw new FormatException($"option '{key}' requires a value");
+			}
+
+			// A flag is true when bare; "--flag=false" / "--flag=off" can still turn it off.
+			bool Flag() => inlineValue is null || ParseBool(inlineValue);
+
+			try
+			{
+				switch (key.ToLowerInvariant())
+				{
+					case "--backend": backend = ParseBackend(Value()); break;
+					case "--vsync": vsync = ParseBool(Value()); break;
+					case "--no-vsync": vsync = false; break;
+					case "--max-fps":
+						maxFps = double.Parse(Value(), CultureInfo.InvariantCulture);
+						if (maxFps < 0) return Fail("--max-fps must be non-negative.");
+						break;
+					case "--hdr": hdr = Flag(); break;
+					case "--watch-shaders": watchShaders = Flag(); break;
+					case "--software-adapter": softwareAdapter = Flag(); break;
+					case "--pads": pads = ParsePads(Value()); break;
+					case "--help" or "-h" or "-?": help = true; break;
+					default:
+						// Not one of ours — pass it through untouched (its own value token, if any, arrives on the
+						// next iteration and is passed through in turn since it won't match a case here either).
+						appArgs.Add(arg);
+						break;
+				}
+			}
+			catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentException)
+			{
+				return Fail(ex.Message);
+			}
+		}
+
+		return new HostOptions
+		{
+			Backend = backend,
+			VSync = vsync,
+			MaxFramesPerSecond = maxFps,
+			HdrOutput = hdr,
+			WatchShaderDirectory = watchShaders,
+			SoftwareAdapter = softwareAdapter,
+			Pads = pads,
+			ShowHelp = help,
+			AppArgs = [.. appArgs],
+		};
+	}
+
+	/// <summary>
+	/// Apply the parsed presentation/backend flags onto <paramref name="settings"/> — call before the engine is
+	/// created so v-sync, the frame-rate cap, HDR, and shader watching take effect. <see cref="Backend"/> is
+	/// applied only when <c>--backend</c> was actually given, so an app's own <see cref="EngineSettings.PreferredBackend"/>
+	/// (or its absence, meaning auto-select) stands otherwise; the rest are applied unconditionally, mirroring the
+	/// sandbox's own convention that the command line is the full source of truth for these once parsed.
+	/// </summary>
+	public void ApplyTo(EngineSettings settings)
+	{
+		ArgumentNullException.ThrowIfNull(settings);
+		if (Backend is not null)
+			settings.PreferredBackend = Backend;
+		settings.VSync = VSync;
+		settings.MaxFramesPerSecond = MaxFramesPerSecond;
+		settings.HdrOutput = HdrOutput;
+		settings.WatchShaderDirectory = WatchShaderDirectory;
+		settings.PreferSoftwareAdapter = SoftwareAdapter;
+	}
+
+	private static string ParseBackend(string value) => value.ToLowerInvariant() switch
+	{
+		"vulkan" or "vk" => "Vulkan",
+		"dx12" or "d3d12" or "directx12" or "directx" => "DirectX12",
+		_ => throw new ArgumentException($"unknown backend '{value}' (expected vulkan or dx12)"),
+	};
+
+	private static GamepadSource ParsePads(string value) => value.ToLowerInvariant() switch
+	{
+		"sdl" or "sdl3" => GamepadSource.Sdl,
+		"glfw" => GamepadSource.Glfw,
+		_ => throw new ArgumentException($"unknown gamepad source '{value}' (expected sdl or glfw)"),
+	};
+
+	private static bool ParseBool(string value) => value.ToLowerInvariant() switch
+	{
+		"1" or "true" or "on" or "yes" => true,
+		"0" or "false" or "off" or "no" => false,
+		_ => throw new ArgumentException($"expected a boolean (on/off), got '{value}'"),
+	};
+}
+
+/// <summary>Where the desktop host reads gamepads from (<see cref="HostOptions.Pads"/>).</summary>
+public enum GamepadSource
+{
+	/// <summary>SDL 3's gamepad subsystem (<see cref="Sdl.SdlGamepadPump"/>), with GLFW's as the fallback.</summary>
+	Sdl,
+
+	/// <summary>GLFW's gamepad mapping, through Silk.NET's input context.</summary>
+	Glfw,
+}

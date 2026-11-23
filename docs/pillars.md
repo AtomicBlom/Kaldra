@@ -1,6 +1,6 @@
-# Loom's Pillars of Design
+# Kaldra's Pillars of Design
 
-These are the load-bearing rules behind Loom's design. Each is easy to break without a compiler error and hard to notice once broken — violate one and the design quietly stops working. Hold them when adding or changing anything in the engine.
+These are the load-bearing rules behind Kaldra's design. Each is easy to break without a compiler error and hard to notice once broken — violate one and the design quietly stops working. Hold them when adding or changing anything in the engine.
 
 ## Derived, not declared
 
@@ -23,9 +23,9 @@ The barrier derivation depends on the distinction. Getting them swapped produces
 
 ## Backend isolation / portability
 
-All procedural, struct-heavy, graphics-API code lives in the backends (`Loom.Backend.Vulkan`, `Loom.Backend.DirectX12`). `Loom.Core` and `Loom.Graph` carry no Vulkan or D3D12 type.
+All procedural, struct-heavy, graphics-API code lives in the backends (`BinaryVibrance.Kaldra.Backend.Vulkan`, `BinaryVibrance.Kaldra.Backend.DirectX12`). `BinaryVibrance.Kaldra.Core` and `BinaryVibrance.Kaldra.Graph` carry no Vulkan or D3D12 type.
 
-The dependency direction enforces it: `Sandbox → Backend → Graph → Core`. A reference the other way (Core → Backend) is the cardinal violation — it breaks portability and blocks a new backend from joining. Loom runs on Vulkan and DirectX 12 in parallel at pixel parity today, with Metal and WebGPU under investigation; that future depends on this isolation staying clean, so every new GPU feature must land in (or be capability-gated for) every backend.
+The dependency direction enforces it: `Sandbox → Backend → Graph → Core`. A reference the other way (Core → Backend) is the cardinal violation — it breaks portability and blocks a new backend from joining. Kaldra runs on Vulkan and DirectX 12 in parallel at pixel parity today, with Metal and WebGPU under investigation; that future depends on this isolation staying clean, so every new GPU feature must land in (or be capability-gated for) every backend.
 
 ## Pure per-frame closures
 
@@ -67,7 +67,7 @@ A `foreach` over an interface, a LINQ chain, a closure capture, or a boxed struc
 
 ## The engine names no game concepts
 
-There is no `Camera`, `Sun`, `Scene`, or `Cascade` in `Loom.Core` or `Loom.Graph`. View, light, and time data ride in through neutral channels — the `Constants` and `Storage` buffers a pass reads, and the `FrameInputs` the app fills — and the app names its own views with its own keys. `Camera`, `Frustum`, and `Scene` exist only as app-side helpers in `Loom.Concepts`: convenience, not engine vocabulary.
+There is no `Camera`, `Sun`, `Scene`, or `Cascade` in `BinaryVibrance.Kaldra.Core` or `BinaryVibrance.Kaldra.Graph`. View, light, and time data ride in through neutral channels — the `Constants` and `Storage` buffers a pass reads, and the `FrameInputs` the app fills — and the app names its own views with its own keys. `Camera`, `Frustum`, and `Scene` exist only as app-side helpers in `BinaryVibrance.Kaldra.Concepts`: convenience, not engine vocabulary.
 
 When a feature seems to need a named game concept in the engine, generalise it into a neutral channel the app fills instead.
 

@@ -1,0 +1,32 @@
+<Solution>
+  <Folder Name="/build/">
+    <Project Path="build/BinaryVibrance.Kaldra.Sdk/BinaryVibrance.Kaldra.Sdk.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/HelloTriangle/HelloTriangle.csproj" />
+    <Project Path="samples/HelloUI/HelloUI.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path="CLAUDE.md" />
+    <File Path="Planning.md" />
+  </Folder>
+  <Project Path="BinaryVibrance.Kaldra.Assets/BinaryVibrance.Kaldra.Assets.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Backend.DirectX12/BinaryVibrance.Kaldra.Backend.DirectX12.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Backend.Vulkan/BinaryVibrance.Kaldra.Backend.Vulkan.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Backend.WebGPU/BinaryVibrance.Kaldra.Backend.WebGPU.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Concepts/BinaryVibrance.Kaldra.Concepts.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Core/BinaryVibrance.Kaldra.Core.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Graph/BinaryVibrance.Kaldra.Graph.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Hosting.Desktop/BinaryVibrance.Kaldra.Hosting.Desktop.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Input/BinaryVibrance.Kaldra.Input.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Tests/BinaryVibrance.Kaldra.Tests.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.UI.ImGui/BinaryVibrance.Kaldra.UI.ImGui.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.UI.Vysara/BinaryVibrance.Kaldra.UI.Vysara.csproj" />
+  <Folder Name="/Vysara/">
+    <Project Path="../Vysara/BinaryVibrance.Vysara/BinaryVibrance.Vysara.csproj" />
+    <Project Path="../Vysara/BinaryVibrance.Vysara.HarfBuzz/BinaryVibrance.Vysara.HarfBuzz.csproj" />
+    <Project Path="../Vysara/BinaryVibrance.Vysara.Rasterizer/BinaryVibrance.Vysara.Rasterizer.csproj" />
+    <Project Path="../Vysara/BinaryVibrance.Vysara.Text/BinaryVibrance.Vysara.Text.csproj" />
+    <Project Path="../Vysara/BinaryVibrance.Vysara.SourceGen/BinaryVibrance.Vysara.SourceGen.csproj" />
+  </Folder>
+</Solution>

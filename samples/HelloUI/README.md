@@ -1,13 +1,13 @@
-# HelloUI: one Loom app on the desktop and on Android
+# HelloUI: one Kaldra app on the desktop and on Android
 
 A Vysara XAML page (a tap counter, a slider, a checkbox, and the GPU and runtime it is on) over a backdrop drawn by the app's own Slang shader. The same `HelloUIApp` builds two ways, chosen by target framework:
 
 | Target | Output | Host |
 |---|---|---|
-| `net11.0` | a desktop exe | `Loom.Hosting.Desktop` (GLFW window) |
-| `net11.0-android` | an APK (CoreCLR) | `Loom.Hosting.Android` (`LoomActivity`) |
+| `net11.0` | a desktop exe | `BinaryVibrance.Kaldra.Hosting.Desktop` (GLFW window) |
+| `net11.0-android` | an APK (CoreCLR) | `BinaryVibrance.Kaldra.Hosting.Android` (`KaldraActivity`) |
 
-Only the entry point differs: `Platforms/Desktop/Program.cs`, or `Platforms/Android/MainActivity.cs`. The page lays out at `LoomApplication.DisplayScale`, so it keeps one physical size on a 100% monitor, a 200% tablet and a phone.
+Only the entry point differs: `Platforms/Desktop/Program.cs`, or `Platforms/Android/MainActivity.cs`. The page lays out at `KaldraApplication.DisplayScale`, so it keeps one physical size on a 100% monitor, a 200% tablet and a phone.
 
 ## Desktop
 
@@ -36,13 +36,13 @@ dotnet build samples/HelloUI -f net11.0-android -c Release
 ```
 
 ```bash
-adb install -r samples/HelloUI/bin/Release/net11.0-android/com.atomicblom.loom.helloui-Signed.apk
+adb install -r samples/HelloUI/bin/Release/net11.0-android/com.atomicblom.kaldra.helloui-Signed.apk
 ```
 
-**Logs.** The host logs under the tag `Loom` (bring-up, device, size, display scale, and any failure), and the engine's own log lines arrive on the app's stdout:
+**Logs.** The host logs under the tag `Kaldra` (bring-up, device, size, display scale, and any failure), and the engine's own log lines arrive on the app's stdout:
 
 ```bash
-adb logcat -v brief Loom:V DOTNET:V AndroidRuntime:E vulkan:V *:S
+adb logcat -v brief Kaldra:V DOTNET:V AndroidRuntime:E vulkan:V *:S
 ```
 
 A failure is also shown on the screen in place of the frame, with its stack trace.

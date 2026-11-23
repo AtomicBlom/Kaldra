@@ -1,0 +1,75 @@
+namespace BinaryVibrance.Kaldra.Input;
+
+/// <summary>
+/// Gamepad binding sources for action definitions. Face buttons and the D-pad convert straight to a button
+/// binding; <see cref="LeftStick"/>/<see cref="RightStick"/> produce 2-D stick sources and <see cref="Triggers"/>
+/// a single axis from the trigger pair. All read the pad last used (<see cref="Last"/>), so a player picks up whichever pad is to\n/// hand; <see cref="OnPad"/> pins one to a particular pad.
+/// </summary>
+public static class Pad
+{
+	/// <summary>The pad index that means the pad last used (<see cref="InputSnapshot.LastPad"/>, or the first connected
+	/// before any is): every binding these helpers make reads it.</summary>
+	public const int Last = -1;
+
+	/// <summary>Bottom face button.</summary>
+	public static InputBinding South => GamepadButton.South;
+
+	/// <summary>Right face button.</summary>
+	public static InputBinding East => GamepadButton.East;
+
+	/// <summary>Left face button.</summary>
+	public static InputBinding West => GamepadButton.West;
+
+	/// <summary>Top face button.</summary>
+	public static InputBinding North => GamepadButton.North;
+
+	public static InputBinding LeftBumper => GamepadButton.LeftBumper;
+	public static InputBinding RightBumper => GamepadButton.RightBumper;
+	public static InputBinding Back => GamepadButton.Back;
+	public static InputBinding Start => GamepadButton.Start;
+	public static InputBinding Guide => GamepadButton.Guide;
+	public static InputBinding LeftStickButton => GamepadButton.LeftStick;
+	public static InputBinding RightStickButton => GamepadButton.RightStick;
+	public static InputBinding DPadUp => GamepadButton.DPadUp;
+	public static InputBinding DPadDown => GamepadButton.DPadDown;
+	public static InputBinding DPadLeft => GamepadButton.DPadLeft;
+	public static InputBinding DPadRight => GamepadButton.DPadRight;
+	public static InputBinding Misc1 => GamepadButton.Misc1;
+	public static InputBinding RightPaddle1 => GamepadButton.RightPaddle1;
+	public static InputBinding LeftPaddle1 => GamepadButton.LeftPaddle1;
+	public static InputBinding RightPaddle2 => GamepadButton.RightPaddle2;
+	public static InputBinding LeftPaddle2 => GamepadButton.LeftPaddle2;
+	public static InputBinding Touchpad => GamepadButton.Touchpad;
+
+	/// <summary>The left stick as a 2-D vector source.</summary>
+	public static InputBinding LeftStick => new()
+	{
+		Kind = BindingKind.Stick,
+		Family = InputFamily.Gamepad,
+		PadIndex = Last,
+		Code = (int)GamepadAxis.LeftX,
+		Code2 = (int)GamepadAxis.LeftY,
+	};
+
+	/// <summary>The right stick as a 2-D vector source.</summary>
+	public static InputBinding RightStick => new()
+	{
+		Kind = BindingKind.Stick,
+		Family = InputFamily.Gamepad,
+		PadIndex = Last,
+		Code = (int)GamepadAxis.RightX,
+		Code2 = (int)GamepadAxis.RightY,
+	};
+
+	/// <summary>The trigger pair as one axis (right minus left).</summary>
+	public static InputBinding Triggers => new() { Kind = BindingKind.Triggers, Family = InputFamily.Gamepad, PadIndex = Last };
+
+	/// <summary>The left trigger as a single axis.</summary>
+	public static InputBinding LeftTrigger => GamepadAxis.LeftTrigger;
+
+	/// <summary>The right trigger as a single axis.</summary>
+	public static InputBinding RightTrigger => GamepadAxis.RightTrigger;
+
+	/// <summary>Retargets a gamepad binding to pad <paramref name="index"/>.</summary>
+	public static InputBinding OnPad(InputBinding binding, int index) => binding with { PadIndex = index };
+}

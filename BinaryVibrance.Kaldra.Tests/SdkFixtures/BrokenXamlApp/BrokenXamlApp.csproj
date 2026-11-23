@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- XamlApp's twin with one XAML error in its only view. SdkXamlTests builds it (it is in no solution) to see that
+       Vysara's generator reports the error against the .xaml's own file and line, so the build fails there. -->
+  <Import Project="..\..\..\build\BinaryVibrance.Kaldra.Sdk\Sdk\Sdk.props" />
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <UseVysara>true</UseVysara>
+    <UseKaldraHost>false</UseKaldraHost>
+    <KaldraShaderOutputMode>None</KaldraShaderOutputMode>
+  </PropertyGroup>
+
+  <Import Project="..\..\..\build\BinaryVibrance.Kaldra.Sdk\Sdk\Sdk.targets" />
+
+</Project>

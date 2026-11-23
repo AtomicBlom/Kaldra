@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.Graph</PackageId>
+    <Description>Backend-neutral render-graph execute layer for Kaldra. Topological scheduling, derived barriers, transient memory aliasing — no graphics-API types.</Description>
+    <PackageTags>vulkan;directx12;rendergraph;gamedev;graphics;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- Execute layer. Backend-agnostic: NO Silk.NET/Vulkan reference (CLAUDE.md cardinal invariant). -->
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Core\BinaryVibrance.Kaldra.Core.csproj" />
+  </ItemGroup>
+
+</Project>
