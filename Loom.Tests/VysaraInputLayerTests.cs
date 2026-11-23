@@ -3,9 +3,9 @@ using System.Numerics;
 using Loom.Input;
 using Loom.UI.Vysara;
 
-using Vysara;
-using Vysara.Controls;
-using Vysara.Media;
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Controls;
+using BinaryVibrance.Vysara.Media;
 
 namespace Loom.Tests;
 

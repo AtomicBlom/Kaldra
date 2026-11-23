@@ -1,9 +1,9 @@
 using System.Numerics;
 using System.Text;
 using Loom.Input;
-using Vysara;
-using Vysara.Controls;
-using Sui = global::Vysara.Input;
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Controls;
+using Sui = global::BinaryVibrance.Vysara.Input;
 
 namespace Loom.UI.Vysara;
 

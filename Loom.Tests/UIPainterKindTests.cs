@@ -1,8 +1,8 @@
 using Loom.Core.Hosting;
 using Loom.UI.Vysara;
 
-using DrawCommand = Vysara.Drawing.DrawCommand;
-using DrawListId = Vysara.Drawing.DrawListId;
+using DrawCommand = BinaryVibrance.Vysara.Drawing.DrawCommand;
+using DrawListId = BinaryVibrance.Vysara.Drawing.DrawListId;
 
 namespace Loom.Tests;
 
@@ -56,5 +56,5 @@ public class UIPainterKindTests
 	}
 
 	private static DrawCommand Command(uint tag, int slot = 0) =>
-		new(new Vysara.Rect(0f, 0f, 8f, 8f), TextureIndex: slot, IndexOffset: 0, IndexCount: 6, VertexOffset: 0, Tag: tag);
+		new(new BinaryVibrance.Vysara.Rect(0f, 0f, 8f, 8f), TextureIndex: slot, IndexOffset: 0, IndexCount: 6, VertexOffset: 0, Tag: tag);
 }

@@ -1,10 +1,10 @@
 using System.Numerics;
 using Loom.Core.Geometry;
 using Loom.Core.Hosting;
-using Vysara;
-using Vysara.Input;
-// Vysara.Drawing and Loom.Core.Hosting both export DrawListId — alias to pin the Vysara side (matches UIPainter.cs).
-using DrawListId = Vysara.Drawing.DrawListId;
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Input;
+// BinaryVibrance.Vysara.Drawing and Loom.Core.Hosting both export DrawListId — alias to pin the Vysara side (matches UIPainter.cs).
+using DrawListId = BinaryVibrance.Vysara.Drawing.DrawListId;
 
 namespace Loom.UI.Vysara;
 

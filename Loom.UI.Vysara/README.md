@@ -59,7 +59,7 @@ ui.Prepare();                                      // upload, share and release 
 
 **A surface may be drawn more than once a frame.** One `Prepare` covers every `Draw` of a surface in the frame it prepared, from one pass or several (a HUD on the frame and again into an inset), since its stable stream holds the same revision each time. A frame that skipped `Prepare` still throws at its first `Draw`, which tells one frame from the next by `IRenderContext.Frame`.
 
-**Host images show the app's own render targets.** A `HostImageSource` (Vysara's `Vysara.Extensions`) has a tag and a size but no texels. Bind the graph texture it should show, and declare it on the pass that draws the UI:
+**Host images show the app's own render targets.** A `HostImageSource` (Vysara's `BinaryVibrance.Vysara.Extensions`) has a tag and a size but no texels. Bind the graph texture it should show, and declare it on the pass that draws the UI:
 
 ```csharp
 var map = g.Domain("map", 256, 256).Color("map.color", Format.Rgba8Srgb);
@@ -119,7 +119,7 @@ ui.Prepare();
 ## Dependencies
 
 - [`Loom`](https://www.nuget.org/packages/Loom) — describe layer
-- [`Vysara`](https://www.nuget.org/packages/Vysara) — UI runtime (transitive)
+- [`BinaryVibrance.Vysara`](https://www.nuget.org/packages/Vysara) — UI runtime (transitive)
 
 Reference [`Loom.Sdk`](https://www.nuget.org/packages/Loom.Sdk) with `<UseVysara>true</UseVysara>` to pull this package in automatically alongside the selected backend.
 
@@ -130,4 +130,4 @@ Reference [`Loom.Sdk`](https://www.nuget.org/packages/Loom.Sdk) with `<UseVysara
 - Folders the project keeps out of its items through `DefaultItemExcludes` stay out: a game whose project holds the Loom submodule beneath it excludes it once.
 - `VysaraXamlEnable=false` keeps the runtime without the generator.
 
-Built from source, the SDK imports Vysara's own build files, which reference the generator project. Packaged, it references the `Vysara` package, which bundles the generator. The Vysara package's build and analyzer assets do not reach an app through this package's dependency on it, so referencing `Loom.UI.Vysara` alone, without the SDK, gives the runtime without XAML.
+Built from source, the SDK imports Vysara's own build files, which reference the generator project. Packaged, it references the `BinaryVibrance.Vysara` package, which bundles the generator. The Vysara package's build and analyzer assets do not reach an app through this package's dependency on it, so referencing `Loom.UI.Vysara` alone, without the SDK, gives the runtime without XAML.

@@ -36,7 +36,7 @@ Place Slang source files under your project and set `LoomShaderOutputMode=Conten
 | `UseVulkan=true` | `Loom.Backend.Vulkan` |
 | `UseDirectX12=true` | `Loom.Backend.DirectX12` |
 | `UseWebGPU=true` | `Loom.Backend.WebGPU` |
-| `UseVysara=true` | `Loom.UI.Vysara` + `Vysara`, with Vysara's XAML generator |
+| `UseVysara=true` | `Loom.UI.Vysara` + `BinaryVibrance.Vysara`, with Vysara's XAML generator |
 | `UseImGui=true` | `Loom.UI.ImGui` + `ImGui.NET` |
 
 ## XAML views
@@ -52,4 +52,4 @@ Two settings shape it:
 
 Folders kept out of the project's items through `DefaultItemExcludes` are kept out of its XAML too. For example, a game that holds Loom as a submodule beneath it, and excludes `Loom/**`, does not compile Loom's own views.
 
-The `Vysara` package is referenced directly because the generator travels in it. A package's analyzers and build files do not reach an app through `Loom.UI.Vysara`'s dependency on it. The version is `LoomVysaraVersion`.
+The `BinaryVibrance.Vysara` package is referenced directly because the generator travels in it. A package's analyzers and build files do not reach an app through `Loom.UI.Vysara`'s dependency on it. The version is `LoomVysaraVersion`.

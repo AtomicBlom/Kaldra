@@ -1,6 +1,6 @@
 using Loom.Core.Hosting;
 
-using Vysara;
+using BinaryVibrance.Vysara;
 
 namespace Loom.UI.Vysara;
 

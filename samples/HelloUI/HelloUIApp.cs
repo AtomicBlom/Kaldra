@@ -7,7 +7,7 @@ using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Loom.UI.Vysara;
 
-using Vysara;
+using BinaryVibrance.Vysara;
 
 namespace HelloUI;
 

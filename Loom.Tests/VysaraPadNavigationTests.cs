@@ -3,8 +3,8 @@ using System.Numerics;
 using Loom.Input;
 using Loom.UI.Vysara;
 
-using Vysara;
-using Vysara.Controls;
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Controls;
 
 namespace Loom.Tests;
 

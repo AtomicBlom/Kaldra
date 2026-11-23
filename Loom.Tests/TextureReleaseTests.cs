@@ -315,7 +315,7 @@ public class TextureReleaseTests
 		{
 			Engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
 			// The painter is created only for the "ui" technique it defines; nothing here draws a UI host.
-			UIPainter.Create(Engine, new global::Vysara.UIHost());
+			UIPainter.Create(Engine, new global::BinaryVibrance.Vysara.UIHost());
 
 			var white = new Half4((Half)1f, (Half)1f, (Half)1f, (Half)1f);
 			_quad =

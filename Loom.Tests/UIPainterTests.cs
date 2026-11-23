@@ -6,11 +6,11 @@ using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Primitives;
 using Loom.UI.Vysara;
-using Vysara;
-using Vysara.Controls;
-using Vysara.Drawing;
-using Vysara.Media;
-using Vysara.Media.Imaging;
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Controls;
+using BinaryVibrance.Vysara.Drawing;
+using BinaryVibrance.Vysara.Media;
+using BinaryVibrance.Vysara.Media.Imaging;
 
 namespace Loom.Tests;
 

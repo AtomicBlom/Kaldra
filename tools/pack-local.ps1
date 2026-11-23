@@ -31,8 +31,8 @@ $vysara = (dotnet msbuild (Join-Path $repo "Loom.UI.Vysara/Loom.UI.Vysara.csproj
 # In the order they depend on each other, so a failure names the first package that can't be made
 $projects = @(
 	"external/VMASharp/VMASharp/VMASharp.csproj",
-	(Join-Path $vysara "Vysara/Vysara.csproj"),
-	(Join-Path $vysara "Vysara.Diagnostics.Endpoint/Vysara.Diagnostics.Endpoint.csproj"),
+	(Join-Path $vysara "BinaryVibrance.Vysara/BinaryVibrance.Vysara.csproj"),
+	(Join-Path $vysara "BinaryVibrance.Vysara.Diagnostics.Endpoint/BinaryVibrance.Vysara.Diagnostics.Endpoint.csproj"),
 	"Loom.Input/Loom.Input.csproj",
 	"Loom.Core/Loom.Core.csproj",
 	"Loom.Graph/Loom.Graph.csproj",

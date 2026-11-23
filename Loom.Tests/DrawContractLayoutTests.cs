@@ -3,12 +3,12 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 using Loom.Core.Primitives;
-using Vysara.Drawing;
+using BinaryVibrance.Vysara.Drawing;
 
 using LoomDrawCommand = Loom.Core.Hosting.DrawCommand;
 using LoomOverlayVertex = Loom.Core.Geometry.OverlayVertex;
-using VysaraDrawCommand = Vysara.Drawing.DrawCommand;
-using VysaraOverlayVertex = Vysara.Drawing.OverlayVertex;
+using VysaraDrawCommand = BinaryVibrance.Vysara.Drawing.DrawCommand;
+using VysaraOverlayVertex = BinaryVibrance.Vysara.Drawing.OverlayVertex;
 
 namespace Loom.Tests;
 
@@ -55,7 +55,7 @@ public class DrawContractLayoutTests
 
 		ReadOnlySpan<VysaraDrawCommand> vysara =
 		[
-			new(new Vysara.Rect(1.5f, 2.5f, 3.5f, 4.5f), TextureIndex: 5, IndexOffset: 6, IndexCount: 7, VertexOffset: 8, Tag: 9u),
+			new(new BinaryVibrance.Vysara.Rect(1.5f, 2.5f, 3.5f, 4.5f), TextureIndex: 5, IndexOffset: 6, IndexCount: 7, VertexOffset: 8, Tag: 9u),
 		];
 		var loom = MemoryMarshal.Cast<VysaraDrawCommand, LoomDrawCommand>(vysara);
 

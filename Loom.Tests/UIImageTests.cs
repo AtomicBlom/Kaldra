@@ -7,17 +7,17 @@ using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Loom.Core.Primitives;
 using Loom.UI.Vysara;
-using Vysara;
-using Vysara.Controls;
-using Vysara.Drawing;
-using Vysara.Extensions;
-using Vysara.Media;
-using Vysara.Media.Imaging;
-using Ellipse = Vysara.Shapes.Ellipse;
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Controls;
+using BinaryVibrance.Vysara.Drawing;
+using BinaryVibrance.Vysara.Extensions;
+using BinaryVibrance.Vysara.Media;
+using BinaryVibrance.Vysara.Media.Imaging;
+using Ellipse = BinaryVibrance.Vysara.Shapes.Ellipse;
 using LoomDrawCommand = Loom.Core.Hosting.DrawCommand;
 using LoomRect = Loom.Core.Primitives.Rect;
 using OverlayVertex = Loom.Core.Geometry.OverlayVertex;
-using SoftwareRasterizer = Vysara.Rasterizer.SoftwareRasterizer;
+using SoftwareRasterizer = BinaryVibrance.Vysara.Rasterizer.SoftwareRasterizer;
 
 namespace Loom.Tests;
 

@@ -142,7 +142,7 @@ The debug spine (channel viewer, GPU timing) exists to make this loop fast for t
 
 ## 9. The UI track (Vysara)
 
-Game/HUD UI is a **separate, standalone subsystem**: `Vysara`, a GPU-free WinUI-3-compatible XAML UI runtime (compile-time `{x:Bind}`, NativeAOT-clean), in [its own repository](https://github.com/AtomicBlom/Vysara), built from a checkout beside the engine's, with **its own design bible at [`Planning.md`](https://github.com/AtomicBlom/Vysara/blob/main/Planning.md)**. It reaches the GPU only through the neutral, UI-agnostic `IRenderContext.DrawList` verb (the same path ImGui rides) via the thin `Loom.UI.Vysara` glue — so **no UI library is referenced by either backend, and no UI-specific type enters Core/Graph.** See that document for the UI roadmap and status; this file does not duplicate it.
+Game/HUD UI is a **separate, standalone subsystem**: `BinaryVibrance.Vysara`, a GPU-free WinUI-3-compatible XAML UI runtime (compile-time `{x:Bind}`, NativeAOT-clean), in [its own repository](https://github.com/AtomicBlom/Vysara), built from a checkout beside the engine's, with **its own design bible at [`Planning.md`](https://github.com/AtomicBlom/Vysara/blob/main/Planning.md)**. It reaches the GPU only through the neutral, UI-agnostic `IRenderContext.DrawList` verb (the same path ImGui rides) via the thin `Loom.UI.Vysara` glue — so **no UI library is referenced by either backend, and no UI-specific type enters Core/Graph.** See that document for the UI roadmap and status; this file does not duplicate it.
 
 ---
 
