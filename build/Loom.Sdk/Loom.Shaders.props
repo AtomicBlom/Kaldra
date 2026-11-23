@@ -4,7 +4,7 @@
     Loom shared shader-compile machinery (Milestone 8) — property defaults.
 
     Imported by any project that compiles Slang shaders: directly by Loom.Backend.Vulkan (engine shaders, Embed
-    mode) and transitively via Sdk.props by an app (Loom.Sandbox, Content mode). Carries NO backend-reference
+    mode) and transitively via Sdk.props by an app (the gallery's Loom.Sandbox, Content mode). Carries NO backend-reference
     logic, so the engine can import it without pulling in (or self-referencing through) the backend selection.
 
     A consuming project sets:

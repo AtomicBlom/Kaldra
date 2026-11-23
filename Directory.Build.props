@@ -19,9 +19,8 @@
 
   <!--
     Warnings are errors across the Loom repo's own projects — the engine, samples, and tests build
-    warning-clean, so CI enforces it. Scoped naturally: external/ (vendored VMASharp + the SUIsei submodule)
-    and Loom.Web (the isolated browser MVP) each have their own Directory.Build.props that stop MSBuild's
-    upward walk, so this never reaches vendored or web-MVP code.
+    warning-clean, so CI enforces it. Scoped naturally: external/ (vendored VMASharp + the SUIsei submodule) has its own
+    Directory.Build.props that stops MSBuild's upward walk, so this never reaches vendored code.
 
     NoWarn covers the residual trim/AOT (ILxxxx) warnings a PublishAot surfaces from third-party Silk.NET —
     its single-file Assembly.Location/CodeBase/DependencyContext use (IL3000/IL3002) and the per-assembly trim
@@ -66,7 +65,7 @@
   <PropertyGroup Label="Backend selection (read by the app-facing Loom SDK: build/Loom.Sdk/Sdk/Sdk.targets)">
     <UseVulkan Condition="'$(UseVulkan)' == ''">true</UseVulkan>
     <UseDirectX12   Condition="'$(UseDirectX12)'   == ''">true</UseDirectX12>
-    <!-- The WebGPU backend is browser-only (Loom.Web / WASM); desktop builds don't reference it, so it
+    <!-- The WebGPU backend is browser-only (the gallery's Loom.Web, WASM); desktop builds don't reference it, so it
          defaults off and the browser host opts in. -->
     <UseWebGPU Condition="'$(UseWebGPU)' == ''">false</UseWebGPU>
   </PropertyGroup>

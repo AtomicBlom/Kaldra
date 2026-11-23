@@ -223,7 +223,7 @@
   <!--
     Close out the RID-conditional base-SDK delegation started in Sdk.props (same guard properties, still in
     scope — MSBuild properties persist across one project's whole evaluation). For the traditional
-    fixed-outer-Sdk usage (e.g. Loom.Sandbox) both imports are skipped: the outer Sdk="Microsoft.NET.Sdk"
+    fixed-outer-Sdk usage (e.g. the gallery's Loom.Sandbox) both imports are skipped: the outer Sdk="Microsoft.NET.Sdk"
     already resolved Microsoft.NET.Sdk's real targets, which MSBuild auto-imports last regardless, so nothing
     here would run anyway. For the bare-<Project> usage this is the only place the real base SDK's targets get
     imported at all, since there's no outer Sdk to do it implicitly.

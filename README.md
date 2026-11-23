@@ -211,12 +211,14 @@ A SUIsei page shows one the same way: a `HostImageSource` names it by tag, `UIPa
 
 ```bash
 dotnet build Loom.slnx                          # build everything
-dotnet run   --project Loom.Sandbox             # interactive demo gallery (opens a window, blocks until closed)
-dotnet run   --project Loom.Sandbox -- --demo bloom --backend dx12   # pick a demo + backend
-dotnet run   --project Loom.Tests               # the engine's unit tests (TUnit); Loom.Audio.Tests, Loom.Audio.Workbench.Tests, and Loom.Gallery.Tests (GPU-gated golden/parity over the gallery)
+dotnet run   --project samples/HelloTriangle    # a triangle in a window (opens a window, blocks until closed)
+dotnet run   --project Loom.Tests               # the engine's unit tests (TUnit)
 ```
 
-Android builds from the same app source, with the `android` workload installed: `samples/HelloUI` targets both `net11.0` (a desktop exe) and `net11.0-android` (an APK on CoreCLR, Vulkan 1.3, SUIsei with touch). `dotnet build samples/HelloUI -f net11.0-android -t:Run` installs and starts it on a connected device; [`samples/HelloUI/README.md`](samples/HelloUI/README.md) has the rest. The demo gallery runs there too: `dotnet build Loom.Sandbox.Android -t:Run` installs `Loom.Gallery`'s `GalleryApp` (the gallery without the desktop's ImGui dev tools), its shaders embedded and its models packed into the APK. The Android projects live in `Loom.Android.slnx`, so `Loom.slnx` never needs the workload.
+The demo gallery, which shows off what the engine draws and holds the GPU golden-image and cross-backend parity tests,
+is its own repository: [Kaldra.Gallery](https://github.com/AtomicBlom/Kaldra.Gallery), built on a checkout of this one.
+
+Android builds from the same app source, with the `android` workload installed: `samples/HelloUI` targets both `net11.0` (a desktop exe) and `net11.0-android` (an APK on CoreCLR, Vulkan 1.3, SUIsei with touch). `dotnet build samples/HelloUI -f net11.0-android -t:Run` installs and starts it on a connected device; [`samples/HelloUI/README.md`](samples/HelloUI/README.md) has the rest. The Android projects live in `Loom.Android.slnx`, so `Loom.slnx` never needs the workload.
 
 On Android, each finger is a touch contact as on Windows and in the browser (a pen is a pointer), a keyboard sends keys and text as on the desktop, the system's Back arrives as Escape (the app decides whether to leave), a mouse's buttons and a pen's barrel buttons are their own, and game controllers are pads with rumble. The on-screen keyboard opens while an input layer asks for text (`InputContext.RequestTextInput`, which SUIsei's layer does while a `TextBox` has focus); its height reaches the app as `LoomApplication.InputPaneHeight`, and in SUIsei `UIRoot.InputPaneHeight` plus `suisei:InputPane.AvoidsKeyboard="True"` on an element arranges that element clear of it, while a `ScrollViewer` keeps its focused field in view and pans by touch.
 
@@ -226,20 +228,9 @@ Three things a game needs on every host:
 - **Safe area.** `LoomApplication.SafeAreaInsets` is how far a phone's camera cutout reaches in from each edge, and in the browser its gesture bar and rounded corners too (the page's `env(safe-area-inset-*)`, which the default page reports by running under them with `viewport-fit=cover`; its canvas fills what is on screen between the browser's own bars, `100dvh`). In SUIsei, `UIRoot.SafeAreaInsets` plus `suisei:SafeArea.Edges="All"` keeps an element's content clear of it while a background runs to the edges.
 - **Fullscreen.** No phone browser has a menu item for it, so the page asks: `LoomApplication.CanFullscreen`, `IsFullscreen` and `SetFullscreen(bool)`, called from the input that asked, as the browser requires. Fullscreen arrives a moment later as a resize, and the player can leave it alone (Esc, Back), so read `IsFullscreen` rather than remembering. The Android host is always fullscreen and the desktop's window is the app's own, so neither offers it.
 
-The sandbox is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in `Loom.Gallery.Tests` — `GalleryGoldenTests`/`GalleryParityTests` render the gallery offscreen in-process (GPU-gated; skipped without one). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
+An app is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in-process, offscreen (`Loom.Tests`, and the gallery's golden-image and parity tests). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
 
-**Audio** — [`Loom.Audio`](Loom.Audio), apart from the engine: the app registers its platforms output (`Loom.Audio.Sdl`, `Loom.Audio.Android`, `Loom.Audio.Web`) and makes an `AudioEngine` over `AudioOutput.Open`. Clips (WAV, Ogg Vorbis, FLAC), music streamed from Ogg Vorbis or FLAC as it plays, and game-written sources (software synthesizers, procedural music, sample by sample) play on pooled voices mixed through a tree of buses, with ducking between them and 3D voices placed for a listener the game feeds, on the platform's audio thread at its lowest latency: SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser. The game and audio threads share no lock, and the steady mix allocates nothing. `samples/HelloAudio` is a playable synthesizer, and [the audio guide](docs/audio.md) covers the API, the threading model and each platform. [`Loom.Audio.Synth`](Loom.Audio.Synth) builds synthesis on it, and renders sound offline to measure or save ([the synthesis guide](docs/synth.md)). 
-
-### Write music: `loom-workbench`
-
-`loom-workbench` ([`Loom.Audio.Workbench.App`](Loom.Audio.Workbench.App)) is where a game's music is written. It opens a music project (a class library of songs, patches, kits and cues: files it edits and C# for what they can't say), plays it, and compiles it again in-process with Roslyn on every save, the song swapped in at the next bar. Arrange the sections and steer the cues, edit a part on the piano roll, design a patch from its operators, sketch a beat on a kit, and eject any piece to C# or bring it back as data.
-
-```bash
-dotnet run --project Loom.Audio.Workbench.App -- samples/HelloSynth   # the sample music project
-dotnet run --project Loom.Audio.Workbench.App -- new ../MyTunes       # a project of your own, from it
-```
-
-A game adds its own mix and controls beside the music with an extension (`IWorkbenchExtension`), and an app can host the workbench itself ([`Loom.Audio.Workbench`](Loom.Audio.Workbench), a SUIsei view). [The synthesis guide](docs/synth.md), sections 10 and 11, has the rest; [`samples/HelloSynth/README.md`](samples/HelloSynth/README.md) walks through the sample.
+**Audio** is not the engine's: [Sirrow](https://github.com/AtomicBlom/Sirrow) is a low-latency mixer and software synthesis for any .NET app, and [SirrowStudio](https://github.com/AtomicBlom/SirrowStudio) is where a game's music is written. An app takes both beside the engine and wires them together itself.
 
 ## Packages
 
@@ -253,8 +244,6 @@ A game adds its own mix and controls beside the music with an extension (`IWorkb
 | `Loom.Backend.WebGPU` | WebGPU backend (browser) |
 | `Loom.Concepts` | App-side helpers — `Camera`, `Frustum`, `Scene`. Not part of the engine |
 | `Loom.Input` | Neutral input: actions, bindings, layered event routing |
-| `Loom.Audio` | Low-latency audio: a lock-free, allocation-free mixer, buses and ducking, 3D voices, clips, Ogg Vorbis and FLAC streams (its own decoders), and game-written sources for software synthesis |
-| `Loom.Audio.Synth` | Software synthesis over `Loom.Audio`: DSP, effects, a synthesizer chip, drum kits, music written as code; sound rendered offline to measure or save |
 | `Loom.Hosting.Desktop` | Desktop host — window, surface, frame loop, CLI flags; gamepads through SDL 3, fetched by the build |
 | `Loom.Hosting.Web` | Browser host, paired with the WebGPU backend |
 | `Loom.Hosting.Android` | Android host — a `LoomActivity` with a Vulkan surface, Choreographer-paced frames, touch, keyboard and on-screen keyboard, mouse, game controllers |
@@ -276,7 +265,7 @@ Consuming Loom selects backends through the SDK:
 
 ## Architecture
 
-Three layers, kept strictly separate — `Sandbox → {backends} → Graph → Core`:
+Three layers, kept strictly separate — `app → {backends} → Graph → Core`:
 
 - **Describe** (`Loom.Core`) — immutable, hashable, fluent builders; the only layer authored against directly.
 - **Execute** (`Loom.Graph`) — derives barriers, layout transitions, and aliasing; backend-neutral, no graphics-API types.
@@ -288,10 +277,10 @@ Three layers, kept strictly separate — `Sandbox → {backends} → Graph → C
 
 - [GitHub](https://github.com/AtomicBlom/Loom)
 - [Design bible & roadmap](Planning.md) · [UI track](external/SUIsei/Planning.md)
-- Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [effect cookbook](docs/effect-cookbook.md) · [audio](docs/audio.md) · [synthesis](docs/synth.md) · [architecture](docs/architecture.md) · [porting from OpenGL](docs/porting-from-opengl.md)
-- [CI with a software rasterizer (WARP, no GPU)](docs/ci-software-rasterizer.md)
-- [WebGPU pixel parity](docs/webgpu-parity.md)
+- Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [architecture](docs/architecture.md) · [porting from OpenGL](docs/porting-from-opengl.md)
+- [Kaldra.Gallery](https://github.com/AtomicBlom/Kaldra.Gallery): the demos, the effect cookbook, and the golden-image, WARP and WebGPU parity tests
+- [Sirrow](https://github.com/AtomicBlom/Sirrow) (audio) and [SirrowStudio](https://github.com/AtomicBlom/SirrowStudio) (writing music)
 
 ## Licence
 
-MIT ([`LICENSE`](LICENSE)). The gallery's Kenney assets are CC0 ([`Loom.Gallery/Assets/kenney/LICENSE.md`](Loom.Gallery/Assets/kenney/LICENSE.md)).
+MIT ([`LICENSE`](LICENSE)).

@@ -44,7 +44,7 @@ jobs:
         with:
           dotnet-version: '11.0.x'
 
-      # Restore only the projects that get packed — Loom.Sandbox and Loom.Tests are excluded
+      # Restore only the projects that get packed — Loom.Tests and the samples are excluded
       # to avoid compiling their demo shaders (not publish artifacts).
       - name: Restore
         shell: pwsh

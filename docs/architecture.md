@@ -56,7 +56,6 @@ Beside the engine tiers, all backend-neutral and free of graphics-API references
 | `Loom.Assets` | image + glTF loaders, and the material upload bridge |
 | `Loom.Concepts` | app-side helpers — `Camera`, `Frustum`, `Scene`. Deliberately **not** engine API |
 | `Loom.Input` | actions, bindings, layered event routing |
-| `Loom.Audio` | the mixer: buses, pooled voices, clips, game-written sources. Each host opens its output device behind `IAudioDevice` (SDL 3, AAudio, an AudioWorklet), so no platform audio API enters it; see [`audio.md`](audio.md) |
 | `Loom.UI.SUIsei` / `Loom.UI.ImGui` | UI bridges; both reach the GPU only through the neutral draw-list verb, so no backend references a UI library |
 
 In the browser, the host (`Loom.Backend.WebGPU/wwwroot/loom-webgpu.js`) keeps from the browser the keys it would also act

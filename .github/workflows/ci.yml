@@ -1,13 +1,9 @@
 name: CI
 
 # Build the engine (including both GPU backends, so the offscreen/hosted-application tests link and self-register)
-# and run the unit tests. No GPU is needed: the GPU-gated tests (golden-image, cross-backend parity, and the
-# offscreen render tests) auto-skip when no device is available, and the rest are backend-neutral (describe/execute
-# layers, graph export, frustum math, asset source).
-#
-# The golden-image regression (GalleryGoldenTests) is deliberately NOT run here: it needs a GPU to produce the
-# captures, and GitHub-hosted runners have none. It is opt-in (skipped without a GPU) and is run
-# locally via tools/golden.ps1 — wire a self-hosted GPU runner to add it to CI later.
+# and run the unit tests. No GPU is needed: the GPU-gated tests (the offscreen render tests) auto-skip when no device
+# is available, and the rest are backend-neutral (describe/execute layers, graph export, frustum math, asset source).
+# The golden-image and cross-backend parity tests are the gallery's, in Kaldra.Gallery.
 
 on:
   push:
@@ -67,15 +63,9 @@ jobs:
         run: pwsh tools/shader-cache.ps1 -Mode restore
 
       # Build the tests and everything they reference — the engine, both GPU backends, and the Slang/DXC shader
-      # toolchain that the backends compile through (hence a Windows runner; see runs-on above). One test project
-      # each for the engine, the audio, the workbench and the gallery, as they will be in their own repositories.
+      # toolchain that the backends compile through (hence a Windows runner; see runs-on above).
       - name: Build (engine + backends + tests)
-        shell: pwsh
-        run: |
-          foreach ($p in 'Loom.Tests', 'Loom.Audio.Tests', 'Loom.Audio.Workbench.Tests', 'Loom.Gallery.Tests') {
-            dotnet build "$p/$p.csproj" -c Release
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          }
+        run: dotnet build Loom.Tests/Loom.Tests.csproj -c Release
 
       # Only on a miss: a hit restored exactly what this key produces, so there is nothing new to store.
       - name: Save shader cache
@@ -85,15 +75,8 @@ jobs:
 
       # TUnit runs on Microsoft.Testing.Platform; the repo-root global.json opts `dotnet test` into MTP mode,
       # which takes the project via --project (the bare path form is VSTest-only and removed in the .NET 10 SDK).
-      - name: Test (no-GPU unit tests; golden-image regression auto-skips)
-        shell: pwsh
-        run: |
-          $failed = @()
-          foreach ($p in 'Loom.Tests', 'Loom.Audio.Tests', 'Loom.Audio.Workbench.Tests', 'Loom.Gallery.Tests') {
-            dotnet test --project "$p/$p.csproj" -c Release --no-build
-            if ($LASTEXITCODE) { $failed += $p }
-          }
-          if ($failed) { Write-Error "Failed: $($failed -join ', ')"; exit 1 }
+      - name: Test (no-GPU unit tests; the GPU-gated ones auto-skip)
+        run: dotnet test --project Loom.Tests/Loom.Tests.csproj -c Release --no-build
 
       # NativeAOT gate: SUIsei is marked <IsAotCompatible>, which turns on the trim/AOT/single-file Roslyn
       # analyzers; build it with warnings promoted to errors so any reflection or AOT-unsafe pattern fails CI.
