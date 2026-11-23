@@ -28,7 +28,7 @@
 
   <!-- Optional Dear ImGui integration: renders the host's ImGui draw data through the public draw-list API, so
        neither backend references ImGui.NET. Reference this package to add the overlay; omit it and the engine is
-       wholly ImGui-free. The twin of Loom.UI.SUIsei (which bridges the XAML UI engine the same way). -->
+       wholly ImGui-free. The twin of Loom.UI.Vysara (which bridges the XAML UI engine the same way). -->
   <ItemGroup>
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />

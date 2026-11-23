@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Another repository's view, with an error (an element SUIsei does not know): XamlApp excludes Vendored\, so its build
+<!-- Another repository's view, with an error (an element Vysara does not know): XamlApp excludes Vendored\, so its build
      must never read this. -->
-<StackPanel xmlns="https://github.com/AtomicBlom/SUIsei/ui"
+<StackPanel xmlns="https://github.com/AtomicBlom/Vysara/ui"
             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
             x:Class="Vendored.OtherView">
 	<NoSuchControl />

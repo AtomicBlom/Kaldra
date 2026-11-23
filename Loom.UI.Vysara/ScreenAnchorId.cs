@@ -1,4 +1,4 @@
-namespace Loom.UI.SUIsei;
+namespace Loom.UI.Vysara;
 
 /// <summary>
 /// Names one anchor of a <see cref="ScreenAnchors"/>. An id outlives its anchor only as a dead id: once the anchor is

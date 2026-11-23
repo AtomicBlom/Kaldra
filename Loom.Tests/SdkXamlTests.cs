@@ -4,20 +4,20 @@ using System.Text.Json;
 namespace Loom.Tests;
 
 /// <summary>
-/// The Loom SDK's <c>UseSUIsei</c> switch gives an app SUIsei's XAML, not only its runtime. Built through the SDK from
+/// The Loom SDK's <c>UseVysara</c> switch gives an app Vysara's XAML, not only its runtime. Built through the SDK from
 /// source, an app with a <c>.xaml</c> view gets the view's typed tree generated and can run it; a XAML error fails the
 /// build at the <c>.xaml</c>'s own file and line; and the views are <c>dotnet watch</c> inputs, which is what XAML Hot
 /// Reload runs on. A view under a folder the app keeps out of its items (<c>DefaultItemExcludes</c>), as a game keeps
 /// out the Loom submodule beneath it, stays out of its XAML too: the app's fixture holds a broken one there. The apps are
 /// the fixtures under <c>SdkFixtures</c>, each its own project, built with the test run's own configuration so their
-/// Loom references are the ones this run already built. The packaged SDK points the same switch at the SUIsei package,
+/// Loom references are the ones this run already built. The packaged SDK points the same switch at the Vysara package,
 /// which carries the same generator and <c>.xaml</c> registration; no test here builds against packages.
 /// </summary>
 [NotInParallel] // the fixtures build against the same referenced projects
 public class SdkXamlTests
 {
 	[Test]
-	public void An_app_that_turns_SUIsei_on_gets_its_xaml_views_generated()
+	public void An_app_that_turns_Vysara_on_gets_its_xaml_views_generated()
 	{
 		var app = Fixture("XamlApp");
 		var (build, buildOutput) = Dotnet(app, "build", "XamlApp.csproj", "-c", Configuration, "-nologo");
@@ -25,7 +25,7 @@ public class SdkXamlTests
 
 		// The generator wrote the view's half of the partial class...
 		Directory.GetFiles(Path.Combine(app, "obj", Configuration), "XamlApp.Views.HelloView.g.cs", SearchOption.AllDirectories)
-			.ShouldNotBeEmpty("SUIsei's generator wrote no XamlApp.Views.HelloView.g.cs");
+			.ShouldNotBeEmpty("Vysara's generator wrote no XamlApp.Views.HelloView.g.cs");
 
 		// ...and the app runs it: the typed x:Name field holds what the XAML set.
 		var (run, runOutput) = Dotnet(app, Path.Combine(app, "bin", Configuration, "net11.0", "XamlApp.dll"));
@@ -39,7 +39,7 @@ public class SdkXamlTests
 		var app = Fixture("BrokenXamlApp");
 		var (exit, output) = Dotnet(app, "build", "BrokenXamlApp.csproj", "-c", Configuration, "-nologo");
 		exit.ShouldNotBe(0, "a view with an unknown element built");
-		output.ShouldContain(Path.Combine("Views", "BrokenView.xaml") + "(7,3): error SUISEI003");
+		output.ShouldContain(Path.Combine("Views", "BrokenView.xaml") + "(7,3): error VYSARA003");
 	}
 
 	[Test]

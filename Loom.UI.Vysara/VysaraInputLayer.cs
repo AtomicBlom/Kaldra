@@ -1,14 +1,14 @@
 using System.Numerics;
 using System.Text;
 using Loom.Input;
-using SUIsei;
-using SUIsei.Controls;
-using Sui = global::SUIsei.Input;
+using Vysara;
+using Vysara.Controls;
+using Sui = global::Vysara.Input;
 
-namespace Loom.UI.SUIsei;
+namespace Loom.UI.Vysara;
 
 /// <summary>
-/// The input half of the SUIsei integration — the twin of the render-only <see cref="UIPainter"/>. An
+/// The input half of the Vysara integration — the twin of the render-only <see cref="UIPainter"/>. An
 /// <see cref="IInputLayer"/> that forwards a frame's neutral input into the <see cref="UIHost"/> it feeds, and keeps
 /// from the lower (game) layers whatever the UI takes. It owns the neutral <see cref="Key"/> and
 /// <see cref="GamepadButton"/> → <see cref="Sui.VirtualKey"/> tables — the second key table in the input stack (each
@@ -32,7 +32,7 @@ namespace Loom.UI.SUIsei;
 /// A controller goes to the UI while <see cref="PadNavigation"/> is set (a menu is open): see there.
 /// </para>
 /// </remarks>
-public sealed class SUIseiInputLayer : IInputLayer
+public sealed class VysaraInputLayer : IInputLayer
 {
 	private readonly UIHost _host;
 
@@ -57,7 +57,7 @@ public sealed class SUIseiInputLayer : IInputLayer
 	private readonly HashSet<int> _uiTouches = [];
 
 	/// <summary>Creates a layer that feeds <paramref name="host"/>.</summary>
-	public SUIseiInputLayer(UIHost host)
+	public VysaraInputLayer(UIHost host)
 	{
 		ArgumentNullException.ThrowIfNull(host);
 		_host = host;
@@ -342,7 +342,7 @@ public sealed class SUIseiInputLayer : IInputLayer
 		_ => Sui.PointerButtons.None,
 	};
 
-	// SUIsei's PointerUpdateKind models only the three primary buttons, so X-buttons are tracked in the button mask
+	// Vysara's PointerUpdateKind models only the three primary buttons, so X-buttons are tracked in the button mask
 	// but never raised as a routed press/release edge.
 	private static Sui.PointerUpdateKind PressKind(MouseButton button) => button switch
 	{
@@ -369,7 +369,7 @@ public sealed class SUIseiInputLayer : IInputLayer
 		_ => Sui.ModifierKeys.None,
 	};
 
-	// The neutral Key → SUIsei VirtualKey table this layer owns. VirtualKey is a WinUI-compatible subset, so keys
+	// The neutral Key → Vysara VirtualKey table this layer owns. VirtualKey is a WinUI-compatible subset, so keys
 	// with no equivalent (extra function keys, keypad, most punctuation, the context-menu key) map to None and are
 	// not forwarded. Letters/digits/F1-F12 map by contiguous offset; the rest are named explicitly.
 	private static Sui.VirtualKey ToVirtualKey(Key key) => key switch
@@ -397,8 +397,8 @@ public sealed class SUIseiInputLayer : IInputLayer
 		_ => Sui.VirtualKey.None,
 	};
 
-	// The neutral pad button → SUIsei's gamepad keys, as WinUI numbers them. Positional: South is A whatever it is
-	// labelled (a PlayStation pad's cross). The bumpers and stick buttons have no SUIsei key and stay the game's.
+	// The neutral pad button → Vysara's gamepad keys, as WinUI numbers them. Positional: South is A whatever it is
+	// labelled (a PlayStation pad's cross). The bumpers and stick buttons have no Vysara key and stay the game's.
 	private static Sui.VirtualKey ToGamepadKey(GamepadButton button) => button switch
 	{
 		GamepadButton.South => Sui.VirtualKey.GamepadA,

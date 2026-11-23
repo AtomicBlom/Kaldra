@@ -1,17 +1,17 @@
 using System.Numerics;
 
 using Loom.Input;
-using Loom.UI.SUIsei;
+using Loom.UI.Vysara;
 
-using SUIsei;
-using SUIsei.Controls;
+using Vysara;
+using Vysara.Controls;
 
 namespace Loom.Tests;
 
 /// <summary>
 /// Touch through the input stack: a contact's phases in <see cref="InputSnapshot.Touches"/> frame to frame, an action
-/// pressed from outside its bindings (<see cref="InputActions.Press"/>), and fingers shared between SUIsei and the game
-/// contact by contact (<see cref="SUIseiInputLayer"/>).
+/// pressed from outside its bindings (<see cref="InputActions.Press"/>), and fingers shared between Vysara and the game
+/// contact by contact (<see cref="VysaraInputLayer"/>).
 /// </summary>
 public class InputTouchTests
 {
@@ -110,7 +110,7 @@ public class InputTouchTests
 		view.Root.Content = button;
 		host.Tick(0.016, 0f, Surface);
 		var stack = new InputLayerStack();
-		stack.Push(new SUIseiInputLayer(host));
+		stack.Push(new VysaraInputLayer(host));
 		return (host, stack, button);
 	}
 

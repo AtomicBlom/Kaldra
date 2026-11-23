@@ -22,7 +22,7 @@ public interface IHostControl
 
 	/// <summary>
 	/// How many physical pixels of the app's surface make one layout unit on this display: about 3 on a typical phone,
-	/// 1 on a desktop monitor at 100%. A UI scales its layout by it (SUIsei's <c>UILayer.LayoutScale</c>) so controls keep
+	/// 1 on a desktop monitor at 100%. A UI scales its layout by it (Vysara's <c>UILayer.LayoutScale</c>) so controls keep
 	/// a physical size a finger or a cursor can hit. Read it each frame: it changes when the window moves to another
 	/// display. Defaults to 1 for a host that does not know its display's density.
 	/// </summary>

@@ -462,7 +462,7 @@ export function submitFrame(commandsView, arenaView) {
 
 // ── Host helpers ──
 
-// The successful-boot message fades the on-page status line to near-invisible: the in-canvas SUIsei shell's top/
+// The successful-boot message fades the on-page status line to near-invisible: the in-canvas Vysara shell's top/
 // bottom bars now show the device name and status, so the fixed bottom-left HTML div would otherwise sit right on
 // top of the shell's bottom bar. Its text stays in the DOM (unfaded) for the verification harness's CDP reads —
 // only its opacity changes. Loading/error text (anything else) stays fully visible.

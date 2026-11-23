@@ -14,7 +14,7 @@ namespace Loom.Hosting.Android;
 /// <remarks>
 /// <para>
 /// Every finger is its own contact: <see cref="InputEventKind.Touch"/> events (began, moved, ended, canceled) under its
-/// pointer id, and nothing else, as on the desktop and in the browser. A UI layer such as SUIsei's routes the fingers that
+/// pointer id, and nothing else, as on the desktop and in the browser. A UI layer such as Vysara's routes the fingers that
 /// land on it as touch pointers; the rest are the game's. A pen is a pointer, as a mouse is: a
 /// <see cref="InputEventKind.PointerMove"/> typed as pen, with the left button going down and up as its tip touches and
 /// lifts, and its barrel buttons as the right and middle buttons.

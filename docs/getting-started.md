@@ -25,12 +25,12 @@ Add the SDK package to your `.csproj`:
   <UseVulkan>true</UseVulkan>
   <UseDirectX12>false</UseDirectX12>
   <!-- Optional UI integrations -->
-  <UseSUIsei>false</UseSUIsei>
+  <UseVysara>false</UseVysara>
   <UseImGui>false</UseImGui>
 </PropertyGroup>
 ```
 
-Setting a flag to `true` adds the matching `PackageReference` automatically — you never reference `Loom.Backend.Vulkan` or `Loom.UI.SUIsei` directly, and `Loom.Core` / `Loom.Graph` / `Loom.Assets` arrive transitively. `UseSUIsei` also brings SUIsei's XAML generator: every `.xaml` view in the project compiles into its partial `x:Class`, XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. To compile your app's Slang shaders at build time, add:
+Setting a flag to `true` adds the matching `PackageReference` automatically — you never reference `Loom.Backend.Vulkan` or `Loom.UI.Vysara` directly, and `Loom.Core` / `Loom.Graph` / `Loom.Assets` arrive transitively. `UseVysara` also brings Vysara's XAML generator: every `.xaml` view in the project compiles into its partial `x:Class`, XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. To compile your app's Slang shaders at build time, add:
 
 ```xml
 <PropertyGroup>
@@ -47,6 +47,9 @@ Slang sources in `Shaders/` compile to `.spv` / `.dxil` / `.json` under `shaders
 git submodule add https://github.com/AtomicBlom/Loom external/Loom
 git submodule update --init --recursive
 ```
+
+An app with `UseVysara` builds Vysara from a checkout too: by default `Vysara` beside the engine's checkout
+(`external/Vysara` here), or the folder the `VysaraSource` property names (`build/Vysara.Source.props`).
 
 Consume the SDK by writing the two import lines yourself:
 

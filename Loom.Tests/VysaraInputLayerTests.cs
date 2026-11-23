@@ -1,19 +1,19 @@
 using System.Numerics;
 
 using Loom.Input;
-using Loom.UI.SUIsei;
+using Loom.UI.Vysara;
 
-using SUIsei;
-using SUIsei.Controls;
-using SUIsei.Media;
+using Vysara;
+using Vysara.Controls;
+using Vysara.Media;
 
 namespace Loom.Tests;
 
 /// <summary>
-/// What <see cref="SUIseiInputLayer"/> takes from the game: a page with two buttons stacked at its top left, over a game
+/// What <see cref="VysaraInputLayer"/> takes from the game: a page with two buttons stacked at its top left, over a game
 /// layer that records what reaches it, run through an <see cref="InputLayerStack"/> a frame at a time as an app does.
 /// </summary>
-public class SUIseiInputLayerTests
+public class VysaraInputLayerTests
 {
 	private static readonly Vector2 Surface = new(400f, 400f);
 	private static readonly Vector2 OnFirst = new(50f, 25f);   // inside the first button (0..100 x 0..50)
@@ -26,7 +26,7 @@ public class SUIseiInputLayerTests
 		public Button Second { get; }
 		public int FirstClicks { get; private set; }
 		public int SecondClicks { get; private set; }
-		public SUIseiInputLayer Layer { get; }
+		public VysaraInputLayer Layer { get; }
 		public Recorder Game { get; } = new();
 		public InputLayerStack Stack { get; } = new();
 		private float _time;
@@ -41,7 +41,7 @@ public class SUIseiInputLayerTests
 			column.Children.Add(First);
 			column.Children.Add(Second);
 			Host.CreateRoot(UILayer.Default).Root.Content = column;
-			Layer = new SUIseiInputLayer(Host);
+			Layer = new VysaraInputLayer(Host);
 			Stack.Push(Game);
 			Stack.Push(Layer);
 			Host.Tick(0.016, 0f, Surface); // lay out, so content can be hit

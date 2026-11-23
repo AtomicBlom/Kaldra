@@ -6,23 +6,23 @@ using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Loom.Core.Primitives;
-using Loom.UI.SUIsei;
-using SUIsei;
-using SUIsei.Controls;
-using SUIsei.Drawing;
-using SUIsei.Extensions;
-using SUIsei.Media;
-using SUIsei.Media.Imaging;
-using Ellipse = SUIsei.Shapes.Ellipse;
+using Loom.UI.Vysara;
+using Vysara;
+using Vysara.Controls;
+using Vysara.Drawing;
+using Vysara.Extensions;
+using Vysara.Media;
+using Vysara.Media.Imaging;
+using Ellipse = Vysara.Shapes.Ellipse;
 using LoomDrawCommand = Loom.Core.Hosting.DrawCommand;
 using LoomRect = Loom.Core.Primitives.Rect;
 using OverlayVertex = Loom.Core.Geometry.OverlayVertex;
-using SoftwareRasterizer = SUIsei.Rasterizer.SoftwareRasterizer;
+using SoftwareRasterizer = Vysara.Rasterizer.SoftwareRasterizer;
 
 namespace Loom.Tests;
 
 /// <summary>
-/// Images through the painter read as their sources declare, as SUIsei's rasterizer reads them: an sRGB source decoded
+/// Images through the painter read as their sources declare, as Vysara's rasterizer reads them: an sRGB source decoded
 /// per texel before filtering (the upload format's job), a straight-alpha one premultiplied after the filter (the
 /// shader's, flagged per command by the painter), whether an <see cref="Image"/> or a shape's <see cref="ImageBrush"/>
 /// samples it. Also the two kinds of image a host supplies: a <see cref="HostImageSource"/> bound to a graph texture by
@@ -38,7 +38,7 @@ public class UIImageTests
 	private static readonly Vector4 Background = new(0.2f, 0.25f, 0.3f, 1f);
 
 	[Test]
-	public void Straight_and_premultiplied_images_render_as_SUIsei_s_rasterizer_does()
+	public void Straight_and_premultiplied_images_render_as_Vysara_s_rasterizer_does()
 	{
 		var backends = AvailableBackends();
 		var failures = new List<string>();
@@ -96,7 +96,7 @@ public class UIImageTests
 			}
 		}
 
-		failures.ShouldBeEmpty("Images read differently on the GPU and in SUIsei's rasterizer:\n  " + string.Join("\n  ", failures));
+		failures.ShouldBeEmpty("Images read differently on the GPU and in Vysara's rasterizer:\n  " + string.Join("\n  ", failures));
 	}
 
 	[Test]
@@ -206,7 +206,7 @@ public class UIImageTests
 	}
 
 	/// <summary>
-	/// A bitmap rewritten every frame allocates nothing. SUIsei's invalidate and composite allocate nothing, the engine's
+	/// A bitmap rewritten every frame allocates nothing. Vysara's invalidate and composite allocate nothing, the engine's
 	/// frame allocates nothing, and <see cref="UIPainter.Prepare"/> writes the new texels into the bitmap's one texture
 	/// through <see cref="IEngine.UpdateTexture"/>, whose staging buffer the backend made at the first update.
 	/// </summary>
@@ -410,7 +410,7 @@ public class UIImageTests
 		return texels;
 	}
 
-	// An 8x8 graph target filled with four quadrants by its own pass, shown by a host image in a SUIsei page drawn by a
+	// An 8x8 graph target filled with four quadrants by its own pass, shown by a host image in a Vysara page drawn by a
 	// second pass. `bind` and `declare` leave out the painter binding and the UI pass's .Samples; `colorSpace` is what the
 	// host image declares about the Rgba8Srgb target.
 	private static void RenderHostImage(IRenderBackend backend, string? outPath, bool bind, bool declare, TextureColorSpace colorSpace)

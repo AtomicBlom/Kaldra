@@ -2,13 +2,13 @@ using System.Numerics;
 
 using Loom.Core.Geometry;
 using Loom.Core.Hosting;
-using SUIsei;
-using SUIsei.Controls;
+using Vysara;
+using Vysara.Controls;
 
-namespace Loom.UI.SUIsei;
+namespace Loom.UI.Vysara;
 
 /// <summary>
-/// Pins SUIsei elements to points in the world: each frame, every anchored element moves to where its point projects
+/// Pins Vysara elements to points in the world: each frame, every anchored element moves to where its point projects
 /// on screen, and fades out while the point is off-screen or behind the eye. Labels over objects, markers along a path,
 /// a name over a character — UI that lives in screen space but follows the world.
 /// <para>
@@ -20,7 +20,7 @@ namespace Loom.UI.SUIsei;
 /// </para>
 /// <para>
 /// <b>The anchors take a <see cref="UIView"/> of their own</b> — a root of its own on the HUD's host, or a host of its
-/// own — and fill it. SUIsei recomposites a view's whole draw list whenever anything in it changes, and moving anchors
+/// own — and fill it. Vysara recomposites a view's whole draw list whenever anything in it changes, and moving anchors
 /// change every frame, so a view shared with a static HUD would recomposite that HUD every frame too. Draw it like any
 /// view: <c>painter.Draw(ctx, anchors.View.Surface)</c>.
 /// </para>

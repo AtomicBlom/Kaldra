@@ -2,7 +2,7 @@
 
   <!-- The engine owns its infrastructure shaders (tonemap/blit/fullscreen/exposure/debugview) and ships them
        embedded in this assembly, so consuming apps don't carry them. UI shaders are NOT here — each optional UI
-       package (Loom.UI.ImGui, Loom.UI.SUIsei) ships its own, resolved at runtime by the backend's loose-file
+       package (Loom.UI.ImGui, Loom.UI.Vysara) ships its own, resolved at runtime by the backend's loose-file
        fallback. Import only the shared shader-compile machinery (not the app SDK), so the backend never
        self-references through backend selection. The compiled .spv/.json become EmbeddedResource (Embed mode). -->
   <Import Project="..\build\Loom.Sdk\Loom.Shaders.props" />

@@ -4,9 +4,10 @@
 
 .DESCRIPTION
   What an app builds against when it takes Loom as packages rather than from source: the engine and its hosts,
-  backends and UI adapters, the SDK, and SUIsei and VMASharp (submodules).
-  The folder is a NuGet feed as it stands (add it as a source). Every package gets the same version, SUIsei's included,
-  so an app names one: LoomPackageVersion and LoomSUIseiVersion in Loom.Sdk's Sdk.targets, and the version of each
+  backends and UI adapters, the SDK, VMASharp (a submodule), and Vysara's from its checkout (VysaraSource, by default
+  ..\Vysara beside this one), which the Vysara adapter depends on at the same version.
+  The folder is a NuGet feed as it stands (add it as a source). Every package gets the same version, Vysara's included,
+  so an app names one: LoomPackageVersion and LoomVysaraVersion in Loom.Sdk's Sdk.targets, and the version of each
   package it references itself.
 
   Android's package (Loom.Hosting.Android) needs the android workload; -SkipAndroid leaves it out.
@@ -25,12 +26,13 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Output) { $Output = Join-Path $repo "artifacts\packages" }
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
+$vysara = (dotnet msbuild (Join-Path $repo "Loom.UI.Vysara/Loom.UI.Vysara.csproj") -getProperty:VysaraSource).Trim()
 
 # In the order they depend on each other, so a failure names the first package that can't be made
 $projects = @(
 	"external/VMASharp/VMASharp/VMASharp.csproj",
-	"external/SUIsei/SUIsei/SUIsei.csproj",
-	"external/SUIsei/SUIsei.Diagnostics.Endpoint/SUIsei.Diagnostics.Endpoint.csproj",
+	(Join-Path $vysara "Vysara/Vysara.csproj"),
+	(Join-Path $vysara "Vysara.Diagnostics.Endpoint/Vysara.Diagnostics.Endpoint.csproj"),
 	"Loom.Input/Loom.Input.csproj",
 	"Loom.Core/Loom.Core.csproj",
 	"Loom.Graph/Loom.Graph.csproj",
@@ -41,7 +43,7 @@ $projects = @(
 	"Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj",
 	"Loom.Hosting.Desktop/Loom.Hosting.Desktop.csproj",
 	"Loom.Hosting.Web/Loom.Hosting.Web.csproj",
-	"Loom.UI.SUIsei/Loom.UI.SUIsei.csproj",
+	"Loom.UI.Vysara/Loom.UI.Vysara.csproj",
 	"Loom.UI.ImGui/Loom.UI.ImGui.csproj",
 	"build/Loom.Sdk/Loom.Sdk.csproj"
 )
@@ -51,7 +53,7 @@ if (-not $SkipAndroid) {
 
 foreach ($project in $projects) {
 	Write-Host "[pack] $project"
-	dotnet pack (Join-Path $repo $project) -c $Configuration -o $Output "-p:Version=$Version" -p:UseDebugVisualization=false --nologo -v:q
+	dotnet pack ([IO.Path]::Combine($repo, $project)) -c $Configuration -o $Output "-p:Version=$Version" -p:UseDebugVisualization=false --nologo -v:q
 	if ($LASTEXITCODE) { throw "pack-local: $project did not pack." }
 }
 $made = @(Get-ChildItem -LiteralPath $Output -Filter "*.$Version.nupkg")

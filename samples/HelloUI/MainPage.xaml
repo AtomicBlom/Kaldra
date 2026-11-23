@@ -1,8 +1,8 @@
-<ContentControl xmlns="https://github.com/AtomicBlom/SUIsei/ui"
+<ContentControl xmlns="https://github.com/AtomicBlom/Vysara/ui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:suisei="https://github.com/AtomicBlom/SUIsei/extensions"
+        xmlns:vysara="https://github.com/AtomicBlom/Vysara/extensions"
         x:Class="HelloUI.MainPage"
-        suisei:InputPane.AvoidsKeyboard="True" suisei:SafeArea.Edges="All">
+        vysara:InputPane.AvoidsKeyboard="True" vysara:SafeArea.Edges="All">
 	<!-- The page fills the surface and keeps clear of the on-screen keyboard and the camera cutout: while the keyboard is
 	     up, the scroll viewer shrinks to the part of the screen above it and scrolls the focused text box, low on the card,
 	     back into view. -->
@@ -10,7 +10,7 @@
 		<Border x:Name="Card" HorizontalAlignment="Center" VerticalAlignment="Center" Width="360" Margin="0,16,0,16"
 		        CornerRadius="20" BorderThickness="2" BorderBrush="#78B4FF" Padding="24,20,24,24">
 			<StackPanel Orientation="Vertical">
-				<TextBlock x:Name="TitleLabel" FontSize="26" Text="Hello from SUIsei" />
+				<TextBlock x:Name="TitleLabel" FontSize="26" Text="Hello from Vysara" />
 				<TextBlock x:Name="GreetingLabel" FontSize="13" Margin="0,4,0,0" Text="{x:Bind ViewModel.Greeting, Mode=OneWay}" />
 				<TextBlock x:Name="DeviceLabel" FontSize="13" Margin="0,6,0,0" Text="{x:Bind ViewModel.Device, Mode=OneWay}" />
 				<TextBlock x:Name="PlatformLabel" FontSize="13" Margin="0,2,0,0" Text="{x:Bind ViewModel.Platform}" />

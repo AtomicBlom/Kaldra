@@ -6,7 +6,7 @@ namespace Loom.Core.Hosting;
 /// Finds a compiled shader artifact embedded in the app's own assemblies, for a host with no shader folder beside the
 /// app (an Android APK, a browser bundle). The Loom shader build embeds each artifact under
 /// <c>"&lt;AssemblyName&gt;.Shaders.&lt;file&gt;"</c>; the app's entry assembly is looked in first, then every other loaded
-/// assembly, so a UI library's shaders (Loom.UI.SUIsei's) are found once that library is loaded. Backend-neutral: it
+/// assembly, so a UI library's shaders (Loom.UI.Vysara's) are found once that library is loaded. Backend-neutral: it
 /// deals only in file names and bytes, whatever the artifact's format.
 /// </summary>
 public static class EmbeddedShaders

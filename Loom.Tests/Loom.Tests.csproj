@@ -50,11 +50,14 @@
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <ProjectReference Include="..\Loom.Concepts\Loom.Concepts.csproj" />
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
-    <!-- The SUIsei adapter: its painter, input layer and screen anchors -->
-    <ProjectReference Include="..\Loom.UI.SUIsei\Loom.UI.SUIsei.csproj" />
-    <!-- SUIsei's software rasterizer, the CPU oracle UIImageTests checks the painter's images against -->
-    <ProjectReference Include="..\external\SUIsei\SUIsei.Rasterizer\SUIsei.Rasterizer.csproj" />
+    <!-- The Vysara adapter: its painter, input layer and screen anchors -->
+    <ProjectReference Include="..\Loom.UI.Vysara\Loom.UI.Vysara.csproj" />
+    <!-- Vysara's software rasterizer, the CPU oracle UIImageTests checks the painter's images against -->
+    <ProjectReference Include="$(VysaraSource)Vysara.Rasterizer\Vysara.Rasterizer.csproj" />
   </ItemGroup>
+  <PropertyGroup>
+    <_LoomNeedsVysaraSource>true</_LoomNeedsVysaraSource>
+  </PropertyGroup>
 
   <!-- The desktop host, for the backend-neutral host-machinery tests (HostOptions launch-option parsing). No GPU
        and no window are created — only the pure parser is exercised. -->

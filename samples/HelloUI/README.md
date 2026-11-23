@@ -1,6 +1,6 @@
 # HelloUI: one Loom app on the desktop and on Android
 
-A SUIsei XAML page (a tap counter, a slider, a checkbox, and the GPU and runtime it is on) over a backdrop drawn by the app's own Slang shader. The same `HelloUIApp` builds two ways, chosen by target framework:
+A Vysara XAML page (a tap counter, a slider, a checkbox, and the GPU and runtime it is on) over a backdrop drawn by the app's own Slang shader. The same `HelloUIApp` builds two ways, chosen by target framework:
 
 | Target | Output | Host |
 |---|---|---|

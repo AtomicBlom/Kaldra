@@ -9,11 +9,11 @@ namespace Loom.UI.ImGui;
 /// <see cref="IInputLayer"/> that feeds a frame's neutral input into the global ImGui context's IO, then blocks
 /// lower (game) layers whenever ImGui reports it captured the mouse or keyboard. ImGui derives
 /// <c>WantCaptureMouse</c>/<c>WantCaptureKeyboard</c> itself from the fed events and its hovered/active state, so —
-/// unlike the SUIsei glue — no submodule change is needed for the report. Push it above the game's layers.
+/// unlike the Vysara glue — no submodule change is needed for the report. Push it above the game's layers.
 /// </summary>
 /// <remarks>
 /// ImGui's capture flags reflect the state established by the <i>previous</i> frame's <c>NewFrame</c>, so the block
-/// uses last frame's result — one frame of coarse latency, matching the SUIsei glue. The very first click onto an
+/// uses last frame's result — one frame of coarse latency, matching the Vysara glue. The very first click onto an
 /// ImGui widget is therefore not yet captured and can "click through" to the game on that frame, after which the
 /// block engages. The app owns the ImGui context lifecycle (<c>NewFrame</c>/<c>Render</c>); this layer only feeds
 /// IO events and reads the flags off the same global context the <see cref="ImGuiPainter"/> renders from.
