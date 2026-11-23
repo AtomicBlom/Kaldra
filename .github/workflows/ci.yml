@@ -14,32 +14,39 @@ on:
     branches: [master]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
-    # Self-hosted Windows runner: Loom.Tests references both GPU backends (below), whose shader-compile step runs
-    # the Slang compiler — and Slang.Sdk packages a native slangc only for win-x64 / win-arm64 (the DirectX12
-    # backend also signs its DXIL with the Windows DXC), so a Linux runner can't build it. A self-hosted runner
-    # keeps this off GitHub-hosted minutes and, on a box with a real device, runs the GPU-gated tests instead of
-    # skipping them.
-    # SECURITY: safe only while this repo is PRIVATE. Before making it public, remove the self-hosted runner (a
-    # fork's PR could otherwise run arbitrary code on it) and switch back to `runs-on: windows-latest`.
-    runs-on: [self-hosted, windows]
+    # A Windows runner: Loom.Tests references both GPU backends (below), whose shader-compile step runs the Slang
+    # compiler, and Slang.Sdk packages a native slangc only for win-x64 / win-arm64 (the DirectX12 backend also signs
+    # its DXIL with the Windows DXC), so a Linux runner can't build it.
+    #
+    # A pull request from a fork runs on a GitHub-hosted runner. Everything else (pushes to master, and pull requests
+    # from this repository's own branches, which only someone with write access can push) runs on the self-hosted one,
+    # which on a box with a real device runs the GPU-gated tests instead of skipping them.
+    # SECURITY: a fork's pull request runs the workflow files on its own branch, so it could change this line. What
+    # keeps it off the self-hosted runner is the repository's setting that a fork's workflows wait for approval
+    # (Settings > Actions > General, "Require approval for all external contributors"): read a fork's workflow changes
+    # before approving its run.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'windows-latest' || fromJSON('["self-hosted", "windows"]') }}
     steps:
-      # SUIsei is a private submodule; it is fetched separately below with a PAT.
       - uses: actions/checkout@v7
 
       # Loom.Tests references both GPU backends (for OffscreenEngineTests' self-registration), and the Vulkan
-      # backend references the VMASharp submodule — so building the tests needs VMASharp checked out, alongside
-      # SUIsei (needed by the NativeAOT gate + UI unit test steps below). VMASharp is public; SUIsei is private, so
-      # wire the PAT (contents:read on AtomicBlom/SUIsei) before init so both resolve.
-      - name: Checkout submodules (PAT for private SUIsei)
+      # backend references the VMASharp submodule, so building the tests needs VMASharp checked out, alongside
+      # SUIsei (needed by the NativeAOT gate + UI unit test steps below).
+      - name: Checkout submodules
         env:
           GH_PAT: ${{ secrets.PAT }}
         shell: bash
         run: |
-          # The PAT for this one command (and the clones it starts), not written to the runner user's global config:
-          # jobs on one machine share that file, and two writing it at once fail to lock it
-          git -c url."https://${GH_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init --recursive external/SUIsei external/VMASharp
+          # While SUIsei is private its checkout takes the PAT secret (contents:read on AtomicBlom/SUIsei), which a
+          # fork's pull request doesn't get. The PAT goes on this one command (and the clones it starts), not in the
+          # runner user's global config: jobs on one machine share that file, and two writing it at once fail to lock it.
+          if [ -n "$GH_PAT" ]; then auth=(-c url."https://${GH_PAT}@github.com/".insteadOf="https://github.com/"); else auth=(); fi
+          git "${auth[@]}" submodule update --init --recursive external/SUIsei external/VMASharp
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -52,13 +59,15 @@ jobs:
       # Local rather than actions/cache on purpose: the runner is self-hosted, so a directory costs no network
       # round-trip and none of the repository's 10 GB cache allowance. Restore deletes each destination before
       # copying, so a stale .dxil from a renamed shader can never survive into the package — see the script's header.
+      # A GitHub-hosted runner starts empty every time, so there it compiles them.
       - name: Restore shader cache
         id: shader-cache
+        if: runner.environment == 'self-hosted'
         shell: pwsh
         run: pwsh tools/shader-cache.ps1 -Mode restore
 
       # Build the tests and everything they reference — the engine, both GPU backends, and the Slang/DXC shader
-      # toolchain that the backends compile through (hence the Windows runner; see runs-on above). One test project
+      # toolchain that the backends compile through (hence a Windows runner; see runs-on above). One test project
       # each for the engine, the audio, the workbench and the gallery, as they will be in their own repositories.
       - name: Build (engine + backends + tests)
         shell: pwsh
@@ -70,7 +79,7 @@ jobs:
 
       # Only on a miss: a hit restored exactly what this key produces, so there is nothing new to store.
       - name: Save shader cache
-        if: steps.shader-cache.outputs.hit != 'true'
+        if: runner.environment == 'self-hosted' && steps.shader-cache.outputs.hit != 'true'
         shell: pwsh
         run: pwsh tools/shader-cache.ps1 -Mode save
 
@@ -88,7 +97,7 @@ jobs:
 
       # NativeAOT gate: SUIsei is marked <IsAotCompatible>, which turns on the trim/AOT/single-file Roslyn
       # analyzers; build it with warnings promoted to errors so any reflection or AOT-unsafe pattern fails CI.
-      # The UI runtime is neutral (Core + Assets only), so it builds on this no-GPU runner.
+      # The UI runtime is neutral (Core + Assets only), so it builds without a GPU.
       - name: NativeAOT gate (SUIsei; AOT/trim analyzers as errors)
         run: dotnet build external/SUIsei/SUIsei/SUIsei.csproj -c Release -p:TreatWarningsAsErrors=true
 

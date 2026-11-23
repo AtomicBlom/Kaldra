@@ -291,3 +291,7 @@ Three layers, kept strictly separate — `Sandbox → {backends} → Graph → C
 - Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [effect cookbook](docs/effect-cookbook.md) · [audio](docs/audio.md) · [synthesis](docs/synth.md) · [architecture](docs/architecture.md) · [porting from OpenGL](docs/porting-from-opengl.md)
 - [CI with a software rasterizer (WARP, no GPU)](docs/ci-software-rasterizer.md)
 - [WebGPU pixel parity](docs/webgpu-parity.md)
+
+## Licence
+
+MIT ([`LICENSE`](LICENSE)). The gallery's Kenney assets are CC0 ([`Loom.Gallery/Assets/kenney/LICENSE.md`](Loom.Gallery/Assets/kenney/LICENSE.md)).
