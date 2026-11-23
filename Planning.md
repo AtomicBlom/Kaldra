@@ -130,10 +130,10 @@ Resolve each before the work it gates; record the decision on the board.
 
 Every new feature is proven the way the existing ones were:
 
-1. A focused `BinaryVibrance.Kaldra.Sandbox` demo.
+1. A focused `Kaldra.Sandbox` demo.
 2. A deterministic offscreen render in `BinaryVibrance.Kaldra.Tests` — the sandbox is interactive-only, so verification runs in-process (`GalleryCapture`) rather than through a capture flag.
 3. **Cross-backend pixel diff** — Vulkan vs DirectX 12 within tolerance (4/255 per channel, <0.5% of pixels), via `Scripts/Verification/diff.ps1`; the automated `GalleryParityTests` asserts it (GPU-gated).
-4. Golden-image regression (`GalleryGoldenTests` against the committed baselines under `BinaryVibrance.Kaldra.Gallery.Tests/Goldens/`; `KALDRA_GOLDEN_UPDATE` regenerates them) guards against drift.
+4. Golden-image regression (`GalleryGoldenTests` against the committed baselines under `Kaldra.Gallery.Tests/Goldens/`; `KALDRA_GOLDEN_UPDATE` regenerates them) guards against drift.
 5. Validation layers / DX12 info-queue stay clean.
 
 The debug spine (channel viewer, GPU timing) exists to make this loop fast for the heavier §5.1 features.

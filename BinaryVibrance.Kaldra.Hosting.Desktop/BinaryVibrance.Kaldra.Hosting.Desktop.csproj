@@ -27,7 +27,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="BinaryVibrance.Kaldra.Tests" />
-    <InternalsVisibleTo Include="BinaryVibrance.Kaldra.Gallery.Tests" />
+    <InternalsVisibleTo Include="Kaldra.Gallery.Tests" />
   </ItemGroup>
 
   <ItemGroup>

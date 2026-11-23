@@ -66,7 +66,7 @@
   <PropertyGroup Label="Backend selection (read by the app-facing Kaldra SDK: build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.targets)">
     <UseVulkan Condition="'$(UseVulkan)' == ''">true</UseVulkan>
     <UseDirectX12   Condition="'$(UseDirectX12)'   == ''">true</UseDirectX12>
-    <!-- The WebGPU backend is browser-only (the gallery's BinaryVibrance.Kaldra.Web, WASM); desktop builds don't reference it, so it
+    <!-- The WebGPU backend is browser-only (the gallery's Kaldra.Web, WASM); desktop builds don't reference it, so it
          defaults off and the browser host opts in. -->
     <UseWebGPU Condition="'$(UseWebGPU)' == ''">false</UseWebGPU>
   </PropertyGroup>
