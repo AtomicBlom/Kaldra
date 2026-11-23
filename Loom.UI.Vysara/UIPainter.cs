@@ -3,17 +3,17 @@ using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
-using Vysara;
-using Vysara.Drawing;
-using Vysara.Extensions;
-// Explicit aliases resolve the DrawCommand / DrawListData / DrawListId name conflicts between Vysara.Drawing and
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Drawing;
+using BinaryVibrance.Vysara.Extensions;
+// Explicit aliases resolve the DrawCommand / DrawListData / DrawListId name conflicts between BinaryVibrance.Vysara.Drawing and
 // Loom.Core.Hosting. Kept in alphabetical order: `dotnet format` sorts using directives, and a sort that has work to
 // do lifts the first alias above this comment and detaches it.
-using DrawCommand = Vysara.Drawing.DrawCommand;
-using DrawListData = Vysara.Drawing.DrawListData;
-using DrawListId = Vysara.Drawing.DrawListId;
+using DrawCommand = BinaryVibrance.Vysara.Drawing.DrawCommand;
+using DrawListData = BinaryVibrance.Vysara.Drawing.DrawListData;
+using DrawListId = BinaryVibrance.Vysara.Drawing.DrawListId;
 using LoomDrawCommand = Loom.Core.Hosting.DrawCommand;
-using TextureSource = Vysara.Drawing.TextureSource;
+using TextureSource = BinaryVibrance.Vysara.Drawing.TextureSource;
 
 namespace Loom.UI.Vysara;
 
@@ -249,7 +249,7 @@ public sealed class UIPainter
 		push[4] = draw.IsHdrTarget ? _engine.HdrPaperWhiteNits / 80f : 1.0f;
 		push[5] = BitConverter.UInt32BitsToSingle(draw.IsHdrTarget ? 1u : 0u);
 
-		// Vysara.Drawing.OverlayVertex has the same binary layout as Loom.Core.Geometry.OverlayVertex;
+		// BinaryVibrance.Vysara.Drawing.OverlayVertex has the same binary layout as Loom.Core.Geometry.OverlayVertex;
 		// TVertex is inferred from draw.Vertices.Span — the backend sees raw bytes either way.
 		// A UI surface is a stable geometry stream: the compositor advances Revision exactly when the composed list
 		// changed, so an untouched surface re-submits the same identity and the backend can keep what it uploaded. The
@@ -371,7 +371,7 @@ public sealed class UIPainter
 	/// </summary>
 	internal static void CopyCommands(ReadOnlySpan<DrawCommand> commands, IReadOnlyList<TextureSource> slots, Span<LoomDrawCommand> destination)
 	{
-		// Vysara.Drawing.DrawCommand and Loom.Core.Hosting.DrawCommand are structurally identical (same fields, same
+		// BinaryVibrance.Vysara.Drawing.DrawCommand and Loom.Core.Hosting.DrawCommand are structurally identical (same fields, same
 		// order, both [StructLayout(Sequential)]), so the copy is a reinterpretation of the bytes.
 		MemoryMarshal.Cast<DrawCommand, LoomDrawCommand>(commands).CopyTo(destination);
 		for (var i = 0; i < commands.Length; i++)

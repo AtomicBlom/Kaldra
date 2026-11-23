@@ -1,6 +1,6 @@
-using Vysara;
-using Vysara.Media;
-using Vysara.RoutedEvents;
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Media;
+using BinaryVibrance.Vysara.RoutedEvents;
 
 namespace HelloUI;
 

@@ -23,10 +23,10 @@
   <Project Path="Loom.UI.ImGui/Loom.UI.ImGui.csproj" />
   <Project Path="Loom.UI.Vysara/Loom.UI.Vysara.csproj" />
   <Folder Name="/Vysara/">
-    <Project Path="../Vysara/Vysara/Vysara.csproj" />
-    <Project Path="../Vysara/Vysara.HarfBuzz/Vysara.HarfBuzz.csproj" />
-    <Project Path="../Vysara/Vysara.Rasterizer/Vysara.Rasterizer.csproj" />
-    <Project Path="../Vysara/Vysara.Text/Vysara.Text.csproj" />
-    <Project Path="../Vysara/Vysara.SourceGen/Vysara.SourceGen.csproj" />
+    <Project Path="../Vysara/BinaryVibrance.Vysara/BinaryVibrance.Vysara.csproj" />
+    <Project Path="../Vysara/BinaryVibrance.Vysara.HarfBuzz/BinaryVibrance.Vysara.HarfBuzz.csproj" />
+    <Project Path="../Vysara/BinaryVibrance.Vysara.Rasterizer/BinaryVibrance.Vysara.Rasterizer.csproj" />
+    <Project Path="../Vysara/BinaryVibrance.Vysara.Text/BinaryVibrance.Vysara.Text.csproj" />
+    <Project Path="../Vysara/BinaryVibrance.Vysara.SourceGen/BinaryVibrance.Vysara.SourceGen.csproj" />
   </Folder>
 </Solution>

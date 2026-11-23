@@ -53,7 +53,7 @@
     <!-- The Vysara adapter: its painter, input layer and screen anchors -->
     <ProjectReference Include="..\Loom.UI.Vysara\Loom.UI.Vysara.csproj" />
     <!-- Vysara's software rasterizer, the CPU oracle UIImageTests checks the painter's images against -->
-    <ProjectReference Include="$(VysaraSource)Vysara.Rasterizer\Vysara.Rasterizer.csproj" />
+    <ProjectReference Include="$(VysaraSource)BinaryVibrance.Vysara.Rasterizer\BinaryVibrance.Vysara.Rasterizer.csproj" />
   </ItemGroup>
   <PropertyGroup>
     <_LoomNeedsVysaraSource>true</_LoomNeedsVysaraSource>

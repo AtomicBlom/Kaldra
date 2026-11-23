@@ -8,7 +8,7 @@ using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Loom.Core.Primitives;
 using Loom.UI.Vysara;
-using UIHost = Vysara.UIHost;
+using UIHost = BinaryVibrance.Vysara.UIHost;
 
 namespace Loom.Tests;
 

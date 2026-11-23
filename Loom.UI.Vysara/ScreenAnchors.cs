@@ -2,8 +2,8 @@ using System.Numerics;
 
 using Loom.Core.Geometry;
 using Loom.Core.Hosting;
-using Vysara;
-using Vysara.Controls;
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Controls;
 
 namespace Loom.UI.Vysara;
 

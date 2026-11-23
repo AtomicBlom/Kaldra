@@ -4,11 +4,11 @@ using Loom.Core.Geometry;
 using Loom.Core.Hosting;
 using Loom.UI.Vysara;
 
-using Vysara;
-using Vysara.Controls;
-using Vysara.Media;
+using BinaryVibrance.Vysara;
+using BinaryVibrance.Vysara.Controls;
+using BinaryVibrance.Vysara.Media;
 
-using Ellipse = Vysara.Shapes.Ellipse;
+using Ellipse = BinaryVibrance.Vysara.Shapes.Ellipse;
 
 namespace Loom.Tests;
 

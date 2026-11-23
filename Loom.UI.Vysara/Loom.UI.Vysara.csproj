@@ -45,7 +45,7 @@
     <_LoomNeedsVysaraSource>true</_LoomNeedsVysaraSource>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="$(VysaraSource)Vysara\Vysara.csproj" />
+    <ProjectReference Include="$(VysaraSource)BinaryVibrance.Vysara\BinaryVibrance.Vysara.csproj" />
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />
