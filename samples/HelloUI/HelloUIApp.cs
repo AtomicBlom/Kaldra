@@ -2,10 +2,10 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 
-using Loom.Core.Graph;
-using Loom.Core.Hosting;
-using Loom.Core.Materials;
-using Loom.UI.Vysara;
+using BinaryVibrance.Kaldra.Core.Graph;
+using BinaryVibrance.Kaldra.Core.Hosting;
+using BinaryVibrance.Kaldra.Core.Materials;
+using BinaryVibrance.Kaldra.UI.Vysara;
 
 using BinaryVibrance.Vysara;
 
@@ -13,10 +13,10 @@ namespace HelloUI;
 
 /// <summary>
 /// A Vysara page over a backdrop, the same source on the desktop and on Android. The page lays out in layout units
-/// scaled by <see cref="LoomApplication.DisplayScale"/>, so it keeps one physical size on a 100% monitor, a 200% tablet
+/// scaled by <see cref="KaldraApplication.DisplayScale"/>, so it keeps one physical size on a 100% monitor, a 200% tablet
 /// and a phone, and it takes clicks, taps and drags through the same input layer on all of them.
 /// </summary>
-public sealed class HelloUIApp : LoomApplication
+public sealed class HelloUIApp : KaldraApplication
 {
 	private UIHost _ui = null!;
 	private UIPainter _painter = null!;
@@ -27,7 +27,7 @@ public sealed class HelloUIApp : LoomApplication
 
 	protected override void Configure(AppOptions options)
 	{
-		options.Title = "Loom - Hello UI";
+		options.Title = "Kaldra - Hello UI";
 		options.Width = 1280;
 		options.Height = 800;
 	}
@@ -95,5 +95,5 @@ public sealed class HelloUIApp : LoomApplication
 
 	// Where the count is kept: the app's own data folder on Android, the user's local app data on the desktop.
 	private static string SavePath { get; } =
-		Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Loom.HelloUI", "taps.txt");
+		Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BinaryVibrance.Kaldra.HelloUI", "taps.txt");
 }

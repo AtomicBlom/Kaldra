@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The shaders the engine's render tests draw with (Shaders/: a probe, a comparison sampler's probe, a depth ramp),
+       compiled to loose content under shaders\ beside the test assembly, as an app's are: the shader machinery only,
+       not the full SDK -->
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- TUnit runs on Microsoft.Testing.Platform, whose source generator emits the executable entry point.
+         `dotnet test` is routed to MTP (not the removed VSTest bridge) by the repo-root dotnet.config. -->
+    <OutputType>Exe</OutputType>
+    <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</KaldraShaderSourceDir>
+    <KaldraShaderOutputMode>Content</KaldraShaderOutputMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="Shouldly" />
+    <!-- Hermetic slangc + hermetic DXC (for signing the DXIL), build-machine only -->
+    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <PackageReference Include="Microsoft.Direct3D.DXC" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="TUnit.Core" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+  <!-- Apps SdkXamlTests builds through the Kaldra SDK, each its own project (in no solution): none of their sources,
+       nor what their builds leave under them, are this project's. -->
+  <ItemGroup>
+    <Compile Remove="SdkFixtures\**" />
+    <None Remove="SdkFixtures\**" />
+  </ItemGroup>
+
+  <!-- A rigged-bar glTF, beside the test assembly so GltfSkinningLoadTests can load it through GltfLoader: a copy of the
+       gallery's (BinaryVibrance.Kaldra.Gallery/Assets), since the gallery is not the engine's -->
+  <ItemGroup>
+    <Content Include="Fixtures\rigged_bar.glb" Link="rigged_bar.glb" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Describe + Execute layers: both backend-neutral, never the Vulkan backend. -->
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Core\BinaryVibrance.Kaldra.Core.csproj" />
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Graph\BinaryVibrance.Kaldra.Graph.csproj" />
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Assets\BinaryVibrance.Kaldra.Assets.csproj" />
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Concepts\BinaryVibrance.Kaldra.Concepts.csproj" />
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Input\BinaryVibrance.Kaldra.Input.csproj" />
+    <!-- The Vysara adapter: its painter, input layer and screen anchors -->
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.UI.Vysara\BinaryVibrance.Kaldra.UI.Vysara.csproj" />
+    <!-- Vysara's software rasterizer, the CPU oracle UIImageTests checks the painter's images against -->
+    <ProjectReference Include="$(VysaraSource)BinaryVibrance.Vysara.Rasterizer\BinaryVibrance.Vysara.Rasterizer.csproj" />
+  </ItemGroup>
+  <PropertyGroup>
+    <_KaldraNeedsVysaraSource>true</_KaldraNeedsVysaraSource>
+  </PropertyGroup>
+
+  <!-- The desktop host, for the backend-neutral host-machinery tests (HostOptions launch-option parsing). No GPU
+       and no window are created — only the pure parser is exercised. -->
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Hosting.Desktop\BinaryVibrance.Kaldra.Hosting.Desktop.csproj" />
+  </ItemGroup>
+
+  <!-- Referenced so their module initializers self-register into Backends.Available (each guarded by its own
+       IsSupported() probe — a box/OS lacking one degrades to it simply not appearing, never a build/runtime
+       failure) for OffscreenEngineTests, which is GPU-gated and skips whichever backend isn't present. -->
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Backend.Vulkan\BinaryVibrance.Kaldra.Backend.Vulkan.csproj" />
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Backend.DirectX12\BinaryVibrance.Kaldra.Backend.DirectX12.csproj" />
+  </ItemGroup>
+
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.targets" />
+
+</Project>

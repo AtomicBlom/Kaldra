@@ -1,4 +1,4 @@
-# Loom — Design Bible & Roadmap
+# Kaldra — Design Bible & Roadmap
 
 > **What this is.** The forward-looking design bible: the engine's core idea, its architecture, the Pillars of Design every change must obey, the backend-portability posture, and **the work that remains**. It deliberately does *not* catalogue what is already built — see [`README.md`](README.md) for the implemented-feature list and how to use the API. `CLAUDE.md` is the operational layer (how the code is written, where the project is now). The GitHub Projects board (#6, owner `AtomicBlom`) is the live task status.
 >
@@ -14,7 +14,7 @@ The hurdle that historically blocks this: graphics APIs want to be called proced
 
 **The one principle everything follows from:** you never describe *when* or *in what order* — only *what each pass reads and writes*. Ordering, barriers, layout transitions, memory aliasing, and queue synchronization are all *derived* from the dependency edges. New capabilities enter as new *resource kinds* or new *edge directions*, and the schedule falls out every time. The vocabulary never grows past "declare a resource, declare a read/write intent."
 
-A loom is not told the order to lay each thread. You warp it, declare the pattern, and the cloth falls out of the structure. Passes are threads; a frame is the cloth.
+A kaldra is not told the order to lay each thread. You warp it, declare the pattern, and the cloth falls out of the structure. Passes are threads; a frame is the cloth.
 
 ---
 
@@ -22,11 +22,11 @@ A loom is not told the order to lay each thread. You warp it, declare the patter
 
 Three layers, mapped to projects, kept strictly separate. This separation is what keeps the design manageable.
 
-- **Describe** (`Loom.Core`) — immutable, hashable, fluent builders (`GraphBuilder`, `PassBuilder`, technique/vertex-layout builders, typed handles, `Domain`). The only layer authored against; allocates freely; hashability drives the bake cache.
-- **Execute** (`Loom.Graph`) — per frame: topological sort from the read/write edges, then *derive* barriers / layout transitions / aliasing and drive command recording. Produces **backend-neutral** decisions (`GraphSchedule`, `BarrierPlan`, `AliasPlan`, `LifetimePlan`, `AttachmentAction`) — no graphics-API types.
+- **Describe** (`BinaryVibrance.Kaldra.Core`) — immutable, hashable, fluent builders (`GraphBuilder`, `PassBuilder`, technique/vertex-layout builders, typed handles, `Domain`). The only layer authored against; allocates freely; hashability drives the bake cache.
+- **Execute** (`BinaryVibrance.Kaldra.Graph`) — per frame: topological sort from the read/write edges, then *derive* barriers / layout transitions / aliasing and drive command recording. Produces **backend-neutral** decisions (`GraphSchedule`, `BarrierPlan`, `AliasPlan`, `LifetimePlan`, `AttachmentAction`) — no graphics-API types.
 - **Bake + record** (the backends) — the marshaling seam: flatten descriptions to native structs, create pipelines/descriptor layouts (cached by hash), translate Execute's neutral decisions into real GPU work.
 
-**Dependency direction: `Sandbox → {backends} → Graph → Core`.** `Loom.Core` and `Loom.Graph` carry **no** graphics-API / windowing reference. **Introducing a graphics-API type into Core or Graph is the cardinal architectural violation** — it breaks backend portability. Barrier derivation is the hardest part of Execute; the reference is Hans-Kristian Arntzen's "Render graphs and Vulkan — a deep dive" (Granite).
+**Dependency direction: `Sandbox → {backends} → Graph → Core`.** `BinaryVibrance.Kaldra.Core` and `BinaryVibrance.Kaldra.Graph` carry **no** graphics-API / windowing reference. **Introducing a graphics-API type into Core or Graph is the cardinal architectural violation** — it breaks backend portability. Barrier derivation is the hardest part of Execute; the reference is Hans-Kristian Arntzen's "Render graphs and Vulkan — a deep dive" (Granite).
 
 ---
 
@@ -37,8 +37,8 @@ Three layers, mapped to projects, kept strictly separate. This separation is wha
 - **Backend isolation / portability.** All procedural, struct-heavy, API-specific code stays in the backends. Core/Graph speak in abstract resources and intents so both backends stay swappable — and a third (Metal/WebGPU) could join. **Every new GPU feature must land in (or be `<Use…>`-gated for) both backends, with zero graphics-API types in Core/Graph.**
 - **Pure per-frame closures.** The graph is built once and cached; each `.Draw`/`.Dispatch` body runs every frame. So a closure may capture **stable objects** — engine handles and app-side stable producers (a painter, a scene) — and read their **live** members at execute time; it must **not** capture a per-frame **value** (that snapshot freezes at build). Pull per-frame facts from `ctx` and per-frame data from neutral `Constants`/`Storage` buffers or from a stable producer passed as pass state. The `Draw<TState>`/`Dispatch<TState>` overloads let a body be written as a `static` lambda so accidental per-frame capture cannot compile.
 - **No allocations on the hot path.** The steady per-frame render loop — pass closures, draw submission, the Execute schedule walk — allocates no managed memory, especially in Release. Per-frame data rides preallocated or pooled buffers and `ref struct`s (`DrawCall` is one); the graph is built once and cached, so frames stay GC-free.
-- **You hand me draw lists.** Culling stays *optional and app-owned*. The engine may *offer* a frustum-cull helper and a `Scene` container (`Loom.Concepts`); it must not mandate a scene graph or seize draw submission.
-- **The engine names no game concepts.** No `Camera`/`Sun`/`Scene` in Core/Graph; `FrameInputs` is just `DeltaSeconds`/`Time`. Per-frame view/world/light/time-of-day data rides neutral `Constants`/`Storage` buffers (`engine.Write(...)`); the app names its own views. This is what keeps Loom a *rendering* engine, not a game engine — and is load-bearing for reuse and portability.
+- **You hand me draw lists.** Culling stays *optional and app-owned*. The engine may *offer* a frustum-cull helper and a `Scene` container (`BinaryVibrance.Kaldra.Concepts`); it must not mandate a scene graph or seize draw submission.
+- **The engine names no game concepts.** No `Camera`/`Sun`/`Scene` in Core/Graph; `FrameInputs` is just `DeltaSeconds`/`Time`. Per-frame view/world/light/time-of-day data rides neutral `Constants`/`Storage` buffers (`engine.Write(...)`); the app names its own views. This is what keeps Kaldra a *rendering* engine, not a game engine — and is load-bearing for reuse and portability.
 - **Ping-pong via handle swap.** Two physical resources + a `(read, write)` tuple swapped in a normal loop; the graph follows the handles.
 - **Plans are advisory.** `BarrierPlan` and `AliasPlan` are *inputs* a backend may use or ignore (an auto-synchronizing WebGPU backend ignores both); the derived per-attachment `AttachmentAction` load/store ops are what a tile-based/Metal-memoryless backend needs and are always available.
 - **Fail loud, never silently degrade.** Every backend mapping switch (`Format`/`ResourceState`/`BlendMode`/`SamplerAddress`) ends in a `throw`; over-promised APIs (async-compute, multi-frame history ring) throw at derive time rather than silently doing the wrong thing.
@@ -53,7 +53,7 @@ Backend isolation was independently verified clean — **no graphics-API type le
 - **Neutral matrix/NDC** — RH, +Y up, **z ∈ [0,1]** (exactly Metal/WebGPU's required depth range — no OpenGL `[-1,1]` assumption), with the clip fix-up isolated in a single neutral `ClipSpaceCorrection` matrix a WebGPU +Y-up backend overrides to identity.
 - **Advisory `BarrierPlan`/`AliasPlan`** + **derived `AttachmentAction` load/store** — an auto-sync WebGPU backend ignores the barriers/aliasing and reads only the attachment actions; a tile-based Metal backend gets memoryless load/store for free.
 - **Logical shader names** — no SPIR-V/DXIL hardcoded in Core/Graph; MSL/WGSL emit is a pure backend + build addition (Slang targets both).
-- **Loud failure** — every mapping switch throws on an unmapped value, so a new backend fails fast on a missing arm rather than silently degrading. The ImGui pointer seam is confined to the opt-in app-side `Loom.UI.ImGui` bridge; the engine path is the pointer-free `DrawList` verb (wasm-safe).
+- **Loud failure** — every mapping switch throws on an unmapped value, so a new backend fails fast on a missing arm rather than silently degrading. The ImGui pointer seam is confined to the opt-in app-side `BinaryVibrance.Kaldra.UI.ImGui` bridge; the engine path is the pointer-free `DrawList` verb (wasm-safe).
 
 **The one WebGPU-relevant friction** is the storage-state collapse (§5.1, optional): a WebGPU backend must treat every `Storage` access as read-write, foreclosing write-only storage textures until the state is split. Everything else is additive enum arms + new derivation, not a rewrite.
 
@@ -130,10 +130,10 @@ Resolve each before the work it gates; record the decision on the board.
 
 Every new feature is proven the way the existing ones were:
 
-1. A focused `Loom.Sandbox` demo.
-2. A deterministic offscreen render in `Loom.Tests` — the sandbox is interactive-only, so verification runs in-process (`GalleryCapture`) rather than through a capture flag.
+1. A focused `BinaryVibrance.Kaldra.Sandbox` demo.
+2. A deterministic offscreen render in `BinaryVibrance.Kaldra.Tests` — the sandbox is interactive-only, so verification runs in-process (`GalleryCapture`) rather than through a capture flag.
 3. **Cross-backend pixel diff** — Vulkan vs DirectX 12 within tolerance (4/255 per channel, <0.5% of pixels), via `Scripts/Verification/diff.ps1`; the automated `GalleryParityTests` asserts it (GPU-gated).
-4. Golden-image regression (`GalleryGoldenTests` against the committed baselines under `Loom.Gallery.Tests/Goldens/`; `LOOM_GOLDEN_UPDATE` regenerates them) guards against drift.
+4. Golden-image regression (`GalleryGoldenTests` against the committed baselines under `BinaryVibrance.Kaldra.Gallery.Tests/Goldens/`; `KALDRA_GOLDEN_UPDATE` regenerates them) guards against drift.
 5. Validation layers / DX12 info-queue stay clean.
 
 The debug spine (channel viewer, GPU timing) exists to make this loop fast for the heavier §5.1 features.
@@ -142,26 +142,26 @@ The debug spine (channel viewer, GPU timing) exists to make this loop fast for t
 
 ## 9. The UI track (Vysara)
 
-Game/HUD UI is a **separate, standalone subsystem**: `BinaryVibrance.Vysara`, a GPU-free WinUI-3-compatible XAML UI runtime (compile-time `{x:Bind}`, NativeAOT-clean), in [its own repository](https://github.com/AtomicBlom/Vysara), built from a checkout beside the engine's, with **its own design bible at [`Planning.md`](https://github.com/AtomicBlom/Vysara/blob/main/Planning.md)**. It reaches the GPU only through the neutral, UI-agnostic `IRenderContext.DrawList` verb (the same path ImGui rides) via the thin `Loom.UI.Vysara` glue — so **no UI library is referenced by either backend, and no UI-specific type enters Core/Graph.** See that document for the UI roadmap and status; this file does not duplicate it.
+Game/HUD UI is a **separate, standalone subsystem**: `BinaryVibrance.Vysara`, a GPU-free WinUI-3-compatible XAML UI runtime (compile-time `{x:Bind}`, NativeAOT-clean), in [its own repository](https://github.com/AtomicBlom/Vysara), built from a checkout beside the engine's, with **its own design bible at [`Planning.md`](https://github.com/AtomicBlom/Vysara/blob/main/Planning.md)**. It reaches the GPU only through the neutral, UI-agnostic `IRenderContext.DrawList` verb (the same path ImGui rides) via the thin `BinaryVibrance.Kaldra.UI.Vysara` glue — so **no UI library is referenced by either backend, and no UI-specific type enters Core/Graph.** See that document for the UI roadmap and status; this file does not duplicate it.
 
 ---
 
 ## 10. The audio track
 
-Audio is a **separate subsystem beside the render graph**: `Loom.Audio`, a mixer that depends only on the BCL (as `Loom.Input` does), with each host opening its platform's output behind the `IAudioDevice` seam (SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser). It shares nothing with the graph: no graphics-API type and no audio API type enters `Loom.Audio`, and no audio type enters Graph. [`docs/audio.md`](docs/audio.md) documents what is built; epic #10 tracks the work.
+Audio is a **separate subsystem beside the render graph**: `BinaryVibrance.Kaldra.Audio`, a mixer that depends only on the BCL (as `BinaryVibrance.Kaldra.Input` does), with each host opening its platform's output behind the `IAudioDevice` seam (SDL 3 on the desktop, AAudio on Android, an AudioWorklet in the browser). It shares nothing with the graph: no graphics-API type and no audio API type enters `BinaryVibrance.Kaldra.Audio`, and no audio type enters Graph. [`docs/audio.md`](docs/audio.md) documents what is built; epic #10 tracks the work.
 
 Its own load-bearing properties, beside §3's:
 
 - **Lowest latency the platform offers on native hosts**, because the target is software synthesizers and procedural music played live. The mix runs on the device's own audio thread at the device's own rate. The browser trades latency for a lead the frame thread renders ahead, since the .NET runtime can't run on the browser's audio thread.
 - **The game and audio threads share no lock**, and neither allocates once running: commands and events cross on single-producer, single-consumer rings, continuous controls through `AudioParameter`.
 - **Fail loud, except for a missing speaker.** Misuse throws on the frame thread (a wrong-thread call, a full command queue, a clip at the wrong rate, a source played twice), and an exception in a source is thrown again from `Update`. A machine with no output is not an app bug, so it runs silent on a `NullAudioDevice` with a logged warning.
-- **Buses take effects and sends:** `AudioEffect`s run on a bus before its volume, and a send mixes one bus into another, as a reverb bus is fed; the mix order is derived from the parents and sends, never declared. `Loom.Audio.Synth` has the effects themselves.
+- **Buses take effects and sends:** `AudioEffect`s run on a bus before its volume, and a send mixes one bus into another, as a reverb bus is fed; the mix order is derived from the parents and sends, never declared. `BinaryVibrance.Kaldra.Audio.Synth` has the effects themselves.
 
 ### Remaining roadmap
 
 | Item | Notes |
 |---|---|
-| **More decoders** | Opus if wanted, written in C# in `Loom.Audio` as the Vorbis and FLAC decoders are: no dependency, allocation-free while streaming, and the same code on every host, the browser included. |
+| **More decoders** | Opus if wanted, written in C# in `BinaryVibrance.Kaldra.Audio` as the Vorbis and FLAC decoders are: no dependency, allocation-free while streaming, and the same code on every host, the browser included. |
 | **3D beyond stereo panning** | 3D voices pan, attenuate and Doppler-shift for a listener the app feeds (positions, never a camera). Not built: HRTF for above and behind, occlusion, reverb zones, sound cones. |
 | **Low-latency WASAPI on Windows** | SDL 3 stops at shared mode's 10 ms period. An exclusive-mode (or `IAudioClient3` small-period) device would reach 2–3 ms. |
 | **Browser: a shared ring instead of a message per frame** | The frame thread posts each frame's samples to the worklet as a new `Float32Array`. The runtime is already multithreaded (cross-origin isolated), so a `SharedArrayBuffer` ring would remove that per-frame garbage and the message hop. |

@@ -1,10 +1,10 @@
-# Loom
+# Kaldra
 
 A declarative, render-graph-driven rendering engine for .NET 11, running on **Vulkan and DirectX 12 at pixel parity**.
 
-You declare *what* each render pass reads and writes; Loom derives ordering, barriers, image-layout transitions, transient memory aliasing, and CPU↔GPU synchronisation. The procedural, struct-heavy graphics-API code is quarantined in a backend layer and never leaks into the authoring API.
+You declare *what* each render pass reads and writes; Kaldra derives ordering, barriers, image-layout transitions, transient memory aliasing, and CPU↔GPU synchronisation. The procedural, struct-heavy graphics-API code is quarantined in a backend layer and never leaks into the authoring API.
 
-> **Docs map.** This README is *what Loom does and how to use it.* [`Planning.md`](Planning.md) is the design bible and forward roadmap. `CLAUDE.md` is the operational guide. The UI track has its own bible at [Vysara's `Planning.md`](https://github.com/AtomicBlom/Vysara/blob/main/Planning.md).
+> **Docs map.** This README is *what Kaldra does and how to use it.* [`Planning.md`](Planning.md) is the design bible and forward roadmap. `CLAUDE.md` is the operational guide. The UI track has its own bible at [Vysara's `Planning.md`](https://github.com/AtomicBlom/Vysara/blob/main/Planning.md).
 
 ## Implemented features
 
@@ -37,13 +37,13 @@ You declare *what* each render pass reads and writes; Loom derives ordering, bar
 
 **Draw throughput** — 10,000 *discrete* draws (own model matrix, own material — not one instanced call) render on both backends with **zero managed allocations per frame**. Materials keep their descriptor tables rather than rewriting them per draw, redundant pipeline/geometry re-binds are elided, each pass's barriers go in one submission, resource uploads batch into the frame instead of draining the GPU per resource, and compiled pipelines persist between runs. The `Draw Scale` demo is the workload; `DrawScaleTests` is the headless gate and prints µs/draw — reported, never asserted, since it moves with machine and driver.
 
-**Game UI** — [`BinaryVibrance.Vysara`](https://github.com/AtomicBlom/Vysara), a standalone WinUI-3-compatible, NativeAOT-clean XAML UI runtime, rendered through Loom's neutral draw-list path (the same one ImGui uses). Beyond controls and text it draws WinUI's shapes (`Rectangle`, `Ellipse`, `Line`, `Polyline`, `Polygon`, `Path` with path markup) with every stroke join, cap and dash, linear gradients on fills and strokes, `UIElement.Clip` and image brushes, as tessellated vector triangles antialiased over one pixel at any angle; a translucent stroke stays one colour where it crosses itself, and Vysara's `vysara:StrokeTrim` and along-length stroke gradients animate draw-on reveals. Text is MTSDF glyphs, sharp at any scale, with `vysara:TextEffects` outlines and soft or hard shadows drawn from the same atlas in the same draw, and tabular figures through `Typography.NumeralAlignment`. The `Vector UI` demo shows them all from one XAML page, and the GPU is held to Vysara's CPU rasterizer on that page and on text with every effect. The UI demos are held to the same golden-image and cross-backend parity tests as the rest of the gallery, with a check that their UI actually reaches the frame, and the vertex and command structs Vysara hands Loom without a copy are guarded field by field.
+**Game UI** — [`BinaryVibrance.Vysara`](https://github.com/AtomicBlom/Vysara), a standalone WinUI-3-compatible, NativeAOT-clean XAML UI runtime, rendered through Kaldra's neutral draw-list path (the same one ImGui uses). Beyond controls and text it draws WinUI's shapes (`Rectangle`, `Ellipse`, `Line`, `Polyline`, `Polygon`, `Path` with path markup) with every stroke join, cap and dash, linear gradients on fills and strokes, `UIElement.Clip` and image brushes, as tessellated vector triangles antialiased over one pixel at any angle; a translucent stroke stays one colour where it crosses itself, and Vysara's `vysara:StrokeTrim` and along-length stroke gradients animate draw-on reveals. Text is MTSDF glyphs, sharp at any scale, with `vysara:TextEffects` outlines and soft or hard shadows drawn from the same atlas in the same draw, and tabular figures through `Typography.NumeralAlignment`. The `Vector UI` demo shows them all from one XAML page, and the GPU is held to Vysara's CPU rasterizer on that page and on text with every effect. The UI demos are held to the same golden-image and cross-backend parity tests as the rest of the gallery, with a check that their UI actually reaches the frame, and the vertex and command structs Vysara hands Kaldra without a copy are guarded field by field.
 
 ## How to use it
 
 ### Author a render graph
 
-A graph is built once with `RenderGraph.Define` (it's immutable and cached); you set it on the engine with `engine.SetGraph`, then call `engine.Render(frameInputs)` each frame. You declare each pass's resources and read/write intent — never the order or the barriers. **Loom owns no scene**; you submit your own draw list:
+A graph is built once with `RenderGraph.Define` (it's immutable and cached); you set it on the engine with `engine.SetGraph`, then call `engine.Render(frameInputs)` each frame. You declare each pass's resources and read/write intent — never the order or the barriers. **Kaldra owns no scene**; you submit your own draw list:
 
 ```csharp
 var graph = RenderGraph.Define(g =>
@@ -101,7 +101,7 @@ Resolution **`Domain`s** decide where each resource lives: `g.Screen` (native si
 engine.Write(viewProj, camera.ViewProjection);   // the camera helper folds in the clip-space correction
 ```
 
-(`Camera`, `Frustum`, and `Scene` are app-side helpers in `Loom.Concepts` — convenience, not part of the engine.)
+(`Camera`, `Frustum`, and `Scene` are app-side helpers in `BinaryVibrance.Kaldra.Concepts` — convenience, not part of the engine.)
 
 ### Define a technique
 
@@ -133,7 +133,7 @@ engine.DefineTechnique("foliage", new TechniqueDescriptor("foliage",
 | `Address` | sampler wrap mode — `Clamp` / `Repeat` / … |
 | `HasFragmentPush` | a small inline per-pass scalar block (JFA step, exposure rate, …) |
 
-Shaders are authored in **Slang** and compiled offline by the Loom shader SDK to SPIR-V (Vulkan) and signed DXIL (DirectX 12).
+Shaders are authored in **Slang** and compiled offline by the Kaldra shader SDK to SPIR-V (Vulkan) and signed DXIL (DirectX 12).
 
 ### Draw, instance, skin
 
@@ -162,7 +162,7 @@ Two rules keep this honest:
 
 ### Draw a game UI
 
-`Loom.UI.Vysara`'s `UIPainter` draws a Vysara host's composited surfaces through `ctx.DrawList`. Each frame, composite the host, then `Prepare` the painter — it uploads any image or glyph-atlas page the UI newly shows, before the frame that samples it, shares it between surfaces, and releases what the UI stopped showing — and draw from a pass:
+`BinaryVibrance.Kaldra.UI.Vysara`'s `UIPainter` draws a Vysara host's composited surfaces through `ctx.DrawList`. Each frame, composite the host, then `Prepare` the painter — it uploads any image or glyph-atlas page the UI newly shows, before the frame that samples it, shares it between surfaces, and releases what the UI stopped showing — and draw from a pass:
 
 ```csharp
 var ui = UIPainter.Create(engine, host);
@@ -174,7 +174,7 @@ host.Render();
 ui.Prepare();
 ```
 
-Several hosts can draw in one frame (a HUD plus an in-world panel): each painter keeps its surfaces' geometry under draw-list streams it mints with `engine.AllocateDrawListStream()`, so their surface ids, which every host numbers from zero, never collide. See [`Loom.UI.Vysara/README.md`](Loom.UI.Vysara/README.md).
+Several hosts can draw in one frame (a HUD plus an in-world panel): each painter keeps its surfaces' geometry under draw-list streams it mints with `engine.AllocateDrawListStream()`, so their surface ids, which every host numbers from zero, never collide. See [`BinaryVibrance.Kaldra.UI.Vysara/README.md`](BinaryVibrance.Kaldra.UI.Vysara/README.md).
 
 Turning Vysara on in the SDK (`<UseVysara>true</UseVysara>`) gives an app Vysara's XAML as well as its runtime: every `.xaml` view in the project compiles into its partial `x:Class`, with typed `x:Name` fields and `InitializeComponent()`. XAML errors fail the build at the view's file and line, and `dotnet watch` hot-reloads an edited view. Folders the project keeps out of its items through `DefaultItemExcludes` (a submodule beneath it, say) stay out of its XAML too.
 
@@ -192,7 +192,7 @@ host.Render();
 ui.Prepare();
 ```
 
-The projection under it is plain matrix maths in `Loom.Core.Geometry` — `viewProjection.TryProjectToScreen(world, size, engine.ClipSpaceCorrection, out var pixel, out var depth)` — which reads the engine's clip-space correction to put a point on the same pixel on every backend.
+The projection under it is plain matrix maths in `BinaryVibrance.Kaldra.Core.Geometry` — `viewProjection.TryProjectToScreen(world, size, engine.ClipSpaceCorrection, out var pixel, out var depth)` — which reads the engine's clip-space correction to put a point on the same pixel on every backend.
 
 ### Show a render target in a draw list
 
@@ -205,30 +205,30 @@ panel.Textures[1] = map;                                   // TextureRef[], rewr
 g.Pass("minimap").Samples(map).Blends(screen).Draw(panel, static (ctx, p) => p.Draw(ctx));
 ```
 
-A Vysara page shows one the same way: a `HostImageSource` names it by tag, `UIPainter.SetExternalTexture(tag, handle)` binds the tag to the graph texture, and the pass that draws the UI declares it with `.Samples`. The gallery's *UI Live Texture* demo shows a minimap this way, beside a `WriteableBitmap` it redraws on the CPU every frame. The painter writes each change into that bitmap's one texture in place (`engine.UpdateTexture`), so redrawing it every frame allocates nothing. Images read as their sources declare — sRGB decoded before filtering, straight alpha premultiplied after it — exactly as Vysara's software rasterizer reads them. See [`Loom.UI.Vysara/README.md`](Loom.UI.Vysara/README.md).
+A Vysara page shows one the same way: a `HostImageSource` names it by tag, `UIPainter.SetExternalTexture(tag, handle)` binds the tag to the graph texture, and the pass that draws the UI declares it with `.Samples`. The gallery's *UI Live Texture* demo shows a minimap this way, beside a `WriteableBitmap` it redraws on the CPU every frame. The painter writes each change into that bitmap's one texture in place (`engine.UpdateTexture`), so redrawing it every frame allocates nothing. Images read as their sources declare — sRGB decoded before filtering, straight alpha premultiplied after it — exactly as Vysara's software rasterizer reads them. See [`BinaryVibrance.Kaldra.UI.Vysara/README.md`](BinaryVibrance.Kaldra.UI.Vysara/README.md).
 
 ### Build & run
 
 ```bash
-dotnet build Loom.slnx                          # build everything
+dotnet build BinaryVibrance.Kaldra.slnx                          # build everything
 dotnet run   --project samples/HelloTriangle    # a triangle in a window (opens a window, blocks until closed)
-dotnet run   --project Loom.Tests               # the engine's unit tests (TUnit)
+dotnet run   --project BinaryVibrance.Kaldra.Tests               # the engine's unit tests (TUnit)
 ```
 
 The demo gallery, which shows off what the engine draws and holds the GPU golden-image and cross-backend parity tests,
 is its own repository: [Kaldra.Gallery](https://github.com/AtomicBlom/Kaldra.Gallery), built on a checkout of this one.
 
-Android builds from the same app source, with the `android` workload installed: `samples/HelloUI` targets both `net11.0` (a desktop exe) and `net11.0-android` (an APK on CoreCLR, Vulkan 1.3, Vysara with touch). `dotnet build samples/HelloUI -f net11.0-android -t:Run` installs and starts it on a connected device; [`samples/HelloUI/README.md`](samples/HelloUI/README.md) has the rest. The Android projects live in `Loom.Android.slnx`, so `Loom.slnx` never needs the workload.
+Android builds from the same app source, with the `android` workload installed: `samples/HelloUI` targets both `net11.0` (a desktop exe) and `net11.0-android` (an APK on CoreCLR, Vulkan 1.3, Vysara with touch). `dotnet build samples/HelloUI -f net11.0-android -t:Run` installs and starts it on a connected device; [`samples/HelloUI/README.md`](samples/HelloUI/README.md) has the rest. The Android projects live in `BinaryVibrance.Kaldra.Android.slnx`, so `BinaryVibrance.Kaldra.slnx` never needs the workload.
 
-On Android, each finger is a touch contact as on Windows and in the browser (a pen is a pointer), a keyboard sends keys and text as on the desktop, the system's Back arrives as Escape (the app decides whether to leave), a mouse's buttons and a pen's barrel buttons are their own, and game controllers are pads with rumble. The on-screen keyboard opens while an input layer asks for text (`InputContext.RequestTextInput`, which Vysara's layer does while a `TextBox` has focus); its height reaches the app as `LoomApplication.InputPaneHeight`, and in Vysara `UIRoot.InputPaneHeight` plus `vysara:InputPane.AvoidsKeyboard="True"` on an element arranges that element clear of it, while a `ScrollViewer` keeps its focused field in view and pans by touch.
+On Android, each finger is a touch contact as on Windows and in the browser (a pen is a pointer), a keyboard sends keys and text as on the desktop, the system's Back arrives as Escape (the app decides whether to leave), a mouse's buttons and a pen's barrel buttons are their own, and game controllers are pads with rumble. The on-screen keyboard opens while an input layer asks for text (`InputContext.RequestTextInput`, which Vysara's layer does while a `TextBox` has focus); its height reaches the app as `KaldraApplication.InputPaneHeight`, and in Vysara `UIRoot.InputPaneHeight` plus `vysara:InputPane.AvoidsKeyboard="True"` on an element arranges that element clear of it, while a `ScrollViewer` keeps its focused field in view and pans by touch.
 
 Three things a game needs on every host:
-- **Content.** List the files as `<LoomContent Include="Content\**" />` and read them with `LoomApplication.OpenContent`/`ReadContent`/`ReadContentAsync("levels/1.json")`. The SDK packs them as a `content` folder beside a desktop exe and as an APK's assets; the browser host doesn't read content yet.
+- **Content.** List the files as `<KaldraContent Include="Content\**" />` and read them with `KaldraApplication.OpenContent`/`ReadContent`/`ReadContentAsync("levels/1.json")`. The SDK packs them as a `content` folder beside a desktop exe and as an APK's assets; the browser host doesn't read content yet.
 - **Suspend and resume.** `OnSuspending` runs when the app leaves the screen (minimized, backgrounded, the phone locked). A phone may end the app after it without another call, so save there. `OnResumed` runs as it comes back.
-- **Safe area.** `LoomApplication.SafeAreaInsets` is how far a phone's camera cutout reaches in from each edge, and in the browser its gesture bar and rounded corners too (the page's `env(safe-area-inset-*)`, which the default page reports by running under them with `viewport-fit=cover`; its canvas fills what is on screen between the browser's own bars, `100dvh`). In Vysara, `UIRoot.SafeAreaInsets` plus `vysara:SafeArea.Edges="All"` keeps an element's content clear of it while a background runs to the edges.
-- **Fullscreen.** No phone browser has a menu item for it, so the page asks: `LoomApplication.CanFullscreen`, `IsFullscreen` and `SetFullscreen(bool)`, called from the input that asked, as the browser requires. Fullscreen arrives a moment later as a resize, and the player can leave it alone (Esc, Back), so read `IsFullscreen` rather than remembering. The Android host is always fullscreen and the desktop's window is the app's own, so neither offers it.
+- **Safe area.** `KaldraApplication.SafeAreaInsets` is how far a phone's camera cutout reaches in from each edge, and in the browser its gesture bar and rounded corners too (the page's `env(safe-area-inset-*)`, which the default page reports by running under them with `viewport-fit=cover`; its canvas fills what is on screen between the browser's own bars, `100dvh`). In Vysara, `UIRoot.SafeAreaInsets` plus `vysara:SafeArea.Edges="All"` keeps an element's content clear of it while a background runs to the edges.
+- **Fullscreen.** No phone browser has a menu item for it, so the page asks: `KaldraApplication.CanFullscreen`, `IsFullscreen` and `SetFullscreen(bool)`, called from the input that asked, as the browser requires. Fullscreen arrives a moment later as a resize, and the player can leave it alone (Esc, Back), so read `IsFullscreen` rather than remembering. The Android host is always fullscreen and the desktop's window is the app's own, so neither offers it.
 
-An app is a `LoomApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in-process, offscreen (`Loom.Tests`, and the gallery's golden-image and parity tests). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
+An app is a `KaldraApplication` on the desktop host: every run is interactive. Deterministic, headless rendering verification is in-process, offscreen (`BinaryVibrance.Kaldra.Tests`, and the gallery's golden-image and parity tests). `Scripts/Verification/` has `colorcount.ps1` (did anything render?) and `diff.ps1` (pixel diff + heatmap) for ad-hoc PNG inspection.
 
 **Audio** is not the engine's: [Sirrow](https://github.com/AtomicBlom/Sirrow) is a low-latency mixer and software synthesis for any .NET app, and [SirrowStudio](https://github.com/AtomicBlom/SirrowStudio) is where a game's music is written. An app takes both beside the engine and wires them together itself.
 
@@ -236,46 +236,46 @@ An app is a `LoomApplication` on the desktop host: every run is interactive. Det
 
 | Package | Role |
 |---|---|
-| `Loom` | Describe layer — `GraphBuilder`, resource handles, `Domain`, technique & vertex-layout builders, `Material`, neutral draw-list types |
-| `Loom.Graph` | Execute layer — scheduling, barrier/layout/aliasing derivation (backend-neutral) |
-| `Loom.Assets` | Neutral image (StbImageSharp) + glTF (SharpGLTF) loaders |
-| `Loom.Backend.Vulkan` | Vulkan 1.3 backend |
-| `Loom.Backend.DirectX12` | DirectX 12 backend |
-| `Loom.Backend.WebGPU` | WebGPU backend (browser) |
-| `Loom.Concepts` | App-side helpers — `Camera`, `Frustum`, `Scene`. Not part of the engine |
-| `Loom.Input` | Neutral input: actions, bindings, layered event routing |
-| `Loom.Hosting.Desktop` | Desktop host — window, surface, frame loop, CLI flags; gamepads through SDL 3, fetched by the build |
-| `Loom.Hosting.Web` | Browser host, paired with the WebGPU backend |
-| `Loom.Hosting.Android` | Android host — a `LoomActivity` with a Vulkan surface, Choreographer-paced frames, touch, keyboard and on-screen keyboard, mouse, game controllers |
-| `Loom.UI.Vysara` | Vysara XAML-UI integration (via the neutral draw-list verb) |
-| `Loom.UI.ImGui` | Dear ImGui integration |
-| `Loom.Sdk` | MSBuild SDK — reference this from a game project |
+| `Kaldra` | Describe layer — `GraphBuilder`, resource handles, `Domain`, technique & vertex-layout builders, `Material`, neutral draw-list types |
+| `BinaryVibrance.Kaldra.Graph` | Execute layer — scheduling, barrier/layout/aliasing derivation (backend-neutral) |
+| `BinaryVibrance.Kaldra.Assets` | Neutral image (StbImageSharp) + glTF (SharpGLTF) loaders |
+| `BinaryVibrance.Kaldra.Backend.Vulkan` | Vulkan 1.3 backend |
+| `BinaryVibrance.Kaldra.Backend.DirectX12` | DirectX 12 backend |
+| `BinaryVibrance.Kaldra.Backend.WebGPU` | WebGPU backend (browser) |
+| `BinaryVibrance.Kaldra.Concepts` | App-side helpers — `Camera`, `Frustum`, `Scene`. Not part of the engine |
+| `BinaryVibrance.Kaldra.Input` | Neutral input: actions, bindings, layered event routing |
+| `BinaryVibrance.Kaldra.Hosting.Desktop` | Desktop host — window, surface, frame loop, CLI flags; gamepads through SDL 3, fetched by the build |
+| `BinaryVibrance.Kaldra.Hosting.Web` | Browser host, paired with the WebGPU backend |
+| `BinaryVibrance.Kaldra.Hosting.Android` | Android host — a `KaldraActivity` with a Vulkan surface, Choreographer-paced frames, touch, keyboard and on-screen keyboard, mouse, game controllers |
+| `BinaryVibrance.Kaldra.UI.Vysara` | Vysara XAML-UI integration (via the neutral draw-list verb) |
+| `BinaryVibrance.Kaldra.UI.ImGui` | Dear ImGui integration |
+| `BinaryVibrance.Kaldra.Sdk` | MSBuild SDK — reference this from a game project |
 
 
-Consuming Loom selects backends through the SDK:
+Consuming Kaldra selects backends through the SDK:
 
 ```xml
-<PackageReference Include="Loom.Sdk" Version="0.1.0-preview.1" />
+<PackageReference Include="BinaryVibrance.Kaldra.Sdk" Version="0.1.0-preview.1" />
 ```
 ```xml
 <UseVulkan>true</UseVulkan>
 <UseDirectX12>false</UseDirectX12>
-<UseVysara>true</UseVysara>   <!-- Vysara's runtime, its Loom bridge, and XAML views -->
+<UseVysara>true</UseVysara>   <!-- Vysara's runtime, its Kaldra bridge, and XAML views -->
 ```
 
 ## Architecture
 
 Three layers, kept strictly separate — `app → {backends} → Graph → Core`:
 
-- **Describe** (`Loom.Core`) — immutable, hashable, fluent builders; the only layer authored against directly.
-- **Execute** (`Loom.Graph`) — derives barriers, layout transitions, and aliasing; backend-neutral, no graphics-API types.
+- **Describe** (`BinaryVibrance.Kaldra.Core`) — immutable, hashable, fluent builders; the only layer authored against directly.
+- **Execute** (`BinaryVibrance.Kaldra.Graph`) — derives barriers, layout transitions, and aliasing; backend-neutral, no graphics-API types.
 - **Bake + record** (the backends) — the marshaling seam: native structs, cached pipelines, real GPU work.
 
-`Loom.Core` and `Loom.Graph` carry no Vulkan/DX12/Silk.NET reference — that isolation is what keeps the engine backend-portable (and is why a Metal or WebGPU backend can be added without touching authoring code). See [`Planning.md`](Planning.md) for the design rationale, the Pillars of Design, and the roadmap.
+`BinaryVibrance.Kaldra.Core` and `BinaryVibrance.Kaldra.Graph` carry no Vulkan/DX12/Silk.NET reference — that isolation is what keeps the engine backend-portable (and is why a Metal or WebGPU backend can be added without touching authoring code). See [`Planning.md`](Planning.md) for the design rationale, the Pillars of Design, and the roadmap.
 
 ## Links
 
-- [GitHub](https://github.com/AtomicBlom/Loom)
+- [GitHub](https://github.com/AtomicBlom/Kaldra)
 - [Design bible & roadmap](Planning.md) · [UI track](https://github.com/AtomicBlom/Vysara/blob/main/Planning.md)
 - Guides: [getting started](docs/getting-started.md) · [API vocabulary](docs/api-vocabulary.md) · [shader authoring](docs/shader-authoring.md) · [architecture](docs/architecture.md) · [porting from OpenGL](docs/porting-from-opengl.md)
 - [Kaldra.Gallery](https://github.com/AtomicBlom/Kaldra.Gallery): the demos, the effect cookbook, and the golden-image, WARP and WebGPU parity tests

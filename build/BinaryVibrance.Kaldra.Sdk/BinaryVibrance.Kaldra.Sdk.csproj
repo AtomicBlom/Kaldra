@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <!-- Pure build-tool package: ships MSBuild props/targets + shader compile machinery; no runtime assembly. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- No code -> no symbols package needed. -->
+    <IncludeSymbols>false</IncludeSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.Sdk</PackageId>
+    <Description>MSBuild project SDK for Kaldra apps. Use it as Sdk="BinaryVibrance.Kaldra.Sdk" and one project builds a native desktop exe (dotnet build) or a WebGPU browser app (dotnet publish -r browser-wasm) from the same source — the RID selects the base SDK, backend, and host. Set Use* flags to pick backends; compile Slang shaders by setting KaldraShaderSourceDir + KaldraShaderOutputMode.</Description>
+    <PackageTags>sdk;msbuild;rendergraph;gamedev;dotnet;slang;shaders;webgpu;wasm</PackageTags>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- NU5128: no lib/net10.0 folder by design — this is a build-tool / MSBuild SDK package. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MSBuild project SDK entry: NuGet SDK resolution (Sdk="BinaryVibrance.Kaldra.Sdk") imports Sdk/Sdk.props at the top of the
+         consuming project and Sdk/Sdk.targets at the bottom. Sdk.props does the RID-conditional base-SDK
+         delegation (Microsoft.NET.Sdk vs Microsoft.NET.Sdk.WebAssembly); Sdk.targets adds the backend + host
+         packages and the shader-compile targets. -->
+    <None Include="Sdk\Sdk.props"    Pack="true" PackagePath="Sdk\Sdk.props" />
+    <None Include="Sdk\Sdk.targets"  Pack="true" PackagePath="Sdk\Sdk.targets" />
+    <!-- Shader-compile machinery the Sdk files import as ..\Kaldra.Shaders.* (package root), plus the shared
+         include header (KaldraShaderIncludeDir falls back to Shaders/ when the repo's BinaryVibrance.Kaldra.Shaders path is absent). -->
+    <None Include="Kaldra.Shaders.props"    Pack="true" PackagePath="Kaldra.Shaders.props" />
+    <None Include="Kaldra.Shaders.targets"  Pack="true" PackagePath="Kaldra.Shaders.targets" />
+    <None Include="..\..\BinaryVibrance.Kaldra.Shaders\Shaders\kaldra_platform.module.slang" Pack="true" PackagePath="Shaders\kaldra_platform.module.slang" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- `dotnet new` template pack. Packs the template content under templates/ (each folder with a
+       .template.config/) as a NuGet template package; no build output, no dependencies. Not part of BinaryVibrance.Kaldra.slnx —
+       packed on its own (like the other Kaldra packages in the publish pipeline). -->
+  <PropertyGroup>
+    <PackageId>BinaryVibrance.Kaldra.Templates</PackageId>
+    <PackageType>Template</PackageType>
+    <TargetFramework>net11.0</TargetFramework>
+    <Description>dotnet new templates for Kaldra apps. Includes "kaldra" — a minimal cross-platform app that builds to desktop (Vulkan) or browser (WebGPU) from one project.</Description>
+    <PackageTags>dotnet-new;templates;kaldra;rendergraph;gamedev;webgpu;wasm</PackageTags>
+
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- No build output means no symbols — a symbol package would be empty (NU5017). Override the repo default. -->
+    <IncludeSymbols>false</IncludeSymbols>
+    <!-- A template pack has no lib and no runtime dependencies (the content's own global.json/csproj carry those). -->
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The template content — everything under the template folders, including the .template.config/ that marks
+         each one. Exclude any local build artifacts. -->
+    <Content Include="kaldra-app\**\*" Exclude="kaldra-app\**\bin\**;kaldra-app\**\obj\**" />
+    <Compile Remove="**\*" />
+  </ItemGroup>
+
+</Project>

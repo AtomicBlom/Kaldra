@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The imgui shader (Shaders/imgui.slang) lives with this integration, not the engine: the shared shader-compile
+       machinery compiles it to loose SPIR-V (+ reflection JSON) and signed DXIL under shaders\, which flow to the
+       consuming app's output. The backend resolves it there by the "imgui" technique name (its loose-file fallback),
+       so a backend built without this package carries no ImGui shader. Import only the shader-compile machinery —
+       NOT the app SDK / backend selection. -->
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Loose .spv/.json (+ signed DXIL when the build includes DirectX12) copied to shaders\ and flowed to the app. -->
+    <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</KaldraShaderSourceDir>
+    <KaldraShaderOutputMode>Content</KaldraShaderOutputMode>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.UI.ImGui</PackageId>
+    <Description>Optional Dear ImGui overlay for Kaldra. Renders ImGui draw data through the backend-neutral draw-list API — neither BinaryVibrance.Kaldra.Core nor any backend references ImGui.NET directly. Reference this package to add the overlay; omit it and the engine is wholly ImGui-free.</Description>
+    <PackageTags>imgui;ui;rendergraph;gamedev;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- Optional Dear ImGui integration: renders the host's ImGui draw data through the public draw-list API, so
+       neither backend references ImGui.NET. Reference this package to add the overlay; omit it and the engine is
+       wholly ImGui-free. The twin of BinaryVibrance.Kaldra.UI.Vysara (which bridges the XAML UI engine the same way). -->
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Core\BinaryVibrance.Kaldra.Core.csproj" />
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Input\BinaryVibrance.Kaldra.Input.csproj" />
+    <PackageReference Include="ImGui.NET" />
+    <!-- Hermetic slangc for compiling this package's shader (bundled in the package; win-x64 / win-arm64) — build-only. -->
+    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <!-- Hermetic DXC for signing the DXIL output; build-only. -->
+    <PackageReference Include="Microsoft.Direct3D.DXC" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.targets" />
+
+</Project>

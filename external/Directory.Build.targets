@@ -1,0 +1,12 @@
+<Project>
+
+  <!--
+    The vendored VMASharp's package, under the engine's prefix. Its project, in the submodule, names it
+    Loom.VulkanMemoryAllocator; this is imported after the project's body, so it has the last word without a change to
+    the fork.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VMASharp'">
+    <PackageId>BinaryVibrance.Kaldra.VulkanMemoryAllocator</PackageId>
+  </PropertyGroup>
+
+</Project>

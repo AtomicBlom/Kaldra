@@ -3,10 +3,10 @@
     <File Path="CLAUDE.md" />
   </Folder>
   <Project Path="samples/HelloTriangle/HelloTriangle.csproj" />
-  <Project Path="Loom.Core/Loom.Core.csproj" />
-  <Project Path="Loom.Graph/Loom.Graph.csproj" />
-  <Project Path="Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj" />
-  <Project Path="Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj" />
-  <Project Path="Loom.Hosting.Desktop/Loom.Hosting.Desktop.csproj" />
-  <Project Path="Loom.Hosting.Web/Loom.Hosting.Web.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Core/BinaryVibrance.Kaldra.Core.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Graph/BinaryVibrance.Kaldra.Graph.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Backend.Vulkan/BinaryVibrance.Kaldra.Backend.Vulkan.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Backend.WebGPU/BinaryVibrance.Kaldra.Backend.WebGPU.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Hosting.Desktop/BinaryVibrance.Kaldra.Hosting.Desktop.csproj" />
+  <Project Path="BinaryVibrance.Kaldra.Hosting.Web/BinaryVibrance.Kaldra.Hosting.Web.csproj" />
 </Solution>

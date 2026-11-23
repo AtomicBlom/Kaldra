@@ -1,18 +1,18 @@
-using Loom.Core.Graph;
-using Loom.Core.Hosting;
-using Loom.Core.Materials;
+using BinaryVibrance.Kaldra.Core.Graph;
+using BinaryVibrance.Kaldra.Core.Hosting;
+using BinaryVibrance.Kaldra.Core.Materials;
 
-LoomApplication.Run(new TriangleApp(), args);
+KaldraApplication.Run(new TriangleApp(), args);
 
 /// <summary>
-/// A minimal Loom application, whole: the entry point, the app, and its render graph in one file. No window, no
+/// A minimal Kaldra application, whole: the entry point, the app, and its render graph in one file. No window, no
 /// canvas, no <c>[JSImport]</c>, no platform <c>#if</c>. <c>dotnet build</c> yields a native (Vulkan) desktop
 /// exe; <c>dotnet publish -r browser-wasm</c> yields a WebGPU browser app from this same source — the RID picks
-/// the host, and <see cref="LoomApplication.Run"/> hands off to it.
+/// the host, and <see cref="KaldraApplication.Run"/> hands off to it.
 /// </summary>
-internal sealed class TriangleApp : LoomApplication
+internal sealed class TriangleApp : KaldraApplication
 {
-	protected override void Configure(AppOptions options) => options.Title = "Loom - Hello Triangle";
+	protected override void Configure(AppOptions options) => options.Title = "Kaldra - Hello Triangle";
 
 	protected override void LoadContent()
 	{

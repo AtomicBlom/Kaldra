@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The engine owns its infrastructure shaders (tonemap/blit/fullscreen/exposure/debugview) and ships them
+       embedded in this assembly, so consuming apps don't carry them. UI shaders are NOT here — each optional UI
+       package (BinaryVibrance.Kaldra.UI.ImGui, BinaryVibrance.Kaldra.UI.Vysara) ships its own, resolved at runtime by the backend's loose-file
+       fallback. Import only the shared shader-compile machinery (not the app SDK), so the backend never
+       self-references through backend selection. The compiled .spv/.json become EmbeddedResource (Embed mode). -->
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- The marshaling seam is pointer-heavy interop. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.Backend.Vulkan</PackageId>
+    <Description>Vulkan 1.3 backend for the Kaldra render-graph engine. Dynamic rendering, synchronization2, timeline semaphores, offline SPIR-V shaders embedded.</Description>
+    <PackageTags>vulkan;rendergraph;gamedev;graphics;dotnet;silk.net</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+
+    <!-- Engine shaders are backend-neutral Slang source shared by every backend (..\BinaryVibrance.Kaldra.Shaders\Shaders); each
+         backend compiles + embeds its own artifact from them (Vulkan → .spv here, DX12 → signed .dxil), so the
+         shaders aren't owned by any one backend. Embedded under the manifest prefix "BinaryVibrance.Kaldra.Backend.Vulkan.Shaders." (= $(AssemblyName).Shaders.). -->
+    <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\..\BinaryVibrance.Kaldra.Shaders\Shaders</KaldraShaderSourceDir>
+    <KaldraShaderOutputMode>Embed</KaldraShaderOutputMode>
+    <!-- The Vulkan backend emits SPIR-V only; never DXIL (even in a -p:UseDX12=true build, where the flag would
+         otherwise default it on). BinaryVibrance.Kaldra.DX12 is the one that compiles these shared shaders to DXIL. -->
+    <KaldraEmitDxil>false</KaldraEmitDxil>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Graph\BinaryVibrance.Kaldra.Graph.csproj" />
+    <!-- Neutral asset layer: the M13 shader hot-reload watcher (no graphics types). -->
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Assets\BinaryVibrance.Kaldra.Assets.csproj" />
+    <!-- VMASharp: pure-managed VMA port on Silk.NET 2.23/net10, MIT, as a submodule. Deliberately NOT in
+         BinaryVibrance.Kaldra.slnx so `dotnet format` never reformats vendored code. PrivateAssets=all keeps it off the package's
+         dependency list (consumers never reference VMASharp directly); the _BundleVMASharp target below then
+         packs its DLL into lib/ so it ships inside the BinaryVibrance.Kaldra.Backend.Vulkan package and reaches a consumer's
+         output at runtime — PrivateAssets alone does NOT bundle the DLL, only drops the dependency. -->
+    <ProjectReference Include="..\external\VMASharp\VMASharp\VMASharp.csproj">
+      <PrivateAssets>all</PrivateAssets>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!-- Bundle VMASharp.dll into this package's lib/<tfm>/ (it isn't a NuGet dependency, so nothing else carries
+       it). A DLL in lib/ is a compile+runtime asset a consumer copies to its own output, which is what the
+       backend needs at runtime. Hooked via TargetsForTfmSpecificBuildOutput so pack picks it up per framework. -->
+  <PropertyGroup>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);_BundleVMASharp</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+  <Target Name="_BundleVMASharp" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)%(Extension)' == 'VMASharp.dll'" />
+    </ItemGroup>
+  </Target>
+
+  <!-- The first backend. The Vulkan/Silk.NET stack is quarantined here. -->
+  <ItemGroup>
+    <PackageReference Include="Silk.NET.Vulkan" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" />
+    <PackageReference Include="Silk.NET.Maths" />
+    <!-- Hermetic slangc for compiling the engine's own shaders (bundled in the package; win-x64 / win-arm64). -->
+    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
+  <!-- Shared shader-compile targets (after the body, so KaldraShaderSourceDir is set). -->
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.targets" />
+
+</Project>

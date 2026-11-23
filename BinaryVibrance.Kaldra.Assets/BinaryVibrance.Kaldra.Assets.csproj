@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Neutral asset-I/O layer (PlanningPhase2.md §8): no graphics-API reference, sits beside BinaryVibrance.Kaldra.Core as a
+       producer of neutral descriptions. M11 adds the image/glTF loaders (decode/parse to BinaryVibrance.Kaldra.Core's neutral
+       descriptions); M13 adds the file-watching half (shader hot-reload). -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.Assets</PackageId>
+    <Description>Neutral asset I/O layer for Kaldra — image decoding (StbImageSharp), glTF model loading (SharpGLTF), CPU mip generation. No graphics-API reference.</Description>
+    <PackageTags>vulkan;directx12;rendergraph;gamedev;assets;gltf;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Core\BinaryVibrance.Kaldra.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StbImageSharp" />
+    <PackageReference Include="SharpGLTF.Toolkit" />
+  </ItemGroup>
+
+</Project>

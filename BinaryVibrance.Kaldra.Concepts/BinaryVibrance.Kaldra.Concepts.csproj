@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The "concepts" layer: where things with app/scene meaning live (camera, named views, scenes, culling, draw
+       submission) — precisely the concepts the render-graph engine deliberately does NOT have. The engine speaks
+       only neutral channels (Constants / per-draw Uniforms / Storage / streams); this layer composes the engine's
+       ClipSpaceCorrection and publishes view-projections + per-object data through them. Depends only on
+       BinaryVibrance.Kaldra.Core's public API (no backend reference), so it sits beside BinaryVibrance.Kaldra.Assets as a neutral consumer:
+       Sandbox -> {Vulkan, DX12, BinaryVibrance.Kaldra.Concepts} -> Graph -> Core. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.Concepts</PackageId>
+    <Description>The app/scene concept layer for Kaldra — camera, named views, scenes, frustum culling, and draw submission over the render-graph engine's neutral channels. The concepts the engine deliberately lacks. No graphics-API reference.</Description>
+    <PackageTags>vulkan;directx12;rendergraph;gamedev;scene;camera;dotnet</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Core\BinaryVibrance.Kaldra.Core.csproj" />
+    <!-- The neutral input snapshot FlyCamera consumes. BinaryVibrance.Kaldra.Input carries no graphics-API/windowing type, so it is
+         a clean leaf dependency that keeps Concepts free of any backend reference. -->
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Input\BinaryVibrance.Kaldra.Input.csproj" />
+  </ItemGroup>
+
+</Project>

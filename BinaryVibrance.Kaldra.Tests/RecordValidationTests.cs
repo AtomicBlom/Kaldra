@@ -1,0 +1,409 @@
+using BinaryVibrance.Kaldra.Core.Geometry;
+using BinaryVibrance.Kaldra.Core.Graph;
+using BinaryVibrance.Kaldra.Core.Hosting;
+using BinaryVibrance.Kaldra.Core.Materials;
+using BinaryVibrance.Kaldra.Graph;
+
+namespace BinaryVibrance.Kaldra.Tests;
+
+/// <summary>
+/// Record-time validation: the recording contradicting what its pass declared. Deriving the graph already rejects a
+/// declaration that contradicts itself; these are the mistakes that only show up once a pass starts issuing draws, and
+/// which used to produce a plausible-looking wrong frame instead of an error.
+/// <para>
+/// Device-free on purpose. <see cref="RecordValidator"/> speaks only in neutral terms, so the behaviour can be pinned
+/// here rather than only through a GPU-gated render — and the gallery rendering green proves the checks do not
+/// misfire, while these prove they actually fire.
+/// </para>
+/// </summary>
+public class RecordValidationTests
+{
+	// A pass built through the public authoring API, so the accesses are exactly what an app would declare.
+	private static GraphPass PassOf(Action<GraphBuilder> author, string name = "p")
+	{
+		var graph = RenderGraph.Define(author);
+		return graph.Passes.Single(p => p.Name == name);
+	}
+
+	private static RecordValidator ValidatorOn(GraphPass pass, TechniqueRegistry? techniques = null, bool enabled = true, DrawListStreams? streams = null)
+	{
+		var validator = new RecordValidator(enabled, techniques ?? new TechniqueRegistry(), streams ?? new DrawListStreams());
+		validator.BeginPass(pass);
+		return validator;
+	}
+
+	// A pass that samples 'declared' and writes 'out', plus the handle for an undeclared sibling target.
+	private static (GraphPass Pass, ResourceHandle Declared, ResourceHandle Undeclared) SamplingPass()
+	{
+		ResourceHandle declared = null!, undeclared = null!;
+		var pass = PassOf(g =>
+		{
+			var world = g.Domain("world", 64, 64);
+			declared = world.Color("declared", Format.Rgba8Srgb);
+			undeclared = world.Color("undeclared", Format.Rgba8Srgb);
+			g.Pass("seed").Writes((ColorHandle)declared);
+			g.Pass("other").Writes((ColorHandle)undeclared);
+			g.Pass("p").Samples((ColorHandle)declared).Writes(world.Color("out", Format.Rgba8Srgb));
+		});
+		return (pass, declared, undeclared);
+	}
+
+	private static TechniqueRegistry RegistryWith(string name, TechniqueDescriptor descriptor, TechniqueShape shape)
+	{
+		var registry = new TechniqueRegistry();
+		registry.Register(name, descriptor, shape);
+		return registry;
+	}
+
+	[Test]
+	public void A_stable_draw_list_must_name_a_stream_the_engine_minted()
+	{
+		// A backend keeps one set of buffers per stable stream and skips the upload while the revision holds, so two
+		// producers that picked the same number — every UI host numbers its surfaces from zero — would draw each other's
+		// geometry without a word. Only minted ids are accepted, which is what makes the numbers unique.
+		var streams = new DrawListStreams();
+		var validator = ValidatorOn(PassOf(g => g.Pass("p").Writes(g.Domain("world", 64, 64).Color("out", Format.Rgba8Srgb))), enabled: false, streams: streams);
+
+		var unminted = Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", new DrawListIdentity(Stream: 1, Revision: 4), default));
+		unminted.Message.ShouldContain("AllocateDrawListStream");
+		Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", new DrawListIdentity(Stream: 0, Revision: 4), default));
+
+		var first = streams.Allocate();
+		var second = streams.Allocate();
+		second.ShouldNotBe(first);
+		validator.DrawList("ui", new DrawListIdentity(first, Revision: 4), default);
+		validator.DrawList("ui", new DrawListIdentity(second, Revision: 9), default);
+
+		// A transient list keeps nothing, so it names no stream at all.
+		validator.DrawList("ui", DrawListIdentity.Transient, default);
+		validator.DrawList("ui", new DrawListIdentity(Stream: 12345, Revision: 0), default);
+	}
+
+	[Test]
+	public void A_draw_list_sampling_a_graph_texture_the_pass_never_declared_throws()
+	{
+		// A draw list is a sampled input like any other: the .Samples edge is what orders it after the target's producer
+		// and puts the image in a sampleable layout, so a list that names an undeclared target would read whatever the
+		// previous pass left behind.
+		var (pass, declared, undeclared) = SamplingPass();
+		var validator = ValidatorOn(pass);
+
+		var ex = Should.Throw<PassBindingException>(() =>
+			validator.DrawList("ui", DrawListIdentity.Transient, [new Texture(3, 4, 4), new TextureRef((ColorHandle)undeclared)]));
+
+		ex.Pass.ShouldBe("p");
+		ex.Resource.ShouldBe("undeclared");
+		ex.Message.ShouldContain(".Samples(undeclared)");
+
+		// Declared, it is accepted beside an engine texture, which is no graph resource and needs no declaration.
+		Should.NotThrow(() => validator.DrawList("ui", DrawListIdentity.Transient, [new Texture(3, 4, 4), new TextureRef((ColorHandle)declared)]));
+	}
+
+	[Test]
+	public void A_draw_list_texture_kept_from_an_earlier_graph_is_not_mistaken_for_one_the_pass_declared()
+	{
+		// A TextureRef lives in a producer's array, so it can outlive the graph that minted its handle. Ids restart in
+		// every graph: here the old "minimap" and the new pass's "shadow" share one, and matching on the id alone
+		// would sample the shadow map where the list meant the minimap.
+		ColorHandle stale = null!;
+		RenderGraph.Define(g =>
+		{
+			stale = g.Domain("map", 64, 64).Color("minimap", Format.Rgba8Srgb);
+			g.Pass("map").Writes(stale);
+		});
+		ColorHandle shadow = null!;
+		var pass = PassOf(g =>
+		{
+			var world = g.Domain("world", 64, 64);
+			shadow = world.Color("shadow", Format.Rgba8Srgb);
+			g.Pass("seed").Writes(shadow);
+			g.Pass("p").Samples(shadow).Writes(world.Color("out", Format.Rgba8Srgb));
+		});
+		stale.Id.ShouldBe(shadow.Id, "the test needs the two graphs' resources to share an id");
+		var validator = ValidatorOn(pass);
+
+		Should.Throw<PassBindingException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [stale]))
+			.Message.ShouldContain("earlier graph");
+		Should.NotThrow(() => validator.DrawList("ui", DrawListIdentity.Transient, [shadow]));
+	}
+
+	[Test]
+	public void A_draw_list_graph_texture_is_held_to_its_declaration_even_with_validation_off()
+	{
+		// The backend resolves a draw list's graph texture by id. Undeclared, it is read in whatever layout the last pass
+		// left it in; kept from an earlier graph, it binds whatever the new graph has under that id. Neither shows as an
+		// error anywhere else, so the draw list checks them with the per-draw scans off, as it does its format.
+		var (pass, declared, undeclared) = SamplingPass();
+		var validator = ValidatorOn(pass, enabled: false);
+
+		Should.Throw<PassBindingException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [new TextureRef((ColorHandle)undeclared)]))
+			.Message.ShouldContain(".Samples(undeclared)");
+		Should.NotThrow(() => validator.DrawList("ui", DrawListIdentity.Transient, [new TextureRef((ColorHandle)declared)]));
+
+		ColorHandle stale = null!;
+		RenderGraph.Define(g =>
+		{
+			stale = g.Domain("map", 64, 64).Color("minimap", Format.Rgba8Srgb);
+			g.Pass("map").Writes(stale);
+		});
+		stale.Id.ShouldBe(declared.Id, "the test needs the two graphs' resources to share an id");
+		Should.Throw<PassBindingException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [stale]))
+			.Message.ShouldContain("earlier graph");
+
+		// The pass's own sampled inputs keep to the switch: off, an undeclared one passes as it always has.
+		Should.NotThrow(() => validator.FullScreen("blit", [undeclared]));
+	}
+
+	[Test]
+	public void A_draw_list_refuses_a_graph_texture_it_cannot_sample_as_a_filterable_float_even_with_validation_off()
+	{
+		// A draw-list technique reads one Texture2D through a filtering sampler. A depth, integer or 32-bit float target
+		// cannot be bound there on every backend, and the failure would otherwise be a device error on one and garbage on
+		// another — so this is checked whether or not the declaration scans run.
+		DepthHandle depth = null!;
+		ColorHandle ids = null!;
+		var pass = PassOf(g =>
+		{
+			var world = g.Domain("world", 64, 64);
+			depth = world.Depth("depth", Format.Depth32F);
+			ids = world.Color("ids", Format.R32Uint);
+			g.Pass("seed").WritesDepth(depth).Writes(ids);
+			g.Pass("p").Samples(depth, ids).Writes(world.Color("out", Format.Rgba8Srgb));
+		});
+		var validator = ValidatorOn(pass, enabled: false);
+
+		Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [depth]))
+			.Message.ShouldContain("Depth32F");
+		Should.Throw<InvalidDrawCallException>(() => validator.DrawList("ui", DrawListIdentity.Transient, [ids]))
+			.Message.ShouldContain("R32Uint");
+	}
+
+	[Test]
+	public void Binding_a_resource_the_pass_never_declared_throws()
+	{
+		// The headline footgun: the pass forgot .Samples, so the graph derived no barrier or layout transition for the
+		// resource and the draw reads it in whatever state the previous pass happened to leave it in.
+		var (pass, _, undeclared) = SamplingPass();
+		var validator = ValidatorOn(pass);
+
+		var ex = Should.Throw<PassBindingException>(() => validator.FullScreen("blit", [undeclared]));
+
+		ex.Pass.ShouldBe("p");
+		ex.Resource.ShouldBe("undeclared");
+		ex.Message.ShouldContain(".Samples(undeclared)");
+		ex.ShouldBeAssignableTo<KaldraAuthoringException>();
+	}
+
+	[Test]
+	public void Drawing_indirectly_from_a_buffer_the_pass_never_declared_throws()
+	{
+		// An indirect draw whose argument buffer was not declared reads counts the graph derived no hand-off for —
+		// so the command processor may fetch them before the compute that wrote them retired. Silent on the GPU,
+		// which is why it is reported here, naming the verb that fixes it.
+		BufferHandle arguments = null!;
+		var pass = PassOf(g =>
+		{
+			var world = g.Domain("world", 64, 64);
+			arguments = g.Buffer("draw.args", 20);
+			g.Compute("fill").ReadWrites(arguments);
+			g.Pass("p").Writes(world.Color("out", Format.Rgba8Srgb));
+		});
+		var validator = ValidatorOn(pass);
+
+		// Built inside the lambda: DrawCall is a ref struct, so it cannot be captured by one.
+		var ex = Should.Throw<PassBindingException>(() =>
+			validator.Draw(new DrawCall { Technique = "mesh", Mesh = new Mesh(1), Instances = DrawCall.Indirect(arguments) }));
+
+		ex.Resource.ShouldBe("draw.args");
+		ex.Message.ShouldContain(".ReadsIndirect(draw.args)");
+	}
+
+	[Test]
+	public void Binding_a_declared_resource_is_accepted()
+	{
+		var (pass, declared, _) = SamplingPass();
+		var validator = ValidatorOn(pass);
+
+		Should.NotThrow(() => validator.FullScreen("blit", [declared]));
+	}
+
+	[Test]
+	public void A_resource_declared_with_the_wrong_access_kind_still_throws()
+	{
+		// .Samples and .ReadWrites are different edges deriving different barriers, so declaring one does not license
+		// binding the resource through the other.
+		var (pass, declared, _) = SamplingPass();
+		var validator = ValidatorOn(pass);
+
+		Should.Throw<PassBindingException>(() => validator.Dispatch("sim", default, [declared]));
+	}
+
+	[Test]
+	public void A_dispatch_validates_both_its_sampled_and_its_storage_bindings()
+	{
+		BufferHandle storage = null!;
+		ResourceHandle undeclared = null!;
+		var pass = PassOf(g =>
+		{
+			storage = g.Buffer<System.Numerics.Vector4>("particles", 16);
+			undeclared = g.Buffer<System.Numerics.Vector4>("stray", 16);
+			g.Compute("p").ReadWrites(storage);
+		});
+		var validator = ValidatorOn(pass);
+
+		Should.NotThrow(() => validator.Dispatch("sim", default, [storage]));
+		Should.Throw<PassBindingException>(() => validator.Dispatch("sim", default, [undeclared]));
+	}
+
+	[Test]
+	public void Handing_a_mesh_to_a_technique_that_fabricates_its_own_vertices_throws()
+	{
+		// A fullscreen technique reads no per-vertex data, so the mesh would be ignored and the draw would render the
+		// technique's own three fabricated verts — geometry silently absent rather than an error.
+		var (pass, _, _) = SamplingPass();
+		var registry = RegistryWith("post", new TechniqueDescriptor { Shader = "post" }, default);
+		var validator = ValidatorOn(pass, registry);
+
+		var ex = Should.Throw<TechniqueMismatchException>(() =>
+			validator.Draw(new DrawCall { Technique = "post", Mesh = new Mesh(1) }));
+
+		ex.Technique.ShouldBe("post");
+		ex.Message.ShouldContain("HasVertexInput");
+	}
+
+	[Test]
+	public void A_mesh_technique_accepts_a_mesh()
+	{
+		var (pass, _, _) = SamplingPass();
+		var registry = RegistryWith("mesh", new TechniqueDescriptor { Shader = "mesh", HasVertexInput = true }, default);
+		var validator = ValidatorOn(pass, registry);
+
+		Should.NotThrow(() => validator.Draw(new DrawCall { Technique = "mesh", Mesh = new Mesh(1) }));
+	}
+
+	[Test]
+	public void A_technique_with_only_an_explicit_layout_also_takes_vertices()
+	{
+		// HasVertexInput and an explicit Layout are two ways to say the same thing; both must license a mesh, which is
+		// the rule the backends had each reimplemented.
+		var (pass, _, _) = SamplingPass();
+		var descriptor = new TechniqueDescriptor { Shader = "mesh", Layout = VertexLayout.MeshStandard };
+		var validator = ValidatorOn(pass, RegistryWith("mesh", descriptor, default));
+
+		Should.NotThrow(() => validator.Draw(new DrawCall { Technique = "mesh", Mesh = new Mesh(1) }));
+	}
+
+	[Test]
+	public void A_procedural_draw_with_no_vertex_count_and_no_instances_throws()
+	{
+		var (pass, _, _) = SamplingPass();
+		var validator = ValidatorOn(pass, RegistryWith("particles", new TechniqueDescriptor { Shader = "particles" }, default));
+
+		var ex = Should.Throw<InvalidDrawCallException>(() =>
+			validator.Draw(new DrawCall { Technique = "particles" }));
+
+		ex.Pass.ShouldBe("p");
+		ex.Message.ShouldContain("VertexCount");
+	}
+
+	[Test]
+	public void A_null_mesh_is_reported_with_the_pass_and_technique_even_with_validation_off()
+	{
+		// RequireMesh replaces a bare "Nullable object must have a value" at the deref, so it is not gated: turning
+		// validation off must not turn a named error back into that.
+		var (pass, _, _) = SamplingPass();
+		var validator = ValidatorOn(pass, enabled: false);
+
+		var ex = Should.Throw<InvalidDrawCallException>(() =>
+			validator.RequireMesh(new DrawCall { Technique = "mesh", VertexCount = 3 }));
+
+		ex.Message.ShouldContain("mesh");
+		ex.Message.ShouldContain("p");
+	}
+
+	[Test]
+	public void Validation_off_skips_the_declaration_scans()
+	{
+		var (pass, _, undeclared) = SamplingPass();
+		var validator = ValidatorOn(pass, enabled: false);
+
+		Should.NotThrow(() => validator.FullScreen("blit", [undeclared]));
+	}
+
+	[Test]
+	public void A_wide_push_into_a_constant_buffer_that_declares_room_is_accepted()
+	{
+		// The regression guard for the correction that shaped this work: a push routed to a constant buffer is bounded
+		// by that buffer's declared size, not by the 16-float scalar block. CascadedShadowsDemo pushes 68 floats and
+		// the sky demos 36; a flat 16-float cap would break both on the first frame.
+		var (pass, _, _) = SamplingPass();
+		var shape = new TechniqueShape(default, [64, 272], ScalarPushBytes: 0, ListPushBytes: 0);
+		var validator = ValidatorOn(pass, RegistryWith("csm", new TechniqueDescriptor { Shader = "csm" }, shape));
+
+		Should.NotThrow(() => validator.PushFits("csm", 68 * sizeof(float), routesToUniform: true, uniformSlot: 1, scalarPushBytes: 0));
+	}
+
+	[Test]
+	public void A_push_that_overflows_its_constant_buffer_throws()
+	{
+		var (pass, _, _) = SamplingPass();
+		var shape = new TechniqueShape(default, [64, 272], ScalarPushBytes: 0, ListPushBytes: 0);
+		var validator = ValidatorOn(pass, RegistryWith("csm", new TechniqueDescriptor { Shader = "csm" }, shape));
+
+		var ex = Should.Throw<TechniqueMismatchException>(() =>
+			validator.PushFits("csm", 69 * sizeof(float), routesToUniform: true, uniformSlot: 1, scalarPushBytes: 0));
+
+		ex.Message.ShouldContain("69 floats");
+		ex.Message.ShouldContain("272 bytes");
+	}
+
+	[Test]
+	public void A_push_that_overflows_the_scalar_block_throws()
+	{
+		var (pass, _, _) = SamplingPass();
+		var validator = ValidatorOn(pass);
+
+		var ex = Should.Throw<TechniqueMismatchException>(() =>
+			validator.PushFits("grade", 17 * sizeof(float), routesToUniform: false, 0, scalarPushBytes: 16 * sizeof(float)));
+
+		ex.Message.ShouldContain("17 floats");
+		ex.Message.ShouldContain("64 bytes");
+	}
+
+	[Test]
+	public void A_push_with_no_channel_at_all_throws()
+	{
+		// The Vulkan silent-drop hole: the technique reflects constant buffers but the pass's .Reads filled them all,
+		// and it declares no scalar block — so the bytes used to be discarded without a word.
+		var (pass, _, _) = SamplingPass();
+		var validator = ValidatorOn(pass);
+
+		var ex = Should.Throw<TechniqueMismatchException>(() =>
+			validator.PushFits("lit", 4 * sizeof(float), routesToUniform: false, 0, scalarPushBytes: 0));
+
+		ex.Message.ShouldContain("KALDRA_PUSH_CONSTANT");
+	}
+
+	[Test]
+	public void A_push_fitting_the_scalar_block_exactly_is_accepted()
+	{
+		var (pass, _, _) = SamplingPass();
+		var validator = ValidatorOn(pass);
+
+		Should.NotThrow(() => validator.PushFits("grade", 16 * sizeof(float), routesToUniform: false, 0, 16 * sizeof(float)));
+		Should.NotThrow(() => validator.PushFits("grade", 0, routesToUniform: false, 0, 0)); // an empty push needs no channel
+	}
+
+	[Test]
+	public void An_unreflected_constant_buffer_falls_back_to_the_portable_bound_rather_than_rejecting()
+	{
+		// A reflected 0 means "size unknown", never "holds nothing". Treating it as zero capacity would reject every
+		// push on a shader with no sidecar.
+		var (pass, _, _) = SamplingPass();
+		var validator = ValidatorOn(pass, RegistryWith("bare", new TechniqueDescriptor { Shader = "bare" }, default));
+
+		Should.NotThrow(() => validator.PushFits("bare", 68 * sizeof(float), routesToUniform: true, 0, 0));
+		Should.Throw<TechniqueMismatchException>(() =>
+			validator.PushFits("bare", RecordValidator.UnknownUniformSlotBytes + sizeof(float), routesToUniform: true, 0, 0));
+	}
+}

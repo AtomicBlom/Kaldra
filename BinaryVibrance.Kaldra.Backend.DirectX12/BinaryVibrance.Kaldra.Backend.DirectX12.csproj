@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The second backend (Planning.md §2 portability invariant). Like BinaryVibrance.Kaldra.Backend.Vulkan, the DirectX 12 /
+       Silk.NET stack is quarantined here: nothing graphics-API-specific reaches BinaryVibrance.Kaldra.Core / BinaryVibrance.Kaldra.Graph. Backend
+       *selection* (UseDirectX12) is the app SDK's job — this project only exists to be referenced when
+       UseDirectX12=true. -->
+
+  <!-- Shared shader-compile machinery (imported before the body so $(KaldraShaderSourceDir) is set when the
+       targets evaluate). Compiles the backend-neutral engine shaders to SIGNED DXIL and embeds them. -->
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.props" />
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- The marshaling seam is pointer-heavy COM interop, exactly as in BinaryVibrance.Kaldra.Backend.Vulkan. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The root signature's registers resolved over every shipped shader (DirectX12RegistersTests) -->
+    <InternalsVisibleTo Include="BinaryVibrance.Kaldra.Tests" />
+    <InternalsVisibleTo Include="BinaryVibrance.Kaldra.Gallery.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup Label="NuGet">
+    <PackageId>BinaryVibrance.Kaldra.Backend.DirectX12</PackageId>
+    <Description>DirectX 12 backend for the Kaldra render-graph engine. PSOs, placed-resource aliasing, offline signed DXIL shaders embedded.</Description>
+    <PackageTags>directx12;dx12;rendergraph;gamedev;graphics;dotnet;silk.net</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+
+    <!-- The SAME backend-neutral engine shaders BinaryVibrance.Kaldra.Backend.Vulkan compiles (..\BinaryVibrance.Kaldra.Shaders\Shaders); this backend
+         emits + embeds them as signed DXIL (manifest prefix "BinaryVibrance.Kaldra.Backend.DirectX12.Shaders.", = $(AssemblyName).Shaders.).
+         UI shaders are NOT here — each optional UI package ships its own, resolved at runtime by the backend's
+         loose-file fallback. -->
+    <KaldraShaderSourceDir>$(MSBuildProjectDirectory)\..\BinaryVibrance.Kaldra.Shaders\Shaders</KaldraShaderSourceDir>
+    <KaldraShaderOutputMode>Embed</KaldraShaderOutputMode>
+    <KaldraEmitDxil>true</KaldraEmitDxil>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Graph\BinaryVibrance.Kaldra.Graph.csproj" />
+    <!-- Neutral asset layer: the M13 shader hot-reload watcher (no graphics types). -->
+    <ProjectReference Include="..\BinaryVibrance.Kaldra.Assets\BinaryVibrance.Kaldra.Assets.csproj" />
+    <!-- Hermetic slangc for compiling the engine shaders to DXIL (bundled in the package; win-x64 / win-arm64). -->
+    <PackageReference Include="Slang.Sdk" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+    <!-- Hermetic DXC for signing: Kaldra.Shaders.targets uses $(PkgMicrosoft_Direct3D_DXC) to locate
+         dxcompiler.dll + dxil.dll, falling back to Windows SDK only if this reference is absent. -->
+    <PackageReference Include="Microsoft.Direct3D.DXC" GeneratePathProperty="true" PrivateAssets="all" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
+  <!-- The DirectX 12 stack, quarantined here. D3DCompiler is the in-box FXC (d3dcompiler_47.dll) — slice 1
+       compiles the hand-baked triangle's HLSL to DXBC at runtime, because the bundled slangc can't emit DXIL
+       on win-arm64 (no dxc/dxil). The offline DXIL pipeline is a follow-up workstream. -->
+  <ItemGroup>
+    <PackageReference Include="Silk.NET.Direct3D12" />
+    <PackageReference Include="Silk.NET.DXGI" />
+    <PackageReference Include="Silk.NET.Direct3D.Compilers" />
+    <PackageReference Include="Silk.NET.Maths" />
+  </ItemGroup>
+
+  <!-- Shared shader-compile targets (after the body, so KaldraShaderSourceDir is set). -->
+  <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Kaldra.Shaders.targets" />
+
+</Project>
