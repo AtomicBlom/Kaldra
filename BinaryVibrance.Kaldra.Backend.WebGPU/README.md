@@ -6,7 +6,7 @@
 
 - A browser with WebGPU support (`navigator.gpu`)
 - .NET 11, published as WebAssembly (e.g. a Blazor WebAssembly host)
-- .NET's WASM interop (`System.Runtime.InteropServices.JavaScript`) plus a JS shim that implements the device/command-buffer bridge — see `BinaryVibrance.Kaldra.Web` in [Kaldra.Gallery](https://github.com/AtomicBlom/Kaldra.Gallery) for a working host
+- .NET's WASM interop (`System.Runtime.InteropServices.JavaScript`) plus a JS shim that implements the device/command-buffer bridge — see `Kaldra.Web` in [Kaldra.Gallery](https://github.com/AtomicBlom/Kaldra.Gallery) for a working host
 
 ## What's included
 

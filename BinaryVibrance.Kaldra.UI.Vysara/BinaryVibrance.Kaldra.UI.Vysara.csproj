@@ -36,7 +36,7 @@
        would never produce. -->
   <ItemGroup>
     <InternalsVisibleTo Include="BinaryVibrance.Kaldra.Tests" />
-    <InternalsVisibleTo Include="BinaryVibrance.Kaldra.Gallery.Tests" />
+    <InternalsVisibleTo Include="Kaldra.Gallery.Tests" />
   </ItemGroup>
 
   <!-- Glue between the standalone Vysara UI runtime and the Kaldra render graph. References both sides;

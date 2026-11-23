@@ -38,7 +38,7 @@
   </ItemGroup>
 
   <!-- A rigged-bar glTF, beside the test assembly so GltfSkinningLoadTests can load it through GltfLoader: a copy of the
-       gallery's (BinaryVibrance.Kaldra.Gallery/Assets), since the gallery is not the engine's -->
+       gallery's (Kaldra.Gallery/Assets), since the gallery is not the engine's -->
   <ItemGroup>
     <Content Include="Fixtures\rigged_bar.glb" Link="rigged_bar.glb" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

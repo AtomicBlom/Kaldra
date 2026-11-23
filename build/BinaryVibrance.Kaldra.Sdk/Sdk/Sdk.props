@@ -3,7 +3,7 @@
   <!--
     The app-facing Kaldra MSBuild SDK (Milestone 8) — props half.
 
-    An app that already knows its target (desktop only, e.g. the gallery's BinaryVibrance.Kaldra.Sandbox) consumes it the traditional way,
+    An app that already knows its target (desktop only, e.g. the gallery's Kaldra.Sandbox) consumes it the traditional way,
     with its own fixed outer Sdk and two manual imports:
         <Project Sdk="Microsoft.NET.Sdk">
           <Import Project="..\build\BinaryVibrance.Kaldra.Sdk\Sdk\Sdk.props" />
@@ -66,7 +66,7 @@
     backend (Vulkan on desktop, WebGPU in the browser) and the shader output mode (loose Content files beside a
     desktop exe; Embedded resources in the wasm bundle). These run AFTER the base SDK import above (so a consumer
     Directory.Build.props, and the repo-root one for in-repo apps, have already had their say) and only fill
-    what's still unset — an app that set a flag itself (e.g. the gallery's BinaryVibrance.Kaldra.Sandbox, or an app wanting both desktop
+    what's still unset — an app that set a flag itself (e.g. the gallery's Kaldra.Sandbox, or an app wanting both desktop
     backends) keeps its choice. Must precede the Kaldra.Shaders.props import, which derives KaldraEmit* from these.
   -->
   <PropertyGroup Label="RID-based defaults">
