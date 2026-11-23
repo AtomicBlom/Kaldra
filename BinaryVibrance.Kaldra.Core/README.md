@@ -1,6 +1,6 @@
 # Kaldra — describe layer
 
-`Kaldra` is the authoring API for the [Kaldra render-graph engine](https://github.com/AtomicBlom/Kaldra). You declare *what* each render pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient memory aliasing, and CPU↔GPU synchronisation — no manual barrier calls.
+`BinaryVibrance.Kaldra.Core` is the authoring API for the [Kaldra render-graph engine](https://github.com/AtomicBlom/Kaldra). You declare *what* each render pass reads and writes; the engine derives ordering, barriers, image-layout transitions, transient memory aliasing, and CPU↔GPU synchronisation — no manual barrier calls.
 
 ## Key types
 
@@ -39,6 +39,6 @@ engine.SetGraph(graph);
 
 ## Architecture
 
-`Kaldra` is the **describe** layer — it allocates freely and contains no graphics-API types. The **execute** layer ([`BinaryVibrance.Kaldra.Graph`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Graph)) derives the frame plan; the backends ([`BinaryVibrance.Kaldra.Backend.Vulkan`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Backend.Vulkan) / [`BinaryVibrance.Kaldra.Backend.DirectX12`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Backend.DirectX12)) record real GPU work.
+`BinaryVibrance.Kaldra.Core` is the **describe** layer — it allocates freely and contains no graphics-API types. The **execute** layer ([`BinaryVibrance.Kaldra.Graph`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Graph)) derives the frame plan; the backends ([`BinaryVibrance.Kaldra.Backend.Vulkan`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Backend.Vulkan) / [`BinaryVibrance.Kaldra.Backend.DirectX12`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Backend.DirectX12)) record real GPU work.
 
 Reference [`BinaryVibrance.Kaldra.Sdk`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Sdk) from a game project to pull in the engine automatically.

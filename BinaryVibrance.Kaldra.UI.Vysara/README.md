@@ -118,7 +118,7 @@ ui.Prepare();
 
 ## Dependencies
 
-- [`Kaldra`](https://www.nuget.org/packages/Kaldra) — describe layer
+- [`BinaryVibrance.Kaldra.Core`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Core) — describe layer
 - [`BinaryVibrance.Vysara`](https://www.nuget.org/packages/Vysara) — UI runtime (transitive)
 
 Reference [`BinaryVibrance.Kaldra.Sdk`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Sdk) with `<UseVysara>true</UseVysara>` to pull this package in automatically alongside the selected backend.

@@ -41,7 +41,7 @@ Each frame, drive ImGui as usual on the host (`ImGui.NewFrame()` → widgets →
 
 ## Dependencies
 
-- [`Kaldra`](https://www.nuget.org/packages/Kaldra) — describe layer
+- [`BinaryVibrance.Kaldra.Core`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Core) — describe layer
 - [`ImGui.NET`](https://www.nuget.org/packages/ImGui.NET) — Dear ImGui bindings (transitive)
 
 Reference [`BinaryVibrance.Kaldra.Sdk`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Sdk) with `<UseImGui>true</UseImGui>` to pull this package in automatically.

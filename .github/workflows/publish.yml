@@ -1,125 +1,87 @@
 name: Publish NuGet packages
 
+# Packs every package an app can take from the engine (tools/pack-local.ps1): the engine, its hosts, backends and UI
+# adapters, the SDK and VMASharp's. A push to master publishes a test build to GitHub Packages (Version.props' version,
+# then .ci.<run>). A v* tag publishes the release to nuget.org, versioned by the tag (v0.2.0 packs 0.2.0). A dispatch
+# packs without publishing.
+#
+# The Vysara adapter is built against Vysara's released package, at the version Directory.Packages.props pins
+# (-VysaraFromPackage), so its dependency names a Vysara that exists. Release that Vysara first, then move the pin.
 on:
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Dry run (pack but do not push)'
-        type: boolean
-        default: false
   push:
-    tags:
-      - 'v*.*.*'
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
-  packages: write
   contents: read
+  packages: write   # test builds, to GitHub Packages
+  id-token: write   # releases: nuget.org's trusted publishing, a short-lived key from GitHub's OIDC token
 
 jobs:
   publish:
     name: Pack and publish
-    # windows-latest for Windows SDK DXC (signed DXIL) + Slang hermetic slangc
+    # Windows for the Windows SDK's DXC, which signs the DXIL
     runs-on: windows-latest
+    env:
+      RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      TEST_BUILD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      # nuget.config's GitHub Packages source reads it, for a pinned Vysara that is only there
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0   # needed by SourceLink for full git history
+          fetch-depth: 0   # SourceLink wants the history
+          submodules: recursive
 
-      - name: Checkout submodules
-        run: git submodule update --init --recursive
-
-      # Vysara, the UI library the Vysara adapter and its tests build on, from a checkout beside this one (..\Vysara,
-      # where build/Vysara.Source.props looks): its main branch.
-      - name: Check out Vysara beside the engine
-        shell: bash
-        run: |
-          rm -rf ../Vysara
-          git clone --depth 1 https://github.com/AtomicBlom/Vysara.git ../Vysara
-
-      - name: Set up .NET 11
-        uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '11.0.x'
 
-      # Restore only the projects that get packed — BinaryVibrance.Kaldra.Tests and the samples are excluded
-      # to avoid compiling their demo shaders (not publish artifacts).
-      - name: Restore
+      # BinaryVibrance.Kaldra.Hosting.Android's package needs it
+      - name: Install the android workload
+        run: dotnet workload install android
+
+      - name: Choose the version
         shell: pwsh
         run: |
-          $projects = @(
-            "BinaryVibrance.Kaldra.Concepts/BinaryVibrance.Kaldra.Concepts.csproj",
-            "BinaryVibrance.Kaldra.Backend.Vulkan/BinaryVibrance.Kaldra.Backend.Vulkan.csproj",
-            "BinaryVibrance.Kaldra.Backend.DirectX12/BinaryVibrance.Kaldra.Backend.DirectX12.csproj",
-            "BinaryVibrance.Kaldra.Backend.WebGPU/BinaryVibrance.Kaldra.Backend.WebGPU.csproj",
-            "BinaryVibrance.Kaldra.UI.Vysara/BinaryVibrance.Kaldra.UI.Vysara.csproj",
-            "BinaryVibrance.Kaldra.UI.ImGui/BinaryVibrance.Kaldra.UI.ImGui.csproj",
-            "build/BinaryVibrance.Kaldra.Sdk/BinaryVibrance.Kaldra.Sdk.csproj"
-          )
-          foreach ($p in $projects) { dotnet restore $p }
+          if ($env:RELEASE -eq 'true') { $version = $env:GITHUB_REF_NAME.Substring(1) }
+          else { $version = (dotnet msbuild BinaryVibrance.Kaldra.Core/BinaryVibrance.Kaldra.Core.csproj -getProperty:Version).Trim() + ".ci.${{ github.run_number }}" }
+          Write-Host "Packing $version"
+          "VERSION=$version" >> $env:GITHUB_ENV
 
-      # Build only packable projects. Transitive ProjectReferences (BinaryVibrance.Kaldra.Core, BinaryVibrance.Kaldra.Graph,
-      # BinaryVibrance.Kaldra.Assets, VMASharp) build automatically — no need to list them explicitly.
-      # UseDebugVisualization is disabled for published packages (arm64 marshal workaround pending).
-      - name: Build
-        shell: pwsh
-        run: |
-          $flags = "-c", "Release", "--no-restore", "-p:UseDebugVisualization=false"
-          dotnet build BinaryVibrance.Kaldra.Concepts/BinaryVibrance.Kaldra.Concepts.csproj                 @flags
-          dotnet build BinaryVibrance.Kaldra.Backend.Vulkan/BinaryVibrance.Kaldra.Backend.Vulkan.csproj     @flags
-          dotnet build BinaryVibrance.Kaldra.Backend.DirectX12/BinaryVibrance.Kaldra.Backend.DirectX12.csproj @flags
-          dotnet build BinaryVibrance.Kaldra.Backend.WebGPU/BinaryVibrance.Kaldra.Backend.WebGPU.csproj     @flags
-          dotnet build BinaryVibrance.Kaldra.UI.Vysara/BinaryVibrance.Kaldra.UI.Vysara.csproj @flags
-          dotnet build BinaryVibrance.Kaldra.UI.ImGui/BinaryVibrance.Kaldra.UI.ImGui.csproj   @flags
-          dotnet build build/BinaryVibrance.Kaldra.Sdk/BinaryVibrance.Kaldra.Sdk.csproj       @flags
-
-      # Generate LLM orientation files before packing (llms.txt is included in Kaldra.nupkg).
+      # Generate LLM orientation files before packing (llms.txt is included in BinaryVibrance.Kaldra.Core's package)
       - name: Generate LLM docs
         run: dotnet run --file tools/generate-llms-docs.cs
 
-      # Pack in dependency order so each nupkg is self-consistent before the next one references it.
-      # Vysara publishes its own packages (its repository's pack workflow); the adapter depends on them.
       - name: Pack
-        run: |
-          # PowerShell does not word-split strings, so pass flags as arrays — each element
-          # becomes a separate argument to the native dotnet command.
-          $noBuild  = "-c", "Release", "--no-build", "-o", "out/"
-          $withBuild = "-c", "Release", "-o", "out/"
-          # Core chain
-          dotnet pack BinaryVibrance.Kaldra.Core/BinaryVibrance.Kaldra.Core.csproj                               $noBuild
-          dotnet pack BinaryVibrance.Kaldra.Graph/BinaryVibrance.Kaldra.Graph.csproj                             $noBuild
-          dotnet pack BinaryVibrance.Kaldra.Assets/BinaryVibrance.Kaldra.Assets.csproj                           $noBuild
-          dotnet pack BinaryVibrance.Kaldra.Concepts/BinaryVibrance.Kaldra.Concepts.csproj                       $noBuild
-          # Backends (embed shaders as EmbeddedResource — no runtime Content items needed)
-          dotnet pack BinaryVibrance.Kaldra.Backend.Vulkan/BinaryVibrance.Kaldra.Backend.Vulkan.csproj           $noBuild
-          dotnet pack BinaryVibrance.Kaldra.Backend.DirectX12/BinaryVibrance.Kaldra.Backend.DirectX12.csproj     $noBuild
-          dotnet pack BinaryVibrance.Kaldra.Backend.WebGPU/BinaryVibrance.Kaldra.Backend.WebGPU.csproj           $noBuild
-          # UI integrations: Content-mode shaders are added by KaldraRegisterShaders (a Build target),
-          # so --no-build would skip that target and produce a package with no shaders.
-          # The build step above already compiled everything; this incremental build is instant.
-          dotnet pack BinaryVibrance.Kaldra.UI.Vysara/BinaryVibrance.Kaldra.UI.Vysara.csproj                    $withBuild
-          dotnet pack BinaryVibrance.Kaldra.UI.ImGui/BinaryVibrance.Kaldra.UI.ImGui.csproj                       $withBuild
-          # MSBuild SDK entry point (pure metadata, no build output)
-          dotnet pack build/BinaryVibrance.Kaldra.Sdk/BinaryVibrance.Kaldra.Sdk.csproj                          $noBuild
         shell: pwsh
+        run: ./tools/pack-local.ps1 -Version $env:VERSION -Output artifacts/packages -VysaraFromPackage
 
-      - name: List packages
-        run: Get-ChildItem out/ | Select-Object Name, Length | Format-Table
-        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts/packages/*.nupkg
 
-      - name: Push packages
-        if: ${{ !inputs.dry_run }}
+      - name: Publish the test build to GitHub Packages
+        if: env.TEST_BUILD == 'true'
         run: >
-          dotnet nuget push "out/*.nupkg"
+          dotnet nuget push "artifacts/packages/*.nupkg"
           --source "https://nuget.pkg.github.com/AtomicBlom/index.json"
           --api-key ${{ secrets.GITHUB_TOKEN }}
           --skip-duplicate
 
-      - name: Push symbol packages
-        if: ${{ !inputs.dry_run }}
+      - name: Log in to nuget.org
+        if: env.RELEASE == 'true'
+        id: nuget
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      - name: Publish the release to nuget.org
+        if: env.RELEASE == 'true'
         run: >
-          dotnet nuget push "out/*.snupkg"
-          --source "https://nuget.pkg.github.com/AtomicBlom/index.json"
-          --api-key ${{ secrets.GITHUB_TOKEN }}
+          dotnet nuget push "artifacts/packages/*.nupkg"
+          --source https://api.nuget.org/v3/index.json
+          --api-key ${{ steps.nuget.outputs.NUGET_API_KEY }}
           --skip-duplicate
