@@ -10,7 +10,7 @@ namespace Loom.UI.ImGui;
 
 /// <summary>
 /// Renders the host's Dear ImGui draw data through the public engine draw-list API — the bridge between the global
-/// ImGui context and the render graph, with no backend knowledge. It is the twin of <c>Loom.UI.SUIsei</c>'s painter:
+/// ImGui context and the render graph, with no backend knowledge. It is the twin of <c>Loom.UI.Vysara</c>'s painter:
 /// because an ImGui draw list is the same shape as any other (vertices + 16-bit indices + clip/texture/range
 /// commands), the backends need no ImGui renderer at all. Create it once after the engine and the ImGui context
 /// exist (it registers the <c>imgui</c> technique and uploads the font atlas through the public API), keep it for the

@@ -1,6 +1,8 @@
 <Project>
 
   <Import Project="$(MSBuildThisFileDirectory)Version.props" />
+  <!-- Where Vysara comes from: a checkout beside this one, or VysaraSource -->
+  <Import Project="$(MSBuildThisFileDirectory)build\Vysara.Source.props" />
 
   <!--
     Loom repo-wide build configuration (Milestone 8). This is the ONLY auto-applied MSBuild file
@@ -19,7 +21,7 @@
 
   <!--
     Warnings are errors across the Loom repo's own projects — the engine, samples, and tests build
-    warning-clean, so CI enforces it. Scoped naturally: external/ (vendored VMASharp + the SUIsei submodule) has its own
+    warning-clean, so CI enforces it. Scoped naturally: external/ (vendored VMASharp) has its own
     Directory.Build.props that stops MSBuild's upward walk, so this never reaches vendored code.
 
     NoWarn covers the residual trim/AOT (ILxxxx) warnings a PublishAot surfaces from third-party Silk.NET —
@@ -54,9 +56,8 @@
 
   <!-- Include each project's own README.md in its package. PackageReadmeFile alone does NOT auto-include the
        file — the SDK still requires an explicit Pack=true item, confirmed by a dry-run publish failing NU5039
-       ("readme file does not exist") on every packed project without this. Submodule projects (external/SUIsei)
-       that reach this file but have their readme elsewhere include it explicitly in their own csproj and will
-       not match this condition (no README.md beside SUIsei.csproj). -->
+       ("readme file does not exist") on every packed project without this. A project whose readme
+       is elsewhere includes it explicitly in its own csproj and does not match this condition. -->
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/README.md')">
     <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="README.md" />
   </ItemGroup>

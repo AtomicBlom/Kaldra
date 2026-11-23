@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- XamlApp's twin with one XAML error in its only view. SdkXamlTests builds it (it is in no solution) to see that
-       SUIsei's generator reports the error against the .xaml's own file and line, so the build fails there. -->
+       Vysara's generator reports the error against the .xaml's own file and line, so the build fails there. -->
   <Import Project="..\..\..\build\Loom.Sdk\Sdk\Sdk.props" />
 
   <PropertyGroup>
@@ -10,7 +10,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <UseSUIsei>true</UseSUIsei>
+    <UseVysara>true</UseVysara>
     <UseLoomHost>false</UseLoomHost>
     <LoomShaderOutputMode>None</LoomShaderOutputMode>
   </PropertyGroup>

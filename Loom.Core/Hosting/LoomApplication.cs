@@ -253,7 +253,7 @@ public abstract class LoomApplication : IHostedApplication
 
 	/// <summary>
 	/// How much of the bottom of the surface the host's on-screen keyboard covers, in surface pixels: zero while there is
-	/// none, and always on a host whose keyboard is a physical one. A SUIsei app hands it to its root each frame
+	/// none, and always on a host whose keyboard is a physical one. A Vysara app hands it to its root each frame
 	/// (<c>UIRoot.InputPaneHeight</c>), where elements marked <c>InputPane.AvoidsKeyboard</c> are arranged clear of it.
 	/// </summary>
 	protected float InputPaneHeight { get; private set; }
@@ -261,7 +261,7 @@ public abstract class LoomApplication : IHostedApplication
 	/// <summary>
 	/// How far in from each edge of the surface the screen hides content, in surface pixels: a phone's camera cutout, on the
 	/// edge it is on for the current rotation. None on a desktop window. Keep text and controls inside it, while a background
-	/// can still run to the edges. A SUIsei app hands it to its root each frame (<c>UIRoot.SafeAreaInsets</c>), where
+	/// can still run to the edges. A Vysara app hands it to its root each frame (<c>UIRoot.SafeAreaInsets</c>), where
 	/// elements marked <c>SafeArea.Edges</c> are arranged clear of it.
 	/// </summary>
 	protected ScreenInsets SafeAreaInsets { get; private set; }

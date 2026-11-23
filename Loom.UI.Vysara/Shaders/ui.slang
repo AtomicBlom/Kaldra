@@ -16,9 +16,9 @@
 // so the sampler decodes each texel to linear light before filtering, while the atlas and the white texel bind
 // linear/UNORM (SDF distances are never decoded). The alpha mode rides the command: STRAIGHT_ALPHA in its tag means the
 // slot's texels are straight, so the arms that paint with a slot (image, vector) premultiply the filtered sample.
-// SUIsei's software rasterizer is this fragment's CPU oracle: each arm has a twin there computing the same thing.
+// Vysara's software rasterizer is this fragment's CPU oracle: each arm has a twin there computing the same thing.
 
-// UIPrimKind (SUIsei) — keep in sync. Values 0..4 and 7 are the shaded primitive families this fragment switches
+// UIPrimKind (Vysara) — keep in sync. Values 0..4 and 7 are the shaded primitive families this fragment switches
 // on. Values 5/6 (BeginLayer/EndLayer) are zero-geometry group-opacity markers the backend turns into an offscreen
 // render-to-texture composite below the graph seam; they never reach this shader, and the composite blit reuses
 // KIND_IMAGE (sample the resolved layer, tint by the group alpha). A layer effect id rides the BeginLayer marker
@@ -33,7 +33,7 @@ static const uint KIND_IMAGE = 4;
 static const uint KIND_VECTOR = 7;
 
 // A command's tag is its kind in the low byte plus flags above it. STRAIGHT_ALPHA marks an image or vector command whose
-// slot holds straight-alpha texels; UIPainter sets it from the slot's source, and SUIsei's kinds never reach it.
+// slot holds straight-alpha texels; UIPainter sets it from the slot's source, and Vysara's kinds never reach it.
 static const uint KIND_MASK = 0xFF;
 static const uint STRAIGHT_ALPHA = 0x100;
 

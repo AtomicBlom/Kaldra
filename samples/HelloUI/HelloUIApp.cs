@@ -5,14 +5,14 @@ using System.Text;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
-using Loom.UI.SUIsei;
+using Loom.UI.Vysara;
 
-using SUIsei;
+using Vysara;
 
 namespace HelloUI;
 
 /// <summary>
-/// A SUIsei page over a backdrop, the same source on the desktop and on Android. The page lays out in layout units
+/// A Vysara page over a backdrop, the same source on the desktop and on Android. The page lays out in layout units
 /// scaled by <see cref="LoomApplication.DisplayScale"/>, so it keeps one physical size on a 100% monitor, a 200% tablet
 /// and a phone, and it takes clicks, taps and drags through the same input layer on all of them.
 /// </summary>
@@ -48,7 +48,7 @@ public sealed class HelloUIApp : LoomApplication
 		if (File.Exists(SavePath) && int.TryParse(File.ReadAllText(SavePath), out var taps))
 			_page.ViewModel.RestoreTaps(taps);
 		// The page is all there is, so a controller drives it: the d-pad and stick move between controls, A presses them.
-		PushInputLayer(new SUIseiInputLayer(_ui) { PadNavigation = true });
+		PushInputLayer(new VysaraInputLayer(_ui) { PadNavigation = true });
 		// On top, so it sees every event before the UI takes any: a readout, and Escape (Back on Android) to leave.
 		PushInputLayer(new InputReadoutLayer(_page.ViewModel, Exit));
 

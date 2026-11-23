@@ -76,7 +76,7 @@
     <UseDirectX12  Condition="'$(UseDirectX12)'  == ''">false</UseDirectX12>
     <UseWebGPU     Condition="'$(UseWebGPU)'     == ''">false</UseWebGPU>
     <!-- UI bridges are opt-in: a game that draws no UI pays for neither. -->
-    <UseSUIsei     Condition="'$(UseSUIsei)'     == ''">false</UseSUIsei>
+    <UseVysara     Condition="'$(UseVysara)'     == ''">false</UseVysara>
     <UseImGui      Condition="'$(UseImGui)'      == ''">false</UseImGui>
     <LoomShaderOutputMode Condition="'$(LoomShaderOutputMode)' == '' and '$(_LoomTargetsBrowser)' == 'true'">Embed</LoomShaderOutputMode>
     <!-- Noted so Sdk.targets can embed instead for an Android target, which is only known there (the target framework

@@ -8,7 +8,7 @@ using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Loom.Core.Primitives;
-using Loom.UI.SUIsei;
+using Loom.UI.Vysara;
 
 namespace Loom.Tests;
 
@@ -315,7 +315,7 @@ public class TextureReleaseTests
 		{
 			Engine = backend.Create(Surface.Offscreen(W, H), W, H, new EngineSettings());
 			// The painter is created only for the "ui" technique it defines; nothing here draws a UI host.
-			UIPainter.Create(Engine, new global::SUIsei.UIHost());
+			UIPainter.Create(Engine, new global::Vysara.UIHost());
 
 			var white = new Half4((Half)1f, (Half)1f, (Half)1f, (Half)1f);
 			_quad =

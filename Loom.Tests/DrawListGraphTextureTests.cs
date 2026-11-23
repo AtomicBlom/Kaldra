@@ -7,8 +7,8 @@ using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
 using Loom.Core.Primitives;
-using Loom.UI.SUIsei;
-using UIHost = SUIsei.UIHost;
+using Loom.UI.Vysara;
+using UIHost = Vysara.UIHost;
 
 namespace Loom.Tests;
 

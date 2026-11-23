@@ -108,7 +108,7 @@ Everything here rides existing verbs (`.Samples`/`.Draw`/`.Blends`/compute + `.R
 - **Stand up a dedicated backend tests project.** Backend integration tests (the kind recently removed when some backend-smoke demos were deleted from the sandbox) and the device-free CPU-testable slices of the backends (pipeline/descriptor hash-key equality, neutral-decision→barrier/PSO translation tables, placed-resource alias-offset math) belong in their own test project — run under NativeAOT — not as sandbox demos. This is the home for closing the "backends have zero unit tests" gap.
 - **Small genuinely-open code items** (low-risk, tracked in [`CODE_REVIEW.md`](CODE_REVIEW.md)): `VertexLayout` offsets ignore attribute alignment; Grid Auto-then-Star measure ordering; the backends have zero CPU unit tests; no compute→compute / ping-pong barrier-derivation test; one SourceGen diagnostic uses a zero-length span.
 - **Gamepads through SDL 3 beyond Windows.** The desktop host reads pads through SDL 3 (`SdlGamepadPump`), from SDL's own Windows release builds, packaged as `BinaryVibrance.Kaldra.SDL3`. SDL publishes no Linux builds and only a framework for macOS, so there the host still reads pads through GLFW: building SDL from source for those platforms into that package would close it. GLFW tells a pad's type only from its mapping's name.
-- **Comment hygiene** (tracked in [`COMMENT_REVIEW.md`](COMMENT_REVIEW.md)): the in-source milestone/section/`PlanningUI.md §…` tags must be stripped to satisfy the self-contained-comment rule — a large but mechanical sweep, concentrated in `external/SUIsei` and the Vulkan backend.
+- **Comment hygiene** (tracked in [`COMMENT_REVIEW.md`](COMMENT_REVIEW.md)): the in-source milestone/section/`PlanningUI.md §…` tags must be stripped to satisfy the self-contained-comment rule — a large but mechanical sweep, concentrated in `external/Vysara` and the Vulkan backend.
 
 ---
 
@@ -140,9 +140,9 @@ The debug spine (channel viewer, GPU timing) exists to make this loop fast for t
 
 ---
 
-## 9. The UI track (SUIsei)
+## 9. The UI track (Vysara)
 
-Game/HUD UI is a **separate, standalone subsystem**: `SUIsei`, a GPU-free WinUI-3-compatible XAML UI runtime (compile-time `{x:Bind}`, NativeAOT-clean), vendored as the `external/SUIsei` submodule with its own repo and **its own design bible at [`external/SUIsei/Planning.md`](external/SUIsei/Planning.md)**. It reaches the GPU only through the neutral, UI-agnostic `IRenderContext.DrawList` verb (the same path ImGui rides) via the thin `Loom.UI.SUIsei` glue — so **no UI library is referenced by either backend, and no UI-specific type enters Core/Graph.** See that document for the UI roadmap and status; this file does not duplicate it.
+Game/HUD UI is a **separate, standalone subsystem**: `Vysara`, a GPU-free WinUI-3-compatible XAML UI runtime (compile-time `{x:Bind}`, NativeAOT-clean), in [its own repository](https://github.com/AtomicBlom/Vysara), built from a checkout beside the engine's, with **its own design bible at [`Planning.md`](https://github.com/AtomicBlom/Vysara/blob/main/Planning.md)**. It reaches the GPU only through the neutral, UI-agnostic `IRenderContext.DrawList` verb (the same path ImGui rides) via the thin `Loom.UI.Vysara` glue — so **no UI library is referenced by either backend, and no UI-specific type enters Core/Graph.** See that document for the UI roadmap and status; this file does not duplicate it.
 
 ---
 

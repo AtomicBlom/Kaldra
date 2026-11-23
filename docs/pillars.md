@@ -61,7 +61,7 @@ A stable handle bundle created once for the engine's lifetime (a painter, a mesh
 
 ## No allocations on the hot path
 
-The steady per-frame render loop allocates no managed memory (especially in Release). The graph is built once and cached; per-frame work runs through preallocated/pooled buffers, `ref struct`s, and spans. Scratch that grows on demand grows geometrically and then stays put, so steady state settles to zero allocations. This applies equally to SUIsei's per-frame tick/route/composite path.
+The steady per-frame render loop allocates no managed memory (especially in Release). The graph is built once and cached; per-frame work runs through preallocated/pooled buffers, `ref struct`s, and spans. Scratch that grows on demand grows geometrically and then stays put, so steady state settles to zero allocations. This applies equally to Vysara's per-frame tick/route/composite path.
 
 A `foreach` over an interface, a LINQ chain, a closure capture, or a boxed struct inside `.Draw` / `.Dispatch` / the compositor is a regression — reach for an indexed `for`, a pooled array, or a value type.
 

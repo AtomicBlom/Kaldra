@@ -4,7 +4,7 @@
 
 ## Design
 
-ImGui draw data is routed through `IRenderContext.DrawList`, the same path SUIsei and any other overlay use. An ImGui draw list is the same shape as any other (vertices + 16-bit indices + clip/texture/range commands), so the backends need no ImGui-specific renderer. This means:
+ImGui draw data is routed through `IRenderContext.DrawList`, the same path Vysara and any other overlay use. An ImGui draw list is the same shape as any other (vertices + 16-bit indices + clip/texture/range commands), so the backends need no ImGui-specific renderer. This means:
 
 - **Opt-in** — reference this package to add the overlay; omit it and the engine is wholly ImGui-free.
 - **Backend-neutral** — works with both `Loom.Backend.Vulkan` and `Loom.Backend.DirectX12` without changes.

@@ -466,7 +466,7 @@
       </Content>
     </ItemGroup>
 
-    <!-- Content with LoomEmbedWgsl (a library's shaders, as Loom.UI.SUIsei's): the WGSL is embedded while the rest stay
+    <!-- Content with LoomEmbedWgsl (a library's shaders, as Loom.UI.Vysara's): the WGSL is embedded while the rest stay
          loose, because a browser app has no shader folder to look in. The web host finds it by the library's
          "<AssemblyName>.Shaders." prefix. -->
     <ItemGroup Condition="'$(LoomShaderOutputMode)' == 'Content' and '$(LoomEmitWgsl)' == 'true' and '$(LoomEmbedWgsl)' == 'true'">
@@ -482,7 +482,7 @@
       </EmbeddedResource>
     </ItemGroup>
 
-    <!-- Content with LoomEmbedSpirv (a library's shaders, as Loom.UI.SUIsei's): the SPIR-V and its reflection JSON are
+    <!-- Content with LoomEmbedSpirv (a library's shaders, as Loom.UI.Vysara's): the SPIR-V and its reflection JSON are
          embedded as well as copied loose, because an Android app has no shader folder beside it either; the loose
          copies keep the desktop's shader folder and hot reload as they were. The Vulkan backend's ShaderResolver finds
          them by the library's "<AssemblyName>.Shaders." prefix. -->

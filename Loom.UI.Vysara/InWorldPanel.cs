@@ -1,17 +1,17 @@
 using System.Numerics;
 using Loom.Core.Geometry;
 using Loom.Core.Hosting;
-using SUIsei;
-using SUIsei.Input;
-// SUIsei.Drawing and Loom.Core.Hosting both export DrawListId — alias to pin the SUIsei side (matches UIPainter.cs).
-using DrawListId = SUIsei.Drawing.DrawListId;
+using Vysara;
+using Vysara.Input;
+// Vysara.Drawing and Loom.Core.Hosting both export DrawListId — alias to pin the Vysara side (matches UIPainter.cs).
+using DrawListId = Vysara.Drawing.DrawListId;
 
-namespace Loom.UI.SUIsei;
+namespace Loom.UI.Vysara;
 
 /// <summary>
-/// An interactive UI panel placed in the 3D world — renders a SUIsei surface into an offscreen texture via the
+/// An interactive UI panel placed in the 3D world — renders a Vysara surface into an offscreen texture via the
 /// standard "ui" draw-list path, and maps screen-space pointer events onto the panel's 2D surface by intersecting
-/// a camera ray with the panel's world-space quad. From SUIsei's perspective it is just a 2D surface with its own
+/// a camera ray with the panel's world-space quad. From Vysara's perspective it is just a 2D surface with its own
 /// <see cref="UIHost"/>; all 3D concerns (world transform, billboard, ray unprojection) live here in the bridge.
 /// </summary>
 /// <remarks>

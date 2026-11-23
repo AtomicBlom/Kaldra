@@ -50,7 +50,7 @@ own SDK and import Loom's by hand:
   <PropertyGroup>
     <UseVulkan>true</UseVulkan>
     <UseDirectX12 Condition="$([MSBuild]::IsOSPlatform('Windows'))">true</UseDirectX12>
-    <UseSUIsei>true</UseSUIsei>
+    <UseVysara>true</UseVysara>
   </PropertyGroup>
 
   <Import Project="Loom/build/Loom.Sdk/Sdk/Sdk.props" />
@@ -80,7 +80,8 @@ Three things that are easy to miss:
 - **`DefaultItemExcludes`.** Without it, a submodule checked out under the project directory is globbed into the
   game's own compile — thousands of engine sources.
 - **The `Use*` flags go before `Sdk.props`.** It derives which shader targets to emit from them, eagerly.
-- **The submodule has submodules** (`external/SUIsei`, `external/VMASharp`): `git submodule update --init --recursive`.
+- **The submodule has a submodule** (`external/VMASharp`): `git submodule update --init --recursive`. Vysara, for an
+  app with `UseVysara`, is a checkout of its own beside the engine's (`..\Vysara` from it, or `VysaraSource`).
 
 Remove the Silk.NET OpenGL, windowing and input packages; the desktop host brings its own.
 
@@ -207,7 +208,7 @@ float4 fragmentMain(VsOut input) : SV_Target
 }
 ```
 
-It costs one fullscreen pass and one 8-bit target. Anything designed for the sRGB backbuffer — SUIsei or ImGui UI —
+It costs one fullscreen pass and one 8-bit target. Anything designed for the sRGB backbuffer — Vysara or ImGui UI —
 draws after the display pass, onto the backbuffer itself.
 
 The third option is re-grading every colour for linear light, which is a design change rather than a port.
@@ -393,13 +394,13 @@ build, not just against what the code says (§12), and expect to make a few such
 
 On Vulkan and DirectX 12, clip space is **y-down** (DirectX 12 through a negative-height viewport): y = -1 is the
 top of the screen, so GL-style overlay coordinates (NDC, y up) come out upside down. WebGPU's clip space is y-up, so
-no one hand-written convention is right on all three. Lay overlays out in pixels from the top-left, the space SUIsei
+no one hand-written convention is right on all three. Lay overlays out in pixels from the top-left, the space Vysara
 lays out in, and always go through the platform macros, which flip y where the backend needs it:
 `LOOM_OVERLAY_POS(pixel, 2.0 / viewport, float2(-1, -1))` for pixels, `LOOM_CLIP_POS(ndc)` for a position already in
 y-down clip space, and `LOOM_FULLSCREEN_POS(uv)` for a fullscreen triangle (all in `loom_platform.module.slang`).
 Overlay and UI then line up without any conversion between them, on every backend.
 
-A GL game without text can have it now. SUIsei, drawn by `Loom.UI.SUIsei`'s `UIPainter` in a pass of its own, sets
+A GL game without text can have it now. Vysara, drawn by `Loom.UI.Vysara`'s `UIPainter` in a pass of its own, sets
 labels on a `Canvas` of `TextBlock`s in a few lines:
 
 ```csharp

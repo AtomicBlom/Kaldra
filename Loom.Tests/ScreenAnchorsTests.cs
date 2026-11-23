@@ -2,20 +2,20 @@ using System.Numerics;
 
 using Loom.Core.Geometry;
 using Loom.Core.Hosting;
-using Loom.UI.SUIsei;
+using Loom.UI.Vysara;
 
-using SUIsei;
-using SUIsei.Controls;
-using SUIsei.Media;
+using Vysara;
+using Vysara.Controls;
+using Vysara.Media;
 
-using Ellipse = SUIsei.Shapes.Ellipse;
+using Ellipse = Vysara.Shapes.Ellipse;
 
 namespace Loom.Tests;
 
 /// <summary>
 /// <see cref="ScreenAnchors"/> places each element where its world point projects, under both clip-space conventions;
 /// fades it out off-screen and behind the eye on its container, leaving the element's own opacity alone; and moves a
-/// hundred anchors a frame without allocating. Headless: a SUIsei host and the projection maths, no GPU.
+/// hundred anchors a frame without allocating. Headless: a Vysara host and the projection maths, no GPU.
 /// </summary>
 public class ScreenAnchorsTests
 {

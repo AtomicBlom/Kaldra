@@ -3,19 +3,19 @@ using Loom.Core.Geometry;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Materials;
-using SUIsei;
-using SUIsei.Drawing;
-using SUIsei.Extensions;
-// Explicit aliases resolve the DrawCommand / DrawListData / DrawListId name conflicts between SUIsei.Drawing and
+using Vysara;
+using Vysara.Drawing;
+using Vysara.Extensions;
+// Explicit aliases resolve the DrawCommand / DrawListData / DrawListId name conflicts between Vysara.Drawing and
 // Loom.Core.Hosting. Kept in alphabetical order: `dotnet format` sorts using directives, and a sort that has work to
 // do lifts the first alias above this comment and detaches it.
-using DrawCommand = SUIsei.Drawing.DrawCommand;
-using DrawListData = SUIsei.Drawing.DrawListData;
-using DrawListId = SUIsei.Drawing.DrawListId;
+using DrawCommand = Vysara.Drawing.DrawCommand;
+using DrawListData = Vysara.Drawing.DrawListData;
+using DrawListId = Vysara.Drawing.DrawListId;
 using LoomDrawCommand = Loom.Core.Hosting.DrawCommand;
-using TextureSource = SUIsei.Drawing.TextureSource;
+using TextureSource = Vysara.Drawing.TextureSource;
 
-namespace Loom.UI.SUIsei;
+namespace Loom.UI.Vysara;
 
 /// <summary>
 /// Renders composited UI draw lists through the public engine API — the bridge between the headless
@@ -38,7 +38,7 @@ public sealed class UIPainter
 	// The vector kind: ui.slang's KIND_VECTOR, the one drawn kind numbered past the layer markers.
 	private const uint KindVector = (uint)UIPrimKind.Vector;
 	// ui.slang's STRAIGHT_ALPHA: set on an image or vector command whose slot holds straight-alpha texels, so the shader
-	// premultiplies the filtered sample. Above the kind's byte, which SUIsei's kinds never reach.
+	// premultiplies the filtered sample. Above the kind's byte, which Vysara's kinds never reach.
 	private const uint TagStraightAlpha = 0x100;
 
 	private readonly UIHost _host;
@@ -249,11 +249,11 @@ public sealed class UIPainter
 		push[4] = draw.IsHdrTarget ? _engine.HdrPaperWhiteNits / 80f : 1.0f;
 		push[5] = BitConverter.UInt32BitsToSingle(draw.IsHdrTarget ? 1u : 0u);
 
-		// SUIsei.Drawing.OverlayVertex has the same binary layout as Loom.Core.Geometry.OverlayVertex;
+		// Vysara.Drawing.OverlayVertex has the same binary layout as Loom.Core.Geometry.OverlayVertex;
 		// TVertex is inferred from draw.Vertices.Span — the backend sees raw bytes either way.
 		// A UI surface is a stable geometry stream: the compositor advances Revision exactly when the composed list
 		// changed, so an untouched surface re-submits the same identity and the backend can keep what it uploaded. The
-		// stream is the surface's own engine-minted one, not its SUIsei surface id: every host numbers its surfaces from
+		// stream is the surface's own engine-minted one, not its Vysara surface id: every host numbers its surfaces from
 		// zero, so two hosts' ids collide.
 		var identity = new DrawListIdentity(surface.Stream, draw.Revision);
 		ctx.DrawList(Technique, identity, surface.Textures.AsSpan(0, surface.Count), draw.Vertices.Span, draw.Indices.Span,
@@ -306,7 +306,7 @@ public sealed class UIPainter
 
 	/// <summary>
 	/// Refuse to release a source a list about to be drawn still names. The host promises that no list of a render names a
-	/// source that render reported released, and SUIsei's own compositor keeps it; one that broke it would have the painter
+	/// source that render reported released, and Vysara's own compositor keeps it; one that broke it would have the painter
 	/// release a texture the frame then samples. Runs only on a frame that released something, so a steady frame pays
 	/// nothing.
 	/// </summary>
@@ -366,12 +366,12 @@ public sealed class UIPainter
 	/// <summary>
 	/// Copy <paramref name="commands"/> into <paramref name="destination"/> as the engine's commands, folding the alpha mode
 	/// of each image and vector command's slot in <paramref name="slots"/> into its tag (<see cref="TagStraightAlpha"/>).
-	/// SUIsei declares alpha per source, not per command, and the shader's only per-command input is the tag. Anything that
-	/// submits a SUIsei list through the <c>ui</c> technique hands it commands made this way.
+	/// Vysara declares alpha per source, not per command, and the shader's only per-command input is the tag. Anything that
+	/// submits a Vysara list through the <c>ui</c> technique hands it commands made this way.
 	/// </summary>
 	internal static void CopyCommands(ReadOnlySpan<DrawCommand> commands, IReadOnlyList<TextureSource> slots, Span<LoomDrawCommand> destination)
 	{
-		// SUIsei.Drawing.DrawCommand and Loom.Core.Hosting.DrawCommand are structurally identical (same fields, same
+		// Vysara.Drawing.DrawCommand and Loom.Core.Hosting.DrawCommand are structurally identical (same fields, same
 		// order, both [StructLayout(Sequential)]), so the copy is a reinterpretation of the bytes.
 		MemoryMarshal.Cast<DrawCommand, LoomDrawCommand>(commands).CopyTo(destination);
 		for (var i = 0; i < commands.Length; i++)
@@ -444,7 +444,7 @@ public sealed class UIPainter
 
 	/// <summary>
 	/// The texels <paramref name="source"/> uploads as. The format is how the GPU decodes them: an sRGB source's sampler
-	/// decodes each texel to linear light before filtering, exactly as SUIsei's rasterizer does; a linear one (an atlas
+	/// decodes each texel to linear light before filtering, exactly as Vysara's rasterizer does; a linear one (an atlas
 	/// page's distances, the white texel) is read raw. Alpha mode is not the format's business: the shader premultiplies a
 	/// straight slot's sample, told so by <see cref="CopyCommands"/>.
 	/// </summary>

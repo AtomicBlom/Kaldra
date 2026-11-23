@@ -30,7 +30,7 @@ public static class DrawListGeometry
 	/// <para>
 	/// Every other tag is the technique's own, and selects its shader's branch; 5 and 6 are taken out of every
 	/// overlay-vertex technique's tag space, so a technique numbering its kinds steps around them. The <c>ui</c>
-	/// technique's kinds mirror SUIsei's <c>UIPrimKind</c>: 0 fill, 1 rounded rect, 2 border, 3 glyph, 4 image
+	/// technique's kinds mirror Vysara's <c>UIPrimKind</c>: 0 fill, 1 rounded rect, 2 border, 3 glyph, 4 image
 	/// (<see cref="KindImage"/>, which a layer composite reuses), and 7 vector — one triangle of a tessellated stroke or
 	/// fill, whose <see cref="OverlayVertex.Custom"/> carries four signed half-plane distances that the shader turns
 	/// into edge coverage. A tag may carry flags above its kind's byte — the <c>ui</c> technique's image and vector kinds
@@ -105,7 +105,7 @@ public static class DrawListGeometry
 	/// <summary>
 	/// A command's scissor rectangle in target pixels, clamped to the target. It holds the pixels whose centres the clip
 	/// covers, the rule rasterization itself follows: from the first pixel whose centre lies on or past the clip's near
-	/// edge to the last whose centre lies before its far edge, each edge rounded on its own. SUIsei's software rasterizer
+	/// edge to the last whose centre lies before its far edge, each edge rounded on its own. Vysara's software rasterizer
 	/// clips by the same rule, so a clip edge that falls between two pixel rows keeps the same row on the GPU as in the
 	/// oracle. A width or height of zero or less means the command is fully clipped and must be skipped — the caller has
 	/// to check, because a backend that hands a negative extent to an unsigned API wraps it into an enormous one.

@@ -31,18 +31,21 @@ jobs:
       - uses: actions/checkout@v7
 
       # Loom.Tests references both GPU backends (for OffscreenEngineTests' self-registration), and the Vulkan
-      # backend references the VMASharp submodule, so building the tests needs VMASharp checked out, alongside
-      # SUIsei (needed by the NativeAOT gate + UI unit test steps below).
+      # backend references the VMASharp submodule, so building the tests needs VMASharp checked out.
       - name: Checkout submodules
+        run: git submodule update --init --recursive external/VMASharp
+
+      # Vysara, the UI library the Vysara adapter and its tests build on, from a checkout beside this one (..\Vysara,
+      # where build/Vysara.Source.props looks): its main branch. While Vysara is private its clone takes the PAT
+      # secret (contents:read on AtomicBlom/Vysara), which a fork's pull request doesn't get.
+      - name: Check out Vysara beside the engine
         env:
           GH_PAT: ${{ secrets.PAT }}
         shell: bash
         run: |
-          # While SUIsei is private its checkout takes the PAT secret (contents:read on AtomicBlom/SUIsei), which a
-          # fork's pull request doesn't get. The PAT goes on this one command (and the clones it starts), not in the
-          # runner user's global config: jobs on one machine share that file, and two writing it at once fail to lock it.
           if [ -n "$GH_PAT" ]; then auth=(-c url."https://${GH_PAT}@github.com/".insteadOf="https://github.com/"); else auth=(); fi
-          git "${auth[@]}" submodule update --init --recursive external/SUIsei external/VMASharp
+          rm -rf ../Vysara
+          git "${auth[@]}" clone --depth 1 https://github.com/AtomicBlom/Vysara.git ../Vysara
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -77,15 +80,3 @@ jobs:
       # which takes the project via --project (the bare path form is VSTest-only and removed in the .NET 10 SDK).
       - name: Test (no-GPU unit tests; the GPU-gated ones auto-skip)
         run: dotnet test --project Loom.Tests/Loom.Tests.csproj -c Release --no-build
-
-      # NativeAOT gate: SUIsei is marked <IsAotCompatible>, which turns on the trim/AOT/single-file Roslyn
-      # analyzers; build it with warnings promoted to errors so any reflection or AOT-unsafe pattern fails CI.
-      # The UI runtime is neutral (Core + Assets only), so it builds without a GPU.
-      - name: NativeAOT gate (SUIsei; AOT/trim analyzers as errors)
-        run: dotnet build external/SUIsei/SUIsei/SUIsei.csproj -c Release -p:TreatWarningsAsErrors=true
-
-      # The headless UI unit tests (draw-list/Dump golden, neutral types) — no backend, like the graph tests above.
-      - name: Build + test (UI no-GPU unit tests)
-        run: |
-          dotnet build external/SUIsei/SUIsei.Tests/SUIsei.Tests.csproj -c Release
-          dotnet test --project external/SUIsei/SUIsei.Tests/SUIsei.Tests.csproj -c Release --no-build

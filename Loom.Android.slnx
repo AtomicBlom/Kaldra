@@ -2,7 +2,7 @@
   <!-- The Android half of Loom: the Android host, the Android sample, and the engine layers they reference. Kept
        separate from Loom.slnx so the android workload (net11.0-android) stays off the desktop build, but present here so
        Roslyn tooling can load and analyse the Android projects. -->
-  <Project Path="external/SUIsei/SUIsei/SUIsei.csproj" />
+  <Project Path="../Vysara/Vysara/Vysara.csproj" />
   <Project Path="Loom.Assets/Loom.Assets.csproj" />
   <Project Path="Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj" />
   <Project Path="Loom.Concepts/Loom.Concepts.csproj" />
@@ -11,6 +11,6 @@
   <Project Path="Loom.Hosting.Android/Loom.Hosting.Android.csproj" />
   <Project Path="Loom.Input/Loom.Input.csproj" />
   <Project Path="Loom.UI.ImGui/Loom.UI.ImGui.csproj" />
-  <Project Path="Loom.UI.SUIsei/Loom.UI.SUIsei.csproj" />
+  <Project Path="Loom.UI.Vysara/Loom.UI.Vysara.csproj" />
   <Project Path="samples/HelloUI/HelloUI.csproj" />
 </Solution>

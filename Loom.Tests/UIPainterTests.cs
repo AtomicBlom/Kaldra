@@ -5,12 +5,12 @@ using Loom.Backend.Vulkan;
 using Loom.Core.Graph;
 using Loom.Core.Hosting;
 using Loom.Core.Primitives;
-using Loom.UI.SUIsei;
-using SUIsei;
-using SUIsei.Controls;
-using SUIsei.Drawing;
-using SUIsei.Media;
-using SUIsei.Media.Imaging;
+using Loom.UI.Vysara;
+using Vysara;
+using Vysara.Controls;
+using Vysara.Drawing;
+using Vysara.Media;
+using Vysara.Media.Imaging;
 
 namespace Loom.Tests;
 

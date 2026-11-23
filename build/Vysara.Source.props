@@ -1,0 +1,22 @@
+<Project>
+
+  <!--
+    Where Vysara comes from while the engine builds from source: a checkout of github.com/AtomicBlom/Vysara, its folder
+    ending in a slash. By default ..\Vysara\ beside the engine's own checkout. VysaraSource names another, set before
+    this is imported (an app's own build files) or as an environment variable, which reaches every project of every
+    repository a build takes in at once. Directory.Build.props imports this for the engine's own projects, and the SDK's
+    Sdk.targets for an app.
+  -->
+  <PropertyGroup>
+    <_LoomVysaraSourceProps>true</_LoomVysaraSourceProps>
+    <VysaraSource Condition="'$(VysaraSource)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\Vysara\'))</VysaraSource>
+    <VysaraSource Condition="!HasTrailingSlash('$(VysaraSource)')">$(VysaraSource)\</VysaraSource>
+  </PropertyGroup>
+
+  <!-- A missing checkout said plainly, rather than as a project that can't be found -->
+  <Target Name="_LoomCheckVysaraSource" BeforeTargets="CollectPackageReferences;ResolveProjectReferences"
+          Condition="'$(_LoomNeedsVysaraSource)' == 'true' and !Exists('$(VysaraSource)Vysara\Vysara.csproj')">
+    <Error Text="This builds on Vysara from a checkout, and there is none at VysaraSource '$(VysaraSource)': clone github.com/AtomicBlom/Vysara beside the engine's checkout, or set VysaraSource (an environment variable reaches every repository)." />
+  </Target>
+
+</Project>

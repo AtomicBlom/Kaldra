@@ -1,22 +1,22 @@
 using System.Numerics;
 
 using Loom.Input;
-using Loom.UI.SUIsei;
+using Loom.UI.Vysara;
 
-using SUIsei;
-using SUIsei.Controls;
+using Vysara;
+using Vysara.Controls;
 
 namespace Loom.Tests;
 
 /// <summary>
-/// A pad through SUIsei (<see cref="SUIseiInputLayer.PadNavigation"/>): the d-pad and the left stick move focus by
+/// A pad through Vysara (<see cref="VysaraInputLayer.PadNavigation"/>): the d-pad and the left stick move focus by
 /// position, South presses the focused button, and the pad goes no further down the stack while the UI has it.
 /// </summary>
-public class SUIseiPadNavigationTests
+public class VysaraPadNavigationTests
 {
 	private static readonly Vector2 Surface = new(400f, 300f);
 
-	private static (UIHost Host, InputLayerStack Stack, SUIseiInputLayer Layer, Button Left, Button Right) Page()
+	private static (UIHost Host, InputLayerStack Stack, VysaraInputLayer Layer, Button Left, Button Right) Page()
 	{
 		var host = new UIHost();
 		var view = host.CreateRoot(UILayer.Default);
@@ -28,7 +28,7 @@ public class SUIseiPadNavigationTests
 		view.Root.Content = panel;
 		host.Tick(0.016, 0f, Surface);
 		var stack = new InputLayerStack();
-		var layer = new SUIseiInputLayer(host);
+		var layer = new VysaraInputLayer(host);
 		stack.Push(layer);
 		return (host, stack, layer, left, right);
 	}

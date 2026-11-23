@@ -15,7 +15,7 @@
     <!-- Loose .spv/.json (+ signed DXIL when the build includes DirectX12) copied to shaders\ and flowed to the app. -->
     <LoomShaderSourceDir>$(MSBuildProjectDirectory)\Shaders</LoomShaderSourceDir>
     <LoomShaderOutputMode>Content</LoomShaderOutputMode>
-    <!-- And WGSL, embedded under "Loom.UI.SUIsei.Shaders.", for an app in the browser: whichever way the app builds,
+    <!-- And WGSL, embedded under "Loom.UI.Vysara.Shaders.", for an app in the browser: whichever way the app builds,
          this library is the same assembly, so it always carries it -->
     <LoomEmitWgsl>true</LoomEmitWgsl>
     <LoomEmbedWgsl>true</LoomEmbedWgsl>
@@ -25,9 +25,9 @@
   </PropertyGroup>
 
   <PropertyGroup Label="NuGet">
-    <PackageId>Loom.UI.SUIsei</PackageId>
-    <Description>Integrates the SUIsei retained-mode UI runtime with the Loom render graph — bridges the SUIsei compositor with Loom's backend-neutral draw path.</Description>
-    <PackageTags>ui;suisei;rendergraph;gamedev;dotnet</PackageTags>
+    <PackageId>Loom.UI.Vysara</PackageId>
+    <Description>Integrates the Vysara retained-mode UI runtime with the Loom render graph — bridges the Vysara compositor with Loom's backend-neutral draw path.</Description>
+    <PackageTags>ui;vysara;rendergraph;gamedev;dotnet</PackageTags>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
@@ -39,10 +39,13 @@
     <InternalsVisibleTo Include="Loom.Gallery.Tests" />
   </ItemGroup>
 
-  <!-- Glue between the standalone SUIsei UI runtime and the Loom render graph. References both sides;
-       neither SUIsei nor Loom.Core reference each other. -->
+  <!-- Glue between the standalone Vysara UI runtime and the Loom render graph. References both sides;
+       neither Vysara nor Loom.Core reference each other. -->
+  <PropertyGroup>
+    <_LoomNeedsVysaraSource>true</_LoomNeedsVysaraSource>
+  </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\external\SUIsei\SUIsei\SUIsei.csproj" />
+    <ProjectReference Include="$(VysaraSource)Vysara\Vysara.csproj" />
     <ProjectReference Include="..\Loom.Core\Loom.Core.csproj" />
     <ProjectReference Include="..\Loom.Assets\Loom.Assets.csproj" />
     <ProjectReference Include="..\Loom.Input\Loom.Input.csproj" />

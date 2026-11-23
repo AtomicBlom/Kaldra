@@ -27,17 +27,20 @@ jobs:
         with:
           fetch-depth: 0   # needed by SourceLink for full git history
 
-      # VMASharp is public; SUIsei is private. Wire the PAT before initialising submodules so both resolve.
-      # Using token: PAT in the checkout step would replace GITHUB_TOKEN for the Loom repo fetch too,
-      # causing a 403 if the PAT is fine-grained and scoped only to SUIsei.
-      - name: Checkout submodules (PAT for private SUIsei)
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+
+      # Vysara, the UI library the Vysara adapter and its tests build on, from a checkout beside this one (..\Vysara,
+      # where build/Vysara.Source.props looks): its main branch. While Vysara is private its clone takes the PAT
+      # secret (contents:read on AtomicBlom/Vysara), which a fork's pull request doesn't get.
+      - name: Check out Vysara beside the engine
         env:
           GH_PAT: ${{ secrets.PAT }}
         shell: bash
         run: |
-          # The PAT for this one command (and the clones it starts), not written to the runner user's global config:
-          # jobs on one machine share that file, and two writing it at once fail to lock it
-          git -c url."https://${GH_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init --recursive
+          if [ -n "$GH_PAT" ]; then auth=(-c url."https://${GH_PAT}@github.com/".insteadOf="https://github.com/"); else auth=(); fi
+          rm -rf ../Vysara
+          git "${auth[@]}" clone --depth 1 https://github.com/AtomicBlom/Vysara.git ../Vysara
 
       - name: Set up .NET 11
         uses: actions/setup-dotnet@v5
@@ -50,12 +53,11 @@ jobs:
         shell: pwsh
         run: |
           $projects = @(
-            "external/SUIsei/SUIsei/SUIsei.csproj",
             "Loom.Concepts/Loom.Concepts.csproj",
             "Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj",
             "Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj",
             "Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj",
-            "Loom.UI.SUIsei/Loom.UI.SUIsei.csproj",
+            "Loom.UI.Vysara/Loom.UI.Vysara.csproj",
             "Loom.UI.ImGui/Loom.UI.ImGui.csproj",
             "build/Loom.Sdk/Loom.Sdk.csproj"
           )
@@ -68,12 +70,11 @@ jobs:
         shell: pwsh
         run: |
           $flags = "-c", "Release", "--no-restore", "-p:UseDebugVisualization=false"
-          dotnet build external/SUIsei/SUIsei/SUIsei.csproj @flags
           dotnet build Loom.Concepts/Loom.Concepts.csproj                 @flags
           dotnet build Loom.Backend.Vulkan/Loom.Backend.Vulkan.csproj     @flags
           dotnet build Loom.Backend.DirectX12/Loom.Backend.DirectX12.csproj @flags
           dotnet build Loom.Backend.WebGPU/Loom.Backend.WebGPU.csproj     @flags
-          dotnet build Loom.UI.SUIsei/Loom.UI.SUIsei.csproj @flags
+          dotnet build Loom.UI.Vysara/Loom.UI.Vysara.csproj @flags
           dotnet build Loom.UI.ImGui/Loom.UI.ImGui.csproj   @flags
           dotnet build build/Loom.Sdk/Loom.Sdk.csproj       @flags
 
@@ -82,15 +83,13 @@ jobs:
         run: dotnet run --file tools/generate-llms-docs.cs
 
       # Pack in dependency order so each nupkg is self-consistent before the next one references it.
-      # VMASharp and SUIsei are submodules with their own projects; pack them from there.
+      # Vysara publishes its own packages (its repository's pack workflow); the adapter depends on them.
       - name: Pack
         run: |
           # PowerShell does not word-split strings, so pass flags as arrays — each element
           # becomes a separate argument to the native dotnet command.
           $noBuild  = "-c", "Release", "--no-build", "-o", "out/"
           $withBuild = "-c", "Release", "-o", "out/"
-          # SUIsei submodule (no central version management — inline version in its csproj)
-          dotnet pack external/SUIsei/SUIsei/SUIsei.csproj                     $noBuild
           # Core chain
           dotnet pack Loom.Core/Loom.Core.csproj                               $noBuild
           dotnet pack Loom.Graph/Loom.Graph.csproj                             $noBuild
@@ -103,7 +102,7 @@ jobs:
           # UI integrations: Content-mode shaders are added by LoomRegisterShaders (a Build target),
           # so --no-build would skip that target and produce a package with no shaders.
           # The build step above already compiled everything; this incremental build is instant.
-          dotnet pack Loom.UI.SUIsei/Loom.UI.SUIsei.csproj                    $withBuild
+          dotnet pack Loom.UI.Vysara/Loom.UI.Vysara.csproj                    $withBuild
           dotnet pack Loom.UI.ImGui/Loom.UI.ImGui.csproj                       $withBuild
           # MSBuild SDK entry point (pure metadata, no build output)
           dotnet pack build/Loom.Sdk/Loom.Sdk.csproj                          $noBuild
