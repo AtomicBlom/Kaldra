@@ -1,5 +1,5 @@
 Loom 0.1.0-preview.1 — render-graph engine for .NET
-Generated: 2026-11-22
+Generated: 2026-11-23
 Source: https://github.com/AtomicBlom/Loom
 
 ## Pillars of Design (abbreviated)

@@ -6,7 +6,7 @@
     Imported AFTER the project body (so $(LoomShaderSourceDir) is already set). Compiles *.slang -> SPIR-V
     (+ a reflection-JSON sidecar) hermetically via the slangc bundled in Slang.Sdk, then registers the
     outputs in one of two modes:
-      Content -> loose <Content> copied to the output under shaders\  (an app, e.g. Loom.Sandbox)
+      Content -> loose <Content> copied to the output under shaders\  (an app, e.g. the gallery's Loom.Sandbox)
       Embed   -> <EmbeddedResource> with a stable manifest name        (the engine, Loom.Backend.Vulkan)
 
     When $(LoomEmitHlsl) is set (the DirectX12 backend is in the build) it ALSO emits per-stage HLSL beside the

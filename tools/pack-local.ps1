@@ -4,12 +4,12 @@
 
 .DESCRIPTION
   What an app builds against when it takes Loom as packages rather than from source: the engine and its hosts,
-  backends and UI adapters, the SDK, SUIsei and VMASharp (submodules), the audio and its outputs, and the workbench.
+  backends and UI adapters, the SDK, and SUIsei and VMASharp (submodules).
   The folder is a NuGet feed as it stands (add it as a source). Every package gets the same version, SUIsei's included,
   so an app names one: LoomPackageVersion and LoomSUIseiVersion in Loom.Sdk's Sdk.targets, and the version of each
   package it references itself.
 
-  Android's packages (Loom.Hosting.Android, Loom.Audio.Android) need the android workload; -SkipAndroid leaves them out.
+  Android's package (Loom.Hosting.Android) needs the android workload; -SkipAndroid leaves it out.
 
 .EXAMPLE
   pwsh tools/pack-local.ps1                                  # 0.0.0-local into artifacts/packages
@@ -43,16 +43,10 @@ $projects = @(
 	"Loom.Hosting.Web/Loom.Hosting.Web.csproj",
 	"Loom.UI.SUIsei/Loom.UI.SUIsei.csproj",
 	"Loom.UI.ImGui/Loom.UI.ImGui.csproj",
-	"build/Loom.Sdk/Loom.Sdk.csproj",
-	"Loom.Audio/Loom.Audio.csproj",
-	"Loom.Audio.Synth/Loom.Audio.Synth.csproj",
-	"Loom.Audio.Sdl/Loom.Audio.Sdl.csproj",
-	"Loom.Audio.Web/Loom.Audio.Web.csproj",
-	"Loom.Audio.Workbench/Loom.Audio.Workbench.csproj",
-	"Loom.Audio.Workbench.Projects/Loom.Audio.Workbench.Projects.csproj"
+	"build/Loom.Sdk/Loom.Sdk.csproj"
 )
 if (-not $SkipAndroid) {
-	$projects += "Loom.Hosting.Android/Loom.Hosting.Android.csproj", "Loom.Audio.Android/Loom.Audio.Android.csproj"
+	$projects += "Loom.Hosting.Android/Loom.Hosting.Android.csproj"
 }
 
 foreach ($project in $projects) {
