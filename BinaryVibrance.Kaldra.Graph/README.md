@@ -15,4 +15,4 @@ No graphics-API types cross this layer. The plan is expressed in terms of abstra
 
 ## Relationship to other packages
 
-`BinaryVibrance.Kaldra.Graph` depends on [`Kaldra`](https://www.nuget.org/packages/Kaldra) (the describe layer) and is a transitive dependency of both backends — you do not reference it directly in a game project.
+`BinaryVibrance.Kaldra.Graph` depends on [`BinaryVibrance.Kaldra.Core`](https://www.nuget.org/packages/BinaryVibrance.Kaldra.Core) (the describe layer) and is a transitive dependency of both backends — you do not reference it directly in a game project.

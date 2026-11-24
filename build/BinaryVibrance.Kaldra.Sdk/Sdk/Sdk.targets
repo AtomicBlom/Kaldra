@@ -43,7 +43,9 @@
     <!-- slangc version for any consumer that does not take it from the Kaldra repo's Directory.Packages.props, which
          pins the same version; _KaldraCheckSlangVersion below fails the repo's own builds if the two drift apart. -->
     <KaldraSlangVersion Condition="'$(KaldraSlangVersion)' == ''">0.5.1</KaldraSlangVersion>
-    <!-- Vysara's package version for packaged mode (BinaryVibrance.Vysara, from Vysara's repository). -->
+    <!-- Vysara's package version for packaged mode (BinaryVibrance.Vysara, from Vysara's repository): the release the
+         engine's packages were built against, pinned in the repo's Directory.Packages.props; _KaldraCheckVysaraVersion
+         below fails the repo's own builds if the two drift apart. -->
     <KaldraVysaraVersion Condition="'$(KaldraVysaraVersion)' == ''">0.1.0-preview.1</KaldraVysaraVersion>
   </PropertyGroup>
 
@@ -71,6 +73,14 @@
     </ItemGroup>
     <Error Condition="'@(_KaldraSlangPackageVersion->'%(Version)')' != '$(KaldraSlangVersion)'"
            Text="Directory.Packages.props pins Slang.Sdk at '@(_KaldraSlangPackageVersion->'%(Version)')', but build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.targets pins KaldraSlangVersion at '$(KaldraSlangVersion)'. Keep the two the same." />
+  </Target>
+
+  <Target Name="_KaldraCheckVysaraVersion" BeforeTargets="CollectPackageReferences" Condition="'$(_KaldraOwnPackageVersions)' == 'true'">
+    <ItemGroup>
+      <_KaldraVysaraPackageVersion Include="@(PackageVersion)" Condition="'%(Identity)' == 'BinaryVibrance.Vysara'" />
+    </ItemGroup>
+    <Error Condition="'@(_KaldraVysaraPackageVersion->'%(Version)')' != '$(KaldraVysaraVersion)'"
+           Text="Directory.Packages.props pins BinaryVibrance.Vysara at '@(_KaldraVysaraPackageVersion->'%(Version)')', but build/BinaryVibrance.Kaldra.Sdk/Sdk/Sdk.targets pins KaldraVysaraVersion at '$(KaldraVysaraVersion)'. Keep the two the same." />
   </Target>
 
   <!-- Backends by RID/flags: ProjectReference in the repo, versioned PackageReference when packaged. -->

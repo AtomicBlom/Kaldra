@@ -44,8 +44,14 @@
   <PropertyGroup>
     <_KaldraNeedsVysaraSource>true</_KaldraNeedsVysaraSource>
   </PropertyGroup>
-  <ItemGroup>
+  <!-- Vysara from its checkout, or with VysaraSource none its released package (build/Vysara.Source.props) -->
+  <ItemGroup Condition="'$(VysaraSource)' != 'none'">
     <ProjectReference Include="$(VysaraSource)BinaryVibrance.Vysara\BinaryVibrance.Vysara.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(VysaraSource)' == 'none'">
+    <PackageReference Include="BinaryVibrance.Vysara" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\BinaryVibrance.Kaldra.Core\BinaryVibrance.Kaldra.Core.csproj" />
     <ProjectReference Include="..\BinaryVibrance.Kaldra.Assets\BinaryVibrance.Kaldra.Assets.csproj" />
     <ProjectReference Include="..\BinaryVibrance.Kaldra.Input\BinaryVibrance.Kaldra.Input.csproj" />

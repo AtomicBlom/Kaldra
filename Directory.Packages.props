@@ -24,6 +24,12 @@
     <!-- SDL's own release builds of SDL3.dll, versioned as SDL is (github.com/AtomicBlom/Kaldra.SDL3). A newer SDL is a
          newer package; SdlGamepadTests checks the version that loads. -->
     <PackageVersion Include="BinaryVibrance.Kaldra.SDL3" Version="3.4.20" />
+    <!-- The Vysara release the engine's packages depend on. A day-to-day build takes Vysara from its checkout
+         (build/Vysara.Source.props); a packed release, with VysaraSource none, builds the Vysara adapter against this
+         package, so its dependency names a Vysara that was released. Moving to a newer Vysara is a change here, after
+         Vysara has released it, and to KaldraVysaraVersion in the SDK's Sdk.targets, which _KaldraCheckVysaraVersion
+         holds to the same. -->
+    <PackageVersion Include="BinaryVibrance.Vysara" Version="0.1.0-preview.1" />
   </ItemGroup>
 
   <ItemGroup Label="Shader toolchain + UI">
