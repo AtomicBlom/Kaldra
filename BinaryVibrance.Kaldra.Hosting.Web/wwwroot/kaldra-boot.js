@@ -63,7 +63,7 @@ async function start(canvas, threads) {
 	await runMain();
 	// The canvas identity comes from the page, not from C#: hand it to the host's [JSExport] to start everything.
 	const exports = await getAssemblyExports('BinaryVibrance.Kaldra.Hosting.Web');
-	const host = exports.Kaldra.Hosting.Web.WebAppHost;
+	const host = exports.BinaryVibrance.Kaldra.Hosting.Web.WebAppHost;
 	await host.StartApp(canvas);
 	let busy = false;
 	const tick = timestamp => {
