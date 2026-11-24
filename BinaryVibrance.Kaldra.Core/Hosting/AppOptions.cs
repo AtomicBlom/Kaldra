@@ -43,9 +43,18 @@ public sealed class AppOptions
 	/// <summary>
 	/// Fixed-timestep rate in Hz for <see cref="KaldraApplication.FixedUpdate"/> (0 = disabled, the default).
 	/// Deterministic simulation/physics code that must not vary with the display's frame rate steps at
-	/// <c>1 / FixedStepHz</c> seconds regardless of how fast frames arrive, with up to 5 catch-up steps per frame
-	/// before any further backlog is dropped (the spiral-of-death guard). <see cref="FrameTime.Alpha"/> carries
-	/// the leftover fraction for render interpolation between the last two fixed states.
+	/// <c>1 / FixedStepHz</c> seconds regardless of how fast frames arrive, with up to
+	/// <see cref="MaxFixedStepsPerFrame"/> catch-up steps per frame before any further whole steps of backlog are
+	/// dropped (the spiral-of-death guard). <see cref="FrameTime.Alpha"/> carries the leftover fraction for render
+	/// interpolation between the last two fixed states.
 	/// </summary>
 	public double FixedStepHz { get; set; }
+
+	/// <summary>
+	/// The spiral-of-death guard: at most this many <see cref="KaldraApplication.FixedUpdate"/> steps run in one
+	/// frame. Past it, the whole steps still owed are dropped and the simulation runs slower than real time: below
+	/// <c>FixedStepHz / MaxFixedStepsPerFrame</c> frames a second (12 at 60 Hz and the default of 5). An app whose
+	/// steps are cheap beside its frames raises it to stay real-time at lower frame rates. At least 1.
+	/// </summary>
+	public int MaxFixedStepsPerFrame { get; set; } = 5;
 }

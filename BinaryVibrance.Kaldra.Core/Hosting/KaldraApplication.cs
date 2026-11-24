@@ -74,6 +74,7 @@ public abstract class KaldraApplication : IHostedApplication
 
 	private IHostControl _host = null!;
 	private double _fixedStepHz;
+	private int _maxFixedSteps;
 	private double _fixedAccumulator;
 	private double _fixedTotalSeconds;
 
@@ -91,9 +92,6 @@ public abstract class KaldraApplication : IHostedApplication
 	private readonly InputEventRing _inputQueue = new(InputEventCapacity);
 	private readonly InputLayerStack _inputStack = new(InputEventCapacity);
 	private readonly InputEvent[] _inputScratch = new InputEvent[InputEventCapacity];
-
-	/// <summary>The spiral-of-death guard: at most this many <see cref="FixedUpdate"/> steps run per frame before any further backlog is dropped.</summary>
-	private const int MaxCatchUpSteps = 5;
 
 	/// <summary>Set startup options (title, size). Runs once, before the window/canvas + engine exist.</summary>
 	protected virtual void Configure(AppOptions options) { }
@@ -119,8 +117,8 @@ public abstract class KaldraApplication : IHostedApplication
 	/// <summary>
 	/// Runs at a constant rate (<c>1 / AppOptions.FixedStepHz</c>) independent of the display's frame rate — zero,
 	/// one, or several times per frame depending on how the actual frame time lines up with the fixed step (a
-	/// spiral-of-death guard caps the catch-up at <see cref="MaxCatchUpSteps"/> steps per frame, dropping any
-	/// further backlog rather than falling ever further behind). Never called while
+	/// spiral-of-death guard caps the catch-up at <see cref="AppOptions.MaxFixedStepsPerFrame"/> steps per frame,
+	/// dropping any further whole steps of backlog rather than falling ever further behind). Never called while
 	/// <see cref="AppOptions.FixedStepHz"/> is 0 (the default). Put deterministic simulation/physics here rather
 	/// than in <see cref="Update"/>; read <see cref="FrameTime.Alpha"/> in <see cref="Update"/>/<see cref="BeforeRender"/>
 	/// to interpolate render state between the last two fixed steps.
@@ -301,6 +299,7 @@ public abstract class KaldraApplication : IHostedApplication
 		var options = new AppOptions();
 		Configure(options);
 		_fixedStepHz = options.FixedStepHz;
+		_maxFixedSteps = Math.Max(1, options.MaxFixedStepsPerFrame);
 		_renderMode = options.RenderMode;
 		return options;
 	}
@@ -374,15 +373,19 @@ public abstract class KaldraApplication : IHostedApplication
 			var step = 1.0 / _fixedStepHz;
 			_fixedAccumulator += time.DeltaSeconds;
 			var steps = 0;
-			while (_fixedAccumulator >= step && steps < MaxCatchUpSteps)
+			while (_fixedAccumulator >= step && steps < _maxFixedSteps)
 			{
 				FixedUpdate(new FixedTime(step, _fixedTotalSeconds));
 				_fixedAccumulator -= step;
 				_fixedTotalSeconds += step;
 				steps++;
 			}
+			// Spiral-of-death guard: drop the whole steps still owed rather than keep falling further behind, but keep
+			// the fraction of a step, so Alpha goes on from where it was. Reset to 0, it jumped back to the start of a
+			// step on every frame that dropped some, and fell short of the last one on every frame that didn't: what
+			// was drawn between the fixed states moved by four steps one frame and six the next instead of five.
 			if (_fixedAccumulator >= step)
-				_fixedAccumulator = 0; // spiral-of-death guard: drop the backlog rather than keep falling further behind
+				_fixedAccumulator %= step;
 			frameTime = time with { Alpha = (float)(_fixedAccumulator / step) };
 		}
 
