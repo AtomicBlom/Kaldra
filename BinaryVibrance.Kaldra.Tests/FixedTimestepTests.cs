@@ -16,11 +16,11 @@ namespace BinaryVibrance.Kaldra.Tests;
 /// </summary>
 public class FixedTimestepTests
 {
-	private const int MaxCatchUpSteps = 5; // mirrors KaldraApplication.MaxCatchUpSteps (the spiral-of-death guard).
+	private const int MaxCatchUpSteps = 5; // AppOptions.MaxFixedStepsPerFrame's default (the spiral-of-death guard).
 
-	private static (FixedApp app, IHostedApplication driver) Start(double fixedStepHz)
+	private static (FixedApp app, IHostedApplication driver) Start(double fixedStepHz, int? maxSteps = null)
 	{
-		var app = new FixedApp(fixedStepHz);
+		var app = new FixedApp(fixedStepHz, maxSteps);
 		var driver = (IHostedApplication)app;
 		driver.ReadOptions();               // runs Configure → captures FixedStepHz
 		driver.Load(new NoopEngine(), new NoopHostControl());
@@ -83,16 +83,46 @@ public class FixedTimestepTests
 		driver.Tick(new FrameTime(1.0, 1.0)); // 60 steps' worth — must not run 60 times
 
 		app.FixedSteps.Count.ShouldBe(MaxCatchUpSteps); // clamped
-		app.LastAlpha.ShouldBe(0f);                     // backlog dropped → accumulator reset, no partial step
+		// Backlog dropped: 60 whole steps owed, so no fraction left, which rounding may leave a hair under a whole
+		// step (Alpha 1, the same moment drawn as 0 a step on)
+		MathF.Min(app.LastAlpha, 1f - app.LastAlpha).ShouldBe(0f, 1e-3f);
+	}
+
+	[Test]
+	public void Dropping_the_backlog_keeps_the_fraction_of_a_step()
+	{
+		var (app, driver) = Start(100); // step = 0.01s
+
+		driver.Tick(new FrameTime(0.083, 0.083)); // five steps run, 0.033 left: three whole steps dropped, 0.003 kept
+		app.FixedSteps.Count.ShouldBe(MaxCatchUpSteps);
+		app.LastAlpha.ShouldBe(0.3f, 1e-3f);
+
+		driver.Tick(new FrameTime(0.083, 0.166)); // 0.086: five steps, 0.036 left, 0.006 kept
+		app.FixedSteps.Count.ShouldBe(2 * MaxCatchUpSteps);
+		app.LastAlpha.ShouldBe(0.6f, 1e-3f);
+	}
+
+	[Test]
+	public void The_catch_up_cap_is_an_option()
+	{
+		var (app, driver) = Start(60, maxSteps: 10);
+		driver.Tick(new FrameTime(9.5 / 60.0, 9.5 / 60.0)); // a 6 fps frame: nine and a half steps' worth
+
+		app.FixedSteps.Count.ShouldBe(9); // all run, real time kept
+		app.LastAlpha.ShouldBe(0.5f, 1e-3f);
 	}
 
 	// An app that records every FixedUpdate it receives and the Alpha it last saw in Update.
-	private sealed class FixedApp(double fixedStepHz) : KaldraApplication
+	private sealed class FixedApp(double fixedStepHz, int? maxSteps) : KaldraApplication
 	{
 		public List<FixedTime> FixedSteps { get; } = [];
 		public float LastAlpha { get; private set; }
 
-		protected override void Configure(AppOptions options) => options.FixedStepHz = fixedStepHz;
+		protected override void Configure(AppOptions options)
+		{
+			options.FixedStepHz = fixedStepHz;
+			if (maxSteps is { } max) options.MaxFixedStepsPerFrame = max;
+		}
 		protected override void FixedUpdate(FixedTime time) => FixedSteps.Add(time);
 		protected override void Update(FrameTime time) => LastAlpha = time.Alpha;
 	}
