@@ -375,21 +375,17 @@
             // Its arguments kept only once it made its files, so a failed run runs again
             if (depfile.Length > 0) File.WriteAllText(depfile + ".args", todo[i].GetMetadata("Arguments"));
         });
-        bool failed = false;
         for (int i = 0; i < todo.Length; i++)
         {
             Log.LogMessage(MessageImportance.High, "Slang -> " + todo[i].ItemSpec);
             foreach (var line in outputs[i].Split('\n'))
                 if (line.Trim().Length > 0) Log.LogMessageFromText(line.TrimEnd('\r'), MessageImportance.High);
             if (codes[i] != 0)
-            {
-                failed = true;
                 Log.LogError("slangc failed (exit code " + codes[i] + ") making " + todo[i].ItemSpec);
-            }
         }
         Log.LogMessage(MessageImportance.High, "Slang: " + todo.Length + " of " + Runs.Length + " compiles out of date, made in " +
                        watch.Elapsed.TotalSeconds.ToString("F1") + " s, " + parallelism + " at a time");
-        return !failed && !Log.HasLoggedErrors;
+        // No return: a fragment's task returns !Log.HasLoggedErrors after it, so a failed run (logged above) fails it
       ]]></Code>
     </Task>
   </UsingTask>
