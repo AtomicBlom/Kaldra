@@ -697,8 +697,17 @@ export function startInputHandlers(onPointerMove, onGamepadButton, onGamepadAxis
 		const [x, y] = toDevice(e);
 		onTouch(touchCode(e, TOUCH_CANCELED), x, y);
 	});
-	// Vertical scroll rides deltaY, a shift-scroll reports on deltaX; passive since the host doesn't cancel it.
-	target.addEventListener("wheel", e => onEvent(WHEEL, e.deltaX, e.deltaY), { passive: true });
+	// Vertical scroll rides deltaY, a shift-scroll reports on deltaX; passive since the host doesn't cancel it. The host's
+	// wheel is the desktop's: in notches, positive up (and left). The DOM's is positive down, in pixels (about 100 a notch),
+	// lines (3 a notch) or pages, so it is turned over and scaled to notches: a trackpad's small deltas stay fractions. The
+	// wheel scrolls what is under the pointer, so a move not yet flushed goes first, as before a button.
+	const WHEEL_NOTCH = [100, 3, 1];
+	target.addEventListener("wheel", e => {
+		pendingMove = [...toDevice(e), 0];
+		flushMove();
+		const notch = WHEEL_NOTCH[e.deltaMode] ?? 100;
+		onEvent(WHEEL, -e.deltaX / notch, -e.deltaY / notch);
+	}, { passive: true });
 
 	// Keyboard state via the physical (layout-independent) code; drop auto-repeat — the host's held state already
 	// covers a key held across frames, and typed characters come through the text channel below.
