@@ -11,6 +11,7 @@
 
 - `DesktopAppHost` — an `IAppHost` that self-registers, owns the Silk.NET window + input pump + blocking frame loop, and branches on the backend name for the window surface (Vulkan `IVkSurface` vs DirectX12 `HWND`)
 - `HostOptions` — reusable launch-option parsing every hosted app gets for free (`--backend`, `--vsync`/`--no-vsync`, `--max-fps`, `--hdr`, `--watch-shaders`, `--software-adapter`), passing any unrecognized argument through to the app as `AppArgs`
+- The system's file dialogs (open a file, open a folder, save a file) through SDL 3 where it ships beside the app: an app calls `ShowFileDialogAsync`, which answers on the main thread without blocking the frames; and files dropped on the window, through `OnFilesDropped`
 - On-demand rendering: under `RenderMode.OnDemand` the window is event-driven (sleeps between events) and `Invalidate()` wakes it; `Continuous` (the default) runs the loop every frame
 
 ## Usage
