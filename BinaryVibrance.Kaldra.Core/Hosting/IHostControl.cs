@@ -61,6 +61,21 @@ public interface IHostControl
 	bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents) => false;
 
 	/// <summary>
+	/// Whether <see cref="ShowFileDialog"/> shows the system's dialogs: the desktop host's do, through SDL 3, where it
+	/// ships beside the app. A browser has no paths to give an app, and offers files through <see cref="SaveFile"/> and
+	/// a page's own controls instead. Defaults to false.
+	/// </summary>
+	bool CanShowFileDialogs => false;
+
+	/// <summary>
+	/// Show one of the system's file dialogs, without blocking the frames: <paramref name="done"/> is called later, on the
+	/// main thread between frames, with the paths chosen, none when the user cancelled, or null when the dialog couldn't be
+	/// shown. Call it from the main thread. A host without dialogs (see <see cref="CanShowFileDialogs"/>) calls
+	/// <paramref name="done"/> with null at once; that is the default.
+	/// </summary>
+	void ShowFileDialog(FileDialog dialog, Action<IReadOnlyList<string>?> done) => done(null);
+
+	/// <summary>
 	/// Whether <see cref="SetFullscreen"/> can have the app fill the screen. The browser host can where the page may ask
 	/// (the Fullscreen API, which a phone's browser offers no menu item for, and an iframe allows only with
 	/// <c>allowfullscreen</c>); the Android host is always fullscreen and the desktop host's window is the app's own, so

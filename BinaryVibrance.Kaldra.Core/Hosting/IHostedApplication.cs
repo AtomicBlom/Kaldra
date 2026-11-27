@@ -89,6 +89,14 @@ public interface IHostedApplication
 	{
 	}
 
+	/// <summary>
+	/// Notify the app that files or folders were dropped on its window, by their full paths, on the main thread. Only a
+	/// host whose window takes drops calls it (the desktop host).
+	/// </summary>
+	void DropFiles(IReadOnlyList<string> paths)
+	{
+	}
+
 	/// <summary>Advance one frame: the app's <c>Update</c>, then <c>Draw</c>, then the framework's own <see cref="IEngine.Render"/> (every frame under <see cref="RenderMode.Continuous"/>; gated under <see cref="RenderMode.OnDemand"/>).</summary>
 	void Tick(FrameTime time);
 

@@ -181,6 +181,31 @@ public abstract class KaldraApplication : IHostedApplication
 	protected bool SaveFile(string name, string contentType, ReadOnlySpan<byte> contents) => _host.SaveFile(name, contentType, contents);
 
 	/// <summary>
+	/// Whether <see cref="ShowFileDialogAsync"/> shows the system's file dialogs (see
+	/// <see cref="IHostControl.CanShowFileDialogs"/>): the desktop host's do.
+	/// </summary>
+	protected bool CanShowFileDialogs => _host.CanShowFileDialogs;
+
+	/// <summary>
+	/// Show one of the system's file dialogs (see <see cref="IHostControl.ShowFileDialog"/>) while the frames go on. It
+	/// completes on the main thread, between frames, with the paths chosen: none when the user cancelled, null when the
+	/// host has no dialogs or the dialog couldn't be shown. Call it from the main thread.
+	/// </summary>
+	protected Task<IReadOnlyList<string>?> ShowFileDialogAsync(FileDialog dialog)
+	{
+		ArgumentNullException.ThrowIfNull(dialog);
+		var chosen = new TaskCompletionSource<IReadOnlyList<string>?>();
+		_host.ShowFileDialog(dialog, paths => chosen.TrySetResult(paths));
+		return chosen.Task;
+	}
+
+	/// <summary>
+	/// Files or folders were dropped on the window, by their full paths (see <see cref="IHostedApplication.DropFiles"/>).
+	/// Called on the main thread, between frames; only the desktop host's window takes drops.
+	/// </summary>
+	protected virtual void OnFilesDropped(IReadOnlyList<string> paths) { }
+
+	/// <summary>
 	/// Whether the host can have the app fill the screen, over the browser's own bars (see
 	/// <see cref="IHostControl.CanFullscreen"/>): only the browser host, so far.
 	/// </summary>
@@ -319,6 +344,8 @@ public abstract class KaldraApplication : IHostedApplication
 	}
 
 	void IHostedApplication.SetFocus(bool focused) => OnFocusChanged(focused);
+
+	void IHostedApplication.DropFiles(IReadOnlyList<string> paths) => OnFilesDropped(paths);
 
 	void IHostedApplication.Suspend()
 	{

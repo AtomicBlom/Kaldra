@@ -94,6 +94,28 @@ internal static unsafe partial class Sdl3
 	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
 	public static partial uint SDL_WasInit(uint flags);
 
+	// The file dialogs (SDL_dialog.h), for SdlFileDialogs. Each returns at once, calling back later, perhaps on another
+	// thread; filters and the default location must stay valid until it does
+	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+	public static partial void SDL_ShowOpenFileDialog(delegate* unmanaged[Cdecl]<void*, byte**, int, void> callback, void* userdata, nint window, DialogFileFilter* filters, int nfilters, byte* defaultLocation, byte allowMany);
+
+	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+	public static partial void SDL_ShowSaveFileDialog(delegate* unmanaged[Cdecl]<void*, byte**, int, void> callback, void* userdata, nint window, DialogFileFilter* filters, int nfilters, byte* defaultLocation);
+
+	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+	public static partial void SDL_ShowOpenFolderDialog(delegate* unmanaged[Cdecl]<void*, byte**, int, void> callback, void* userdata, nint window, byte* defaultLocation, byte allowMany);
+
+	[LibraryImport(Lib), UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+	public static partial void SDL_PumpEvents();
+
+	/// <summary>SDL_DialogFileFilter: a kind of file's name, and its extensions joined by ';' ("*" for every file).</summary>
+	[StructLayout(LayoutKind.Sequential)]
+	public struct DialogFileFilter
+	{
+		public byte* Name;
+		public byte* Pattern;
+	}
+
 	/// <summary>
 	/// Stops the subsystems in <paramref name="flags"/>, and SDL itself once nothing else uses it. SDL counts each
 	/// subsystem's starts, so the gamepad pump stops only what it started, and an audio library in the same process using

@@ -87,8 +87,40 @@ public class HostChannelTests
 		Should.Throw<NotSupportedException>(() => app.Read("levels/1.json"));
 	}
 
+	[Test]
+	public async Task A_file_dialog_answers_with_what_the_host_chose_and_a_host_without_dialogs_answers_null()
+	{
+		var (app, _, host) = Start();
+		app.Dialogs.ShouldBeTrue();
+		var asked = new FileDialog { Kind = FileDialogKind.OpenFile, Filters = [new FileDialogFilter("Lunelle music", "lunelle")] };
+		var answer = app.Show(asked);
+		answer.IsCompleted.ShouldBeFalse();
+		host.Dialog.ShouldBe(asked);
+		host.Answer!(["C:/music/song.lunelle"]);
+		(await answer).ShouldBe(["C:/music/song.lunelle"]);
+
+		var bare = new ProbeApp();
+		((IHostedApplication)bare).ReadOptions();
+		((IHostedApplication)bare).Load(null!, new BareHost());
+		bare.Dialogs.ShouldBeFalse();
+		(await bare.Show(asked)).ShouldBeNull();
+	}
+
+	[Test]
+	public void Files_dropped_on_the_window_reach_the_app()
+	{
+		var (app, driver, _) = Start();
+		driver.DropFiles(["C:/music/a.lunelle", "C:/music/b"]);
+		app.Dropped.ShouldBe(["C:/music/a.lunelle", "C:/music/b"]);
+	}
+
 	private sealed class ProbeApp : KaldraApplication
 	{
+		public List<string> Dropped { get; } = [];
+		public bool Dialogs => CanShowFileDialogs;
+		public Task<IReadOnlyList<string>?> Show(FileDialog dialog) => ShowFileDialogAsync(dialog);
+		protected override void OnFilesDropped(IReadOnlyList<string> paths) => Dropped.AddRange(paths);
+
 		public List<string> Calls { get; } = [];
 		public bool Suspended => IsSuspended;
 		public ScreenInsets Insets => SafeAreaInsets;
@@ -106,8 +138,18 @@ public class HostChannelTests
 	{
 		public Dictionary<string, byte[]> Files { get; } = [];
 		public List<string> Asked { get; } = [];
+		public FileDialog? Dialog { get; private set; }
+		public Action<IReadOnlyList<string>?>? Answer { get; private set; }
 
 		public void RequestExit() { }
+
+		public bool CanShowFileDialogs => true;
+
+		public void ShowFileDialog(FileDialog dialog, Action<IReadOnlyList<string>?> done)
+		{
+			Dialog = dialog;
+			Answer = done;
+		}
 
 		public Stream OpenContent(string path)
 		{

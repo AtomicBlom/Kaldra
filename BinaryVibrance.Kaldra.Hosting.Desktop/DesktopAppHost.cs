@@ -103,8 +103,14 @@ public sealed class DesktopAppHost : IAppHost
 		// Closed by the window's Closing (below). Where Load or a frame throws instead, the window never closes, and Silk
 		// resets it only when Run returns normally, so this using closes the input on a window that is still alive.
 		using var input = new WindowInput(inputContext);
-		IHostControl host = new WindowHostControl(window, inputContext, window.Native?.Win32?.Hwnd ?? 0);
+		// The system's file dialogs through SDL 3, where it ships beside the app; each answer wakes the window
+		var dialogs = SdlFileDialogs.TryCreate(window.ContinueEvents, out var noDialogs);
+		if (dialogs is null)
+			KaldraLog.Info($"no file dialogs: {noDialogs}");
+		IHostControl host = new WindowHostControl(window, inputContext, window.Native?.Win32?.Hwnd ?? 0, dialogs);
 		driver.Load(engine, host);
+		// Files dropped on the window, raised by GLFW as it reads the window's events, on the main thread
+		window.FileDrop += paths => driver.DropFiles(paths);
 
 		// The host reports the initial size before the first frame, exactly like every later resize.
 		driver.Resize(window.FramebufferSize.X, window.FramebufferSize.Y);
@@ -186,6 +192,8 @@ public sealed class DesktopAppHost : IAppHost
 		var total = 0.0;
 		window.Render += delta =>
 		{
+			// A dialog's answer goes to the app between frames, even while the window is minimized
+			dialogs?.Update();
 			if (minimized)
 				return;
 			total += delta;
@@ -311,7 +319,7 @@ public sealed class DesktopAppHost : IAppHost
 	// Wraps the Silk.NET window as the app's control channel back to the host — RequestExit closes the window,
 	// which unwinds window.Run() and lets Run's teardown (Unload + WaitIdle) proceed. Made on the thread that runs the
 	// window, which is the only one GLFW lets reach the clipboard.
-	private sealed class WindowHostControl(IWindow window, IInputContext input, nint hwnd) : IHostControl
+	private sealed class WindowHostControl(IWindow window, IInputContext input, nint hwnd, SdlFileDialogs? dialogs) : IHostControl
 	{
 		private readonly int _mainThreadId = Environment.CurrentManagedThreadId;
 
@@ -350,6 +358,17 @@ public sealed class DesktopAppHost : IAppHost
 				return false;
 			input.Keyboards[0].ClipboardText = text;
 			return true;
+		}
+
+		public bool CanShowFileDialogs => dialogs is not null;
+
+		public void ShowFileDialog(FileDialog dialog, Action<IReadOnlyList<string>?> done)
+		{
+			ThrowIfNotMainThread(nameof(ShowFileDialog));
+			if (dialogs is null)
+				done(null);
+			else
+				dialogs.Show(dialog, done);
 		}
 
 		// GLFW's clipboard calls are main-thread only; from another thread they fail or corrupt its state without a word.
